@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/images/logo.png" width="128" alt="CONST API logo">
+
 # CONST API
 
 ### One local API for the AI tools you already use
@@ -208,5 +210,3 @@ CONST API is moving toward a source release deliberately rather than publishing 
 | Reproducible public build and release documentation | Planned with the source release |
 
 Until that work is complete, this repository should be understood as a public distribution and documentation repository—not yet as the licensed source repository. Issues about releases, compatibility, installation, and documentation are welcome now; source contributions will open with the source tree and contribution policy.
-
-**The CONST API open-source plan is in progress.**
