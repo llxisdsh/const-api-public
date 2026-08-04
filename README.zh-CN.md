@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/logo.png" width="128" alt="CONST API 标志">
+<img src="docs/images/readme-logo-route.svg" width="900" alt="CONST API 路由标志">
 
 # CONST API
 
