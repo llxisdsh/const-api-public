@@ -57,7 +57,7 @@ Need a manual connection or command-line mode? See the [usage guide](docs/usage.
 - Logs do not store prompts, response text, API keys, account tokens, cookies, or authorization headers.
 - Before changing a tool's settings, CONST API creates a backup. Canceling setup removes only CONST API's changes and keeps edits you made later.
 
-## Technical highlights
+## Technical features
 
 - **Native API surfaces.** OpenAI Responses and Chat Completions, Anthropic Messages, and Gemini native interfaces share one local gateway. API channels, supported subscriptions, local models, and marketplace channels all connect through the same model-channel system.
 - **Capability-aware protocol handling.** Requests, responses, streaming events, errors, usage, and tool calls follow one operation contract. Native fields pass through unchanged when possible; cross-protocol conversion runs only when needed.
