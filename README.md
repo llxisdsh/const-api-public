@@ -12,7 +12,7 @@
   <a href="https://github.com/llxisdsh/const-api-public/releases/latest">Download</a> ·
   <a href="docs/usage.md">Usage guide</a> ·
   <a href="README.zh-CN.md">简体中文</a> ·
-  <a href="https://github.com/llxisdsh/const-api-public/issues">Get help</a>
+  <a href="https://github.com/llxisdsh/const-api-public/issues">Report an issue</a>
 </p>
 
 CONST API gives your AI tools one local connection. Configure a tool once, then use your own models or find the ones you need in the shared Model Marketplace. Available for Windows, macOS, and Linux.

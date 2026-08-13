@@ -12,7 +12,7 @@
   <a href="https://github.com/llxisdsh/const-api-public/releases/latest">下载客户端</a> ·
   <a href="docs/usage.zh-CN.md">使用指南</a> ·
   <a href="README.md">English</a> ·
-  <a href="https://github.com/llxisdsh/const-api-public/issues">反馈问题</a>
+  <a href="https://github.com/llxisdsh/const-api-public/issues">问题反馈</a>
 </p>
 
 CONST API 给 AI 工具一个统一的本地入口。工具只需配置一次，自己的模型可以直接用，缺少的模型可以去共享市场找。支持 Windows、macOS 和 Linux。
