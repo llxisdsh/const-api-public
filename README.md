@@ -20,7 +20,7 @@ CONST API gives your AI tools one local connection. Configure a tool once, then 
 ## Why CONST API?
 
 - **Set up once.** Switch API keys, supported subscriptions, local models, or marketplace models without configuring every tool again.
-- **Use your own resources first.** Bring the services you already pay for, use a model running on your computer, and optionally fall back to the marketplace only when needed.
+- **Use your own resources first.** CONST API uses your model channels when they are available and automatically turns to the marketplace when they are not.
 - **Get models you do not have.** Use an available shared channel without first opening an account with every model provider.
 - **See what actually happened.** Price reference shows the expected market price; usage logs show the model, tokens, route, and charge actually used.
 - **Change tools safely.** Managed setup is backed up and reversible. Later edits are preserved, and Codex keeps its on-device session history when its connection changes.
@@ -60,14 +60,14 @@ Need a manual connection or command-line mode? See the [usage guide](docs/usage.
 ## How does it work?
 
 ```text
-Your own channel:
-AI tool → CONST API on your computer → your API, supported subscription, or local model
-
-Model Marketplace:
-AI tool → CONST API on your computer → the marketplace picks a lower-priced available channel → CONST API on the supplier's computer → model
+AI tool → CONST API on your computer
+              ├─ your model channel is available → your API, supported subscription, or local model
+              └─ your model channel is unavailable → Model Marketplace, lower price first
+                                                    → CONST API on the supplier's computer
+                                                    → the supplier's model channel
 ```
 
-Your tool always uses the same local connection. Your own channel is called directly. With the marketplace, the platform only selects and forwards the request to a suitable supplier; the supplier's credentials stay on their computer. CONST API returns the result through the native OpenAI, Anthropic, or Gemini interface the tool expects.
+Your tool always uses the same local connection. CONST API tries your own model channel first. If it is unavailable, the marketplace selects a lower-priced available supplier channel. The supplier's credentials stay on their computer, and the result returns through the native OpenAI, Anthropic, or Gemini interface the tool expects.
 
 Models, prices, tool support, and platform addresses can update without reinstalling the app. Every update is checked before use.
 
