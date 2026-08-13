@@ -57,19 +57,15 @@ Need a manual connection or command-line mode? See the [usage guide](docs/usage.
 - Logs do not store prompts, response text, API keys, account tokens, cookies, or authorization headers.
 - Before changing a tool's settings, CONST API creates a backup. Canceling setup removes only CONST API's changes and keeps edits you made later.
 
-## How does it work?
+## Technical highlights
 
-```text
-AI tool → CONST API on your computer
-              ├─ your model channel is available → your API, supported subscription, or local model
-              └─ your model channel is unavailable → Model Marketplace, lower price first
-                                                    → CONST API on the supplier's computer
-                                                    → the supplier's model channel
-```
-
-Your tool always uses the same local connection. CONST API tries your own model channel first. If it is unavailable, the marketplace selects a lower-priced available supplier channel. The supplier's credentials stay on their computer, and the result returns through the native OpenAI, Anthropic, or Gemini interface the tool expects.
-
-Models, prices, tool support, and platform addresses can update without reinstalling the app. Every update is checked before use.
+- **Native API surfaces.** OpenAI Responses and Chat Completions, Anthropic Messages, and Gemini native interfaces share one local gateway. API channels, supported subscriptions, local models, and marketplace channels all connect through the same model-channel system.
+- **Capability-aware protocol handling.** Requests, responses, streaming events, errors, usage, and tool calls follow one operation contract. Native fields pass through unchanged when possible; cross-protocol conversion runs only when needed.
+- **Stable, lower-cost routing.** Exact models and your own channels come first. Marketplace routing considers availability, price, quota, concurrency, success rate, and latency, keeps active sessions stable, and moves away from failed channels automatically.
+- **Reversible tool configuration.** JSON, JSON5, YAML, and TOML are updated structurally, backed up, and written atomically. Field-level three-way restore preserves later user edits, while Codex keeps its on-device session history across connection changes.
+- **Verifiable dynamic registries.** Models, compatibility groups, capabilities, prices, tool metadata, and platform endpoints update independently through Ed25519-signed, content-addressed releases. New data switches atomically only after verification, while the client and server retain a verified snapshot.
+- **Reproducible usage and settlement.** Each request freezes its model, price, and supplier offer. Actual usage, route, charge, and settlement evidence are recorded in the ledger and usage log.
+- **Adaptive transport.** Platform traffic prefers HTTP/3 and falls back to HTTP/2 or HTTP/1.1. Supplier connections prefer QUIC, fall back to WebSocket, and support encrypted remote links and negotiated compression.
 
 ## Open source
 
