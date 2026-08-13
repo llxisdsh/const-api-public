@@ -2,7 +2,7 @@
 
 [Back to README](../README.md) · [简体中文](usage.zh-CN.md)
 
-This guide covers the public desktop release: installation, the local API, managed tool setup and recovery, supply channels, manual API calls, and command-line operation. It does not require access to the private development repository.
+This guide covers the public desktop release: installation, the local API, managed tool setup and recovery, model channels, manual API calls, and command-line operation. It does not require access to the private development repository.
 
 ## Contents
 
@@ -12,7 +12,7 @@ This guide covers the public desktop release: installation, the local API, manag
 - [Configure a managed tool](#configure-a-managed-tool)
 - [Codex session continuity](#codex-session-continuity)
 - [Connect manually](#connect-manually)
-- [Add supply](#add-supply)
+- [Add a model channel](#add-a-model-channel)
 - [Advanced local settings](#advanced-local-settings)
 - [Command-line operation](#command-line-operation)
 - [Local files and privacy](#local-files-and-privacy)
@@ -50,7 +50,7 @@ A later unsigned build may require the same approval again.
 
 The client can start in a degraded state when no generation route is currently available. In that state the process, local health endpoint, configuration UI, and diagnostics still work, but a generation request will return a clear routing error until a usable local or remote channel exists.
 
-Signing in is optional for local-only use. It is required only for account features and for explicitly sharing enabled supply channels through platform routing.
+Signing in is optional for local-only use. It is required for account features and for using or sharing channels through the Model Marketplace.
 
 Closing the desktop window does not stop the runtime; it hides the window in the Windows/Linux tray or macOS menu bar. Use the tray/menu-bar **Quit** command to stop it completely.
 
@@ -76,7 +76,7 @@ The remaining Use-page actions are:
 
 - **Advanced Settings** — local listening, LAN access, and compatibility-routing policy.
 - **Connection Guide** — copy-ready protocol-specific values and manual setup hints.
-- **Price reference** — the currently verified model and pricing catalog.
+- **Marketplace Pricing** — current catalog prices and available marketplace offers.
 - **Usage Log** — privacy-filtered request metadata and route results.
 
 ## Configure a managed tool
@@ -199,9 +199,9 @@ curl "http://127.0.0.1:38787/gemini/v1beta/models/<model-id>:generateContent" \
 
 On PowerShell, use `curl.exe` if `curl` is aliased to another command, and adjust shell quoting as needed. Never place a real key into a committed script, issue, screenshot, or terminal transcript you plan to share.
 
-## Add supply
+## Add a model channel
 
-Open **Supply**, select **Add Channel**, and choose a source type.
+Open **Models**, select **Add Channel**, and choose a source type.
 
 ### API credentials
 
@@ -342,7 +342,7 @@ Confirm the asset came from this repository. Follow the operating-system trusted
 
 ### `invalid API key`
 
-Use the **local API key from the Use page** in the tool. Provider keys belong in their Supply channels. If the local key changed, reapply managed tool configuration or update the manual client.
+Use the **local API key from the Use page** in the tool. Provider keys belong in their model channels. If the local key changed, reapply managed tool configuration or update the manual client.
 
 ### A tool has no models or requires a model list
 
@@ -375,4 +375,4 @@ Use **Usage Log**, **Supply Log**, and the route trace to find the exact layer t
 
 ## Current release boundary
 
-This public repository distributes the desktop packages, updater metadata, and signed endpoint/catalog registries. Source licensing and the contribution workflow are still being prepared. See the [open-source plan](../README.md#open-source-plan) before assuming source availability or redistribution rights.
+This public repository distributes the desktop packages, updater metadata, and signed endpoint/catalog registries. Source licensing and the contribution workflow are still being prepared. See [Open source](../README.md#open-source) before assuming source availability or redistribution rights.
