@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "rules": [
+    { "pattern": "gpt-*", "priority": 4, "hidden": false },
+    { "pattern": "claude-*", "priority": 3, "hidden": false },
+    { "pattern": "gemini-*", "priority": 2, "hidden": false },
+    { "pattern": "deepseek-*", "priority": 1, "hidden": false }
+  ]
+}

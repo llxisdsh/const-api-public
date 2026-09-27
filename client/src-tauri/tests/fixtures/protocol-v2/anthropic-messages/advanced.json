@@ -1,0 +1,55 @@
+{
+  "request": {
+    "model":"claude-test",
+    "system":[
+      {"type":"text","text":"system rule","cache_control":{"type":"ephemeral"}},
+      {"type":"text","text":"developer rule","cache_control":{"type":"ephemeral","ttl":"1h"}}
+    ],
+    "messages":[
+      {"role":"user","content":[
+        {"type":"text","text":"inspect","cache_control":{"type":"ephemeral"}},
+        {"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}},
+        {"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"AA=="},"title":"notes.pdf"}
+      ]},
+      {"role":"assistant","content":[
+        {"type":"thinking","thinking":"reasoning","signature":"sig-exact"},
+        {"type":"redacted_thinking","data":"redacted-exact"},
+        {"type":"tool_use","id":"call-1","name":"lookup","input":{"id":1},"cache_control":{"type":"ephemeral","ttl":"1h"}}
+      ]},
+      {"role":"user","content":[
+        {"type":"tool_result","tool_use_id":"call-1","content":[
+          {"type":"text","text":"done"},
+          {"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}
+        ],"is_error":false}
+      ]}
+    ],
+    "tools":[{"name":"lookup","description":"find","input_schema":{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]},"cache_control":{"type":"ephemeral","ttl":"1h"}}],
+    "tool_choice":{"type":"tool","name":"lookup","disable_parallel_tool_use":false},
+    "thinking":{"type":"adaptive"},
+    "output_config":{"effort":"high","format":{"type":"json_schema","name":"answer","schema":{"title":"","type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok","ok"]}}},
+    "max_tokens":1024,
+    "temperature":0.2,
+    "top_p":0.9,
+    "top_k":40,
+    "stop_sequences":["STOP"],
+    "service_tier":"auto",
+    "stream":false,
+    "metadata":{"user_id":"account-1"}
+  },
+  "response": {
+    "id":"msg-advanced",
+    "type":"message",
+    "role":"assistant",
+    "model":"claude-test",
+    "content":[
+      {"type":"thinking","thinking":"response reasoning","signature":"response-sig"},
+      {"type":"redacted_thinking","data":"response-redacted"},
+      {"type":"text","text":"visible","citations":[{"type":"web_search_result_location","url":"https://example.invalid"}]},
+      {"type":"tool_use","id":"call-2","name":"lookup","input":{"id":2}}
+    ],
+    "stop_reason":"tool_use",
+    "stop_sequence":null,
+    "usage":{"input_tokens":30,"output_tokens":10,"cache_read_input_tokens":8,"cache_creation_input_tokens":4,"cache_creation":{"ephemeral_5m_input_tokens":1,"ephemeral_1h_input_tokens":3},"server_tool_use":{"web_search_requests":2}},
+    "error":null
+  }
+}

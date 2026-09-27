@@ -1,0 +1,34 @@
+{
+  "protocol": "gemini_native",
+  "path": "/v1beta/models/source-model:generateContent",
+  "request": {
+    "systemInstruction": {"parts": [{"text": "Use tools carefully."}]},
+    "contents": [
+      {"role": "user", "parts": [{"text": "Read README.md"}]},
+      {"role": "model", "parts": [{"functionCall": {"name": "read_file", "args": {"path": "README.md"}}}]},
+      {"role": "user", "parts": [{"functionResponse": {"name": "read_file", "response": {"result": "hello"}}}]}
+    ],
+    "tools": [{"functionDeclarations": [{"name": "read_file", "description": "Read a file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}]}],
+    "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}}
+  },
+  "response": {
+    "modelVersion": "source-model",
+    "candidates": [{"content": {"role": "model", "parts": [{"text": "Reading"}, {"functionCall": {"name": "read_file", "args": {"path": "docs/roadmap.md"}}}]}, "finishReason": "STOP"}],
+    "usageMetadata": {"promptTokenCount": 14, "candidatesTokenCount": 6, "totalTokenCount": 20, "cachedContentTokenCount": 2}
+  },
+  "expected": {
+    "request_message_count": 4,
+    "system_text": "Use tools carefully.",
+    "user_text": "Read README.md",
+    "tool_name": "read_file",
+    "tool_call_id": "call_gemini_0",
+    "tool_argument_path": "README.md",
+    "tool_result_text": "{\"result\":\"hello\"}",
+    "response_text": "Reading",
+    "finish_reason": "tool_calls",
+    "input_tokens": 14,
+    "output_tokens": 6,
+    "total_tokens": 20,
+    "unsupported": ["cache_usage"]
+  }
+}

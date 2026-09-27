@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CONST API Local",
+  "version": "0.1.57",
+  "identifier": "xin.const.api.local",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:15420",
+    "beforeDevCommand": "npm run dev:renderer",
+    "beforeBuildCommand": "npm run build:renderer"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "CONST API Local",
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay",
+        "decorations": false,
+        "shadow": true,
+        "width": 1040,
+        "height": 680,
+        "center": true,
+        "visible": false,
+        "resizable": true,
+        "backgroundColor": "#fafaf8"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: https://zpayz.cn https://*.zpayz.cn; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* https: http:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": false,
+    "targets": "all",
+    "icon": [
+      "icons/16x16.png",
+      "icons/20x20.png",
+      "icons/24x24.png",
+      "icons/32x32.png",
+      "icons/40x40.png",
+      "icons/48x48.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": ""
+    }
+  }
+}

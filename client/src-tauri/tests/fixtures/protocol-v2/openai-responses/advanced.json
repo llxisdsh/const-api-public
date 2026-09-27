@@ -1,0 +1,59 @@
+{
+  "request": {
+    "model": "responses-test",
+    "instructions": "Use tools carefully.",
+    "input": [
+      {"type":"message","id":"msg-user","role":"user","status":"completed","content":[
+        {"type":"input_text","text":"inspect"},
+        {"type":"input_image","image_url":"data:image/png;base64,aGVsbG8=","detail":"high"},
+        {"type":"input_file","file_id":"file-1","filename":"notes.txt"}
+      ]},
+      {"type":"reasoning","id":"rs-1","status":"completed","text":"internal","summary":[{"type":"summary_text","text":"checked"}],"encrypted_content":"opaque-reasoning"},
+      {"type":"function_call","id":"fc-1","status":"completed","call_id":"call-1","name":"lookup","arguments":"{\"id\":1}"},
+      {"type":"function_call_output","id":"out-1","status":"completed","call_id":"call-1","output":[{"type":"input_text","text":"done"}]},
+      {"type":"custom_tool_call","id":"ctc-1","status":"completed","call_id":"custom-1","name":"shell","input":"echo ok"},
+      {"type":"custom_tool_call_output","id":"cto-1","status":"completed","call_id":"custom-1","output":"ok"}
+    ],
+    "tools": [
+      {"type":"function","name":"lookup","description":"find","parameters":{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]},"strict":true},
+      {"type":"custom","name":"shell","description":"run command","format":{"type":"grammar","syntax":"lark","definition":"start: WORD"}},
+      {"type":"namespace","name":"repo","description":"repository tools","tools":[{"name":"read","description":"read file","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}]},
+      {"type":"web_search_preview","search_context_size":"medium"},
+      {"type":"mcp","server_label":"docs","server_url":"https://example.invalid/mcp","allowed_tools":["search"]},
+      {"type":"tool_search","execution":"server"}
+    ],
+    "tool_choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"lookup"},{"type":"custom","name":"shell"}]},
+    "parallel_tool_calls":true,
+    "text":{"format":{"type":"json_schema","name":"answer","strict":true,"schema":{"title":"","type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok","ok"]}}},
+    "reasoning":{"effort":"high","summary":"detailed"},
+    "max_output_tokens":512,
+    "temperature":0.2,
+    "service_tier":"priority",
+    "modalities":["text","audio"],
+    "audio":{"voice":"alloy","format":"wav"},
+    "stream":false,
+    "store":false,
+    "prompt_cache_key":"fixture-cache",
+    "prompt_cache_retention":"24h",
+    "previous_response_id":"resp-prev",
+    "include":["reasoning.encrypted_content"],
+    "metadata":{"trace":"fixture"},
+    "user":"account-1"
+  },
+  "response": {
+    "id":"resp-advanced",
+    "model":"responses-test",
+    "status":"incomplete",
+    "incomplete_details":{"reason":"max_output_tokens"},
+    "output":[
+      {"type":"reasoning","id":"rs-out","status":"completed","text":"internal-output","summary":[{"type":"summary_text","text":"summary"}],"encrypted_content":"opaque-output"},
+      {"type":"message","id":"msg-out","role":"assistant","status":"completed","content":[
+        {"type":"output_text","text":"visible","annotations":[{"type":"url_citation","url":"https://example.invalid"}]},
+        {"type":"refusal","refusal":"not allowed"}
+      ]},
+      {"type":"function_call","id":"fc-out","status":"completed","call_id":"call-2","name":"lookup","arguments":"{\"id\":2}"}
+    ],
+    "usage":{"input_tokens":20,"output_tokens":8,"total_tokens":28,"input_tokens_details":{"cached_tokens":6,"cache_write_tokens":5},"output_tokens_details":{"reasoning_tokens":3}},
+    "error":null
+  }
+}

@@ -1,0 +1,139 @@
+.onboarding-callout {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  min-height: 88px;
+  margin: 4px 0 24px;
+  padding: 18px 20px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-inline-start: 4px solid var(--accent);
+  border-radius: var(--radius-panel);
+  background: linear-gradient(115deg, color-mix(in srgb, var(--accent) 10%, var(--panel)), var(--panel) 72%);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.onboarding-callout:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.onboarding-callout.decision {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+  border-inline-start-color: var(--accent);
+  background: linear-gradient(115deg, color-mix(in srgb, var(--accent) 16%, var(--panel)), color-mix(in srgb, var(--accent) 4%, var(--panel)) 72%);
+}
+
+.onboarding-callout.local {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: linear-gradient(115deg, color-mix(in srgb, var(--accent) 12%, var(--panel)), var(--panel) 76%);
+}
+
+.onboarding-callout.warning {
+  border-color: var(--warning-border);
+  border-inline-start-color: var(--warning-text);
+  background: linear-gradient(115deg, color-mix(in srgb, var(--warning-bg) 88%, var(--panel)), var(--panel) 80%);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--warning-text) 10%, transparent);
+}
+
+.onboarding-callout.success {
+  border-color: var(--success-border);
+  border-inline-start-color: var(--success-text);
+  background: linear-gradient(115deg, color-mix(in srgb, var(--success-bg) 88%, var(--panel)), var(--panel) 80%);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--success-text) 9%, transparent);
+}
+
+.onboarding-callout-icon {
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--panel));
+}
+
+.onboarding-callout.warning .onboarding-callout-icon {
+  color: var(--warning-text);
+  background: color-mix(in srgb, var(--warning-bg) 72%, var(--panel));
+}
+
+.onboarding-callout.success .onboarding-callout-icon {
+  color: var(--success-text);
+  background: color-mix(in srgb, var(--success-bg) 72%, var(--panel));
+}
+
+.onboarding-callout-eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.25;
+}
+
+.onboarding-callout.warning .onboarding-callout-eyebrow {
+  color: var(--warning-text);
+}
+
+.onboarding-callout.success .onboarding-callout-eyebrow {
+  color: var(--success-text);
+}
+
+.onboarding-callout-copy {
+  min-width: 0;
+}
+
+.onboarding-callout-copy h2,
+.onboarding-callout-copy h3,
+.onboarding-callout-copy p {
+  margin: 0;
+}
+
+.onboarding-callout-copy h2,
+.onboarding-callout-copy h3 {
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.onboarding-callout-copy p {
+  max-width: 780px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.onboarding-callout-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.onboarding-callout-actions > button {
+  white-space: nowrap;
+}
+
+.onboarding-facts {
+  display: block;
+  margin-top: 6px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  .onboarding-callout {
+    grid-template-columns: 42px minmax(0, 1fr);
+    padding: 16px;
+  }
+
+  .onboarding-callout-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}

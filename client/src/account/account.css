@@ -1,0 +1,1390 @@
+.account-center-page {
+  display: grid;
+  width: min(100%, 980px);
+  min-width: 0;
+  gap: 16px;
+  align-content: start;
+}
+
+.account-center-page section {
+  height: auto;
+  min-width: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+.account-center-page header {
+  margin-bottom: 0;
+}
+
+.account-center-page-header {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--art-rule, var(--border));
+}
+
+.account-center-page-header h1,
+.account-center-page-header p {
+  margin: 0;
+}
+
+.account-center-page-header p {
+  max-width: 760px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.account-center-tabs {
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  gap: 2px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-center-tabs button {
+  min-width: 68px;
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.account-center-tabs button:hover,
+.account-center-tabs button:focus-visible {
+  background: var(--panel-muted);
+  color: var(--text);
+}
+
+.account-center-tabs button.active {
+  border-bottom-color: var(--blue);
+  color: var(--text);
+}
+
+.account-center-panel {
+  min-width: 0;
+  outline: none;
+}
+
+.account-center-panel:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--blue);
+}
+
+.account-center-auth-panel {
+  --account-center-auth-content-width: 780px;
+
+  display: grid;
+  width: min(100%, var(--account-center-auth-content-width));
+  gap: 12px;
+}
+
+.account-center-auth-panel-register {
+  gap: 14px;
+  container-type: inline-size;
+}
+
+.account-center-segments {
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  gap: 2px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-center-segments button {
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.account-center-segments button.active {
+  border-bottom-color: var(--blue);
+  color: var(--text);
+}
+
+.account-center-segments button:hover:not(:disabled),
+.account-center-segments button:focus-visible {
+  background: var(--panel-muted);
+  color: var(--text);
+}
+
+.account-center-auth-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.account-center-auth-fields {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+}
+
+.account-center-auth-fields-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.account-center-auth-fields-pair,
+.account-center-auth-fields-reset {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.account-center-auth-fields-triple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.account-center-invite-field {
+  display: grid;
+  width: min(100%, 520px);
+  gap: 6px;
+}
+
+.account-center-register-form {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.account-center-invite-heading {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+
+.account-center-invite-heading label,
+.account-center-invite-heading small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.account-center-invite-heading small.has-reward {
+  color: var(--blue-strong);
+  font-weight: 600;
+}
+
+.account-center-invite-control-row {
+  display: grid;
+  grid-template-columns: minmax(240px, 360px) auto;
+  min-width: 0;
+  gap: 10px;
+  align-items: center;
+}
+
+.account-center-invite-control {
+  width: 100%;
+  min-width: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.account-center-invite-status {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--success-text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.account-center-register-body {
+  display: grid;
+  width: 100%;
+  gap: 12px;
+}
+
+.account-center-register-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 18px;
+}
+
+.account-center-register-email {
+  grid-column: 1 / -1;
+}
+
+.account-center-register-actions {
+  margin-top: 4px;
+  justify-content: flex-start;
+}
+
+.account-center-register-submit {
+  width: min(380px, 100%);
+}
+
+.account-center-auth-panel-register .account-center-mode-introduction {
+  width: 100%;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.account-center-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.account-center-auth-actions {
+  display: flex;
+  min-height: 38px;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.account-center-action-feedback {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.account-center-action-feedback[data-tone="error"] {
+  color: var(--danger-text);
+}
+
+.account-center-action-feedback[data-tone="success"] {
+  color: var(--success-text);
+}
+
+.account-center-settings-feedback {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.account-center-auth-actions > .account-center-action-feedback {
+  flex: 1 1 100%;
+  max-width: 300px;
+}
+
+.account-center-auth-feedback {
+  grid-column: 1 / -1;
+  margin: -4px 0 0;
+  color: var(--danger-text);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.account-center-mode-introduction {
+  margin-top: 2px;
+  padding-top: 0;
+}
+
+.account-center-mode-introduction p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.account-center-field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.account-center-field > span,
+.account-center-login-hint,
+.account-center-settings-row span,
+.account-center-settings-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-center-submit,
+.account-center-secondary {
+  align-self: end;
+  height: 38px;
+  min-height: 38px;
+  padding-block: 0;
+  white-space: nowrap;
+}
+
+.account-center-password-input {
+  position: relative;
+  min-width: 0;
+}
+
+.account-center-password-input input {
+  width: 100%;
+  padding-right: 42px;
+}
+
+.account-center-password-input input[aria-invalid="true"] {
+  border-color: var(--danger-border);
+}
+
+.account-center-password-input input[aria-invalid="true"]:focus {
+  border-color: var(--danger-text);
+}
+
+.account-center-password-input input::-ms-reveal,
+.account-center-password-input input::-ms-clear {
+  display: none;
+}
+
+.account-center-password-visibility {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: inline-grid;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  place-items: center;
+  transform: translateY(-50%);
+}
+
+.account-center-password-visibility:hover:not(:disabled),
+.account-center-password-visibility:focus-visible {
+  background: var(--panel-muted);
+  color: var(--text);
+}
+
+.account-center-password-visibility:disabled {
+  opacity: 0.45;
+}
+
+.account-center-settings {
+  display: grid;
+}
+
+.account-center-settings-row,
+.account-center-command-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-center-settings-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.account-center-settings-row strong {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-center-inline-panel {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(120px, 0.6fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.account-center-inline-panel > .account-center-action-feedback {
+  grid-column: 1 / -1;
+  justify-self: end;
+  text-align: right;
+}
+
+.account-center-password-panel {
+  grid-template-columns: repeat(3, minmax(140px, 1fr)) auto;
+}
+
+.account-center-password-verification {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.account-center-command-row {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  border-bottom: 0;
+}
+
+.account-center-command-row > .account-center-action-feedback {
+  flex: 1 1 220px;
+}
+
+.account-center-compact-command {
+  display: inline-flex;
+  min-height: 32px;
+  padding: 6px 10px;
+  gap: 6px;
+  align-items: center;
+}
+
+.account-center-view {
+  display: grid;
+  min-width: 0;
+  gap: 18px;
+}
+
+.account-center-view-header,
+.account-center-section-heading {
+  display: flex;
+  min-width: 0;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-center-view-header h2,
+.account-center-section-heading h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.account-center-view-header small,
+.account-center-section-heading small,
+.account-center-eyebrow,
+.account-center-state,
+.account-center-billing-detail dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-center-eyebrow {
+  margin: 0 0 3px;
+}
+
+.account-center-icon-command {
+  display: inline-grid;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0;
+  place-items: center;
+}
+
+.account-center-icon-command svg {
+  width: 18px;
+  height: 18px;
+}
+
+.account-center-balance-row,
+.account-center-fund-ledger {
+  display: grid;
+  margin: 0;
+  border-block: 1px solid var(--border);
+}
+
+.account-center-balance-row {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.account-center-fund-ledger {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.account-center-balance-row > div,
+.account-center-fund-ledger > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  padding: 12px;
+  border-inline-end: 1px solid var(--border);
+}
+
+.account-center-balance-row > div:first-child,
+.account-center-fund-ledger > div:first-child {
+  padding-inline-start: 0;
+}
+
+.account-center-balance-row > div:last-child,
+.account-center-fund-ledger > div:last-child {
+  padding-inline-end: 0;
+  border-inline-end: 0;
+}
+
+.account-center-balance-row dt,
+.account-center-fund-ledger dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-center-balance-row dd,
+.account-center-fund-ledger dd {
+  margin: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.account-center-settlement-guide {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  padding: 14px 15px;
+  border: 1px solid color-mix(in srgb, var(--blue) 24%, var(--border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--blue) 4%, var(--panel));
+}
+
+.account-center-settlement-guide > svg {
+  align-self: start;
+  margin-top: 2px;
+  color: var(--blue-strong);
+}
+
+.account-center-settlement-guide-copy h3,
+.account-center-settlement-guide-copy p {
+  margin: 0;
+}
+
+.account-center-settlement-guide-copy h3 {
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.account-center-settlement-guide-copy p,
+.account-center-settlement-guide-copy small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.account-center-settlement-guide-copy p {
+  margin-top: 3px;
+}
+
+.account-center-settlement-guide-copy small {
+  display: block;
+  margin-top: 2px;
+}
+
+.account-center-settlement-guide-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(96px, auto));
+  margin: 0;
+  border-inline-start: 1px solid var(--border);
+}
+
+.account-center-settlement-guide-facts > div {
+  display: grid;
+  gap: 3px;
+  padding-inline: 15px;
+}
+
+.account-center-settlement-guide-facts > div + div {
+  border-inline-start: 1px solid var(--border);
+}
+
+.account-center-settlement-guide-facts dt {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.account-center-settlement-guide-facts dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.account-center-data-section {
+  display: grid;
+  gap: 10px;
+}
+
+.account-center-trend {
+  display: flex;
+  min-width: 0;
+  min-height: 86px;
+  gap: 2px;
+  align-items: end;
+  overflow-x: auto;
+  padding-block: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-center-trend-wrap {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.account-center-trend-data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.account-center-trend-data th,
+.account-center-trend-data td {
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.account-center-trend-data th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.account-center-trend-day {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  flex: 1 0 28px;
+  gap: 4px;
+  align-self: stretch;
+  align-items: end;
+  text-align: center;
+}
+
+.account-center-trend-bars {
+  display: flex;
+  gap: 2px;
+  align-items: end;
+  height: 56px;
+}
+
+.account-center-trend-band {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  align-items: end;
+}
+
+.account-center-trend-bars span {
+  flex: 1;
+  background: var(--accent);
+}
+
+.account-center-trend-bars span.usage {
+  background: #c26046;
+}
+
+.account-center-trend-day small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-center-trend-tooltip {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  display: grid;
+  gap: 3px;
+  box-sizing: border-box;
+  width: 220px;
+  max-width: calc(100% - 16px);
+  padding: 10px 12px;
+  border: 1px solid var(--surface-floating-border);
+  border-radius: 8px;
+  background: var(--surface-floating);
+  box-shadow: var(--surface-floating-shadow);
+  color: var(--text);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.account-center-trend-tooltip small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.account-center-trend-tooltip strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-center-fact-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+
+.account-center-fact-list li {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-center-fact-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-center-record-label {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.account-center-record-label small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.account-center-fund-actions {
+  display: grid;
+  border-top: 1px solid var(--border);
+}
+
+.account-center-fund-action {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(320px, auto);
+  min-width: 0;
+  gap: 18px;
+  align-items: center;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-center-fund-action-highlight {
+  margin-top: 6px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--warning-bg) 62%, transparent);
+  box-shadow: inset 3px 0 0 var(--warning-text);
+  scroll-margin-block: 24px;
+}
+
+.account-center-fund-action-highlight .account-center-fund-action-copy > svg,
+.account-center-fund-action-highlight .account-center-fund-action-copy p {
+  color: var(--warning-text);
+}
+
+.account-center-fund-action-copy {
+  display: flex;
+  min-width: 0;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.account-center-fund-action-copy > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.account-center-fund-action-copy h3,
+.account-center-fund-action-copy p {
+  margin: 0;
+}
+
+.account-center-fund-action-copy h3 {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.account-center-fund-action-copy p,
+.account-center-fund-action-control small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-center-fund-action-control,
+.account-center-transfer {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+  justify-content: flex-end;
+}
+
+.account-center-fund-action-control {
+  align-items: center;
+}
+
+.account-center-fund-action-control > .account-center-action-feedback {
+  flex: 1 1 180px;
+  text-align: right;
+}
+
+.account-center-transfer .account-center-field {
+  width: min(180px, 100%);
+}
+
+.account-center-finance-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-center-withdrawal-form {
+  grid-template-columns: minmax(140px, 0.7fr) minmax(190px, 1fr) minmax(210px, 1fr) auto;
+}
+
+.account-center-finance-form > small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-center-finance-form > .account-center-action-feedback {
+  grid-column: 1 / -1;
+  justify-self: end;
+  text-align: right;
+}
+
+.account-center-current-payout {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-content);
+}
+
+.account-center-current-payout > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.account-center-current-payout span,
+.account-center-current-payout small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-center-current-payout strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-center-transfer > .account-center-action-feedback {
+  flex: 1 1 100%;
+  order: 3;
+  text-align: right;
+}
+
+.account-center-withdrawal-preview {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border-inline-start: 2px solid var(--accent);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-center-withdrawal-preview strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.account-center-finance-history {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.account-center-finance-history h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.account-center-finance-history ul {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.account-center-finance-history li {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-center-finance-history li > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.account-center-finance-history .account-center-history-actions {
+  display: grid;
+  flex: 0 1 440px;
+  grid-template-columns: repeat(3, max-content);
+  justify-content: end;
+  align-items: center;
+  gap: 6px;
+}
+
+.account-center-history-actions > .account-center-action-feedback {
+  grid-column: 1 / -1;
+  text-align: right;
+}
+
+.account-center-finance-history li span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-center-billing-filters {
+  display: grid;
+  grid-template-columns: auto minmax(130px, 0.4fr) minmax(160px, 0.6fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.account-center-table-wrap {
+  overflow-x: auto;
+  border-block: 1px solid var(--border);
+}
+
+.account-center-billing-table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.account-center-billing-table th,
+.account-center-billing-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.account-center-billing-table th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.account-center-billing-table .account-center-billing-time {
+  width: 158px;
+  white-space: nowrap;
+}
+
+.account-center-billing-model {
+  min-width: 160px;
+  overflow-wrap: anywhere;
+}
+
+.account-center-billing-direction,
+.account-center-billing-type,
+.account-center-billing-status {
+  white-space: nowrap;
+}
+
+.account-center-billing-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.account-center-record-command {
+  padding: 0;
+  color: var(--text);
+  text-align: left;
+}
+
+.account-center-billing-detail.detail-drawer {
+  display: block;
+  width: min(680px, calc(100vw - 240px));
+  min-width: 520px;
+}
+
+.account-center-billing-detail dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.account-center-billing-detail dl > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.account-center-billing-detail dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-center-state {
+  margin: 0;
+}
+
+.account-center-referral-code {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-muted);
+}
+
+.account-center-referral-code strong {
+  font-size: 22px;
+  letter-spacing: 0.16em;
+}
+
+.account-center-referral-code-heading {
+  flex-wrap: wrap;
+}
+
+.account-center-referral-heading-actions {
+  display: flex;
+  min-width: 0;
+  margin-left: auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.account-center-page .account-center-referral-activation {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 16px 20px;
+  border: 1px solid color-mix(in srgb, var(--blue) 26%, var(--border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--blue) 4%, var(--panel));
+}
+
+.account-center-referral-activation.account-center-referral-agreement-update {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.account-center-referral-activation-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  color: var(--blue-strong);
+}
+
+.account-center-referral-activation h3,
+.account-center-referral-activation p {
+  margin: 0;
+}
+
+.account-center-referral-activation h3 {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.account-center-referral-activation > div > p:last-child {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.modal-panel.account-center-referral-agreement {
+  display: grid;
+  width: min(660px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  gap: 16px;
+  padding: 22px;
+  overflow: auto;
+}
+
+.account-center-referral-agreement-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.account-center-referral-agreement-header h2,
+.account-center-referral-agreement-intro,
+.account-center-referral-principles h3,
+.account-center-referral-principles p {
+  margin: 0;
+}
+
+.account-center-referral-agreement-header h2 {
+  color: var(--text);
+  font-size: 20px;
+}
+
+.account-center-referral-agreement-intro {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.account-center-referral-principles {
+  display: grid;
+  border-block: 1px solid var(--border);
+}
+
+.account-center-referral-principles > section {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  padding: 13px 0;
+}
+
+.account-center-referral-principles > section + section {
+  border-top: 1px solid var(--border);
+}
+
+.account-center-referral-principles svg {
+  margin-top: 1px;
+  color: var(--blue-strong);
+}
+
+.account-center-referral-principles h3 {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.account-center-referral-principles p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.account-center-referral-rule-list {
+  display: grid;
+  margin: 4px 0 0;
+  padding-left: 17px;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.account-center-referral-consent {
+  display: flex;
+  gap: 9px;
+  align-items: start;
+  align-self: stretch;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--blue) 22%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--blue) 3%, var(--panel));
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.account-center-referral-consent input {
+  flex: 0 0 16px;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 2px 0 0;
+  padding: 0;
+  accent-color: var(--blue);
+}
+
+.account-center-referral-consent span {
+  min-width: 0;
+}
+
+.account-center-referral-agreement-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+@container (max-width: 500px) {
+  .account-center-invite-control-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.account-center-error {
+  color: #b54735;
+}
+
+.account-center-inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #b54735;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .account-center-billing-detail.detail-drawer {
+    width: min(680px, calc(100vw - 24px));
+    min-width: 0;
+  }
+
+  .account-center-auth-form,
+  .account-center-inline-panel,
+  .account-center-password-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .account-center-auth-fields,
+  .account-center-auth-fields-pair,
+  .account-center-auth-fields-triple,
+  .account-center-auth-fields-reset {
+    grid-template-columns: 1fr;
+  }
+
+  .account-center-invite-control-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-center-referral-activation {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .account-center-referral-activation > button {
+    grid-column: 1 / -1;
+    justify-content: center;
+  }
+
+  .modal-panel.account-center-referral-agreement {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    padding: 18px;
+  }
+
+  .account-center-register-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .account-center-register-email {
+    grid-column: auto;
+  }
+
+  .account-center-auth-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .account-center-submit,
+  .account-center-secondary {
+    width: 100%;
+  }
+
+  .account-center-segments {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .account-center-fund-action {
+    grid-template-columns: 1fr;
+  }
+
+  .account-center-fund-action-control,
+  .account-center-transfer {
+    justify-content: flex-start;
+  }
+
+  .account-center-current-payout {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .account-center-settlement-guide {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .account-center-settlement-guide-facts {
+    grid-column: 2;
+    border-inline-start: 0;
+  }
+
+  .account-center-balance-row,
+  .account-center-fund-ledger {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-center-balance-row > div:nth-child(2),
+  .account-center-fund-ledger > div:nth-child(2) {
+    border-inline-end: 0;
+  }
+
+  .account-center-transfer,
+  .account-center-billing-filters,
+  .account-center-finance-form,
+  .account-center-withdrawal-form {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .account-center-transfer .account-center-field {
+    width: 100%;
+  }
+
+  .account-center-finance-history li {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

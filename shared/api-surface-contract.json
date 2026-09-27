@@ -1,0 +1,2659 @@
+{
+  "schema_version": 2,
+  "manifest_version": 3,
+  "execution_contexts": [
+    {
+      "id": "api_credential",
+      "short": "A"
+    },
+    {
+      "id": "subscription_driver",
+      "short": "S"
+    },
+    {
+      "id": "platform_supply",
+      "short": "P"
+    }
+  ],
+  "conversion_levels": [
+    "c0",
+    "c1",
+    "c2",
+    "c3"
+  ],
+  "maturity_levels": [
+    "l0",
+    "l1",
+    "l2",
+    "l3",
+    "l4",
+    "l5",
+    "l6"
+  ],
+  "surfaces": [
+    {
+      "id": "openai",
+      "mount": "/v1",
+      "api_versions": [
+        "v1"
+      ],
+      "protocols": [
+        "openai_responses",
+        "openai_chat"
+      ],
+      "authentication": [
+        "bearer",
+        "x_api_key",
+        "api_key"
+      ]
+    },
+    {
+      "id": "anthropic",
+      "mount": "/anthropic",
+      "api_versions": [
+        "v1"
+      ],
+      "protocols": [
+        "anthropic_messages"
+      ],
+      "authentication": [
+        "x_api_key",
+        "bearer"
+      ]
+    },
+    {
+      "id": "gemini",
+      "mount": "/gemini",
+      "api_versions": [
+        "v1beta"
+      ],
+      "protocols": [
+        "gemini_native"
+      ],
+      "authentication": [
+        "x_goog_api_key",
+        "query_key",
+        "bearer"
+      ]
+    }
+  ],
+  "official_families": [
+    {
+      "id": "openai.models",
+      "surface": "openai",
+      "name": "Models",
+      "scope": "model_api",
+      "priority": "p1_core",
+      "official_paths": ["/v1/models"],
+      "typed_operation_ids": ["openai.list_models", "openai.get_model", "openai.delete_model"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "aggregated_mock"},
+        "subscription_driver": {"coverage": "partial", "conversion": "c0", "maturity": "l4", "evidence": "aggregated_mock"},
+        "platform_supply": {"coverage": "partial", "conversion": "c0", "maturity": "l4", "evidence": "aggregated_mock"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/models",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.responses",
+      "surface": "openai",
+      "name": "Responses",
+      "scope": "model_api",
+      "priority": "p0_tools",
+      "official_paths": ["/v1/responses"],
+      "typed_operation_ids": ["openai.responses", "openai.responses_websocket", "openai.responses_get", "openai.responses_delete", "openai.responses_cancel", "openai.responses_input_items", "openai.responses_compact", "openai.responses_input_tokens"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "mock_e2e"},
+        "subscription_driver": {"coverage": "partial", "conversion": "c1", "maturity": "l4", "evidence": "mock_e2e"},
+        "platform_supply": {"coverage": "partial", "conversion": "c1", "maturity": "l5", "evidence": "billing_mock_e2e"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/responses",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "openai.chat_completions",
+      "surface": "openai",
+      "name": "Chat Completions and stored chats",
+      "scope": "model_api",
+      "priority": "p0_tools",
+      "official_paths": ["/v1/chat/completions", "/v1/chat/completions/{completion_id}"],
+      "typed_operation_ids": ["openai.chat_completions", "openai.chat_completions_list", "openai.chat_completions_get", "openai.chat_completions_update", "openai.chat_completions_delete", "openai.chat_completion_messages_list"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "partial", "conversion": "c1", "maturity": "l4", "evidence": "mock_e2e"},
+        "platform_supply": {"coverage": "partial", "conversion": "c1", "maturity": "l5", "evidence": "billing_mock_e2e"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/chat",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.legacy_completions",
+      "surface": "openai",
+      "name": "Legacy Completions",
+      "scope": "model_api",
+      "priority": "p4_extended",
+      "official_paths": ["/v1/completions"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "opaque_native_transport_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "explicit_rejection"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "pricing_rejection"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/completions",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.conversations",
+      "surface": "openai",
+      "name": "Conversations and items",
+      "scope": "model_api",
+      "priority": "p0_tools",
+      "official_paths": ["/v1/conversations"],
+      "typed_operation_ids": ["openai.conversations_create", "openai.conversations_get", "openai.conversations_update", "openai.conversations_delete", "openai.conversation_items_create", "openai.conversation_items_list", "openai.conversation_item_get", "openai.conversation_item_delete"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "resource_owner_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "pricing_rejection"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/conversations",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "openai.embeddings",
+      "surface": "openai",
+      "name": "Embeddings",
+      "scope": "model_api",
+      "priority": "p1_core",
+      "official_paths": ["/v1/embeddings"],
+      "typed_operation_ids": ["openai.embeddings"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "mock_e2e"},
+        "subscription_driver": {"coverage": "partial", "conversion": "c2", "maturity": "l3", "evidence": "approximation_disabled"},
+        "platform_supply": {"coverage": "complete", "conversion": "c1", "maturity": "l5", "evidence": "billing_mock_e2e"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/embeddings",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "openai.files_uploads",
+      "surface": "openai",
+      "name": "Files and Uploads",
+      "scope": "model_api",
+      "priority": "p2_resources",
+      "official_paths": ["/v1/files", "/v1/uploads"],
+      "typed_operation_ids": ["openai.files_create", "openai.files_list", "openai.files_get", "openai.files_delete", "openai.files_content", "openai.uploads_create", "openai.upload_parts_create", "openai.uploads_complete", "openai.uploads_cancel"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "streaming_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "storage_pricing_rejection"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/files",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "openai.batches",
+      "surface": "openai",
+      "name": "Batches",
+      "scope": "model_api",
+      "priority": "p2_resources",
+      "official_paths": ["/v1/batches"],
+      "typed_operation_ids": ["openai.batches_create", "openai.batches_list", "openai.batches_get", "openai.batches_cancel"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "resource_owner_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "batch_pricing_rejection"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/batch",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "openai.images",
+      "surface": "openai",
+      "name": "Images",
+      "scope": "model_api",
+      "priority": "p3_media",
+      "official_paths": ["/v1/images"],
+      "typed_operation_ids": ["openai.images_generations", "openai.images_edits", "openai.images_variations"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "multipart_mock_e2e"},
+        "subscription_driver": {"coverage": "partial", "conversion": "c1", "maturity": "l4", "evidence": "openai_driver_mock_e2e"},
+        "platform_supply": {"coverage": "partial", "conversion": "c1", "maturity": "l5", "evidence": "generation_billing_mock_e2e"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/images",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "openai.audio",
+      "surface": "openai",
+      "name": "Audio, voices, and consents",
+      "scope": "model_api",
+      "priority": "p3_media",
+      "official_paths": ["/v1/audio/speech", "/v1/audio/transcriptions", "/v1/audio/translations", "/v1/audio/voice_consents", "/v1/audio/voices"],
+      "typed_operation_ids": ["openai.audio_speech", "openai.audio_transcriptions", "openai.audio_translations"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "streaming_media_and_native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "media_pricing_rejection"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/audio",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.videos",
+      "surface": "openai",
+      "name": "Videos and characters",
+      "scope": "model_api",
+      "priority": "p3_media",
+      "official_paths": ["/v1/videos", "/v1/videos/characters"],
+      "typed_operation_ids": ["openai.videos_create", "openai.videos_list", "openai.videos_get", "openai.videos_delete", "openai.videos_content", "openai.videos_remix", "openai.videos_edit", "openai.videos_extend"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "resource_media_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "media_pricing_rejection"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/videos",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.realtime",
+      "surface": "openai",
+      "name": "Realtime WebSocket, WebRTC, and SIP",
+      "scope": "model_api",
+      "priority": "p0_tools",
+      "official_paths": ["/v1/realtime", "/v1/realtime/translations"],
+      "typed_operation_ids": ["openai.realtime_websocket", "openai.realtime_calls_create", "openai.realtime_calls_accept", "openai.realtime_calls_hangup", "openai.realtime_calls_refer", "openai.realtime_calls_reject", "openai.realtime_client_secrets_create", "openai.realtime_sessions_create", "openai.realtime_transcription_sessions_create", "openai.realtime_translation_websocket", "openai.realtime_translation_calls_create", "openai.realtime_translation_client_secrets_create"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "http_websocket_mock_e2e"},
+        "subscription_driver": {"coverage": "partial", "conversion": "c1", "maturity": "l2", "evidence": "codex_webrtc_wire_verified_bootstrap_403_observed"},
+        "platform_supply": {"coverage": "partial", "conversion": "c0", "maturity": "l2", "evidence": "native_websocket_usage_metering_mock; webrtc_call_audio_tunnel_mock; sip_translation_not_platform_enabled"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/realtime",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.codex_live",
+      "surface": "openai",
+      "name": "Codex Frameless Live (experimental)",
+      "scope": "model_api",
+      "priority": "p0_tools",
+      "official_paths": ["/v1/live"],
+      "typed_operation_ids": ["openai.realtime_live_call_create", "openai.realtime_live_connect", "openai.realtime_live_websocket"],
+      "contexts": {
+        "api_credential": {"coverage": "partial", "conversion": "c0", "maturity": "l2", "evidence": "compatible_backend_mock_only_not_official_api_key"},
+        "subscription_driver": {"coverage": "partial", "conversion": "c1", "maturity": "l2", "evidence": "codex_wire_verified_entitlement_required"},
+        "platform_supply": {"coverage": "partial", "conversion": "c0", "maturity": "l2", "evidence": "standalone_websocket_connection_metering_mock; webrtc_call_audio_tunnel_mock"}
+      },
+      "official_source": "https://github.com/openai/codex/tree/main/codex-rs/codex-api/src/endpoint",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.moderations",
+      "surface": "openai",
+      "name": "Moderations",
+      "scope": "model_api",
+      "priority": "p1_core",
+      "official_paths": ["/v1/moderations"],
+      "typed_operation_ids": ["openai.moderations"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "native_route_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "pricing_rejection"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/moderations",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "openai.content_provenance",
+      "surface": "openai",
+      "name": "Content provenance checks",
+      "scope": "model_api",
+      "priority": "p3_media",
+      "official_paths": ["/v1/content_provenance_checks"],
+      "typed_operation_ids": ["openai.content_provenance_checks"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "streaming_upload_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "media_pricing_rejection"}
+      },
+      "official_source": "https://developers.openai.com/api/reference/cli/resources/content_provenance_checks/methods/create",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.vector_stores",
+      "surface": "openai",
+      "name": "Vector stores, files, batches, and search",
+      "scope": "model_api",
+      "priority": "p2_resources",
+      "official_paths": ["/v1/vector_stores"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "opaque_native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "storage_pricing_rejection"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/vector-stores",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.containers",
+      "surface": "openai",
+      "name": "Containers and container files",
+      "scope": "model_api",
+      "priority": "p2_resources",
+      "official_paths": ["/v1/containers"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "opaque_native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "storage_pricing_rejection"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/containers",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.skills",
+      "surface": "openai",
+      "name": "Skills and versions",
+      "scope": "model_api",
+      "priority": "p0_tools",
+      "official_paths": ["/v1/skills"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "opaque_native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "pricing_rejection"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/skills",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.assistants_threads",
+      "surface": "openai",
+      "name": "Assistants and Threads (legacy)",
+      "scope": "model_api",
+      "priority": "p4_extended",
+      "official_paths": ["/v1/assistants", "/v1/threads"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "opaque_native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "pricing_rejection"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/assistants",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.fine_tuning_evals_chatkit",
+      "surface": "openai",
+      "name": "Fine-tuning, Evals, and ChatKit",
+      "scope": "model_api",
+      "priority": "p4_extended",
+      "official_paths": ["/v1/fine_tuning", "/v1/evals", "/v1/chatkit"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "opaque_native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "pricing_rejection"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/fine-tuning",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "openai.management",
+      "surface": "openai",
+      "name": "Organization and project management",
+      "scope": "management_api",
+      "priority": "p5_management",
+      "official_paths": ["/v1/organization", "/v1/projects"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "reserved", "conversion": "c3", "maturity": "l4", "evidence": "fail_closed_test"},
+        "subscription_driver": {"coverage": "reserved", "conversion": "c3", "maturity": "l4", "evidence": "fail_closed_test"},
+        "platform_supply": {"coverage": "reserved", "conversion": "c3", "maturity": "l4", "evidence": "fail_closed_test"}
+      },
+      "official_source": "https://platform.openai.com/docs/api-reference/projects",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "anthropic.models",
+      "surface": "anthropic",
+      "name": "Models",
+      "scope": "model_api",
+      "priority": "p1_core",
+      "official_paths": ["/anthropic/v1/models"],
+      "typed_operation_ids": ["anthropic.list_models", "anthropic.get_model"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "aggregated_mock"},
+        "subscription_driver": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "aggregated_mock"},
+        "platform_supply": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "aggregated_mock"}
+      },
+      "official_source": "https://platform.claude.com/docs/en/api/models/list",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "anthropic.messages",
+      "surface": "anthropic",
+      "name": "Messages and token counting",
+      "scope": "model_api",
+      "priority": "p0_tools",
+      "official_paths": ["/anthropic/v1/messages"],
+      "typed_operation_ids": ["anthropic.messages", "anthropic.count_tokens"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "mock_e2e"},
+        "subscription_driver": {"coverage": "complete", "conversion": "c1", "maturity": "l4", "evidence": "claude_driver_mock_e2e"},
+        "platform_supply": {"coverage": "complete", "conversion": "c1", "maturity": "l5", "evidence": "billing_mock_e2e"}
+      },
+      "official_source": "https://platform.claude.com/docs/en/api/messages",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "anthropic.files",
+      "surface": "anthropic",
+      "name": "Files",
+      "scope": "model_api",
+      "priority": "p2_resources",
+      "official_paths": ["/anthropic/v1/files"],
+      "typed_operation_ids": ["anthropic.files_create", "anthropic.files_list", "anthropic.files_get", "anthropic.files_delete", "anthropic.files_content"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "streaming_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "storage_pricing_rejection"}
+      },
+      "official_source": "https://platform.claude.com/docs/en/build-with-claude/files",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "anthropic.message_batches",
+      "surface": "anthropic",
+      "name": "Message Batches",
+      "scope": "model_api",
+      "priority": "p2_resources",
+      "official_paths": ["/anthropic/v1/messages/batches"],
+      "typed_operation_ids": ["anthropic.batches_create", "anthropic.batches_list", "anthropic.batches_get", "anthropic.batches_cancel", "anthropic.batches_delete", "anthropic.batches_results"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "resource_owner_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "batch_pricing_rejection"}
+      },
+      "official_source": "https://platform.claude.com/docs/en/api/messages/batches",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "anthropic.skills_agents",
+      "surface": "anthropic",
+      "name": "Skills, managed agents, sessions, and environments",
+      "scope": "model_api",
+      "priority": "p2_resources",
+      "official_paths": ["/anthropic/v1/skills", "/anthropic/v1/agents", "/anthropic/v1/sessions", "/anthropic/v1/environments", "/anthropic/v1/deployments", "/anthropic/v1/deployment_runs", "/anthropic/v1/vaults", "/anthropic/v1/memory_stores", "/anthropic/v1/dreams", "/anthropic/v1/tunnels", "/anthropic/v1/user_profiles"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "opaque_native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "pricing_rejection"}
+      },
+      "official_source": "https://platform.claude.com/docs/en/api",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "anthropic.management",
+      "surface": "anthropic",
+      "name": "Organization, workspace, member, key, usage, and audit management",
+      "scope": "management_api",
+      "priority": "p5_management",
+      "official_paths": ["/anthropic/v1/organizations"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "reserved", "conversion": "c3", "maturity": "l4", "evidence": "fail_closed_test"},
+        "subscription_driver": {"coverage": "reserved", "conversion": "c3", "maturity": "l4", "evidence": "fail_closed_test"},
+        "platform_supply": {"coverage": "reserved", "conversion": "c3", "maturity": "l4", "evidence": "fail_closed_test"}
+      },
+      "official_source": "https://platform.claude.com/docs/en/manage-claude/overview",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "gemini.models",
+      "surface": "gemini",
+      "name": "Models",
+      "scope": "model_api",
+      "priority": "p1_core",
+      "official_paths": ["/gemini/v1beta/models"],
+      "typed_operation_ids": ["gemini.list_models", "gemini.get_model"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "aggregated_mock"},
+        "subscription_driver": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "aggregated_mock"},
+        "platform_supply": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "aggregated_mock"}
+      },
+      "official_source": "https://ai.google.dev/api/models",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "gemini.generation",
+      "surface": "gemini",
+      "name": "GenerateContent, streaming, and token counting",
+      "scope": "model_api",
+      "priority": "p0_tools",
+      "official_paths": ["/gemini/v1beta/models/{model}:generateContent", "/gemini/v1beta/models/{model}:streamGenerateContent", "/gemini/v1beta/models/{model}:countTokens"],
+      "typed_operation_ids": ["gemini.generate_content", "gemini.stream_generate_content", "gemini.count_tokens"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "mock_e2e"},
+        "subscription_driver": {"coverage": "complete", "conversion": "c1", "maturity": "l4", "evidence": "antigravity_driver_mock_e2e"},
+        "platform_supply": {"coverage": "complete", "conversion": "c1", "maturity": "l5", "evidence": "billing_mock_e2e"}
+      },
+      "official_source": "https://ai.google.dev/api/generate-content",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "gemini.interactions",
+      "surface": "gemini",
+      "name": "Interactions",
+      "scope": "model_api",
+      "priority": "p0_tools",
+      "official_paths": ["/gemini/v1beta/interactions"],
+      "typed_operation_ids": ["gemini.interactions_create", "gemini.interactions_get", "gemini.interactions_delete", "gemini.interactions_cancel"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "resource_owner_mock_e2e"},
+        "subscription_driver": {"coverage": "partial", "conversion": "c1", "maturity": "l4", "evidence": "driver_capability_gated_mock"},
+        "platform_supply": {"coverage": "complete", "conversion": "c1", "maturity": "l5", "evidence": "billing_mock_e2e"}
+      },
+      "official_source": "https://ai.google.dev/gemini-api/docs/interactions",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "gemini.embeddings",
+      "surface": "gemini",
+      "name": "Embeddings and batch embeddings",
+      "scope": "model_api",
+      "priority": "p1_core",
+      "official_paths": ["/gemini/v1beta/models/{model}:embedContent", "/gemini/v1beta/models/{model}:batchEmbedContents"],
+      "typed_operation_ids": ["gemini.embed_content", "gemini.batch_embed_contents"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c2", "maturity": "l3", "evidence": "approximation_disabled"},
+        "platform_supply": {"coverage": "partial", "conversion": "c1", "maturity": "l5", "evidence": "billing_mock_e2e"}
+      },
+      "official_source": "https://ai.google.dev/api/embeddings",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "gemini.cached_contents",
+      "surface": "gemini",
+      "name": "Cached Contents",
+      "scope": "model_api",
+      "priority": "p0_tools",
+      "official_paths": ["/gemini/v1beta/cachedContents"],
+      "typed_operation_ids": ["gemini.cached_contents_create", "gemini.cached_contents_list", "gemini.cached_contents_get", "gemini.cached_contents_update", "gemini.cached_contents_delete"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "resource_owner_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "cache_storage_pricing_rejection"}
+      },
+      "official_source": "https://ai.google.dev/api/caching",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "gemini.files",
+      "surface": "gemini",
+      "name": "Files and resumable uploads",
+      "scope": "model_api",
+      "priority": "p2_resources",
+      "official_paths": ["/gemini/v1beta/files", "/gemini/upload/v1beta/files"],
+      "typed_operation_ids": ["gemini.files_create", "gemini.files_list", "gemini.files_get", "gemini.files_delete"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "resumable_upload_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "storage_pricing_rejection"}
+      },
+      "official_source": "https://ai.google.dev/gemini-api/docs/files",
+      "verified_on": "2026-07-29"
+    },
+    {
+      "id": "gemini.live",
+      "surface": "gemini",
+      "name": "Live API and constrained auth tokens",
+      "scope": "model_api",
+      "priority": "p0_tools",
+      "official_paths": ["/gemini/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent", "/gemini/v1beta/auth_tokens"],
+      "typed_operation_ids": ["gemini.live_websocket", "gemini.live_auth_tokens_create"],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "websocket_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "partial", "conversion": "c0", "maturity": "l2", "evidence": "fresh_live_websocket_usage_metering_mock; owner_resumption_not_platform_enabled"}
+      },
+      "official_source": "https://ai.google.dev/api/live",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "gemini.batches",
+      "surface": "gemini",
+      "name": "Generate and embedding batches",
+      "scope": "model_api",
+      "priority": "p2_resources",
+      "official_paths": ["/gemini/v1beta/batches"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "opaque_native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "batch_pricing_rejection"}
+      },
+      "official_source": "https://ai.google.dev/api/all-methods",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "gemini.file_search",
+      "surface": "gemini",
+      "name": "File Search Stores and documents",
+      "scope": "model_api",
+      "priority": "p0_tools",
+      "official_paths": ["/gemini/v1beta/fileSearchStores", "/gemini/upload/v1beta/fileSearchStores"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "opaque_native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "storage_pricing_rejection"}
+      },
+      "official_source": "https://ai.google.dev/api/all-methods",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "gemini.generated_media",
+      "surface": "gemini",
+      "name": "Generated files, media, image, audio, video, and music",
+      "scope": "model_api",
+      "priority": "p3_media",
+      "official_paths": ["/gemini/v1beta/generatedFiles", "/gemini/v1beta/media", "/gemini/v1beta/environments", "/gemini/v1beta/models/{model}:predict", "/gemini/v1beta/models/{model}:predictLongRunning"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "opaque_native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "media_pricing_rejection"}
+      },
+      "official_source": "https://ai.google.dev/api/all-methods",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "gemini.operations",
+      "surface": "gemini",
+      "name": "Long-running operations",
+      "scope": "model_api",
+      "priority": "p2_resources",
+      "official_paths": ["/gemini/v1beta/operations"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "opaque_native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "pricing_rejection"}
+      },
+      "official_source": "https://ai.google.dev/api/all-methods",
+      "verified_on": "2026-08-29"
+    },
+    {
+      "id": "gemini.tuning_corpora_permissions",
+      "surface": "gemini",
+      "name": "Tuned models, corpora, and permissions",
+      "scope": "model_api",
+      "priority": "p4_extended",
+      "official_paths": ["/gemini/v1beta/tunedModels", "/gemini/v1beta/corpora"],
+      "typed_operation_ids": [],
+      "contexts": {
+        "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "opaque_native_resource_mock_e2e"},
+        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
+        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "pricing_rejection"}
+      },
+      "official_source": "https://ai.google.dev/api/all-methods",
+      "verified_on": "2026-08-29"
+    }
+  ],
+  "operations": [
+    {
+      "id": "openai.list_models",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/models",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "aggregated_control",
+      "statefulness": "stateless",
+      "billing_class": "none",
+      "execution_policy": "aggregated_control",
+      "required_context_declarations": [],
+      "required_conversion_evidence": [
+        "response",
+        "error"
+      ]
+    },
+    {
+      "id": "openai.get_model",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/models/{model}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "aggregated_control",
+      "statefulness": "stateless",
+      "billing_class": "none",
+      "execution_policy": "aggregated_control",
+      "required_context_declarations": [],
+      "required_conversion_evidence": [
+        "response",
+        "error"
+      ]
+    },
+    {
+      "id": "openai.chat_completions",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "protocol": "openai_chat",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "buffered",
+        "sse"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "stream",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "openai.responses",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/responses",
+      "protocol": "openai_responses",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "buffered",
+        "sse"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "stream",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "openai.responses_websocket",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/responses",
+      "protocol": "openai_responses",
+      "transport": "websocket",
+      "request_body_mode": "duplex_frames",
+      "response_modes": ["websocket"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_websocket",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/realtime",
+      "protocol": null,
+      "transport": "websocket",
+      "request_body_mode": "duplex_frames",
+      "response_modes": ["websocket"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "platform_supply"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_live_call_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/live",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_live_connect",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/live",
+      "protocol": null,
+      "transport": "websocket",
+      "request_body_mode": "duplex_frames",
+      "response_modes": ["websocket"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_live_websocket",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/live/{call_id}",
+      "protocol": null,
+      "transport": "websocket",
+      "request_body_mode": "duplex_frames",
+      "response_modes": ["websocket"],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "metered",
+      "execution_policy": "local_backend_only",
+      "required_context_declarations": ["api_credential", "subscription_driver"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "openai.responses_get",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/responses/{response_id}",
+      "protocol": "openai_responses",
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "openai.responses_delete",
+      "surface": "openai",
+      "method": "DELETE",
+      "path": "/v1/responses/{response_id}",
+      "protocol": "openai_responses",
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "none",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "openai.responses_cancel",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/responses/{response_id}/cancel",
+      "protocol": "openai_responses",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "none",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "openai.responses_input_items",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/responses/{response_id}/input_items",
+      "protocol": "openai_responses",
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "openai.responses_compact",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/responses/compact",
+      "protocol": "openai_responses",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "openai.responses_input_tokens",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/responses/input_tokens",
+      "protocol": "openai_responses",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.conversations_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/conversations",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.conversations_get",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/conversations/{conversation_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.conversations_update",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/conversations/{conversation_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.conversations_delete",
+      "surface": "openai",
+      "method": "DELETE",
+      "path": "/v1/conversations/{conversation_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.conversation_items_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/conversations/{conversation_id}/items",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.conversation_items_list",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/conversations/{conversation_id}/items",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.conversation_item_get",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/conversations/{conversation_id}/items/{item_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.conversation_item_delete",
+      "surface": "openai",
+      "method": "DELETE",
+      "path": "/v1/conversations/{conversation_id}/items/{item_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.embeddings",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/embeddings",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "openai.files_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/files",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "streaming_upload",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.files_list",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/files",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.files_get",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/files/{file_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.files_delete",
+      "surface": "openai",
+      "method": "DELETE",
+      "path": "/v1/files/{file_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.files_content",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/files/{file_id}/content",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["binary_stream"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "openai.uploads_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/uploads",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.upload_parts_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/uploads/{upload_id}/parts",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "streaming_upload",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.uploads_complete",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/uploads/{upload_id}/complete",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.uploads_cancel",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/uploads/{upload_id}/cancel",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.batches_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/batches",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.batches_list",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/batches",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.batches_get",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/batches/{batch_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.batches_cancel",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/batches/{batch_id}/cancel",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.images_generations",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/images/generations",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered", "sse"],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+        "execution_policy": "capability_routed",
+        "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "openai.images_edits",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/images/edits",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered", "sse"],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "local_backend_only",
+      "required_context_declarations": ["api_credential", "subscription_driver"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "openai.images_variations",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/images/variations",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "streaming_upload",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.audio_speech",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/audio/speech",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["binary_stream", "sse"],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "openai.audio_transcriptions",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/audio/transcriptions",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "streaming_upload",
+      "response_modes": ["buffered", "sse"],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "openai.audio_translations",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/audio/translations",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "streaming_upload",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.videos_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/videos",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "streaming_upload",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.videos_list",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/videos",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.videos_get",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/videos/{video_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.videos_delete",
+      "surface": "openai",
+      "method": "DELETE",
+      "path": "/v1/videos/{video_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.videos_content",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/videos/{video_id}/content",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["binary_stream"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "openai.videos_remix",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/videos/{video_id}/remix",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.videos_edit",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/videos/edits",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "streaming_upload",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.videos_extend",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/videos/extensions",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "streaming_upload",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "anthropic.list_models",
+      "surface": "anthropic",
+      "method": "GET",
+      "path": "/anthropic/v1/models",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "aggregated_control",
+      "statefulness": "stateless",
+      "billing_class": "none",
+      "execution_policy": "aggregated_control",
+      "required_context_declarations": [],
+      "required_conversion_evidence": [
+        "response",
+        "error"
+      ]
+    },
+    {
+      "id": "anthropic.get_model",
+      "surface": "anthropic",
+      "method": "GET",
+      "path": "/anthropic/v1/models/{model}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "aggregated_control",
+      "statefulness": "stateless",
+      "billing_class": "none",
+      "execution_policy": "aggregated_control",
+      "required_context_declarations": [],
+      "required_conversion_evidence": [
+        "response",
+        "error"
+      ]
+    },
+    {
+      "id": "anthropic.messages",
+      "surface": "anthropic",
+      "method": "POST",
+      "path": "/anthropic/v1/messages",
+      "protocol": "anthropic_messages",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "buffered",
+        "sse"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "stream",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "anthropic.count_tokens",
+      "surface": "anthropic",
+      "method": "POST",
+      "path": "/anthropic/v1/messages/count_tokens",
+      "protocol": "anthropic_messages",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "none",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "anthropic.files_create",
+      "surface": "anthropic",
+      "method": "POST",
+      "path": "/anthropic/v1/files",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "streaming_upload",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "anthropic.files_list",
+      "surface": "anthropic",
+      "method": "GET",
+      "path": "/anthropic/v1/files",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "anthropic.files_get",
+      "surface": "anthropic",
+      "method": "GET",
+      "path": "/anthropic/v1/files/{file_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "anthropic.files_delete",
+      "surface": "anthropic",
+      "method": "DELETE",
+      "path": "/anthropic/v1/files/{file_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "anthropic.files_content",
+      "surface": "anthropic",
+      "method": "GET",
+      "path": "/anthropic/v1/files/{file_id}/content",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["binary_stream"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "anthropic.batches_create",
+      "surface": "anthropic",
+      "method": "POST",
+      "path": "/anthropic/v1/messages/batches",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "anthropic.batches_list",
+      "surface": "anthropic",
+      "method": "GET",
+      "path": "/anthropic/v1/messages/batches",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "anthropic.batches_get",
+      "surface": "anthropic",
+      "method": "GET",
+      "path": "/anthropic/v1/messages/batches/{message_batch_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "anthropic.batches_cancel",
+      "surface": "anthropic",
+      "method": "POST",
+      "path": "/anthropic/v1/messages/batches/{message_batch_id}/cancel",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "anthropic.batches_delete",
+      "surface": "anthropic",
+      "method": "DELETE",
+      "path": "/anthropic/v1/messages/batches/{message_batch_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "anthropic.batches_results",
+      "surface": "anthropic",
+      "method": "GET",
+      "path": "/anthropic/v1/messages/batches/{message_batch_id}/results",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["binary_stream"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "gemini.list_models",
+      "surface": "gemini",
+      "method": "GET",
+      "path": "/gemini/v1beta/models",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "aggregated_control",
+      "statefulness": "stateless",
+      "billing_class": "none",
+      "execution_policy": "aggregated_control",
+      "required_context_declarations": [],
+      "required_conversion_evidence": [
+        "response",
+        "error"
+      ]
+    },
+    {
+      "id": "gemini.get_model",
+      "surface": "gemini",
+      "method": "GET",
+      "path": "/gemini/v1beta/models/{model}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "aggregated_control",
+      "statefulness": "stateless",
+      "billing_class": "none",
+      "execution_policy": "aggregated_control",
+      "required_context_declarations": [],
+      "required_conversion_evidence": [
+        "response",
+        "error"
+      ]
+    },
+    {
+      "id": "gemini.generate_content",
+      "surface": "gemini",
+      "method": "POST",
+      "path": "/gemini/v1beta/models/{model}:generateContent",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "gemini.stream_generate_content",
+      "surface": "gemini",
+      "method": "POST",
+      "path": "/gemini/v1beta/models/{model}:streamGenerateContent",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "sse"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "stream",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "gemini.count_tokens",
+      "surface": "gemini",
+      "method": "POST",
+      "path": "/gemini/v1beta/models/{model}:countTokens",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "none",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "gemini.embed_content",
+      "surface": "gemini",
+      "method": "POST",
+      "path": "/gemini/v1beta/models/{model}:embedContent",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "gemini.interactions_create",
+      "surface": "gemini",
+      "method": "POST",
+      "path": "/gemini/v1beta/interactions",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "buffered",
+        "sse"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "stream",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "gemini.interactions_get",
+      "surface": "gemini",
+      "method": "GET",
+      "path": "/gemini/v1beta/interactions/{interaction_id}",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": [
+        "buffered",
+        "sse"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "stream",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "gemini.interactions_delete",
+      "surface": "gemini",
+      "method": "DELETE",
+      "path": "/gemini/v1beta/interactions/{interaction_id}",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "none",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "gemini.interactions_cancel",
+      "surface": "gemini",
+      "method": "POST",
+      "path": "/gemini/v1beta/interactions/{interaction_id}/cancel",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": [
+        "buffered"
+      ],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "none",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": [
+        "api_credential",
+        "subscription_driver",
+        "platform_supply"
+      ],
+      "required_conversion_evidence": [
+        "request",
+        "response",
+        "error",
+        "cancel"
+      ]
+    },
+    {
+      "id": "gemini.cached_contents_create",
+      "surface": "gemini",
+      "method": "POST",
+      "path": "/gemini/v1beta/cachedContents",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "gemini.cached_contents_list",
+      "surface": "gemini",
+      "method": "GET",
+      "path": "/gemini/v1beta/cachedContents",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "gemini.cached_contents_get",
+      "surface": "gemini",
+      "method": "GET",
+      "path": "/gemini/v1beta/cachedContents/{cached_content_id}",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "gemini.cached_contents_update",
+      "surface": "gemini",
+      "method": "PATCH",
+      "path": "/gemini/v1beta/cachedContents/{cached_content_id}",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "gemini.cached_contents_delete",
+      "surface": "gemini",
+      "method": "DELETE",
+      "path": "/gemini/v1beta/cachedContents/{cached_content_id}",
+      "protocol": "gemini_native",
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "conditional",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "gemini.files_create",
+      "surface": "gemini",
+      "method": "POST",
+      "path": "/gemini/upload/v1beta/files",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "streaming_upload",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "gemini.files_list",
+      "surface": "gemini",
+      "method": "GET",
+      "path": "/gemini/v1beta/files",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "gemini.files_get",
+      "surface": "gemini",
+      "method": "GET",
+      "path": "/gemini/v1beta/files/{file_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "gemini.files_delete",
+      "surface": "gemini",
+      "method": "DELETE",
+      "path": "/gemini/v1beta/files/{file_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "gemini.live_websocket",
+      "surface": "gemini",
+      "method": "GET",
+      "path": "/gemini/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+      "protocol": "gemini_native",
+      "transport": "websocket",
+      "request_body_mode": "duplex_frames",
+      "response_modes": ["websocket"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "platform_supply"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "gemini.live_auth_tokens_create",
+      "surface": "gemini",
+      "method": "POST",
+      "path": "/gemini/v1beta/auth_tokens",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_calls_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/realtime/calls",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_calls_accept",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/realtime/calls/{call_id}/accept",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "metered",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_calls_hangup",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/realtime/calls/{call_id}/hangup",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_calls_refer",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/realtime/calls/{call_id}/refer",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_calls_reject",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/realtime/calls/{call_id}/reject",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_client_secrets_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/realtime/client_secrets",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_sessions_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/realtime/sessions",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_transcription_sessions_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/realtime/transcription_sessions",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_translation_client_secrets_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/realtime/translations/client_secrets",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_translation_websocket",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/realtime/translations",
+      "protocol": null,
+      "transport": "websocket",
+      "request_body_mode": "duplex_frames",
+      "response_modes": ["websocket"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
+    },
+    {
+      "id": "openai.realtime_translation_calls_create",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/realtime/translations/calls",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_create",
+      "billing_class": "metered",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.moderations",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/moderations",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.delete_model",
+      "surface": "openai",
+      "method": "DELETE",
+      "path": "/v1/models/{model}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.chat_completions_list",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/chat/completions",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.chat_completions_get",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/chat/completions/{completion_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.chat_completions_update",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/chat/completions/{completion_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_mutate",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.chat_completions_delete",
+      "surface": "openai",
+      "method": "DELETE",
+      "path": "/v1/chat/completions/{completion_id}",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_delete",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.chat_completion_messages_list",
+      "surface": "openai",
+      "method": "GET",
+      "path": "/v1/chat/completions/{completion_id}/messages",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "none",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "resource_read",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "openai.content_provenance_checks",
+      "surface": "openai",
+      "method": "POST",
+      "path": "/v1/content_provenance_checks",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "streaming_upload",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "none",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    },
+    {
+      "id": "gemini.batch_embed_contents",
+      "surface": "gemini",
+      "method": "POST",
+      "path": "/gemini/v1beta/models/{model}:batchEmbedContents",
+      "protocol": null,
+      "transport": "http",
+      "request_body_mode": "small_buffered",
+      "response_modes": ["buffered"],
+      "ownership": "routed_known",
+      "statefulness": "stateless",
+      "billing_class": "metered",
+      "execution_policy": "native_backend_only",
+      "required_context_declarations": ["api_credential"],
+      "required_conversion_evidence": ["request", "response", "error", "cancel"]
+    }
+  ]
+}

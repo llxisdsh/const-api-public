@@ -1,0 +1,3 @@
+data: {"modelVersion":"source-model","candidates":[{"content":{"role":"model","parts":[{"text":"Hello 世界"}]}}]}
+
+data: {"modelVersion":"source-model","candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":6}}

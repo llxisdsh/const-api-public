@@ -1,0 +1,9 @@
+data: {"id":"chat-1","model":"source-model","choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{"content":"Hello "},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{"content":"世界"},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}
+
+data: [DONE]

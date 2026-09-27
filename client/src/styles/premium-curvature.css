@@ -1,0 +1,315 @@
+/*
+ * Unified premium curvature
+ *
+ * This file is imported last so the product has one visible geometry contract
+ * instead of feature-level 2px/3px overrides. Attached and tabular structures
+ * remain square; interactive controls and floating surfaces share the same
+ * deliberate curvature across light and dark themes.
+ */
+
+:root {
+  --floating-border: var(--surface-floating-border);
+}
+
+button {
+  border-radius: var(--radius-control) !important;
+}
+
+input,
+select,
+textarea,
+.compact-choice-trigger,
+.local-entry-surface-field,
+.local-entry-key-field {
+  border-color: color-mix(in srgb, var(--border-strong) 72%, var(--border));
+  border-radius: var(--radius-control) !important;
+}
+
+button.quiet,
+.secondary-actions button,
+.local-entry-actions button,
+.copy-input button,
+.copy-row button,
+.field-with-action button,
+.icon-button {
+  border-color: color-mix(in srgb, var(--border-strong) 78%, var(--border));
+}
+
+/* Floating surfaces */
+
+.tool-dock-menu,
+.tool-dock-menu.has-context,
+.quick-card-menu-panel {
+  border-color: var(--floating-border);
+  border-radius: var(--radius-panel) !important;
+  background: var(--surface-floating);
+  box-shadow: var(--surface-floating-shadow);
+}
+
+.compact-choice-list {
+  border-color: var(--floating-border);
+  border-radius: var(--radius-control) !important;
+  background: var(--surface-floating);
+  box-shadow: var(--surface-floating-shadow);
+}
+
+.tool-dock-menu-actions {
+  gap: 3px;
+}
+
+.tool-dock-menu-actions button {
+  border-radius: var(--radius-compact) !important;
+  background: transparent;
+}
+
+.tool-dock-menu-header {
+  border-bottom-color: var(--surface-floating-border);
+}
+
+.tool-dock-menu-actions button:hover:not(:disabled),
+.tool-dock-menu-actions button:focus-visible:not(:disabled),
+.tool-dock-menu-actions > .tool-dock-context-toggle.active,
+.quick-card-menu-panel button:hover,
+.compact-choice-list .compact-choice-option:hover,
+.compact-choice-list .compact-choice-option:focus-visible {
+  background: var(--surface-floating-hover);
+}
+
+.quick-card-menu-panel button {
+  background: transparent;
+}
+
+.compact-choice-list .compact-choice-option {
+  border-radius: 0 !important;
+}
+
+.tool-dock-button,
+.quick-card,
+.brand-badge {
+  border-radius: var(--radius-panel) !important;
+}
+
+/* Dialogs are floating; drawers are attached workspace surfaces. */
+
+.modal-panel,
+.modal-panel.call-log-panel,
+.debug-modal-panel,
+.legal-notice-panel {
+  border-color: var(--floating-border);
+  border-radius: var(--radius-dialog) !important;
+  box-shadow: var(--overlay-shadow);
+}
+
+.detail-drawer {
+  border: 0 !important;
+  border-top: 0 !important;
+  border-left: 1px solid var(--art-rule) !important;
+  border-radius: 0 !important;
+  box-shadow: -18px 0 48px rgba(18, 20, 24, 0.09);
+}
+
+:root[data-theme="dark"] .detail-drawer {
+  box-shadow: -20px 0 52px rgba(0, 0, 0, 0.3);
+}
+
+.detail-drawer .drawer-section,
+.detail-drawer .drawer-summary,
+.detail-drawer .drawer-summary > div,
+.detail-drawer .drawer-summary div {
+  border-radius: 0 !important;
+}
+
+/* Reusable content surfaces */
+
+.guide-root-card,
+.guide-surface-section,
+.guide-compat-section,
+.guide-steps,
+.advanced-disclosure,
+.alias-preview-group,
+.call-error-box,
+.diagnostic-item,
+.log-panel,
+.empty-log,
+.supplier-command,
+.tool-truth-panel,
+.tool-truth-panel .tool-truth-warning,
+.account-center-billing-detail dl > div,
+.call-detail,
+.supplier-box,
+.test-panel,
+.supplier-test-panel,
+.debug-console,
+.debug-result,
+.route-decision-panel,
+.diagnostic-panel,
+.account-center-inline-panel,
+.account-center-password-panel,
+.account-center-data-section,
+.account-center-balance-row,
+.account-center-fund-ledger,
+.account-center-fund-actions,
+.account-center-trend-wrap,
+.account-center-table-wrap,
+.about-list,
+.copy-row,
+.program-candidate,
+.duplicate-channel-target,
+.wizard-operation-status {
+  border-radius: var(--radius-panel) !important;
+}
+
+/* Standalone interactive rows use the control curve, not card curvature. */
+
+.guide-root-link,
+.guide-surface-row > button {
+  border-radius: var(--radius-control) !important;
+}
+
+/*
+ * Disclosure headers own the outer contour while collapsed. Once expanded,
+ * their lower edge joins the body and must become a square internal seam.
+ */
+
+.advanced-disclosure-toggle {
+  border-radius: inherit !important;
+}
+
+.advanced-disclosure-toggle[aria-expanded="true"] {
+  border-bottom-right-radius: 0 !important;
+  border-bottom-left-radius: 0 !important;
+}
+
+/*
+ * Continuous lists and underline tabs are structural surfaces. Rounding their
+ * individual rows/buttons makes a table read as a stack of unrelated cards.
+ */
+
+.account-center-fund-actions > .account-center-fund-action,
+.supplier-channel-table .supplier-channel-row,
+.call-record-list .call-record-row,
+.call-detail-grid > div,
+.guide-model-list .guide-model-item,
+.log-list .log-entry,
+.compatibility-editor-group,
+.model-equivalence-toggle,
+.compatibility-model-rows .compatibility-model-row,
+.route-candidate-list .route-candidate-row,
+.debug-target-browser .debug-target-row,
+.alias-preview-group .alias-preview-row,
+.tool-truth-panel .tool-truth-row,
+button[role="tab"] {
+  border-radius: 0 !important;
+}
+
+/* Dense tables keep one outer contour and square, continuous rows. */
+
+.supplier-channel-table {
+  overflow: hidden;
+  border: 1px solid var(--art-rule);
+  border-radius: var(--radius-panel) !important;
+}
+
+/*
+ * A rounded frame owns its outside stroke. Nested table borders otherwise
+ * overlap at the clipped corners and make the curve look soft or doubled.
+ */
+
+.account-center-table-wrap {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.account-center-table-wrap > table,
+.account-center-trend-wrap > table {
+  border: 0;
+}
+
+.supplier-list-title {
+  border-bottom: 0;
+}
+
+.call-detail-title {
+  border-bottom: 0;
+}
+
+/*
+ * Status color is an inset rectangle rather than a thick border. This avoids
+ * the diagonal border join that made the bar look trapezoidal.
+ */
+
+.log-list .log-entry {
+  --log-entry-accent: var(--neutral-fill);
+  border-left-width: 1px;
+  border-left-color: var(--border);
+  box-shadow: inset 4px 0 0 var(--log-entry-accent);
+}
+
+.log-list .log-entry.success {
+  --log-entry-accent: var(--green);
+  border-left-color: var(--border);
+}
+
+.log-list .log-entry.error {
+  --log-entry-accent: var(--red);
+  border-left-color: var(--border);
+}
+
+/*
+ * Joined controls expose only the group's outer silhouette. Internal seams are
+ * deliberately square so the control reads as one unit.
+ */
+
+.local-entry-surface-select .compact-choice-trigger {
+  border-radius: var(--radius-control) 0 0 var(--radius-control) !important;
+}
+
+.local-entry-surface-field > button,
+.local-entry-key-field > button {
+  border-radius: 0 var(--radius-control) var(--radius-control) 0 !important;
+}
+
+/* Segmented and structural regions keep a continuous, square interior. */
+
+.theme-segmented {
+  overflow: hidden;
+  border-radius: var(--radius-control) !important;
+}
+
+aside > button,
+.theme-segmented button,
+.account-center-tabs button,
+.account-center-segments button,
+.tool-dock-menu.has-context .tool-dock-menu-main,
+.tool-dock-context,
+table,
+thead,
+tbody,
+tr,
+th,
+td {
+  border-radius: 0 !important;
+}
+
+.toast {
+  border-radius: 0 !important;
+}
+
+@media (min-width: 520px) and (max-width: 720px) {
+  .call-log-panel .call-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .modal-panel,
+  .modal-panel.call-log-panel,
+  .debug-modal-panel,
+  .legal-notice-panel {
+    border-radius: var(--radius-panel) !important;
+  }
+
+  .detail-drawer {
+    border-radius: 0 !important;
+  }
+}

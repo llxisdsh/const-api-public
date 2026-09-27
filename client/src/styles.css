@@ -1,0 +1,17 @@
+/* AccountPage is lazy-loaded; keep its base CSS global so later refinements retain precedence. */
+@import "./account/account.css";
+@import "./styles/design-tokens.css";
+@import "./styles/foundation-and-calls.css";
+@import "./styles/ui-primitives.css";
+@import "./styles/pagination-controls.css";
+@import "./styles/tools-and-local-api.css";
+@import "./styles/dialogs-and-supplier.css";
+@import "./styles/account-and-about.css";
+@import "./styles/supplier-detail.css";
+@import "./styles/debug-and-responsive.css";
+@import "./styles/modern-art-system.css";
+@import "./styles/precision-refinement.css";
+@import "./styles/legal-notice.css";
+@import "./styles/market-pricing.css";
+@import "./styles/premium-curvature.css";
+@import "./styles/onboarding.css";

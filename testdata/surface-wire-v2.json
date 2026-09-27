@@ -1,0 +1,31 @@
+{
+  "wire": {
+    "version": 2,
+    "surface": "gemini",
+    "operation": "opaque",
+    "protocol": "gemini_native",
+    "method": "POST",
+    "escaped_relative_path": "/v1beta/files/a%2fb%3Fc%2Ftail",
+    "raw_query": "tag=one&tag=two&escape=%2f&escape=%2F",
+    "has_query": true,
+    "headers": [
+      {
+        "name": "set-cookie",
+        "value": {"encoding": "utf8", "data": "a=1"}
+      },
+      {
+        "name": "set-cookie",
+        "value": {"encoding": "utf8", "data": "b=2"}
+      },
+      {
+        "name": "x-binary",
+        "value": {"encoding": "base64", "data": "//4="}
+      }
+    ],
+    "body": {"encoding": "base64", "data": "AP8B/gI="},
+    "status": 206,
+    "stream": false,
+    "requested_model": "public-model",
+    "selected_upstream_model": "upstream-model"
+  }
+}

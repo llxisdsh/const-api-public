@@ -1,72 +1,123 @@
-<p align="center">
-  <img src="docs/images/logo.png" width="88" alt="CONST API logo">
-</p>
+<p align="center"><img src="docs/images/logo.png" width="88" alt="CONST API"></p>
 
-<h1 align="center">CONST API</h1>
+# CONST API
 
-<p align="center"><strong>All your AI tools. One API.</strong></p>
+One local gateway for your AI tools, API providers, subscriptions, and local models.
 
-<p align="center">Use what you have. Find what you need.</p>
+[简体中文](README.zh-CN.md) · [Download the official app](https://github.com/llxisdsh/const-api-public/releases/latest) · [Usage guide](docs/usage.md) · [Build from source](SOURCE.md) · [Issues](https://github.com/llxisdsh/const-api-public/issues)
 
-<p align="center">
-  <a href="https://github.com/llxisdsh/const-api-public/releases/latest">Download</a> ·
-  <a href="docs/usage.md">Usage guide</a> ·
-  <a href="README.zh-CN.md">简体中文</a> ·
-  <a href="https://github.com/llxisdsh/const-api-public/issues">Report an issue</a>
-</p>
+Connect a tool once, then manage its model channels in one desktop app. CONST API
+provides OpenAI Responses / Chat Completions, Anthropic Messages, and Gemini API
+interfaces on Windows, macOS, and Linux.
 
-CONST API gives your AI tools one local connection. Configure a tool once, then use your own models or find the ones you need in the shared Model Marketplace. Available for Windows, macOS, and Linux.
+## Choose your edition
 
-## Why CONST API?
+This repository contains **local-edition source code** and hosts **official app downloads**.
+They are different editions:
 
-- **Set up once.** Switch API keys, supported subscriptions, local models, or marketplace models without configuring every tool again.
-- **Use your own resources first.** CONST API uses your model channels when they are available and automatically turns to the marketplace when they are not.
-- **Get models you do not have.** Use an available shared channel without first opening an account with every model provider.
-- **See what actually happened.** Price reference shows the expected market price; usage logs show the model, tokens, route, and charge actually used.
-- **Change tools safely.** Managed setup is backed up and reversible. Later edits are preserved, and Codex keeps its on-device session history when its connection changes.
+| | CONST API Local — built from this source | Official app — downloaded from Releases |
+| --- | --- | --- |
+| Your own APIs, supported subscriptions, and local models | Yes | Yes |
+| Managed tool setup and local / LAN access | Yes | Yes |
+| CONST account, Model Marketplace, remote supply, and billing | Not included | Available with a CONST account |
+| Default local API port | `38789` | `38787` |
+| Configuration directory | `~/.const-api-local` | `~/.const-api` |
+| Updates | Rebuild from a newer source snapshot | Official update channel |
 
-## What is the Model Marketplace?
+Public CI checks the local source build; it does **not** publish installers.
+Official releases continue to be built and published from the main private
+repository. This source is not a reproducible build of the official application.
 
-The Model Marketplace connects people who need a model with people who have spare model capacity.
+## What you can do locally
 
-- **Need a model:** use an available channel shared by someone else and pay for the successful request's actual usage.
-- **Have spare capacity:** share an API channel, a supported subscription, or a local model at the price you set. Successfully completed requests become supplier earnings.
+- **Manage model channels.** Add API keys, supported account subscriptions, or an
+  OpenAI-compatible local server. Available models and capabilities depend on the upstream.
+- **Connect your tools.** Configure supported tools such as Codex, Claude Code,
+  OpenCode, and WorkBuddy from the app, or copy the local URL and key manually.
+  Managed configuration is backed up; restoration preserves unrelated edits.
+- **Use native protocols.** Same-protocol requests preserve native fields where
+  the upstream allows them. Cross-protocol conversion handles messages,
+  streaming, tool calls, and usage; it cannot create capabilities a model lacks.
+- **Share on a trusted LAN.** Choose models and create separate member keys and
+  usage limits. This is local sharing, not participation in the hosted market.
+- **Troubleshoot requests.** Inspect channel health, model availability, usage,
+  latency, and errors without guessing which upstream was used.
 
-For each marketplace request, CONST API looks for the exact model first. Among healthy channels within the price limit, lower-priced options are preferred. Active sessions stay on a stable route when possible; failed channels are skipped automatically. You can check the price before a request and verify the result afterward.
+Local use needs no CONST account. Your provider may charge for requests and checks.
+**Refreshing channel metadata is not a generation test**; model and full-channel
+tests can consume upstream quota.
 
-Credentials do not enter the marketplace. They stay on the computer running the channel. The platform receives only the model, capability, availability, capacity, and price information needed for routing. A shared request still has to travel through the platform to the selected supplier and model provider to be completed.
+Antigravity browser sign-in and token refresh require compatible OAuth application
+credentials supplied by the builder; those credentials are not published here.
+See the [source-build requirements](SOURCE.md#optional-antigravity-oauth-configuration).
 
-## Start
+## Quick start
 
-1. [Download](https://github.com/llxisdsh/const-api-public/releases/latest) and open CONST API.
-2. When **Local API · Running** appears, click your tool's icon. CONST API takes care of its connection settings.
-3. Sign in to use the Model Marketplace. Open **Models** to add your own API channel, supported subscription, or local model.
+### Use the official app
 
-Need a manual connection or command-line mode? See the [usage guide](docs/usage.md).
+1. Download the package for your OS from [Releases](https://github.com/llxisdsh/const-api-public/releases/latest).
+2. Add a channel under **Models**. Sign-in is optional for local use; the hosted
+   Model Marketplace requires an account.
+3. Wait for **Local API · Running**, then configure a tool from **Use**.
 
-## What does it cost?
+### Build CONST API Local
 
-- **Your own channel:** you pay only the provider, subscription, or local running cost. CONST API does not change it.
-- **Model Marketplace:** lower-priced available channels are used first. Check the price before use, then verify the actual usage and charge in **Usage Log**.
+Install Node.js matching `client/.node-version`, stable Rust, and the native
+[Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
 
-## Is it private?
+```sh
+git clone https://github.com/llxisdsh/const-api-public.git
+cd const-api-public/client
+npm ci
+npm run dev
+```
 
-- Your tools connect to the local address `127.0.0.1:38787`.
-- With your own channel, requests go directly from your computer to the provider or local model. They do not pass through the CONST API platform.
-- With a marketplace channel, requests pass through the platform to the selected supplier and model provider.
-- Logs do not store prompts, response text, API keys, account tokens, cookies, or authorization headers.
-- Before changing a tool's settings, CONST API creates a backup. Canceling setup removes only CONST API's changes and keeps edits you made later.
+Add and enable your own channel, then configure a tool. No server deployment or
+private repository is needed. To create an executable, run `npm run build`.
+See [SOURCE.md](SOURCE.md) for build checks, output paths, and edition boundaries.
 
-## Technical features
+Both editions are desktop applications. There is no supported headless or
+configuration-check CLI; older instructions using those modes are obsolete.
 
-- **Native API surfaces.** OpenAI Responses and Chat Completions, Anthropic Messages, and Gemini native interfaces share one local gateway. API channels, supported subscriptions, local models, and marketplace channels all connect through the same model-channel system.
-- **Capability-aware protocol handling.** Requests, responses, streaming events, errors, usage, and tool calls follow one operation contract. Native fields pass through unchanged when possible; cross-protocol conversion runs only when needed.
-- **Stable, lower-cost routing.** Exact models and your own channels come first. Marketplace routing considers availability, price, quota, concurrency, success rate, and latency, keeps active sessions stable, and moves away from failed channels automatically.
-- **Reversible tool configuration.** JSON, JSON5, YAML, and TOML are updated structurally, backed up, and written atomically. Field-level three-way restore preserves later user edits, while Codex keeps its on-device session history across connection changes.
-- **Verifiable dynamic registries.** Models, compatibility groups, capabilities, prices, tool metadata, and platform endpoints update independently through Ed25519-signed, content-addressed releases. New data switches atomically only after verification, while the client and server retain a verified snapshot.
-- **Reproducible usage and settlement.** Each request freezes its model, price, and supplier offer. Actual usage, route, charge, and settlement evidence are recorded in the ledger and usage log.
-- **Adaptive transport.** Platform traffic prefers HTTP/3 and falls back to HTTP/2 or HTTP/1.1. Supplier connections prefer QUIC, fall back to WebSocket, and support encrypted remote links and negotiated compression.
+## How requests travel
 
-## Open source
+**Local edition:** your tool → local CONST gateway → your configured upstream.
+The built-in CONST platform login, discovery, supply connection, and request
+transports are unavailable. Copying official account settings does not enable them.
 
-The open-source release is in preparation.
+**Official app:** requests use your own channels or the hosted Model Marketplace
+according to your routing settings. A marketplace request passes through the
+platform and selected supplier before reaching the upstream provider. Provider
+credentials remain on the supplier's machine, but request contents necessarily
+reach the systems that process them.
+
+The local edition is not an offline model or a network security sandbox. It connects
+to the upstream URLs you configure. Source-level restrictions cannot authenticate
+an arbitrary modified client; hosted services enforce their own authorization.
+
+## Project layout
+
+| Path | Contents |
+| --- | --- |
+| `client/src/` | React / TypeScript desktop interface |
+| `client/src-tauri/` | Rust runtime, local gateway, adapters, tool configuration |
+| `shared/` | Public API contracts and bundled metadata |
+| `testdata/` | Protocol fixtures |
+| `.github/workflows/check-source.yml` | Build and boundary checks; no publishing |
+
+Source snapshots are synchronized from the main repository. Contributions should
+be small and focused; include a reproduction and relevant tests. Maintainers
+integrate accepted changes upstream before exporting the next snapshot.
+
+## Help and licensing
+
+- [Usage, manual API configuration, and troubleshooting](docs/usage.md)
+- [Source build and isolation details](SOURCE.md)
+- [Report a bug](https://github.com/llxisdsh/const-api-public/issues): include your
+  edition, version, OS, and redacted error. Never post keys, tokens, account files,
+  or private conversation content.
+
+Original exported source is [MIT licensed](LICENSE). Third-party dependencies and
+assets retain their own licenses; see [Third-party notices](THIRD_PARTY_NOTICES.md).
+The license does not grant access to the hosted service, upstream subscriptions,
+or rights to third-party trademarks.

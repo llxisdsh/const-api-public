@@ -1,0 +1,196 @@
+{
+  "protocol": "gemini_native",
+  "path": "/v1beta/models/gemini-test:generateContent",
+  "request": {
+    "systemInstruction": {
+      "parts": [{"text": "Use tools and cite sources."}]
+    },
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          {"text": "Inspect these inputs."},
+          {"inlineData": {"mimeType": "image/png", "data": "AA=="}},
+          {
+            "fileData": {"mimeType": "video/mp4", "fileUri": "files/asset-1"},
+            "videoMetadata": {"startOffset": "1s", "endOffset": "2s"}
+          }
+        ]
+      },
+      {
+        "role": "model",
+        "parts": [
+          {
+            "functionCall": {"id": "call-weather", "name": "weather", "args": {"city": "Paris"}},
+            "thoughtSignature": "sig-parallel"
+          },
+          {
+            "functionCall": {"id": "call-time", "name": "time", "args": {"zone": "Europe/Paris"}}
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "functionResponse": {
+              "id": "call-weather",
+              "name": "weather",
+              "response": {"temperature": 18}
+            }
+          },
+          {
+            "functionResponse": {
+              "id": "call-time",
+              "name": "time",
+              "response": {"local": "10:00"}
+            }
+          }
+        ]
+      },
+      {
+        "role": "model",
+        "parts": [
+          {
+            "thought": true,
+            "text": "I should verify one more fact.",
+            "thoughtSignature": "sig-sequential"
+          },
+          {
+            "functionCall": {"id": "call-source", "name": "source", "args": {"topic": "weather"}},
+            "thoughtSignature": "sig-source"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "functionResponse": {
+              "id": "call-source",
+              "name": "source",
+              "response": {"url": "https://example.com/weather"}
+            }
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "name": "weather",
+            "description": "Read weather",
+            "parametersJsonSchema": {
+              "type": "object",
+              "properties": {"city": {"type": "string"}},
+              "required": ["city"]
+            }
+          },
+          {
+            "name": "time",
+            "description": "Read local time",
+            "parameters": {
+              "type": "object",
+              "properties": {"zone": {"type": "string"}},
+              "required": ["zone"]
+            }
+          }
+        ]
+      },
+      {"googleSearch": {}},
+      {"codeExecution": {}},
+      {"urlContext": {}}
+    ],
+    "toolConfig": {
+      "functionCallingConfig": {
+        "mode": "ANY",
+        "allowedFunctionNames": ["weather", "time", "source"]
+      }
+    },
+    "generationConfig": {
+      "maxOutputTokens": 512,
+      "temperature": 0.2,
+      "topP": 0.8,
+      "topK": 40,
+      "seed": 7,
+      "presencePenalty": 0.1,
+      "frequencyPenalty": 0.2,
+      "stopSequences": ["DONE"],
+      "responseMimeType": "application/json",
+      "responseJsonSchema": {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"]
+      },
+      "responseModalities": ["TEXT"],
+      "thinkingConfig": {
+        "includeThoughts": true,
+        "thinkingBudget": 1024,
+        "thinkingLevel": "HIGH"
+      }
+    },
+    "safetySettings": [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"}],
+    "cachedContent": "cachedContents/context-1",
+    "serviceTier": "PRIORITY",
+    "store": false
+  },
+  "response": {
+    "responseId": "response-1",
+    "modelVersion": "gemini-test-001",
+    "candidates": [
+      {
+        "index": 0,
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "thought": true,
+              "text": "I checked the sources.",
+              "thoughtSignature": "response-thought-signature"
+            },
+            {
+              "text": "{\"answer\":\"clear\"}",
+              "thoughtSignature": "response-text-signature"
+            },
+            {"inlineData": {"mimeType": "image/png", "data": "AQ=="}},
+            {
+              "functionCall": {"id": "call-final", "name": "source", "args": {"topic": "final"}},
+              "thoughtSignature": "response-call-signature"
+            }
+          ]
+        },
+        "finishReason": "STOP",
+        "finishMessage": "complete",
+        "safetyRatings": [{"category": "HARM_CATEGORY_HARASSMENT", "probability": "NEGLIGIBLE"}],
+        "citationMetadata": {"citationSources": [{"startIndex": 0, "endIndex": 5, "uri": "https://example.com"}]},
+        "groundingMetadata": {"webSearchQueries": ["weather Paris"]}
+      }
+    ],
+    "usageMetadata": {
+      "promptTokenCount": 20,
+      "cachedContentTokenCount": 4,
+      "candidatesTokenCount": 8,
+      "toolUsePromptTokenCount": 3,
+      "thoughtsTokenCount": 5,
+      "totalTokenCount": 33,
+      "promptTokensDetails": [
+        {"modality": "TEXT", "tokenCount": 18},
+        {"modality": "IMAGE", "tokenCount": 2}
+      ],
+      "candidatesTokensDetails": [
+        {"modality": "TEXT", "tokenCount": 6},
+        {"modality": "IMAGE", "tokenCount": 2}
+      ]
+    },
+    "promptFeedback": {"blockReason": "BLOCK_REASON_UNSPECIFIED"}
+  },
+  "error": {
+    "error": {
+      "code": 429,
+      "message": "quota exhausted",
+      "status": "RESOURCE_EXHAUSTED",
+      "details": [{"reason": "RATE_LIMIT"}]
+    }
+  }
+}

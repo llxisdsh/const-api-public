@@ -1,0 +1,69 @@
+/* Shared pagination control. Feature pages provide data and labels only. */
+
+.pagination-controls {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pagination-controls-summary {
+  color: var(--muted);
+}
+
+.pagination-controls-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pagination-controls-page {
+  min-width: 20px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.pagination-controls-button {
+  display: inline-grid;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  opacity: 0.82;
+  place-items: center;
+  transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.pagination-controls-icon {
+  width: 20px;
+  height: 20px;
+  stroke-width: 1.9;
+}
+
+.pagination-controls-button:hover:not(:disabled),
+.pagination-controls-button:focus-visible:not(:disabled) {
+  border-color: transparent;
+  background: var(--panel-muted);
+  color: var(--text);
+  opacity: 1;
+}
+
+.pagination-controls .pagination-controls-button:disabled,
+.pagination-controls .pagination-controls-button:disabled:hover {
+  border-color: transparent;
+  background: transparent;
+  color: var(--subtle);
+  cursor: not-allowed;
+  opacity: 0.34;
+}

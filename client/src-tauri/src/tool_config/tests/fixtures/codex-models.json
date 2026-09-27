@@ -1,0 +1,36 @@
+{
+  "models": [
+    {
+      "slug": "const-test",
+      "display_name": "const-test",
+      "description": "CONST API",
+      "default_reasoning_level": null,
+      "supported_reasoning_levels": [],
+      "shell_type": "default",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 0,
+      "availability_nux": null,
+      "upgrade": null,
+      "base_instructions": "You are a coding assistant working in the user's workspace. Follow the user's instructions and repository guidance. Inspect relevant files before editing, preserve unrelated changes, use the available tools to complete the task, and verify your work. Report results and any remaining limitations clearly.",
+      "supports_reasoning_summaries": false,
+      "supports_parallel_tool_calls": false,
+      "supports_reasoning_summary_parameter": false,
+      "default_reasoning_summary": "none",
+      "support_verbosity": false,
+      "default_verbosity": null,
+      "apply_patch_tool_type": null,
+      "truncation_policy": {"mode": "tokens", "limit": 10000},
+      "context_window": 65536,
+      "max_context_window": 65536,
+      "auto_compact_token_limit": 57344,
+      "effective_context_window_percent": 95,
+      "experimental_supported_tools": [],
+      "input_modalities": ["text"],
+      "supports_search_tool": false,
+      "supports_experimental_context": false,
+      "use_responses_lite": false,
+      "node_repl_disabled": true
+    }
+  ]
+}

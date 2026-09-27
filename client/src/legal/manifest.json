@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "agreement": {
+    "id": "user_agreement",
+    "version": 1,
+    "content_sha256": "41c35687bbb017e14f91d7d3975ad4c1e0cf30911365e4a78f73557f8e13e9d4",
+    "effective_at": "2026-07-22T00:00:00+08:00",
+    "required_after": "2026-07-22T00:00:00+08:00"
+  },
+  "privacy": {
+    "id": "privacy_policy",
+    "version": 1,
+    "content_sha256": "fd62f89d22995e038931a07bd99f7808c2fc64af31bd4d564bf0ee7cfc8d7551",
+    "effective_at": "2026-07-22T00:00:00+08:00",
+    "required_after": "2026-07-22T00:00:00+08:00"
+  }
+}

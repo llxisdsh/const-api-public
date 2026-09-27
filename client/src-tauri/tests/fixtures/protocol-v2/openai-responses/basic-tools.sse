@@ -1,0 +1,8 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp-1","model":"source-model","status":"in_progress","output":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Hello 世界"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp-1","model":"source-model","status":"completed","output":[],"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}

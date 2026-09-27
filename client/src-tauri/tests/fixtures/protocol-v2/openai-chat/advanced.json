@@ -1,0 +1,34 @@
+{
+  "request": {
+    "model": "chat-test",
+    "messages": [
+      {"role":"system","content":"system rule"},
+      {"role":"developer","content":[{"type":"text","text":"developer rule"}]},
+      {"role":"user","content":[
+        {"type":"text","text":"inspect"},
+        {"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8=","detail":"high"}},
+        {"type":"input_audio","input_audio":{"data":"AA==","format":"wav"}}
+      ]},
+      {"role":"assistant","content":null,"reasoning_content":"checked inputs","tool_calls":[
+        {"id":"call-a","type":"function","function":{"name":"lookup","arguments":"{\"id\":1}"}},
+        {"id":"call-b","type":"function","function":{"name":"lookup","arguments":"{\"id\":2"}}
+      ]},
+      {"role":"tool","tool_call_id":"call-a","name":"lookup","content":[{"type":"text","text":"done"}]}
+    ],
+    "tools":[{"type":"function","function":{"name":"lookup","description":"find","parameters":{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]},"strict":true}}],
+    "tool_choice":{"type":"function","function":{"name":"lookup"}},
+    "parallel_tool_calls":true,
+    "response_format":{"type":"json_schema","json_schema":{"name":"answer","strict":true,"schema":{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}}},
+    "modalities":["text","audio"],
+    "audio":{"voice":"alloy","format":"wav"},
+    "stream":false,
+    "temperature":0.2,
+    "x_provider_option":{"mode":"future"}
+  },
+  "response": {
+    "id":"chatcmpl-1",
+    "model":"chat-test",
+    "choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"visible","reasoning_content":"reasoning","refusal":"no private data","annotations":[{"type":"url_citation","url":"https://example.invalid"}],"tool_calls":[{"id":"call-c","type":"function","function":{"name":"lookup","arguments":"{\"id\":3}"}}]}}],
+    "usage":{"prompt_tokens":10,"completion_tokens":6,"total_tokens":16,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":3,"audio_tokens":1},"completion_tokens_details":{"reasoning_tokens":2,"audio_tokens":1,"accepted_prediction_tokens":1,"rejected_prediction_tokens":1}}
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "id": "user_agreement",
+  "title": "User Agreement",
+  "version": 1,
+  "effective_date": "July 22, 2026",
+  "sections": [
+    {
+      "title": "1. Product purpose and scope",
+      "paragraphs": [
+        "CONST API is local-first software for connecting AI tools, routing requests, converting protocols, and managing supply. It is not a provider of foundation models or third-party AI services and does not guarantee the continued availability of any particular model, account, subscription, or upstream service.",
+        "You must have the legal capacity required to use this product. If you use it on behalf of an organization, you confirm that you have the necessary authorization. Installing, configuring, or continuing to use the product means that you accept this Agreement."
+      ]
+    },
+    {
+      "title": "2. Accounts, supply channels, and third-party services",
+      "paragraphs": [
+        "You may connect only accounts, credentials, models, and computing resources that you are authorized to use. You must follow the relevant provider's regional restrictions, subscription rules, automation policies, and other terms. Each third party is responsible for its own service changes, rate limits, suspensions, discontinuation, and data handling.",
+        "When you are signed out, channels are primarily used on this device. After you sign in and enable sharing, local channels may receive requests routed by the platform and consume your upstream quota. The client synchronizes the versions of legal documents you accepted to the platform account for permission management and auditing. You are responsible for confirming that sharing, resale, or calling a service for others is authorized and complies with third-party rules."
+      ]
+    },
+    {
+      "title": "3. Configuration, protocol conversion, and compatibility",
+      "paragraphs": [
+        "When you request an operation, the product may locate, read, back up, or modify configuration for supported tools and may start or stop related programs. Save important work and keep appropriate backups before proceeding.",
+        "Requests using the same protocol are preserved as closely as possible. Requests crossing surfaces or protocols are converted automatically. Expressible information is retained where possible; extension fields that cannot be mapped may be ignored, normalized, or reported as conversion warnings. Conversion is not guaranteed to be lossless, semantically identical, or compatible with future versions."
+      ]
+    },
+    {
+      "title": "4. AI output and automated operations",
+      "paragraphs": [
+        "Model output may be inaccurate, outdated, biased, unsafe, or infringe third-party rights. Clients with agent, tool-calling, or code-execution capabilities may also read files, access networks, run commands, or modify data.",
+        "Verify important output, use least privilege, and maintain backups. Do not use output without appropriate professional review for medical, legal, financial, personal-safety, or other high-risk decisions. You are responsible for automated operations that you initiate or authorize and for their results."
+      ]
+    },
+    {
+      "title": "5. Fees, retries, and settlement",
+      "paragraphs": [
+        "Model calls, subscriptions, networking, supply settlement, and other third-party charges are billed by the relevant provider. Quota, cost, and earnings displayed in the interface may be upstream data or estimates; actual bills and settlement records control.",
+        "To improve availability, the client, platform, or upstream service may retry, fall back, or recover operations. The system attempts to prevent duplicate calls and settlement, but network interruptions, timeouts, or insufficient third-party idempotency may still cause duplicate requests, additional charges, or incomplete results."
+      ]
+    },
+    {
+      "title": "6. Security, compliance, and prohibited conduct",
+      "paragraphs": [
+        "Protect API keys, sign-in tokens, subscription credentials, configuration backups, and logs. You are responsible for firewall settings, LAN access scope, and upstream permissions. Open listening addresses and shared channels increase the accessible surface.",
+        "Do not use the product for unlawful activity, bypassing access controls, infringing privacy or intellectual-property rights, distributing malicious content, or disrupting services. Do not submit personal information, trade secrets, or restricted data that you are not authorized to process."
+      ]
+    },
+    {
+      "title": "7. Availability, updates, and termination",
+      "paragraphs": [
+        "The product may degrade, become unavailable, or change compatibility because of networks, system resources, tool versions, platform maintenance, quotas, credentials, or upstream failures. We may update features, interfaces, and this Agreement to fix problems, address security needs, or evolve the product.",
+        "You may stop the local API, sign out of the platform, remove tool configuration, or uninstall the software. Serious violations of this Agreement, legal requirements, or security risks may result in restrictions or termination of related features."
+      ]
+    },
+    {
+      "title": "8. Disclaimers and limitation of liability",
+      "paragraphs": [
+        "The product is provided as is. To the extent permitted by law, no express or implied warranty is made that it will be uninterrupted, error-free, absolutely secure, produce a particular result, or keep third-party services available. We are not liable for indirect, incidental, or consequential loss caused by model output, third-party services, user configuration, or unauthorized use.",
+        "Nothing in this section excludes or limits liability that the law does not permit us to exclude or limit. If part of this Agreement is invalid, the remaining terms remain effective. Disputes should first be discussed in good faith through the project's public contact channels and handled under applicable law."
+      ]
+    }
+  ]
+}

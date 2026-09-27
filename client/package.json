@@ -1,0 +1,46 @@
+{
+  "name": "const-api-local",
+  "version": "0.1.57",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.18.0 <25"
+  },
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:renderer": "vite",
+    "build": "tauri build --no-bundle",
+    "build:renderer": "vite build",
+    "typecheck": "tsc --noEmit",
+    "i18n:check": "node scripts/check-i18n.mjs",
+    "test:renderer": "vitest run",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-os": "^2.3.2",
+    "i18next": "^26.4.0",
+    "lucide-react": "^1.34.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-i18next": "^17.0.12",
+    "simple-icons": "^16.28.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.6",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.0",
+    "jsdom": "^30.0.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11",
+    "@types/node": "26.2.0"
+  },
+  "license": "MIT"
+}

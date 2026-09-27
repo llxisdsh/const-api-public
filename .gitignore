@@ -1,0 +1,11 @@
+node_modules/
+**/target/
+dist/
+output/
+client/src-tauri/gen/
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx

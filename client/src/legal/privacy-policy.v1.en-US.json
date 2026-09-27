@@ -1,0 +1,64 @@
+{
+  "id": "privacy_policy",
+  "title": "Privacy Policy",
+  "version": 1,
+  "effective_date": "July 22, 2026",
+  "sections": [
+    {
+      "title": "1. Scope and processing principles",
+      "paragraphs": [
+        "This Policy explains how the CONST API desktop client handles data while running locally, connecting to the platform, calling third-party upstream services, and configuring external tools. We follow the principles of specific purpose, data minimization, transparency, security, and user control.",
+        "Third-party model services, tools, operating systems, source-code hosts, and payment providers have their own privacy rules. This Policy does not replace them. Questions and rights requests may be submitted through the public channels at github.com/llxisdsh/const-api."
+      ]
+    },
+    {
+      "title": "2. Data processed locally",
+      "paragraphs": [
+        "To provide configuration and runtime functions, the client processes on this device: client settings; supported-tool installation paths, processes, configuration status, and limited runtime records; channel and model settings; endpoint information; runtime status; quota and call metadata; faults and diagnostics; and references to accounts and credentials that you import or authorize.",
+        "Tool configuration, subscription credentials, and secrets may be stored in the tool's own files, the CONST API configuration directory, or secure operating-system storage, depending on the tool and platform. The client does not intentionally scan personal files unrelated to its functions. Prompts, attachments, and tool context that you select are processed as required by the request."
+      ]
+    },
+    {
+      "title": "3. Network transmission and recipients",
+      "paragraphs": [
+        "The client transmits necessary data to configured platform endpoints or model providers only to provide the selected function. A request may include prompts, message history, file or image content, tool definitions and results, model parameters, and request identifiers. Responses, usage, errors, and routing metadata return over the corresponding path.",
+        "Signing in may transmit email, user and client identifiers, authentication and connection information, balances, and payment or settlement records. The client also synchronizes legal-document versions, content digests, and the client version for account permission management and auditing. Enabling supply sharing may transmit channel models, protocols, health, quota, and call metadata and may receive requests assigned by the platform. Update checks and endpoint discovery access configured source-code hosting or release locations."
+      ]
+    },
+    {
+      "title": "4. Purpose and necessity",
+      "paragraphs": [
+        "This data is used for the local proxy, authentication, account permission management, model calls, protocol conversion, routing and recovery, supply sharing and settlement, quota display, tool configuration, update checks, security controls, and diagnostics.",
+        "Applicable local functions remain available without signing in. A local channel is not registered as shared supply unless sharing is enabled. If you decline processing that is necessary for a particular function, that function cannot be provided, but functions that do not require the data are unaffected."
+      ]
+    },
+    {
+      "title": "5. Retention and logs",
+      "paragraphs": [
+        "Local configuration and status are generally retained until you modify, clear, or uninstall the related data. Runtime logs in the interface retain only a limited number of recent high-level events. Call records primarily contain metadata; normal logs should not contain prompts, response bodies, or complete credentials. Debug features may display more detail and should be used only in a trusted environment.",
+        "The platform retains acceptance records as needed for account permission management and auditing. Other platform and upstream retention, logging, and training practices are governed by their configuration and privacy policies. Do not send sensitive data to untrusted endpoints, and remove local configuration, backups, and third-party records when no longer needed."
+      ]
+    },
+    {
+      "title": "6. Sharing, processors, and cross-border risk",
+      "paragraphs": [
+        "Requests are sent only as configured to the platform, a selected supply node, or a third-party upstream service. Different nodes may be operated by different entities. Protocol conversion does not change the actual recipient. Confirm the recipient and its data rules before sending a request.",
+        "If a selected service is located in another country or region, data may be transferred across borders and become subject to local law. Before processing another person's personal information, organizational data, or sensitive information, obtain lawful authorization and provide any required notices, consent, and safeguards."
+      ]
+    },
+    {
+      "title": "7. Security measures and risks",
+      "paragraphs": [
+        "The client uses local-first processing, minimal credential exposure, controlled logging, and operating-system secure storage where available. No local file, network communication, or third-party service can be guaranteed absolutely secure. Malware, permissive file permissions, open LAN listening, or an untrusted endpoint may cause disclosure.",
+        "Protect device accounts, restrict access to configuration files and backups, use trusted networks and endpoints, keep software updated, and revoke or rotate credentials immediately if they may have been exposed."
+      ]
+    },
+    {
+      "title": "8. Your choices and Policy updates",
+      "paragraphs": [
+        "You may remain signed out, disable channel sharing, stop the local API, remove tool configuration, sign out, clear local configuration, or uninstall the software. You may use the project's public contact channels for questions about personal-information handling. Data retained by a third party must be managed through that party's controls.",
+        "If the purposes, methods, categories of data, or this Policy change materially, we will update its version and request acceptance again. Minors should use the product with a guardian's guidance. The product is not intended for independent use by minors who lack the necessary understanding or authorization."
+      ]
+    }
+  ]
+}

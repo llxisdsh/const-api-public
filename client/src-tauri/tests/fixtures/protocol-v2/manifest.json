@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "cases": [
+    "openai-chat/basic-tools",
+    "openai-responses/basic-tools",
+    "anthropic-messages/basic-tools",
+    "gemini-native/basic-tools"
+  ]
+}

@@ -1,0 +1,49 @@
+name: Check local source
+on:
+  push:
+    branches: [main]
+    paths: ['client/**', 'shared/**', 'testdata/**', '.github/workflows/check-source.yml']
+  pull_request:
+    paths: ['client/**', 'shared/**', 'testdata/**', '.github/workflows/check-source.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: local-source-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: client/.node-version
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev build-essential pkg-config libssl-dev libgtk-3-dev librsvg2-dev patchelf
+      - name: Install the declared Rust toolchain
+        run: rustup update stable --no-self-update
+        working-directory: client
+      - run: npm ci
+        working-directory: client
+      - run: npm run typecheck
+        working-directory: client
+      - run: npm run i18n:check
+        working-directory: client
+      - run: npm run test:renderer
+        working-directory: client
+      - name: Build local executable without publishing
+        run: npm run build -- --debug
+        working-directory: client
+      - name: Check local edition boundary
+        run: cargo test --manifest-path src-tauri/Cargo.toml local_policy::tests -- --test-threads=1
+        working-directory: client

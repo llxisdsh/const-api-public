@@ -1,0 +1,4 @@
+[build]
+# reqwest 0.12 keeps its HTTP/3 API behind this cfg even when the feature is
+# enabled. HTTP/3 usage is isolated in platform_transport.rs.
+rustflags = ["--cfg", "reqwest_unstable"]
