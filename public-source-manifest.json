@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_revision": "714a8c33318f3a7d45f439e1db21197bcf2f0d03",
+  "source_revision": "736e6264d761252e5a6f8faeb24cc3ef9d610890",
   "edition": "local-only",
   "files": {
     "client/.node-version": "55075b5ec4e8b31936cbbc282b8829116d1fd48f2f2f1856dee592a6650700ce",
@@ -74,7 +74,7 @@
     "client/src-tauri/icons/macos-tray.png": "d13c3ee626c0b876d62767d590c55b3c743dbfcf5be96451671aff210eb8e9b8",
     "client/src-tauri/resources/tool-model-metadata.json": "17fae3634a566af7ee14405fd653ac1c64507facab26300e6fc9ec95bbcb62d4",
     "client/src-tauri/src/announcements.rs": "75078c73c3d79759f2243bca53b143887c787a6d370cbdbdd10501c748073d77",
-    "client/src-tauri/src/antigravity_models.rs": "9850e8a77b819b83b07d6be1508254a8427ebcc3e36a2d0bbe036c6d6308df9b",
+    "client/src-tauri/src/antigravity_models.rs": "b668e9a4b90ce02ae41916a19ab1ecf562b286295165846f2264438f0a504cbb",
     "client/src-tauri/src/autostart.rs": "5e80e7a8fc966f2264a4347453d4e4e9f0d149caa431c2b5753bab74f001b5f1",
     "client/src-tauri/src/catalog_registry.rs": "d624c3810038b0ea6b0805a3aee117cbdce94f8f82510a936da59c67a5b2f567",
     "client/src-tauri/src/channel_executor.rs": "a54a5a75f018411c775a2df51dc75a7e995e898b910e0304aff7c54176875f96",
@@ -203,8 +203,8 @@
     "client/src-tauri/src/supplier/availability.rs": "2b3168eb0934bd8c623acbb3ade0813143fb0260f8578455fa23b31c401bf898",
     "client/src-tauri/src/supplier/cache_identity.rs": "1992cf8ab0426862b9934a1a7e8a2651a75f812fd86c3e3a59035b5ed8f4d582",
     "client/src-tauri/src/supplier/channel_probe.rs": "8629339bf7ee5459839a76baa2d046f4bd8bba8842f58067f8c1b80201bf696c",
-    "client/src-tauri/src/supplier/codex_http_continuation.rs": "146c009bb864a08640a863dba8fe2088a7eb1a8c8e730b656ac4275f6b0273dd",
-    "client/src-tauri/src/supplier/codex_subscription_endpoint.rs": "175798bf7b073ccce1a3e0c7a33a0917071e56911eb26c80de55c9c19f8ee110",
+    "client/src-tauri/src/supplier/codex_http_continuation.rs": "a75b844a2601fc1c4298d98c6ed69f80c6a82e436bfcd7a1f6af55cb2654326e",
+    "client/src-tauri/src/supplier/codex_subscription_endpoint.rs": "f910f199b6faaacfce123f4ddff894c3d25ccc2587e6531aede2cad326d8dde8",
     "client/src-tauri/src/supplier/dialect.rs": "b1e44833ff70db545aa601ea00f9280b15fd8eced10487cf7f43012d95982f88",
     "client/src-tauri/src/supplier/execution_evidence.rs": "ffebb3dab7eccc373ed7d9d197aff6bd0336a9489143fd2b78d8fd03f54743ee",
     "client/src-tauri/src/supplier/forward.rs": "fed654bab1cd501418571f65b323c6946c3d42066843d16951cbea3d5df45c22",
@@ -461,7 +461,7 @@
     "SOURCE.md": "d56716c92ff38cd97e5522f9be6c5800408059ddc3fc78f34aab777b3ab5ff91",
     "SOURCE.zh-CN.md": "f29557d057289ad52d66a5e5d0ce56f3f45932d5942164961e885e514c0a6b1c",
     "LICENSE": "5d89be6297e11f5c7b9513fa2681581cdd197eeb74465d0c5661995e9ad7ceea",
-    "THIRD_PARTY_NOTICES.md": "4e978b9d55b64b98200d981bd0704a41a296e0f426224f000d559cb6ad324cfb",
+    "THIRD_PARTY_NOTICES.md": "25542565daf2cc6644e887dd47886036373f921627998495b7bd9fc8ca9a7424",
     ".github/workflows/check-source.yml": "704133051b8a6904fb12e816e7e11b118bb0e4200356791c42de9e4704c3db4b",
     ".gitignore": "47b00324cd21e54031a71c0ab69d526272d6c3a235917caad55ce19d9d9c0f5b",
     ".gitattributes": "d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c"

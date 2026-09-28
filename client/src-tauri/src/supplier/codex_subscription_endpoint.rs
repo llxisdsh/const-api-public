@@ -427,9 +427,9 @@ fn adjust_codex_subscription_request_for_operation(
         // captured upstream rejections.
         //
         // `previous_response_id` is intentionally left untouched in this generic dialect pass.
-        // CLIProxyAPI's HTTP executor removes it, while its WebSocket v2 executor retains it. Our
-        // subscription HTTP executor therefore expands the referenced response from its bounded
-        // continuation cache before removing the field. Public Responses API channels never enter
+        // The subscription HTTP endpoint rejects it, while WebSocket turns can retain it. The
+        // HTTP executor expands the referenced response from its bounded continuation cache
+        // before removing the field. Public Responses API channels never enter
         // that subscription-only repair path.
         // String input is normalized by the single production entry point before continuation
         // recovery. Keep this fallback for compact requests and direct unit coverage.

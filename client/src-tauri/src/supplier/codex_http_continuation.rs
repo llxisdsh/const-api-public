@@ -684,8 +684,8 @@ pub(crate) fn prepare_codex_websocket_subscription_replay(
 /// continuation semantics, so normal WebSocket turns retain the field. Only safe affinity-loss
 /// or explicit reference-rejection recovery enters `prepare_codex_websocket_subscription_replay`; this HTTP
 /// executor always expands it because the subscription HTTP endpoint rejects the reference.
-/// Unlike CLIProxyAPI's source-specific replay cache, we key the complete replay by the concrete
-/// response id because VS Code sends only tool-output deltas.
+/// Complete replay history is keyed by the concrete response ID because VS Code sends only
+/// tool-output deltas.
 pub(crate) fn prepare_codex_http_subscription_request(
     config: &SupplierConfig,
     body: &str,
@@ -706,11 +706,10 @@ pub(crate) fn prepare_codex_http_subscription_request(
     let Some(state) = codex_http_continuation_state(config, &previous_response_id) else {
         // Official Responses guidance requires an unresolved continuation to become a new turn
         // with self-contained input. The subscription HTTP endpoint rejects the reference itself,
-        // while blindly removing it leaves function_call_output items orphaned. Follow
-        // ref/CLIProxyAPI's pairing rule: retain complete call/output pairs and non-tool input,
-        // discard only unresolvable tool items, then provide a neutral fallback turn if nothing
-        // usable remains. This is deliberately the last-resort path; normal restarts are handled
-        // by the bounded local continuation database above.
+        // while blindly removing it leaves function_call_output items orphaned. Retain complete
+        // call/output pairs and non-tool input, discard only unresolvable tool items, then provide
+        // a neutral fallback turn if nothing usable remains. This is deliberately the last-resort
+        // path; normal restarts are handled by the bounded local continuation database above.
         let recovery = repair_unresolved_codex_continuation(object);
         let repaired = serde_json::to_string(&value)?;
         log::warn!(

@@ -1003,8 +1003,8 @@ fn route_availability(metadata: &serde_json::Value) -> Option<bool> {
 
 pub(crate) fn callable_upstream_model_id(model: &str) -> String {
     match model.trim().to_ascii_lowercase().as_str() {
-        // Antigravity may still advertise these retired aliases. The current
-        // callable routes are confirmed by both OmniRoute and CLIProxyAPI.
+        // Antigravity may still advertise retired aliases; resolve them to
+        // the callable upstream route IDs before dispatch.
         "gemini-3.1-pro" | "gemini-3-pro-preview" | "gemini-3.1-pro-high" | "gemini-3-pro-high" => {
             "gemini-pro-agent".to_string()
         }

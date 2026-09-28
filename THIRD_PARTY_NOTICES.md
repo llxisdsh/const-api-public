@@ -11,7 +11,7 @@ their license texts and notices, and provide covered source where required when
 redistributing a binary. A package's license metadata is not a complete binary
 distribution audit; check the dependencies and native libraries for the target OS.
 
-## Assets and compatibility references
+## Assets and model metadata
 
 The OmniRoute icon has its accompanying MIT notice in
 `client/src/assets/tool-icons/omniroute.LICENSE.txt`. Other standalone vendor
@@ -21,10 +21,11 @@ Product names identify compatible third-party tools. MIT does not grant
 trademark rights or establish endorsement. Upstream services retain their own
 service terms; this project's license does not grant access to them.
 
-The bundled model and price catalogs incorporate public metadata from
-[LiteLLM](https://github.com/BerriAI/litellm). Subscription compatibility work also
-uses [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) as a reference.
-Their MIT notices are retained below. No LiteLLM enterprise source is included.
+Bundled model metadata incorporates public catalog data from
+[LiteLLM](https://github.com/BerriAI/litellm) and
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). These are data sources
+used during metadata generation, not runtime libraries. Their MIT notices are
+retained below. No LiteLLM enterprise source is included.
 
 ## LiteLLM — MIT License
 
@@ -48,7 +49,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## CLIProxyAPI — MIT License
+## CLIProxyAPI model catalog data — MIT License
 
 Copyright (c) 2025-2005.9 Luis Pater
 Copyright (c) 2025.9-present Router-For.ME
