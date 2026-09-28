@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_revision": "736e6264d761252e5a6f8faeb24cc3ef9d610890",
+  "source_revision": "3b78460405d0bc32a7823fbc8f899b460a42b602",
   "edition": "local-only",
   "files": {
     "client/.node-version": "55075b5ec4e8b31936cbbc282b8829116d1fd48f2f2f1856dee592a6650700ce",
@@ -461,7 +461,7 @@
     "SOURCE.md": "d56716c92ff38cd97e5522f9be6c5800408059ddc3fc78f34aab777b3ab5ff91",
     "SOURCE.zh-CN.md": "f29557d057289ad52d66a5e5d0ce56f3f45932d5942164961e885e514c0a6b1c",
     "LICENSE": "5d89be6297e11f5c7b9513fa2681581cdd197eeb74465d0c5661995e9ad7ceea",
-    "THIRD_PARTY_NOTICES.md": "25542565daf2cc6644e887dd47886036373f921627998495b7bd9fc8ca9a7424",
+    "THIRD_PARTY_NOTICES.md": "84ba2f8c23bc55e6deabd63701259aa9e048ef8bb24700a5c7fc6a4fc34ac115",
     ".github/workflows/check-source.yml": "704133051b8a6904fb12e816e7e11b118bb0e4200356791c42de9e4704c3db4b",
     ".gitignore": "47b00324cd21e54031a71c0ab69d526272d6c3a235917caad55ce19d9d9c0f5b",
     ".gitattributes": "d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c"
