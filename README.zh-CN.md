@@ -4,7 +4,7 @@
 
 把 AI 工具、API 渠道、账号订阅和本地模型，连接到同一个本地入口。
 
-[English](README.md) · [下载官方客户端](https://github.com/llxisdsh/const-api-public/releases/latest) · [使用指南](docs/usage.zh-CN.md) · [源码构建](SOURCE.zh-CN.md) · [问题反馈](https://github.com/llxisdsh/const-api-public/issues)
+[English](README.md) · [下载官方客户端](https://github.com/llxisdsh/const-api-public/releases/latest) · [使用指南](docs/usage.zh-CN.md) · [技术说明](docs/technical-overview.zh-CN.md) · [源码构建](SOURCE.zh-CN.md) · [问题反馈](https://github.com/llxisdsh/const-api-public/issues)
 
 工具配置一次，在一个桌面应用中管理模型渠道。CONST API 提供 OpenAI Responses / Chat
 Completions、Anthropic Messages 和 Gemini API 接口，支持 Windows、macOS 和 Linux。
@@ -42,6 +42,24 @@ Completions、Anthropic Messages 和 Gemini API 接口，支持 Windows、macOS 
 
 Antigravity 的浏览器授权和令牌刷新，需要构建者提供兼容的 OAuth 应用配置；
 这些应用凭据不随源码公开。见[源码构建要求](SOURCE.zh-CN.md#可选的-antigravity-oauth-配置)。
+
+## 技术实现概览
+
+网关核心使用 **Rust**，桌面界面使用 **Tauri + React/TypeScript**。
+工具共用一条本机请求链路；协议和厂商差异由专门的适配器处理，不在每个工具里重复实现。
+
+| 技术特征 | 实现方式 |
+| --- | --- |
+| 原生转发与跨协议转换 | 同协议保留原生字段；跨协议使用统一消息和工具结构，并按事件转换流式响应。 |
+| HTTP、SSE、WebSocket 与媒体 | 复用 HTTP 客户端，按上游能力管理 Responses WS 连接，上传和实时连接使用专用路径。 |
+| API 与账号订阅渠道 | 共用渠道执行器，将厂商鉴权、凭据刷新和必要的订阅字段调整留在对应适配器。 |
+| 一致的模型列表 | 短名称与上游 ID 分开；工具和 LAN 接入共用排序、可用性、上下文及兼容信息。 |
+| 可恢复的工具配置 | 跟踪字段归属、备份修改，取消时保留用户后续编辑；Codex 切换接入时同步会话索引。 |
+| 有界的运行开销 | 增量流式处理、按字节限量的输出缓存、精简模型目录、元数据缓存及日志与历史保留上限。 |
+
+[完整技术说明](docs/technical-overview.zh-CN.md)通过 14 个章节解释这些机制及更多特性，并附代码入口。
+其中也单独介绍**官方平台专属**的目录发布和动态参考价格，不会将它们混同为公开本机版服务。
+[English technical guide](docs/technical-overview.md)。
 
 ## 快速开始
 
@@ -96,6 +114,7 @@ npm run dev
 ## 帮助和许可
 
 - [使用、手动接入和问题排查](docs/usage.zh-CN.md)
+- [技术架构、特性与代码导航](docs/technical-overview.zh-CN.md)
 - [源码构建和隔离说明](SOURCE.zh-CN.md)
 - [报告问题](https://github.com/llxisdsh/const-api-public/issues)：请注明版本类型、版本号、系统和
   脱敏错误。不要上传 Key、Token、账号文件或私人对话内容。

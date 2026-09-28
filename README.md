@@ -4,7 +4,7 @@
 
 One local gateway for your AI tools, API providers, subscriptions, and local models.
 
-[简体中文](README.zh-CN.md) · [Download the official app](https://github.com/llxisdsh/const-api-public/releases/latest) · [Usage guide](docs/usage.md) · [Build from source](SOURCE.md) · [Issues](https://github.com/llxisdsh/const-api-public/issues)
+[简体中文](README.zh-CN.md) · [Download the official app](https://github.com/llxisdsh/const-api-public/releases/latest) · [Usage guide](docs/usage.md) · [Architecture](docs/technical-overview.md) · [Build from source](SOURCE.md) · [Issues](https://github.com/llxisdsh/const-api-public/issues)
 
 Connect a tool once, then manage its model channels in one desktop app. CONST API
 provides OpenAI Responses / Chat Completions, Anthropic Messages, and Gemini API
@@ -50,6 +50,26 @@ tests can consume upstream quota.
 Antigravity browser sign-in and token refresh require compatible OAuth application
 credentials supplied by the builder; those credentials are not published here.
 See the [source-build requirements](SOURCE.md#optional-antigravity-oauth-configuration).
+
+## How it works
+
+The gateway runs in **Rust**, with a **Tauri + React/TypeScript** desktop interface.
+Tools share one local request path; protocol and provider differences are handled
+in dedicated adapters rather than repeated in each tool integration.
+
+| Technical feature | Implementation |
+| --- | --- |
+| Native forwarding and cross-protocol conversion | Preserve native fields on matching protocols; use a common message/tool representation and event-based streaming conversion when protocols differ. |
+| HTTP, SSE, WebSocket, and media | Reuse HTTP clients, manage Responses WS connections according to upstream support, and provide dedicated upload and realtime paths. |
+| API and subscription channels | Share a channel executor while isolating provider authentication, credential refresh, and required subscription adjustments. |
+| Consistent model lists | Keep short display names separate from wire IDs; share ordering, availability, context limits, and compatibility metadata across tools and LAN access. |
+| Reversible tool configuration | Track field ownership, back up changes, preserve user edits on removal, and synchronize Codex session indexes when switching providers. |
+| Bounded runtime overhead | Incremental streams, byte-budgeted output buffers, compact model catalogs, cached metadata, and bounded log/history retention. |
+
+The [technical guide](docs/technical-overview.md) explains these mechanisms and more,
+with code links across 14 chapters. It also describes **official-platform-only**
+catalog releases and dynamic reference pricing without presenting them as local
+source-build services. [Read in Chinese](docs/technical-overview.zh-CN.md).
 
 ## Quick start
 
@@ -112,6 +132,7 @@ integrate accepted changes upstream before exporting the next snapshot.
 ## Help and licensing
 
 - [Usage, manual API configuration, and troubleshooting](docs/usage.md)
+- [Architecture, technical features, and code map](docs/technical-overview.md)
 - [Source build and isolation details](SOURCE.md)
 - [Report a bug](https://github.com/llxisdsh/const-api-public/issues): include your
   edition, version, OS, and redacted error. Never post keys, tokens, account files,
