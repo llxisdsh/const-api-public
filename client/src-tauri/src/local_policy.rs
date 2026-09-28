@@ -34,6 +34,20 @@ pub(crate) fn enforce(config: &mut crate::model::ClientConfig) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn application_update_commands_are_unavailable() {
+        for result in [
+            crate::update_sources::set_automatic_updates(),
+            crate::update_sources::request_native_update_check(),
+            crate::update_sources::request_native_update_install(),
+        ] {
+            assert_eq!(
+                result.err().as_deref(),
+                Some("Application updates are unavailable in the local edition")
+            );
+        }
+    }
+
     use http_body_util::BodyExt;
     use warp::Filter;
 

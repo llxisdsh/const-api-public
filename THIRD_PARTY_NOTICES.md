@@ -13,10 +13,10 @@ distribution audit; check the dependencies and native libraries for the target O
 
 ## Assets and model metadata
 
-The OmniRoute icon has its accompanying MIT notice in
-`client/src/assets/tool-icons/omniroute.LICENSE.txt`. Other standalone vendor
-artwork without an accompanying license is not included in this source snapshot;
-the UI uses the installed icon packages or generic icons instead.
+Tool logos in `client/src/assets/tool-icons/` identify compatible third-party
+products and remain the property of their respective owners; the root MIT
+license does not relicense these marks. The OmniRoute icon has its accompanying
+MIT notice in `client/src/assets/tool-icons/omniroute.LICENSE.txt`.
 Product names identify compatible third-party tools. MIT does not grant
 trademark rights or establish endorsement. Upstream services retain their own
 service terms; this project's license does not grant access to them.

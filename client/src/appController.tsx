@@ -209,7 +209,7 @@ import {
   localApiSurfaceById,
   type LocalApiConnectionId,
 } from "./localApiSurfaces";
-import { DEVELOPMENT_PROFILE } from "./runtimeProfile";
+import { DEVELOPMENT_PROFILE, RELEASE_UPDATES_ENABLED } from "./runtimeProfile";
 import {
   UI_SNAPSHOT_AUTO_REFRESH_MS,
   createRefreshGate,
@@ -1071,7 +1071,7 @@ export function useAppController({
 
   const [updateState, setUpdateState] = useState<UpdateState>({ status: "idle" });
 
-  const [autoInstallUpdates, setAutoInstallUpdatesState] = useState(!DEVELOPMENT_PROFILE);
+  const [autoInstallUpdates, setAutoInstallUpdatesState] = useState(RELEASE_UPDATES_ENABLED);
 
   const [autostartEnabled, setAutostartEnabled] = useState(false);
 
@@ -1607,7 +1607,7 @@ export function useAppController({
     }, [tab, account.status.state]);
 
   useEffect(() => {
-      if (DEVELOPMENT_PROFILE || !isTauriRuntime()) return;
+      if (!RELEASE_UPDATES_ENABLED || !isTauriRuntime()) return;
       let disposed = false;
       let unlisten: (() => void) | undefined;
       void (async () => {
@@ -1640,7 +1640,7 @@ export function useAppController({
     }, []);
 
   useEffect(() => {
-      if (DEVELOPMENT_PROFILE || !isTauriRuntime()) return;
+      if (!RELEASE_UPDATES_ENABLED || !isTauriRuntime()) return;
       const syncNativeUpdateStatus = () => {
         if (document.visibilityState === "hidden") return;
         void invoke<NativeUpdateStatus>("native_update_status")
@@ -2924,8 +2924,9 @@ export function useAppController({
     }
 
   function setAutoInstallUpdates(enabled: boolean) {
+      if (!RELEASE_UPDATES_ENABLED) return;
       setAutoInstallUpdatesState(enabled);
-      if (DEVELOPMENT_PROFILE || !isTauriRuntime()) return;
+      if (!isTauriRuntime()) return;
       void invoke<NativeUpdateStatus>("set_automatic_updates", { enabled })
         .then((status) => {
           clearLegacyAutoInstallUpdatesPreference();
@@ -2940,7 +2941,7 @@ export function useAppController({
     }
 
   async function checkAndDownloadUpdate(silent = false) {
-      if (DEVELOPMENT_PROFILE) return;
+      if (!RELEASE_UPDATES_ENABLED) return;
       if (!isTauriRuntime()) {
         if (!silent) showToast(tr("updates.desktopOnly"), "error", 4200);
         return;
@@ -2966,7 +2967,7 @@ export function useAppController({
     }
 
   async function installPreparedUpdate() {
-      if (!isTauriRuntime()) return;
+      if (!RELEASE_UPDATES_ENABLED || !isTauriRuntime()) return;
       if (updateState.status !== "ready") {
         showToast(tr("updates.notReady"), "error", 4200);
         return;

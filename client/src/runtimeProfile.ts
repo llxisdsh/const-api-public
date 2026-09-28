@@ -7,6 +7,10 @@ export const DEVELOPMENT_PROFILE = developmentProfileEnabled(
   import.meta.env.VITE_CONST_API_PROFILE,
 );
 
+// The public exporter changes this single edition capability, not the runtime profile.
+export const RELEASE_UPDATES_SUPPORTED = false;
+export const RELEASE_UPDATES_ENABLED = RELEASE_UPDATES_SUPPORTED && !DEVELOPMENT_PROFILE;
+
 export const DEFAULT_LOCAL_PROXY_LISTEN = DEVELOPMENT_PROFILE
   ? "127.0.0.1:38789"
   : "127.0.0.1:38789";

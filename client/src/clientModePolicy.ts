@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { installWebviewShortcutGuard } from "./webviewShortcutGuard";
+import { RELEASE_UPDATES_SUPPORTED } from "./runtimeProfile";
 
 export type ClientPresentationMode = "development" | "production";
 
@@ -37,6 +38,7 @@ type ClientModeInput = {
   viteDevelopment: boolean;
   productionPresentationRequested: boolean;
   experimentalToolsUnlocked?: boolean;
+  releaseUpdatesSupported?: boolean;
 };
 
 type ExperimentalToolsShortcutEvent = Pick<
@@ -58,6 +60,7 @@ export function resolveClientModePolicy({
   viteDevelopment,
   productionPresentationRequested,
   experimentalToolsUnlocked = false,
+  releaseUpdatesSupported = RELEASE_UPDATES_SUPPORTED,
 }: ClientModeInput): ClientModePolicy {
   const productionPreviewActive = developmentProfile && productionPresentationRequested;
   const productionPresentation = !developmentProfile || productionPreviewActive;
@@ -87,7 +90,7 @@ export function resolveClientModePolicy({
     capabilities: {
       debugConsole: developmentProfile || experimentalToolsUnlocked,
       developmentEndpoint: viteDevelopment,
-      releaseUpdates: false,
+      releaseUpdates: !developmentProfile && releaseUpdatesSupported,
       releasePreferences: false,
     },
   };
@@ -96,7 +99,7 @@ export function resolveClientModePolicy({
 export function useClientModePolicy({
   developmentProfile,
   viteDevelopment,
-}: Omit<ClientModeInput, "productionPresentationRequested" | "experimentalToolsUnlocked">) {
+}: Omit<ClientModeInput, "productionPresentationRequested" | "experimentalToolsUnlocked" | "releaseUpdatesSupported">) {
   const [productionPresentationRequested, setProductionPresentationRequested] = useState(false);
   const [experimentalToolsUnlocked, setExperimentalToolsUnlocked] = useState(false);
   const policy = useMemo(

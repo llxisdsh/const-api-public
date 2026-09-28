@@ -425,9 +425,9 @@
                 known_tool_process_names("claude-science"),
                 &["claude-science.exe"]
             );
-            assert_eq!(known_tool_process_names("kimicode"), &["kimi.exe"]);
+            assert_eq!(known_tool_process_names("kimicode"), &["Kimi Code.exe", "kimi.exe"]);
             assert_eq!(known_tool_process_names("mimocode"), &["mimo.exe"]);
-            assert_eq!(known_tool_process_names("qwencode"), &["qwen.exe"]);
+            assert_eq!(known_tool_process_names("qwencode"), &["qwen-code-desktop.exe", "Qwen Code Desktop.exe", "qwen.exe"]);
             assert_eq!(known_tool_process_names("openscience"), &["ai4s-workbench.exe"]);
             assert_eq!(
                 known_tool_process_names("vibe-trading"),
@@ -436,7 +436,7 @@
             assert_eq!(known_tool_process_names("copilot"), &["copilot.exe"]);
             assert_eq!(known_tool_process_names("raven"), &["raven.exe"]);
             assert_eq!(known_tool_process_names("pi"), &["pi.exe"]);
-            assert_eq!(known_tool_process_names("cline"), &["cline.exe"]);
+            assert_eq!(known_tool_process_names("cline"), &["cline-app.exe", "cline.exe"]);
             assert_eq!(
                 known_tool_process_names("reasonix"),
                 &["Reasonix.exe", "reasonix.exe"]
@@ -950,6 +950,9 @@
             .expect("LOCALAPPDATA");
 
         let expected = [
+            ("cline", "Programs/Cline/cline-app.exe", &["cline-app.exe", "cline.exe"][..]),
+            ("kimicode", "Programs/kimi-code-app/Kimi Code.exe", &["Kimi Code.exe", "kimi.exe"][..]),
+            ("qwencode", "Programs/Qwen Code Desktop/qwen-code-desktop.exe", &["qwen-code-desktop.exe", "Qwen Code Desktop.exe", "qwen.exe"][..]),
             (
                 "zcode",
                 "Programs/ZCode/ZCode.exe",
@@ -1283,6 +1286,9 @@
     #[test]
     fn every_known_tool_program_path_matches_the_program_allowlist() {
         for tool in [
+            "cline",
+            "kimicode",
+            "qwencode",
             "codex",
             "claude-desktop",
             "claude-science",
@@ -1303,6 +1309,47 @@
                     path.display()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn shared_config_desktop_tools_prefer_desktop_and_keep_cli_fallback() {
+        for (tool, command, windows_exe, mac_app, linux_exe) in [
+            ("cline", "cline", "cline-app.exe", "Cline.app", Some("cline-app")),
+            ("kimicode", "kimi", "Kimi Code.exe", "Kimi Code.app", None),
+            ("qwencode", "qwen", "qwen-code-desktop.exe", "Qwen Code Desktop.app", Some("qwen-code-desktop")),
+        ] {
+            let profile = tool_profile(tool).unwrap();
+            assert!(profile.desktop_preferred);
+            assert!(profile.macos_app_names.contains(&mac_app));
+            assert_eq!(profile.command_launch, ToolCommandLaunch::Terminal);
+            let cli = ToolProgramCandidate {
+                path: format!("/tools/{command}"),
+                kind: "command".into(),
+                exists: true,
+                selected: true,
+                ..Default::default()
+            };
+            let mut variants = vec![(windows_exe, "windows_exe"), (mac_app, "mac_app")];
+            if let Some(linux_exe) = linux_exe {
+                assert!(is_linux_desktop_program_path(tool, linux_exe));
+                variants.push((linux_exe, "linux_desktop"));
+            }
+            for (program, kind) in variants {
+                let mut candidates = vec![cli.clone(), ToolProgramCandidate {
+                    path: format!("/apps/{program}"),
+                    kind: kind.into(),
+                    exists: true,
+                    ..Default::default()
+                }];
+                assert_eq!(select_tool_launch_candidate(tool, &candidates).unwrap().path,
+                    candidates[1].path, "{tool}: prefer {program}");
+                candidates[1].exists = false;
+                assert_eq!(select_tool_launch_candidate(tool, &candidates).unwrap().path,
+                    cli.path, "{tool}: keep command when desktop is absent");
+            }
+            assert!(!is_tool_owned_program_path(tool, Path::new("/apps/code-sidecar.exe")),
+                "never claim a shared runtime as the tool executable");
         }
     }
 

@@ -9,7 +9,35 @@ import {
   RotateCcw,
   type LucideIcon,
 } from "lucide-react";
+import azureIconUrl from "../assets/tool-icons/azure.svg";
+import anythingllmIconUrl from "../assets/tool-icons/anythingllm.svg";
+import bedrockIconUrl from "../assets/tool-icons/bedrock.svg";
+import claudeIconUrl from "../assets/tool-icons/claude.svg";
+import claudeScienceIconUrl from "../assets/tool-icons/claude-science.png";
+import codexIconUrl from "../assets/tool-icons/codex.svg";
+import copilotIconUrl from "../assets/tool-icons/copilot.svg";
+import clineIconUrl from "../assets/tool-icons/cline.svg";
+import deepseekHarnessIconUrl from "../assets/tool-icons/deepseek-harness.svg";
+import geminiIconUrl from "../assets/tool-icons/gemini.svg";
+import gooseIconUrl from "../assets/tool-icons/goose.svg";
+import hermesIconUrl from "../assets/tool-icons/hermesagent.png";
+import kimiIconUrl from "../assets/tool-icons/kimi.svg";
+import mimoCodeIconUrl from "../assets/tool-icons/mimocode.svg";
 import omniRouteIconUrl from "../assets/tool-icons/omniroute.svg";
+import openDesignIconUrl from "../assets/tool-icons/open-design.svg";
+import openInterpreterIconUrl from "../assets/tool-icons/open-interpreter.svg";
+import openClawIconUrl from "../assets/tool-icons/openclaw.svg";
+import openCodeIconUrl from "../assets/tool-icons/opencode.svg";
+import openScienceIconUrl from "../assets/tool-icons/open-science.svg";
+import qwenIconUrl from "../assets/tool-icons/qwen.svg";
+import piIconUrl from "../assets/tool-icons/pi.svg";
+import ravenIconUrl from "../assets/tool-icons/raven.svg";
+import reasonixIconUrl from "../assets/tool-icons/reasonix.svg";
+import mistralVibeIconUrl from "../assets/tool-icons/mistral-vibe.svg";
+import vibeTradingIconUrl from "../assets/tool-icons/vibe-trading.png";
+import vscodeIconUrl from "../assets/tool-icons/vscode.svg";
+import workBuddyIconUrl from "../assets/tool-icons/workbuddy.svg";
+import zcodeIconUrl from "../assets/tool-icons/zcode.png";
 import { useToolDockMenu } from "../ToolDockMenu";
 import type { ToolCatalogId } from "../toolCatalog";
 import {
@@ -1635,5 +1663,64 @@ export function BrandBadge({
 }
 
 export function customBrandIconUrl(icon: CustomBrandIcon) {
-  return icon === "omniroute" ? omniRouteIconUrl : "";
+  switch (icon) {
+    case "anythingllm":
+      return anythingllmIconUrl;
+    case "azure":
+      return azureIconUrl;
+    case "bedrock":
+      return bedrockIconUrl;
+    case "claude":
+      return claudeIconUrl;
+    case "claude-science":
+      return claudeScienceIconUrl;
+    case "codex":
+      return codexIconUrl;
+    case "copilot":
+      return copilotIconUrl;
+    case "cline":
+      return clineIconUrl;
+    case "deepseek-harness":
+      return deepseekHarnessIconUrl;
+    case "gemini":
+      return geminiIconUrl;
+    case "goose":
+      return gooseIconUrl;
+    case "hermes":
+      return hermesIconUrl;
+    case "kimi":
+      return kimiIconUrl;
+    case "mimocode":
+      return mimoCodeIconUrl;
+    case "omniroute":
+      return omniRouteIconUrl;
+    case "open-design":
+      return openDesignIconUrl;
+    case "open-interpreter":
+      return openInterpreterIconUrl;
+    case "openclaw":
+      return openClawIconUrl;
+    case "opencode":
+      return openCodeIconUrl;
+    case "openscience":
+      return openScienceIconUrl;
+    case "qwen":
+      return qwenIconUrl;
+    case "pi":
+      return piIconUrl;
+    case "raven":
+      return ravenIconUrl;
+    case "reasonix":
+      return reasonixIconUrl;
+    case "mistral-vibe":
+      return mistralVibeIconUrl;
+    case "vibe-trading":
+      return vibeTradingIconUrl;
+    case "vscode":
+      return vscodeIconUrl;
+    case "workbuddy":
+      return workBuddyIconUrl;
+    case "zcode":
+      return zcodeIconUrl;
+  }
 }

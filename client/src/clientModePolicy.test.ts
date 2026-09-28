@@ -1,5 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { RELEASE_UPDATES_SUPPORTED } from "./runtimeProfile";
 
 import {
   isExperimentalToolsShortcut,
@@ -68,7 +69,7 @@ describe("client mode policy", () => {
     expect(policy.presentation.mode).toBe("production");
     expect(policy.presentation.showDebugConsole).toBe(false);
     expect(policy.capabilities.debugConsole).toBe(false);
-    expect(policy.capabilities.releaseUpdates).toBe(false);
+    expect(policy.capabilities.releaseUpdates).toBe(RELEASE_UPDATES_SUPPORTED);
     expect(policy.capabilities.releasePreferences).toBe(false);
   });
 
@@ -86,6 +87,18 @@ describe("client mode policy", () => {
     expect(policy.presentation.showDebugConsole).toBe(true);
     expect(policy.capabilities.debugConsole).toBe(true);
     expect(policy.capabilities.developmentEndpoint).toBe(false);
+  });
+
+  it("keeps updates unavailable in an edition without an update service", () => {
+    const policy = resolveClientModePolicy({
+      developmentProfile: false,
+      viteDevelopment: false,
+      productionPresentationRequested: true,
+      experimentalToolsUnlocked: true,
+      releaseUpdatesSupported: false,
+    });
+    expect(policy.presentation.mode).toBe("production");
+    expect(policy.capabilities.releaseUpdates).toBe(false);
   });
 
   it("requires the full primary+alt+shift+d chord", () => {

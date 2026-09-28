@@ -1376,7 +1376,7 @@ fn cline_protocol_name(protocol: ToolProtocol) -> Result<(&'static str, &'static
         ToolProtocol::OpenAiResponses => Ok(("openai-responses", "openai")),
         ToolProtocol::OpenAiChat => Ok(("openai-chat", "openai-compatible")),
         _ => Err(anyhow!(
-            "Cline CLI does not support tool protocol {}",
+            "Cline does not support tool protocol {}",
             protocol.as_str()
         )),
     }
@@ -1529,7 +1529,7 @@ fn apply_cline_config(
     models: &[ToolModelInfo],
     protocol: ToolProtocol,
 ) -> Result<ToolApplyResult> {
-    let models = configured_additional_tool_models("Cline CLI", models)?;
+    let models = configured_additional_tool_models("Cline", models)?;
     let (providers_path, catalog_path) = cline_provider_paths()?;
     let paths = [providers_path.clone(), catalog_path.clone()];
     with_tool_config_file_transaction("cline", &paths, || {

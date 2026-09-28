@@ -1412,7 +1412,7 @@
     "productionPresentationPreviewDisabled": "未模拟",
     "catalogVersion": "模型目录版本",
     "catalogSource": "目录来源",
-    "startupAndUpdates": "启动与更新",
+    "startupAndUpdates": "启动",
     "interfaceSettings": "界面设置",
     "autoRestartUpdate": "自动重启更新",
     "launchAtLogin": "登录时启动",
@@ -1829,7 +1829,7 @@
       "description": "支持 OpenAI 兼容自带密钥渠道的 GitHub 终端编码代理"
     },
     "cline": {
-      "description": "Cline 的独立终端编码代理"
+      "description": "桌面端与终端共用模型配置的 Cline 编码代理"
     },
     "opencode": {
       "description": "覆盖终端、桌面与 IDE 的开源 AI 编码代理"
@@ -1874,13 +1874,13 @@
       "description": "面向办公、研究与多步骤任务的专业桌面智能体"
     },
     "kimicode": {
-      "description": "Moonshot AI 开源的终端编码代理"
+      "description": "桌面端与终端共用模型配置的 Kimi Code 编码代理"
     },
     "mimocode": {
       "description": "小米 MiMo 开源的终端编码代理"
     },
     "qwencode": {
-      "description": "Qwen 开源的智能终端编码工具"
+      "description": "桌面端与终端共用模型配置的 Qwen Code 编码工具"
     },
     "openscience": {
       "description": "面向科研工作的开源研究工作区与智能体"

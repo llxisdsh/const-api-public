@@ -3246,7 +3246,7 @@ async fn execute_tool_config_operation_inner(
             "copilot" => "GitHub Copilot CLI",
             "raven" => "Raven",
             "pi" => "Pi",
-            "cline" => "Cline CLI",
+            "cline" => "Cline",
             "reasonix" => "DeepSeek Reasonix",
             "deepseek-harness" => "DeepSeek Harness",
             "open-interpreter" => "Open Interpreter",

@@ -731,14 +731,7 @@ pub(crate) fn start_native_update_manager(
     app: AppHandle<Wry>,
     manager: Arc<NativeUpdateManager>,
     lifecycle: Arc<DesktopLifecycle>,
-) {
-    crate::spawn_supervised("native update manager", Duration::from_secs(5), move || {
-        let app = app.clone();
-        let manager = manager.clone();
-        let lifecycle = lifecycle.clone();
-        async move { run_native_update_manager(app, manager, lifecycle).await }
-    });
-}
+) {}
 
 async fn run_native_update_manager(
     app: AppHandle<Wry>,
@@ -777,99 +770,13 @@ pub(crate) fn native_update_status(
 }
 
 #[tauri::command]
-pub(crate) fn set_automatic_updates(
-    state: State<'_, AppState>,
-    manager: State<'_, Arc<NativeUpdateManager>>,
-    enabled: bool,
-) -> Result<NativeUpdateStatus, String> {
-    commit_config_update(&state.config_path, &state.proxy_config, |config| {
-        config.automatic_updates = enabled;
-        Ok(())
-    })
-    .map_err(|error| error.to_string())?;
-    let previous = manager.automatic.swap(enabled, AtomicOrdering::AcqRel);
-    if previous != enabled {
-        if enabled {
-            // Apply a newly enabled install policy to an already downloaded
-            // package without waiting for the next periodic check.
-            manager.check_requested.store(true, AtomicOrdering::Release);
-        }
-        // There is one native manager task. notify_one stores a permit when the
-        // task is between waits, so a tray-hidden preference change cannot be lost.
-        manager.wake.notify_one();
-    }
-    Ok(manager.snapshot())
-}
+pub(crate) fn set_automatic_updates() -> Result<NativeUpdateStatus, String> { Err("Application updates are unavailable in the local edition".into()) }
 
 #[tauri::command]
-pub(crate) fn request_native_update_check(
-    app: AppHandle<Wry>,
-    manager: State<'_, Arc<NativeUpdateManager>>,
-) -> NativeUpdateStatus {
-    let manager = manager.inner().clone();
-    let before = manager.snapshot();
-    let prepared = manager
-        .prepared
-        .try_lock()
-        .map(|prepared| prepared.is_some())
-        .unwrap_or_else(|_| {
-            matches!(
-                before.status.as_str(),
-                "ready" | "ready_waiting_idle" | "installing"
-            )
-        });
-    manager.check_requested.store(true, AtomicOrdering::Release);
-    let status = if prepared {
-        manager.snapshot()
-    } else {
-        manager.publish(&app, |status| {
-            if !matches!(
-                status.status.as_str(),
-                "downloading" | "ready_waiting_idle" | "installing"
-            ) {
-                status.status = "checking".to_string();
-                status.error = None;
-                status.checked_at_unix_ms = unix_now_ms();
-            }
-        })
-    };
-    manager.wake.notify_one();
-    status
-}
+pub(crate) fn request_native_update_check() -> Result<NativeUpdateStatus, String> { Err("Application updates are unavailable in the local edition".into()) }
 
 #[tauri::command]
-pub(crate) fn request_native_update_install(
-    app: AppHandle<Wry>,
-    manager: State<'_, Arc<NativeUpdateManager>>,
-) -> NativeUpdateStatus {
-    let manager = manager.inner().clone();
-    let before = manager.snapshot();
-    let prepared = manager
-        .prepared
-        .try_lock()
-        .map(|prepared| prepared.is_some())
-        .unwrap_or_else(|_| {
-            matches!(
-                before.status.as_str(),
-                "ready" | "ready_waiting_idle" | "installing"
-            )
-        });
-    manager
-        .install_requested
-        .store(true, AtomicOrdering::Release);
-    let status = if prepared {
-        manager.publish(&app, |status| {
-            if status.status != "installing" {
-                status.status = "ready_waiting_idle".to_string();
-                status.error = None;
-            }
-        })
-    } else {
-        manager.snapshot()
-    };
-    manager.wake.notify_one();
-    status
-}
+pub(crate) fn request_native_update_install() -> Result<NativeUpdateStatus, String> { Err("Application updates are unavailable in the local edition".into()) }
 
 #[cfg(test)]
 mod tests {

@@ -1412,7 +1412,7 @@
     "productionPresentationPreviewDisabled": "Not previewing",
     "catalogVersion": "Model catalog version",
     "catalogSource": "Catalog sources",
-    "startupAndUpdates": "Startup and updates",
+    "startupAndUpdates": "Startup",
     "interfaceSettings": "Interface",
     "autoRestartUpdate": "Restart automatically for updates",
     "launchAtLogin": "Launch at login",
@@ -1829,7 +1829,7 @@
       "description": "GitHub's terminal coding agent using an OpenAI-compatible BYOK provider"
     },
     "cline": {
-      "description": "Cline's standalone terminal coding agent"
+      "description": "Cline desktop and terminal agent with shared model configuration"
     },
     "opencode": {
       "description": "An open-source AI coding agent for terminals, desktops, and IDEs"
@@ -1874,13 +1874,13 @@
       "description": "A professional desktop agent for office work, research, and multi-step tasks"
     },
     "kimicode": {
-      "description": "Moonshot AI's open-source terminal coding agent"
+      "description": "Kimi Code desktop and terminal agent with shared model configuration"
     },
     "mimocode": {
       "description": "Xiaomi MiMo's open-source terminal coding agent"
     },
     "qwencode": {
-      "description": "Qwen's open-source agentic coding tool for the terminal"
+      "description": "Qwen Code desktop and terminal agent with shared model configuration"
     },
     "openscience": {
       "description": "An open-source research workspace and scientific agent"

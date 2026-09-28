@@ -25,6 +25,7 @@ describe("tool catalog", () => {
       "open-design.ai",
       "code.visualstudio.com",
       "www.codebuddy.cn",
+      "www.kimi.com",
       "zcode.z.ai",
     ]);
     expect(Object.keys(TOOL_CATALOG)).toHaveLength(27);
@@ -48,6 +49,15 @@ describe("tool catalog", () => {
     expect(TOOL_CATALOG.openscience.officialLinks).toEqual([
       { label: "GitHub", url: "https://github.com/ai4s-research/open-science" },
     ]);
+  });
+
+  test("shares desktop and terminal configuration through one canonical tool entry", () => {
+    for (const tool of ["cline", "kimicode", "qwencode"] as const) {
+      expect(TOOL_CATALOG[tool].modelSyncPolicy).toBe("catalog");
+      expect(TOOL_CATALOG[tool].description).toContain("desktop and terminal");
+      expect(TOOL_CATALOG_ORDER.filter((id) => id === tool)).toHaveLength(1);
+    }
+    expect(TOOL_CATALOG.cline.title).toBe("Cline");
   });
 
   test("does not resolve unknown or inherited object keys", () => {

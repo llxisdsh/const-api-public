@@ -95,8 +95,8 @@ export const TOOL_CATALOG = {
   },
   cline: {
     tool: "cline",
-    title: "Cline CLI",
-    description: "Cline's standalone terminal coding agent",
+    title: "Cline",
+    description: "Cline's desktop and terminal coding agent with shared model configuration",
     protocols: ["openai_responses", "openai_chat"],
     defaultProtocol: "openai_responses",
     modelSyncPolicy: "catalog",
@@ -223,11 +223,12 @@ export const TOOL_CATALOG = {
   kimicode: {
     tool: "kimicode",
     title: "Kimi Code",
-    description: "Moonshot AI's open-source terminal coding agent",
+    description: "Kimi Code desktop and terminal agent with shared model configuration",
     protocols: ["openai_responses", "openai_chat"],
     defaultProtocol: "openai_responses",
     modelSyncPolicy: "catalog",
     officialLinks: [
+      { label: "Official download", url: "https://www.kimi.com/code" },
       { label: "GitHub", url: "https://github.com/MoonshotAI/kimi-code" },
     ],
   },
@@ -245,7 +246,7 @@ export const TOOL_CATALOG = {
   qwencode: {
     tool: "qwencode",
     title: "Qwen Code",
-    description: "Qwen's open-source agentic coding tool for the terminal",
+    description: "Qwen Code desktop and terminal agent with shared model configuration",
     protocols: ["openai_chat"],
     defaultProtocol: "openai_chat",
     modelSyncPolicy: "catalog",
