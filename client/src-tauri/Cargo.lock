@@ -718,12 +718,14 @@ dependencies = [
 
 [[package]]
 name = "const-api-local"
-version = "0.1.57"
+version = "0.1.58"
 dependencies = [
+ "aes",
  "anyhow",
  "async-trait",
  "base64 0.23.1",
  "bytes",
+ "cbc",
  "core-foundation 0.10.1",
  "dirs 6.0.0",
  "ed25519-dalek",
@@ -757,6 +759,7 @@ dependencies = [
  "rusqlite",
  "rustls",
  "rustls-pki-types",
+ "security-framework",
  "security-framework-sys",
  "semver",
  "serde",

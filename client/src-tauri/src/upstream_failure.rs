@@ -447,7 +447,8 @@ fn scoped_message(
     }
     if matches!(status, 400 | 403)
         && (message.starts_with("user location is not supported")
-            || message.starts_with("api use is not supported in your location"))
+            || message.starts_with("api use is not supported in your location")
+            || message == "this model is not available in your region.")
     {
         return ("location_unsupported", "model", "location.explicit.v1");
     }
@@ -669,5 +670,26 @@ mod tests {
         assert_eq!(error.status, 200);
         assert_eq!(error.cause, "provider_eligibility_restricted");
         assert_eq!(error.scope, "model");
+    }
+
+    #[test]
+    fn explicit_model_region_restriction_is_not_a_credential_failure() {
+        let body = r#"{"error":{"code":403,"message":"This model is not available in your region.","metadata":{"failed_routing_step":"Gate Endpoints with Geo Restrictions"}}}"#;
+        for status in [403, 200] {
+            let error = failure(status, body);
+            assert_eq!(error.cause, "location_unsupported");
+            assert_eq!(error.scope, "model");
+            assert_eq!(error.rule_id, "location.explicit.v1");
+            assert!(error.group_failure());
+            let mut payload = Map::new();
+            error.attach(&mut payload);
+            assert_eq!(payload["error_kind"], "location_unsupported");
+            assert_eq!(payload["failure_scope"], "model");
+        }
+        assert_eq!(
+            failure(403, r#"{"error":{"message":"Access denied"}}"#).cause,
+            "permission_denied"
+        );
+        assert!(observe(200, r#"{"choices":[{"message":{"content":"This model is not available in your region."}}]}"#, &[], Some("model-a")).is_none());
     }
 }

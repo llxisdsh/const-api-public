@@ -37,7 +37,7 @@ fn harness_test_models(id: &str) -> Vec<ToolModelInfo> {
 }
 
 fn harness_test_profile_patch() -> PathBuf {
-    deepseek_harness_profile_patch_path()
+    deepseek_harness_profile_patch_path("web")
 }
 
 fn harness_test_read_settings(path: &Path) -> serde_yaml::Value {
@@ -59,7 +59,10 @@ fn deepseek_harness_legacy_settings_remain_preferred_before_migration() {
             ToolProtocol::OpenAiChat,
         )
         .unwrap();
-        assert_eq!(deepseek_harness_settings_files().unwrap()[0].path, legacy);
+        assert_eq!(
+            deepseek_harness_settings_groups().unwrap()[0][0].path,
+            legacy
+        );
         assert_eq!(
             fs::read_to_string(&patch).unwrap(),
             "# Created by Harness\n[]\n"
@@ -108,7 +111,10 @@ fn deepseek_harness_settings_migration_preserves_status_reapply_and_restore() {
                     .unwrap();
                     let manifest_before = fs::read(tool_config_manifest_path()).unwrap();
                     let patch_before = fs::read(&patch).unwrap();
-                    assert_eq!(deepseek_harness_settings_files().unwrap()[0].path, patch);
+                    assert_eq!(
+                        deepseek_harness_settings_groups().unwrap()[0][0].path,
+                        patch
+                    );
                     assert!(
                         check_deepseek_harness_config(TOOL_CONFIG_ROOT_URL, "test-key")
                             .unwrap()
@@ -284,7 +290,7 @@ fn deepseek_harness_home_patch_updates_only_the_effective_sections() {
             ToolProtocol::OpenAiChat,
         )
         .unwrap();
-        assert_eq!(deepseek_harness_settings_files().unwrap().len(), 2);
+        assert_eq!(deepseek_harness_settings_groups().unwrap()[0].len(), 2);
         assert!(
             check_deepseek_harness_config(TOOL_CONFIG_ROOT_URL, "test-key")
                 .unwrap()
@@ -371,4 +377,151 @@ fn deepseek_harness_unsupported_patch_fails_without_writing_config() {
             assert!(!tool_config_manifest_path().exists());
         });
     }
+}
+
+#[test]
+fn deepseek_harness_desktop_and_web_preserve_separate_settings_and_restore() {
+    for protocol in [
+        ToolProtocol::OpenAiChat,
+        ToolProtocol::OpenAiResponses,
+        ToolProtocol::AnthropicMessages,
+    ] {
+        for home_override in [false, true] {
+            with_temp_home(|_| {
+                let mut originals = Vec::new();
+                for profile in ["desktop", "web"] {
+                    let path = deepseek_harness_profile_patch_path(profile);
+                    fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    let settings = parse_deepseek_harness_yaml_mapping(
+                        &HARNESS_USER_SETTINGS
+                            .replace("user-model", &format!("{profile}-user-model")),
+                        "test",
+                    )
+                    .unwrap();
+                    let original =
+                        render_deepseek_harness_patch(HARNESS_OTHER_PATCH, &settings).unwrap();
+                    fs::write(&path, &original).unwrap();
+                    originals.push((path, original));
+                }
+                let home_patch = deepseek_harness_config_paths()
+                    .0
+                    .with_file_name("cordis.patch.yml");
+                if home_override {
+                    let original = "- id: agent-default-model\n  config: {provider: home-user, model: home-model}\n";
+                    fs::write(&home_patch, original).unwrap();
+                    originals.push((home_patch.clone(), original.into()));
+                }
+                let models = admin_order_models(&["model-z", "model-a"]);
+                let preview = preview_tool_config_apply(|| {
+                    apply_deepseek_harness_config(
+                        TOOL_CONFIG_ROOT_URL,
+                        "test-key",
+                        &models,
+                        protocol,
+                    )
+                })
+                .unwrap();
+                assert!(!preview.already_configured);
+                assert!(!tool_config_manifest_path().exists());
+                for (path, original) in &originals {
+                    assert_eq!(fs::read_to_string(path).unwrap(), *original);
+                }
+                apply_deepseek_harness_config(TOOL_CONFIG_ROOT_URL, "test-key", &models, protocol)
+                    .unwrap();
+                assert_eq!(deepseek_harness_settings_groups().unwrap().len(), 2);
+                assert!(
+                    check_deepseek_harness_config(TOOL_CONFIG_ROOT_URL, "test-key")
+                        .unwrap()
+                        .already_configured
+                );
+                for (profile, files) in ["desktop", "web"]
+                    .into_iter()
+                    .zip(deepseek_harness_settings_groups().unwrap())
+                {
+                    let effective = parse_deepseek_harness_yaml_mapping(
+                        &deepseek_harness_effective_settings(&files).unwrap(),
+                        "test",
+                    )
+                    .unwrap();
+                    assert_eq!(deepseek_harness_protocol(&effective), protocol);
+                    assert_eq!(
+                        deepseek_harness_model_ids(&effective),
+                        ["model-z", "model-a"]
+                    );
+                    assert_eq!(
+                        effective["llm-pi-ai"]["providers"]["user"]["models"][0]["id"],
+                        format!("{profile}-user-model")
+                    );
+                }
+                assert!(
+                    apply_deepseek_harness_config(
+                        TOOL_CONFIG_ROOT_URL,
+                        "test-key",
+                        &models,
+                        protocol
+                    )
+                    .unwrap()
+                    .already_configured
+                );
+                let manifest = load_tool_config_manifest().unwrap();
+                assert_eq!(manifest.files.len(), if home_override { 4 } else { 3 });
+                remove_additional_tool_config("deepseek-harness").unwrap();
+                for (path, original) in originals {
+                    assert_eq!(fs::read_to_string(path).unwrap(), original);
+                }
+                assert!(!deepseek_harness_config_paths().1.exists());
+                assert!(load_tool_config_manifest().unwrap().files.is_empty());
+            });
+        }
+    }
+}
+
+#[test]
+fn deepseek_harness_legacy_ownership_follows_desktop_import_not_empty_web_profile() {
+    with_temp_home(|_| {
+        let (legacy, _) = deepseek_harness_config_paths();
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, HARNESS_USER_SETTINGS).unwrap();
+        apply_deepseek_harness_config(
+            TOOL_CONFIG_ROOT_URL,
+            "test-key",
+            &harness_test_models("model-a"),
+            ToolProtocol::OpenAiChat,
+        )
+        .unwrap();
+        let settings =
+            parse_deepseek_harness_yaml_mapping(&fs::read_to_string(&legacy).unwrap(), "test")
+                .unwrap();
+        fs::rename(&legacy, legacy.with_file_name("settings.yaml.imported")).unwrap();
+        let desktop = deepseek_harness_profile_patch_path("desktop");
+        let web = deepseek_harness_profile_patch_path("web");
+        for path in [&desktop, &web] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        fs::write(
+            &desktop,
+            render_deepseek_harness_patch(HARNESS_OTHER_PATCH, &settings).unwrap(),
+        )
+        .unwrap();
+        fs::write(&web, "# web template\n[]\n").unwrap();
+        let manifest = load_tool_config_manifest().unwrap();
+        assert!(manifest.files.contains_key(&manifest_file_key(&desktop)));
+        assert!(!manifest.files.contains_key(&manifest_file_key(&web)));
+        assert!(!manifest.files.contains_key(&manifest_file_key(&legacy)));
+        apply_deepseek_harness_config(
+            TOOL_CONFIG_ROOT_URL,
+            "test-key",
+            &harness_test_models("model-b"),
+            ToolProtocol::OpenAiResponses,
+        )
+        .unwrap();
+        remove_additional_tool_config("deepseek-harness").unwrap();
+        assert_eq!(
+            harness_test_read_settings(&desktop),
+            serde_yaml::from_str::<serde_yaml::Value>(HARNESS_USER_SETTINGS).unwrap()
+        );
+        assert_eq!(fs::read_to_string(&web).unwrap(), "# web template\n[]\n");
+        assert!(!legacy.exists());
+        assert!(load_tool_config_manifest().unwrap().files.is_empty());
+    });
 }

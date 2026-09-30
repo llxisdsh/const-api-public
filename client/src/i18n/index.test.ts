@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   changeAppLanguage,
   initializeI18n,
+  i18n,
   localizedError,
   stableErrorCode,
 } from "./index";
@@ -12,6 +13,35 @@ beforeAll(async () => {
 });
 
 describe("localizedError", () => {
+  it("labels desktop and command-line programs in both locator languages", () => {
+    expect(i18n.t("access.locator.editions.desktop", { lng: "zh-CN" })).toBe("桌面版");
+    expect(i18n.t("access.locator.editions.cli", { lng: "zh-CN" })).toBe("命令行版（CLI）");
+    expect(i18n.t("access.locator.editions.desktop", { lng: "en-US" })).toBe("Desktop");
+    expect(i18n.t("access.locator.editions.cli", { lng: "en-US" })).toBe("CLI");
+  });
+  it("keeps precise Trae errors inside a generic configuration write failure", async () => {
+    for (const language of ["zh-CN", "en-US"] as const) {
+      await changeAppLanguage(language);
+      for (const [code, params, expected] of [
+        ["tool_config_trae_http_failed", { status: 429 }, "HTTP 429"],
+        ["tool_config_trae_rejected", { vendor_code: 42 }, language === "zh-CN" ? "错误码 42" : "error code 42"],
+        ["tool_config_trae_verification_failed", {}, language === "zh-CN" ? "高级配置未通过回读校验" : "advanced configuration failed read-back verification"],
+        ["tool_config_trae_advanced_verification_failed", { model: "glm-5.1", field: "multimodal" }, language === "zh-CN" ? "“图片输入”未通过回读校验" : "“Image input” on Trae model “glm-5.1”"],
+      ] as const) {
+        const message = `TOOL_CONFIG_WRITE_FAILED: write TraeCode CN configuration: ${JSON.stringify({ code, params })}`;
+        expect(stableErrorCode(message)).toBe(code);
+        expect(localizedError(message)).toContain(expected);
+        expect(localizedError(message)).not.toContain("TOOL_CONFIG_WRITE_FAILED");
+      }
+    }
+  });
+  it("localizes Copilot desktop initialization inside a configuration preview failure", async () => {
+    const message = "TOOL_CONFIG_PREVIEW_FAILED: preview GitHub Copilot configuration: TOOL_CONFIG_COPILOT_DESKTOP_INITIALIZE: missing database";
+    await changeAppLanguage("zh-CN");
+    expect(localizedError(message)).toContain("请先更新并打开一次 GitHub Copilot 桌面版");
+    await changeAppLanguage("en-US");
+    expect(localizedError(message)).toContain("Update and open GitHub Copilot desktop once");
+  });
   it("uses the active language for a structured error code", async () => {
     await changeAppLanguage("zh-CN");
     expect(localizedError({ code: "insufficient_balance", params: {} })).toBe(

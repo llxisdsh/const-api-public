@@ -1536,12 +1536,28 @@ pub(crate) fn model_name_matches(candidate: &str, requested: &str) -> bool {
                 || (!requested.contains('/')
                     && short_model_name(candidate)
                         .trim()
-                        .eq_ignore_ascii_case(requested)));
+                        .eq_ignore_ascii_case(requested))
+                || crate::tool_model_metadata::same_model_identity(
+                    if requested.contains('/') {
+                        candidate
+                    } else {
+                        short_model_name(candidate).trim()
+                    },
+                    requested,
+                ));
     }
     let requested = normalize_model_name(without_context_hint(requested));
     !requested.is_empty()
         && (normalize_model_name(without_context_hint(candidate)) == requested
-            || (!requested.contains('/') && public_model_name(candidate) == requested))
+            || (!requested.contains('/') && public_model_name(candidate) == requested)
+            || crate::tool_model_metadata::same_model_identity(
+                if requested.contains('/') {
+                    candidate
+                } else {
+                    short_model_name(candidate)
+                },
+                &requested,
+            ))
 }
 
 // Preserve exact upstream IDs, including literal context variants, before
@@ -1646,6 +1662,61 @@ pub(crate) fn is_azure_openai_channel(channel: &ChannelConfig) -> bool {
 #[allow(clippy::items_after_test_module)] // Identity helpers below are shared by production and tests.
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_aliases_match_both_directions_and_keep_advertised_wire_ids() {
+        let mut channel = default_config().channels.remove(0);
+        channel.set_source_driver(crate::source_driver::SourceDriverId::CustomEndpoint);
+        for (requested, wire) in [
+            ("claude-opus-5.5", "claude-opus-5-5"),
+            ("claude-opus-5-5", "anthropic/claude-opus-5.5"),
+            ("claude-sonnet-5.5", "claude-sonnet-5-5"),
+            ("anthropic/claude-sonnet-5.5", "claude-sonnet-5-5"),
+            ("CLAUDE-SONNET-5.5[1m]", "claude-sonnet-5-5[1M]"),
+            ("claude-mythos-5.1", "claude-mythos-5-1"),
+        ] {
+            channel.models = vec![wire.into()];
+            assert!(crate::proxy::channel_supports_model(&channel, requested));
+            assert_eq!(resolve_model_name(&channel.models, requested), Some(wire));
+            assert_eq!(
+                crate::proxy::channel_upstream_model_for_request(&channel, Some(requested)),
+                wire
+            );
+            assert_eq!(
+                crate::supplier::supplier_upstream_model_for_request(
+                    &crate::supplier_from_channel(&channel),
+                    Some(requested)
+                ),
+                wire
+            );
+            for enabled in [false, true] {
+                let mut config = default_config();
+                config.allow_model_equivalence = enabled;
+                let alternatives =
+                    crate::model_compatibility::model_compatibility_candidates(&config, requested);
+                assert!(enabled || alternatives.is_empty());
+                assert!(!alternatives.iter().any(|model| {
+                    crate::tool_model_metadata::same_model_identity(model, requested)
+                }));
+            }
+        }
+        let names = vec!["claude-opus-5-5".into(), "claude-opus-5.5".into()];
+        assert_eq!(
+            resolve_model_name(&names, "claude-opus-5.5"),
+            Some("claude-opus-5.5")
+        );
+        for distinct in [
+            "claude-opus-5.5:free",
+            "claude-opus-5.5-pro",
+            "unknown/claude-opus-5.5",
+            "claude-opus-5.6",
+        ] {
+            assert!(
+                !model_name_matches("claude-opus-5-5", distinct),
+                "{distinct}"
+            );
+        }
+    }
 
     #[test]
     fn exact_context_variant_resolves_before_base_alias_on_both_execution_paths() {

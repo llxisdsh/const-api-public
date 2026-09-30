@@ -145,6 +145,9 @@ function normalizeErrorDescriptor(descriptor: ErrorDescriptor): ErrorDescriptor 
 
 function errorDescriptor(value: unknown): ErrorDescriptor {
   const message = value instanceof Error ? value.message : String(value ?? "");
+  if (message.includes("TOOL_CONFIG_COPILOT_DESKTOP_INITIALIZE")) {
+    return { code: "TOOL_CONFIG_COPILOT_DESKTOP_INITIALIZE", params: {} };
+  }
   const direct = descriptorFromObject(value);
   if (direct) return direct;
   try {
@@ -190,6 +193,10 @@ export function localizedError(value: unknown) {
   const raw = value instanceof Error ? value.message : String(value ?? "");
   const { code, params } = normalizeErrorDescriptor(errorDescriptor(value));
   if (!code) return raw;
+  if (code === "tool_config_trae_advanced_verification_failed") {
+    const fieldKey = `errors.traeFields.${params.field}`;
+    if (i18n.exists(fieldKey)) params.field = tr(fieldKey);
+  }
   const key = `errors.codes.${code.toLowerCase().replace(/-/g, "_")}`;
   if (i18n.exists(key, { lng: currentAppLanguage() })) return tr(key, params);
   if (i18n.exists(key, { lng: "en-US" })) {

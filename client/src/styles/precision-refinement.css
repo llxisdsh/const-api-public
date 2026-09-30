@@ -231,6 +231,7 @@ textarea:focus-visible,
 }
 
 .tool-dock-icon-wrap {
+  position: relative;
   display: flex;
   width: 64px;
   height: 48px;
@@ -563,16 +564,46 @@ textarea:focus-visible,
   height: var(--tool-dock-icon-size, 32px);
 }
 
+/* Edition labels belong to the tool control, not to the vendor's artwork. */
+.tool-edition-badge {
+  position: absolute;
+  right: 4px;
+  bottom: -3px;
+  z-index: 2;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 13px;
+  pointer-events: none;
+}
+
+.tool-edition-label {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
 /*
- * Dark artwork needs per-logo optical correction: monochrome marks should
- * become light, while icons with a baked-in light tile should be quieter.
+ * Artwork needs theme-aware optical correction: monochrome marks should
+ * become light in dark mode, while vivid colors and baked-in tiles stay quiet.
  * Keep these corrections on the artwork so the shared glass frame remains
- * identical for every tool and light mode preserves the official assets.
+ * identical for every tool without changing the source assets.
  */
+:root[data-theme="dark"] .brand-badge-copilot img,
+:root[data-theme="dark"] .brand-badge-trae-work img,
+:root[data-theme="dark"] .brand-badge-pi img,
+:root[data-theme="dark"] .brand-badge-zcode img,
 :root[data-theme="dark"] .brand-badge-cline img,
 :root[data-theme="dark"] .brand-badge-anythingllm img,
 :root[data-theme="dark"] .brand-badge-goose img,
-:root[data-theme="dark"] .brand-badge-kimi img {
+:root[data-theme="dark"] .brand-badge-mimocode img,
+:root[data-theme="dark"] .brand-badge-minimax-code img,
+:root[data-theme="dark"] .brand-badge-grok img {
   filter: invert(0.84) brightness(1.02);
   opacity: 0.96;
 }
@@ -594,30 +625,25 @@ textarea:focus-visible,
   filter: brightness(0.9) saturate(0.92);
 }
 
-:root[data-theme="dark"] .brand-badge-zcode img {
-  filter: brightness(0.82) contrast(0.96);
-  opacity: 0.96;
+:root[data-theme="light"] .brand-badge-trae img {
+  filter: brightness(0.74) saturate(0.9);
 }
 
-:root[data-theme="dark"] .brand-badge-claude-science img {
+:root[data-theme="dark"] .brand-badge-trae img {
+  filter: brightness(0.82) saturate(0.9);
+}
+
+:root[data-theme="dark"] .brand-badge-claude-science img,
+:root[data-theme="dark"] .brand-badge-kimi img {
   filter: brightness(0.86) saturate(0.92) contrast(1.02);
 }
 
-:root[data-theme="dark"] .brand-badge-mimocode img {
-  filter: brightness(0.94) saturate(0.96);
-}
-
 :root[data-theme="dark"] .brand-badge-openscience img {
-  filter: brightness(0.94) saturate(0.98);
+  filter: brightness(0.88) saturate(0.92);
 }
 
 :root[data-theme="dark"] .brand-badge-raven img {
   filter: brightness(0.86) saturate(0.92);
-}
-
-:root[data-theme="dark"] .brand-badge-pi img {
-  filter: brightness(0.8) contrast(0.94);
-  opacity: 0.95;
 }
 
 :root[data-theme="dark"] .brand-badge-hermes img {
@@ -628,58 +654,62 @@ textarea:focus-visible,
   filter: brightness(0.68) saturate(0.84);
 }
 
-/* Keep the artwork optically balanced inside the shared 40px icon well. */
+/* Optical sizes account for visible artwork and stroke density, not just the
+ * asset canvas. Keep dense solid marks smaller than thin or open outlines. */
 #codex-tool-button,
-#claude-desktop-tool-button {
+#claude-desktop-tool-button,
+#deepseek-harness-tool-button,
+#goose-tool-button,
+#anythingllm-tool-button,
+#grok-build-tool-button {
   --tool-dock-icon-size: 31px;
 }
 
-#claude-tool-button {
+#claude-tool-button,
+#gemini-tool-button,
+#minimax-code-tool-button,
+#open-interpreter-tool-button {
   --tool-dock-icon-size: 32px;
 }
 
-#gemini-tool-button {
-  --tool-dock-icon-size: 33px;
-}
-
-#openclaw-tool-button {
+#openclaw-tool-button,
+#trae-tool-button,
+#trae-cn-tool-button,
+#trae-work-tool-button,
+#qwencode-tool-button,
+#mistral-vibe-tool-button,
+#openscience-tool-button,
+#open-design-tool-button {
   --tool-dock-icon-size: 30px;
 }
 
-#vscode-tool-button {
+#vscode-tool-button,
+#claude-science-tool-button,
+#mimocode-tool-button,
+#raven-tool-button,
+#vibe-trading-tool-button {
   --tool-dock-icon-size: 29px;
 }
 
-#opencode-tool-button,
 #hermes-tool-button,
-#workbuddy-tool-button {
+#workbuddy-tool-button,
+#copilot-tool-button,
+#copilot-desktop-tool-button,
+#zcode-tool-button {
   --tool-dock-icon-size: 28px;
 }
 
-#claude-science-tool-button,
-#raven-tool-button {
-  --tool-dock-icon-size: 29px;
+#opencode-tool-button {
+  --tool-dock-icon-size: 27px;
 }
 
-#mimocode-tool-button {
-  --tool-dock-icon-size: 33px;
+#pi-tool-button {
+  --tool-dock-icon-size: 26px;
 }
 
-#openscience-tool-button {
-  --tool-dock-icon-size: 36px;
-}
-
-#open-interpreter-tool-button {
+/* Kimi's artwork has more intrinsic whitespace than the other assets. */
+#kimicode-tool-button {
   --tool-dock-icon-size: 34px;
-}
-
-/* Raster assets need optical sizing based on their visible artwork, not canvas size. */
-#vibe-trading-tool-button {
-  --tool-dock-icon-size: 36px;
-}
-
-#zcode-tool-button {
-  --tool-dock-icon-size: 38px;
 }
 
 .tool-dock-status-text {

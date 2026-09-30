@@ -1,6 +1,7 @@
 import { tr } from "./i18n";
 import {
   TOOL_CATALOG,
+  toolCatalogEntry,
   type ToolModelSyncPolicy,
   type ToolProtocolId,
 } from "./toolCatalog";
@@ -46,6 +47,7 @@ export function toolProtocolMenuState(
     ? configuredProtocol
     : null;
   const fixed = protocols.length <= 1;
+  const perModel = toolCatalogEntry(tool)?.protocolScope === "model";
   const changed = Boolean(configured && configured !== selected);
   const suffix = changed
     ? ` · ${tr("labels.toolMenu.pendingApply")}`
@@ -57,6 +59,7 @@ export function toolProtocolMenuState(
     selected,
     configured,
     fixed,
+    perModel,
     changed,
     summary: `${TOOL_PROTOCOL_OPTIONS[selected].label}${suffix}`,
   };
@@ -72,6 +75,30 @@ type ToolConfigStatusLike = {
   }>;
 };
 
+// Presence drives the dot; readiness still drives configuration/launch.
+// Older runtimes only return already_configured, so retain that fallback.
+export function toolHasManagedConfig(status: ToolConfigStatusLike | null | undefined): boolean {
+  return Boolean(status?.already_configured || status?.details?.has_managed_config === "true");
+}
+
+export function toolConfigCapabilityWarning(status: ToolConfigStatusLike | null | undefined): string | undefined {
+  const models = status?.details?.trae_image_input_limited?.trim();
+  return models ? tr("toolOperations.traeImageInputLimited", { models }) : undefined;
+}
+
+export function toolConfigCheckFailed<T extends ToolConfigStatusLike>(status: T | null | undefined) {
+  if (!status) return null;
+  return {
+    ...status,
+    already_configured: false,
+    details: {
+      ...status.details,
+      has_managed_config: String(toolHasManagedConfig(status)),
+      config_check_failed: "true",
+    },
+  };
+}
+
 export type ToolPrimaryAction = "locate" | "configure_and_launch" | "launch";
 
 export function toolPrimaryAction(
@@ -86,7 +113,7 @@ export function toolPrimaryAction(
 export function toolConfigurationActionKey(
   configStatus: ToolConfigStatusLike | null | undefined,
 ): "access.configure" | "access.reconfigure" {
-  return configStatus?.already_configured ? "access.reconfigure" : "access.configure";
+  return toolHasManagedConfig(configStatus) ? "access.reconfigure" : "access.configure";
 }
 
 export function toolSyncsModelsOnLaunch(
@@ -106,10 +133,11 @@ export function toolConfigDetailState(
     ...(configStatus?.files ?? []),
   ].filter(Boolean)));
   const programMissing = configStatus?.details?.program_located === "false";
+  const checkFailed = configStatus === null || configStatus?.details?.config_check_failed === "true";
   const externalLaunchWarning = configStatus?.details?.external_launch_warning;
   const status = configStatus === undefined
     ? checking ? tr("labels.toolMenu.checking") : tr("labels.toolMenu.waitingCheck")
-    : configStatus === null
+    : checkFailed
       ? tr("labels.toolMenu.checkFailed")
       : programMissing
         ? tr("labels.toolMenu.programMissing")
@@ -119,10 +147,12 @@ export function toolConfigDetailState(
             ? externalLaunchWarning
               ? tr("labels.toolMenu.configuredRisk")
               : tr("labels.toolMenu.configured")
-            : tr("labels.toolMenu.needsConfiguration");
+            : toolHasManagedConfig(configStatus)
+              ? tr("labels.toolMenu.configurationIncomplete")
+              : tr("labels.toolMenu.needsConfiguration");
   const tone: ToolConfigTone = configStatus === undefined
     ? "unknown"
-    : configStatus === null
+    : checkFailed
       ? "error"
       : programMissing
       ? "missing"
@@ -135,5 +165,6 @@ export function toolConfigDetailState(
     primaryPath: paths[0] ?? tr("labels.toolMenu.fileMissing"),
     fileCount: paths.length,
     externalLaunchWarning,
+    capabilityWarning: toolConfigCapabilityWarning(configStatus),
   };
 }

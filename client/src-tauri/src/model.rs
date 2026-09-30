@@ -1209,6 +1209,8 @@ pub(crate) struct ToolProgramCandidate {
     pub(crate) path: String,
     pub(crate) label: String,
     pub(crate) kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) edition: Option<String>,
     pub(crate) exists: bool,
     #[serde(default)]
     pub(crate) modified_at_unix: u64,

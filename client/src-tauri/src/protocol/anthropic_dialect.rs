@@ -2,15 +2,35 @@
 pub(crate) struct AnthropicModelDialect {
     pub(crate) adaptive_thinking_only: bool,
     pub(crate) thinking_always_on: bool,
+    pub(crate) thinking_between_tools: bool,
+    pub(crate) forced_tool_choice_unsupported: bool,
 }
 
 /// Returns only model-generation constraints documented by Anthropic.
 ///
 /// Unknown and older models deliberately keep the legacy behavior. Native
-/// Anthropic requests bypass protocol re-encoding, so this profile affects
-/// only requests that CONST API converts into Anthropic Messages.
+/// Anthropic requests bypass protocol re-encoding. These constraints apply to
+/// cross-protocol conversion and to probes synthesized by CONST API.
 pub(crate) fn anthropic_model_dialect(model: &str) -> AnthropicModelDialect {
-    let model = model.trim().to_ascii_lowercase();
+    let model = model
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let model = model.replace('.', "-");
+    // Both 5.5 families reject forced tool choice. Only Sonnet 5.5 offers
+    // between_tools as the replacement for an explicit disabled request.
+    let opus_55 = model_family_matches(&model, "claude-opus-5-5");
+    let sonnet_55 = model_family_matches(&model, "claude-sonnet-5-5");
+    if opus_55 || sonnet_55 {
+        return AnthropicModelDialect {
+            adaptive_thinking_only: true,
+            thinking_always_on: true,
+            thinking_between_tools: sonnet_55,
+            forced_tool_choice_unsupported: true,
+        };
+    }
     let always_on = model.starts_with("claude-fable-5")
         || model.starts_with("claude-mythos-5")
         || model.starts_with("claude-mythos-preview");
@@ -18,6 +38,7 @@ pub(crate) fn anthropic_model_dialect(model: &str) -> AnthropicModelDialect {
         return AnthropicModelDialect {
             adaptive_thinking_only: true,
             thinking_always_on: true,
+            ..Default::default()
         };
     }
 
@@ -28,6 +49,7 @@ pub(crate) fn anthropic_model_dialect(model: &str) -> AnthropicModelDialect {
     AnthropicModelDialect {
         adaptive_thinking_only,
         thinking_always_on: false,
+        ..Default::default()
     }
 }
 
@@ -96,6 +118,23 @@ fn anthropic_numbered_generation(model: &str, prefix: &str) -> Option<(u32, u32)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_55_constraints_cover_native_and_aggregator_names() {
+        for model in [
+            "claude-sonnet-5-5",
+            "anthropic/claude-sonnet-5.5",
+            "claude-sonnet-5-5-20260929",
+        ] {
+            let dialect = anthropic_model_dialect(model);
+            assert!(dialect.thinking_between_tools && dialect.thinking_always_on);
+            assert!(dialect.forced_tool_choice_unsupported);
+        }
+        let opus = anthropic_model_dialect("claude-opus-5-5");
+        assert!(opus.thinking_always_on && opus.forced_tool_choice_unsupported);
+        assert!(!opus.thinking_between_tools);
+        assert!(!anthropic_model_dialect("claude-sonnet-5").forced_tool_choice_unsupported);
+    }
 
     #[test]
     fn classifies_only_documented_adaptive_generations() {

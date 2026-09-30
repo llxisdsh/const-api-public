@@ -519,6 +519,10 @@
       "showMissing": "Show unavailable paths ({{count}})",
       "autoDetected": "Automatically detected",
       "hermesInstaller": "Hermes installer",
+      "editions": {
+        "desktop": "Desktop",
+        "cli": "CLI"
+      },
       "kinds": {
         "windowsExecutable": "Windows executable",
         "windowsApp": "Windows app",
@@ -1651,11 +1655,15 @@
       "configuredRisk": "Configured · external launch may conflict",
       "configured": "Configured",
       "needsConfiguration": "Configuration required",
+      "configurationIncomplete": "Setup needs attention",
       "fileMissing": "No configuration file found",
       "protocolAria": "{{title}} connection protocol",
       "fixedProtocol": "This tool supports only this protocol",
+      "fallbackProtocol": "Fallback protocol",
+      "perModelProtocol": "Each model uses its matching native protocol; this protocol is used when no match is known.",
       "protocolChange": "Currently configured for {{protocol}}; the next configuration applies this change.",
       "environment": "Environment",
+      "capabilityLimit": "Capability limit",
       "extensionsAria": "VS Code extensions",
       "useCurrent": "Uses the current configuration",
       "afterCurrent": "Available after this configuration",
@@ -1696,7 +1704,7 @@
         "awaitingConfirmation": "Waiting for confirmation",
         "awaitingManualClose": "Waiting for manual close",
         "closingProcess": "Closing program",
-        "writingConfig": "Writing configuration",
+        "writingConfig": "Writing configuration{{displayCount}}",
         "scanningSessions": "Scanning sessions{{displayCount}}",
         "planningIndex": "Planning session index",
         "migratingSessions": "Migrating{{displayCount}}",
@@ -1828,8 +1836,20 @@
     "copilot": {
       "description": "GitHub's terminal coding agent using an OpenAI-compatible BYOK provider"
     },
+    "copilot-desktop": {
+      "description": "GitHub Copilot desktop app with automatic BYOK models and system-keychain credentials"
+    },
     "cline": {
       "description": "Cline desktop and terminal agent with shared model configuration"
+    },
+    "trae": {
+      "description": "TraeCode with automatic custom-model configuration; sign in to Trae first"
+    },
+    "trae-cn": {
+      "description": "TraeCode China with automatic custom-model configuration; sign in to Trae first"
+    },
+    "trae-work": {
+      "description": "Configure models for local tasks in TraeWork desktop; sign in to TraeWork first"
     },
     "opencode": {
       "description": "An open-source AI coding agent for terminals, desktops, and IDEs"
@@ -1847,7 +1867,7 @@
       "description": "An open-source reasoning and coding agent with desktop and terminal clients"
     },
     "deepseek-harness": {
-      "description": "DeepSeek's open-source plugin-based agent harness and local Web workspace"
+      "description": "DeepSeek's open-source plugin-based agent harness with desktop and local Web clients"
     },
     "pi": {
       "description": "A minimal, extensible terminal coding agent from pi-mono"
@@ -1864,11 +1884,17 @@
     "mistral-vibe": {
       "description": "Mistral AI's open-source terminal coding agent"
     },
+    "grok-build": {
+      "description": "xAI's terminal coding agent; syncs models and selects the matching API protocol for each model"
+    },
+    "minimax-code": {
+      "description": "MiniMax desktop and terminal agent with shared model configuration; prefers desktop by default and uses the protocol selected in the tool menu"
+    },
     "open-design": {
       "description": "A local-first open-source AI design workspace using its official Codex adapter"
     },
     "vscode": {
-      "description": "Use CONST API through custom OpenAI endpoints in VS Code Chat and Agent"
+      "description": "Use CONST API in VS Code Chat and Agent with model-specific protocols"
     },
     "workbuddy": {
       "description": "A professional desktop agent for office work, research, and multi-step tasks"
@@ -1877,7 +1903,7 @@
       "description": "Kimi Code desktop and terminal agent with shared model configuration"
     },
     "mimocode": {
-      "description": "Xiaomi MiMo's open-source terminal coding agent"
+      "description": "Xiaomi MiMo coding tool; prefers the desktop app, sharing model configuration with the CLI"
     },
     "qwencode": {
       "description": "Qwen Code desktop and terminal agent with shared model configuration"
@@ -2199,6 +2225,7 @@
     "committedNotStarted": "{{tool}} was configured, but the program did not start. Launch it manually when ready.",
     "statusCheckTimeout": "{{tool}} status check timed out.",
     "statusRefreshFailed": "{{tool}} was updated, but its status could not be refreshed: {{error}}",
+    "statusCheckFailed": "Could not check {{tool}} configuration: {{error}}",
     "incomplete": "{{tool}} did not return a complete operation result.",
     "launchConfirmationMissing": "{{tool}} was configured, but launch confirmation is missing.",
     "manualStartRequired": "{{tool}} is configured. Start it manually to use the new settings.",
@@ -2208,6 +2235,7 @@
     "filesCurrent": "Configuration files were already current. ",
     "targetProvider": "Target provider: {{provider}}.",
     "alreadyConfigured": "{{tool}} is already configured.",
+    "traeImageInputLimited": "Trae did not enable image input for these models; text configuration is available: {{models}}.",
     "configured": "{{tool}} configured: {{changed}} of {{checked}} file(s) updated, {{backups}} backup(s) created.",
     "restoreHint": "To restore the previous connection settings, right-click the tool and choose “Remove configuration”.",
     "configureFailed": "Could not {{action}} {{tool}}: {{error}}",
@@ -2215,7 +2243,7 @@
     "launchFailed": "Could not launch {{tool}}: {{error}}",
     "modelRefreshUnavailableUsedExisting": "The model list for {{tool}} could not be refreshed, so the existing valid configuration was used to launch it.",
     "removeNoOwnedConfig": "No CONST API-managed configuration was found for {{tool}}.",
-    "removeStillDetected": "{{tool}} still reports an active configuration.",
+    "removeStillDetected": "CONST API configuration is still present in {{tool}}. Cleanup may be incomplete or another tool may still share it.",
     "removed": "{{tool}} configuration removed.",
     "removedNativeRoute": "{{tool}} restored to its native connection.",
     "removedStatusRefreshFailed": "{{tool}} configuration was removed, but status refresh failed: {{error}}",
@@ -2613,6 +2641,17 @@
     "expand": "Expand notice: {{title}}"
   },
   "errors": {
+    "traeFields": {
+      "multimodal": "Image input",
+      "thinking_enable": "Thinking mode",
+      "custom_model_type": "Model family",
+      "prompt_max_tokens": "Input context window",
+      "max_tokens": "Output limit",
+      "max_turn": "Tool-call rounds",
+      "temperature": "Temperature",
+      "top_p": "Top P",
+      "top_k": "Top K"
+    },
     "codes": {
       "unauthorized": "Authentication failed. Sign in again.",
       "forbidden": "You do not have permission to perform this action.",
@@ -2682,6 +2721,7 @@
       "empty_model_catalog": "The model catalog is empty.",
       "tool_config_confirmation_process_replaced": "The authorized process changed before it could be stopped safely.",
       "tool_config_models_unavailable": "No usable model catalog is available for {{detail}}.",
+      "tool_config_copilot_desktop_initialize": "Update and open GitHub Copilot desktop once to initialize its local data, then configure it again. Existing configuration has not been overwritten.",
       "tool_config_process_close_failed": "The program could not be closed safely.",
       "tool_config_process_close_timeout": "The program did not close before the timeout.",
       "tool_config_process_still_running": "The program or a background process is still running. It may be shutting down or have been restarted by another program. No configuration has been written.",
@@ -2692,6 +2732,10 @@
       "tool_config_start_failed": "The program could not be started.",
       "tool_config_start_precheck_failed": "The program could not be verified before launch.",
       "tool_config_write_failed": "The configuration could not be written.",
+      "tool_config_trae_http_failed": "The Trae model configuration service returned HTTP {{status}}. Configuration is incomplete; try again later.",
+      "tool_config_trae_rejected": "The Trae model configuration service rejected the operation (error code {{vendor_code}}). Configuration is incomplete.",
+      "tool_config_trae_verification_failed": "The Trae model connection or advanced configuration failed read-back verification. Existing models were not deleted; check the affected models in Trae and configure again.",
+      "tool_config_trae_advanced_verification_failed": "Read-back verification failed for “{{field}}” on Trae model “{{model}}”. Existing models were not deleted; check this model's settings and configure again.",
       "tool_start_candidate_missing": "No launchable program was found.",
       "tool_start_unstable": "The program exited before startup could be confirmed."
     }

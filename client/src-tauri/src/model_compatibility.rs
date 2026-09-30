@@ -336,7 +336,7 @@ pub(crate) fn model_compatibility_candidates(
         return Vec::new();
     }
     let profile = effective_local_model_compatibility_profile(config);
-    let requested_key = normalize_model_name(crate::config::without_context_hint(requested_model));
+    let requested_key = crate::tool_model_metadata::model_identity(requested_model);
     if requested_key.is_empty() {
         return Vec::new();
     }
@@ -1791,14 +1791,16 @@ mod tests {
                 "muse-spark-1.3",
                 "claude-mythos-5",
                 "claude-fable-5",
+                "gpt-6.1-sol",
+                "claude-sonnet-5-5",
                 "gpt-6-sol",
                 "gpt-5.6-sol",
-                "claude-opus-5-5",
                 "claude-opus-5",
                 "grok-4.7",
                 "grok-4.6",
                 "claude-mythos-5-1",
                 "claude-fable-5-1",
+                "claude-opus-5-5",
                 "gpt-6-astra",
             ]
         );
@@ -2012,6 +2014,7 @@ mod tests {
             [
                 "claude-mythos-5-1",
                 "claude-fable-5-1",
+                "claude-opus-5-5",
                 "gpt-6-astra",
                 "custom/local-gpt-6",
             ]
@@ -2319,7 +2322,7 @@ mod tests {
             vec![
                 "claude-mythos-5",
                 "claude-fable-5",
-                "claude-opus-5-5",
+                "claude-sonnet-5-5",
                 "claude-opus-5",
                 "claude-opus-4-8",
                 "claude-opus-4-7",
@@ -2344,7 +2347,7 @@ mod tests {
             vec![
                 "claude-mythos-5",
                 "claude-fable-5",
-                "claude-opus-5-5",
+                "claude-sonnet-5-5",
                 "claude-opus-5",
                 "claude-opus-4-8",
                 "claude-opus-4-7",

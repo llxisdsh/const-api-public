@@ -5,29 +5,68 @@
         with_temp_home(|_| {
             let mut cfg = crate::default_config();
             cfg.allow_model_equivalence = false;
-            let models = crate::tool_model_metadata::tool_models_from_response(&serde_json::json!({"data":[
-                {"id":"claude-sonnet-4-6","const_api":{"context_tokens":1_000_000,"output_tokens":128_000}}
-            ]}));
-            let choices = ClaudeModelSettings { main:"claude-sonnet-4-6".into(), opus:CLAUDE_MODEL_FOLLOW_MAIN.into(), sonnet:CLAUDE_MODEL_FOLLOW_MAIN.into(), haiku:CLAUDE_MODEL_FOLLOW_MAIN.into() };
+            let models = crate::tool_model_metadata::tool_models_from_response(
+                &serde_json::json!({"data":[
+                    {"id":"claude-sonnet-4-6","const_api":{"context_tokens":1_000_000,"output_tokens":128_000}}
+                ]}),
+            );
+            let choices = ClaudeModelSettings {
+                main: "claude-sonnet-4-6".into(),
+                opus: CLAUDE_MODEL_FOLLOW_MAIN.into(),
+                sonnet: CLAUDE_MODEL_FOLLOW_MAIN.into(),
+                haiku: CLAUDE_MODEL_FOLLOW_MAIN.into(),
+            };
             let effective = claude_settings_with_context(&cfg, &choices, &models);
-            apply_claude_config_with_model_info(TOOL_CONFIG_ROOT_URL, "mock-key", &effective, &models, &cfg).unwrap();
+            apply_claude_config_with_model_info(
+                TOOL_CONFIG_ROOT_URL,
+                "mock-key",
+                &effective,
+                &models,
+                &cfg,
+            )
+            .unwrap();
             let path = home_dir().join(".claude/settings.json");
             let before = fs::read(&path).unwrap();
             for settings in [&choices, &effective] {
-                assert!(check_claude_config_with_model_settings(TOOL_CONFIG_ROOT_URL, "mock-key", settings).unwrap().already_configured);
+                assert!(
+                    check_claude_config_with_model_settings(TOOL_CONFIG_ROOT_URL, "mock-key", settings)
+                        .unwrap()
+                        .already_configured
+                );
             }
-            assert_eq!(before, fs::read(&path).unwrap(), "status check must never write settings");
-            let changed = ClaudeModelSettings { main:"claude-opus-4-6".into(), ..choices.clone() };
-            assert!(!check_claude_config_with_model_settings(TOOL_CONFIG_ROOT_URL, "mock-key", &changed).unwrap().already_configured);
-            assert!(!check_claude_config_with_model_settings(TOOL_CONFIG_ROOT_URL, "wrong-key", &choices).unwrap().already_configured);
-            apply_claude_config_with_model_settings(TOOL_CONFIG_ROOT_URL, "mock-key", &choices).unwrap();
-            assert!(!check_claude_config_with_model_settings(TOOL_CONFIG_ROOT_URL, "mock-key", &effective).unwrap().already_configured, "an explicit [1m] selection must not match an unhinted file");
+            assert_eq!(
+                before,
+                fs::read(&path).unwrap(),
+                "status check must never write settings"
+            );
+            let changed = ClaudeModelSettings {
+                main: "claude-opus-4-6".into(),
+                ..choices.clone()
+            };
+            assert!(
+                !check_claude_config_with_model_settings(TOOL_CONFIG_ROOT_URL, "mock-key", &changed)
+                    .unwrap()
+                    .already_configured
+            );
+            assert!(
+                !check_claude_config_with_model_settings(TOOL_CONFIG_ROOT_URL, "wrong-key", &choices)
+                    .unwrap()
+                    .already_configured
+            );
+            apply_claude_config_with_model_settings(TOOL_CONFIG_ROOT_URL, "mock-key", &choices)
+                .unwrap();
+            assert!(
+                !check_claude_config_with_model_settings(TOOL_CONFIG_ROOT_URL, "mock-key", &effective)
+                    .unwrap()
+                    .already_configured,
+                "an explicit [1m] selection must not match an unhinted file"
+            );
         });
     }
 
     fn rewrite_tool_config_without_semantic_change(path: &Path) {
-        let raw = fs::read_to_string(path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let raw =
+            fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
         let rewritten = match tool_config_format(path) {
             ToolConfigFormat::Json => {
                 let value = json5::from_str::<serde_json::Value>(&raw)
@@ -38,9 +77,7 @@
                 .as_object()
                 .expect("env values")
                 .iter()
-                .map(|(key, value)| {
-                    format!("export {key}=\"{}\"", value.as_str().expect("env string"))
-                })
+                .map(|(key, value)| format!("export {key}=\"{}\"", value.as_str().expect("env string")))
                 .collect::<Vec<_>>()
                 .join("\n"),
             ToolConfigFormat::Toml | ToolConfigFormat::Yaml => {
@@ -108,27 +145,53 @@
         let mut model = workbuddy_test_models()[0].clone();
         model.context_tokens = Some(1_000_000);
         let mut entry = serde_json::json!({});
-        configure_workbuddy_model_entry(&mut entry, &model, "http://localhost/v1/chat/completions", "test");
-        assert_eq!(entry["contextWindow"], serde_json::json!({
-            "supportedLengths": [200_000, 1_000_000], "defaultLength": 1_000_000
-        }));
+        configure_workbuddy_model_entry(
+            &mut entry,
+            &model,
+            "http://localhost/v1/chat/completions",
+            "test",
+        );
+        assert_eq!(
+            entry["contextWindow"],
+            serde_json::json!({
+                "supportedLengths": [200_000, 1_000_000], "defaultLength": 1_000_000
+            })
+        );
         entry["contextWindow"] = serde_json::json!({
             "supportedLengths": [1_000_000, 128_000, 128_000, 0, -1, "bad", 2_000_000],
             "defaultLength": 128_000, "userField": "keep"
         });
         model.context_tokens = Some(272_000);
-        configure_workbuddy_model_entry(&mut entry, &model, "http://localhost/v1/chat/completions", "test");
+        configure_workbuddy_model_entry(
+            &mut entry,
+            &model,
+            "http://localhost/v1/chat/completions",
+            "test",
+        );
         assert_eq!(entry["maxInputTokens"], 272_000);
-        assert_eq!(entry["contextWindow"]["supportedLengths"], serde_json::json!([128_000, 200_000, 272_000]));
+        assert_eq!(
+            entry["contextWindow"]["supportedLengths"],
+            serde_json::json!([128_000, 200_000, 272_000])
+        );
         assert_eq!(entry["contextWindow"]["defaultLength"], 128_000);
         assert_eq!(entry["contextWindow"]["userField"], "keep");
         model.context_tokens = Some(64_000);
-        configure_workbuddy_model_entry(&mut entry, &model, "http://localhost/v1/chat/completions", "test");
+        configure_workbuddy_model_entry(
+            &mut entry,
+            &model,
+            "http://localhost/v1/chat/completions",
+            "test",
+        );
         assert_eq!(entry["maxInputTokens"], 64_000);
         assert!(entry.get("contextWindow").is_none());
         model.context_tokens = None;
         model.output_tokens = None;
-        configure_workbuddy_model_entry(&mut entry, &model, "http://localhost/v1/chat/completions", "test");
+        configure_workbuddy_model_entry(
+            &mut entry,
+            &model,
+            "http://localhost/v1/chat/completions",
+            "test",
+        );
         assert!(entry.get("maxInputTokens").is_none());
         assert!(entry.get("maxOutputTokens").is_none());
         assert!(entry.get("contextWindow").is_none());
@@ -141,10 +204,31 @@
         models[1].tool_call = false;
         let mut providers = serde_json::json!({});
         let mut catalog = serde_json::json!({});
-        upsert_cline_configs(&mut providers, &mut catalog, TOOL_CONFIG_OPENAI_BASE_URL, "test", Some(&models), ToolProtocol::OpenAiChat).unwrap();
+        upsert_cline_configs(
+            &mut providers,
+            &mut catalog,
+            TOOL_CONFIG_OPENAI_BASE_URL,
+            "test",
+            Some(&models),
+            ToolProtocol::OpenAiChat,
+        )
+        .unwrap();
         let entries = &catalog["providers"]["const-api"]["models"];
-        assert_eq!(entries["gpt-5.6-sol"]["capabilities"], serde_json::json!(["streaming", "tools", "reasoning", "images", "files"]));
-        assert_eq!(entries["gpt-5.6-terra"]["capabilities"], serde_json::json!(["streaming"]));
+        assert_eq!(
+            entries["gpt-5.6-sol"]["capabilities"],
+            serde_json::json!([
+                "streaming",
+                "tools",
+                "reasoning",
+                "reasoning-effort",
+                "images",
+                "files"
+            ])
+        );
+        assert_eq!(
+            entries["gpt-5.6-terra"]["capabilities"],
+            serde_json::json!(["streaming"])
+        );
         assert_eq!(entries["gpt-5.6-sol"]["contextWindow"], 372_000);
         assert_eq!(entries["gpt-5.6-sol"]["maxTokens"], 128_000);
     }
@@ -198,26 +282,72 @@
                 ]);
                 let original = if legacy_object {
                     serde_json::json!({"models":entries,"availableModels":["Vendor/claude-fable-5","same-model","another-key","builtin"]})
-                } else { entries };
+                } else {
+                    entries
+                };
                 fs::write(&path, serde_json::to_vec_pretty(&original).unwrap()).unwrap();
                 let live = workbuddy_test_models();
-                apply_workbuddy_config_with_model_info_for_protocol(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test", &live, ToolProtocol::OpenAiChat).unwrap();
+                apply_workbuddy_config_with_model_info_for_protocol(
+                    TOOL_CONFIG_OPENAI_BASE_URL,
+                    "sk-test",
+                    &live,
+                    ToolProtocol::OpenAiChat,
+                )
+                .unwrap();
                 let current = read_json_or_default(&path, serde_json::json!([])).unwrap();
                 let models = workbuddy_models(&current).unwrap();
-                assert!(!models.iter().any(|m| m["id"].as_str().is_some_and(|id| id.contains("fable"))));
-                assert_eq!(models.iter().filter(|m| workbuddy_model_uses_connection(m, endpoint, "sk-test")).count(), live.len());
+                assert!(
+                    !models
+                        .iter()
+                        .any(|m| m["id"].as_str().is_some_and(|id| id.contains("fable")))
+                );
+                assert_eq!(
+                    models
+                        .iter()
+                        .filter(|m| workbuddy_model_uses_connection(m, endpoint, "sk-test"))
+                        .count(),
+                    live.len()
+                );
                 assert_eq!(models.iter().filter(|m| m["apiKey"] == "keep").count(), 2);
                 if legacy_object {
                     let available = current["availableModels"].as_array().unwrap();
-                    assert!(!available.iter().any(|id| id.as_str().is_some_and(|id| id.contains("fable"))));
+                    assert!(
+                        !available
+                            .iter()
+                            .any(|id| id.as_str().is_some_and(|id| id.contains("fable")))
+                    );
                     assert!(available.contains(&serde_json::json!("same-model")));
                     assert!(available.contains(&serde_json::json!("builtin")));
                 }
-                assert!(apply_workbuddy_config_with_model_info_for_protocol(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test", &live, ToolProtocol::OpenAiChat).unwrap().already_configured);
-                assert!(apply_workbuddy_config_with_model_info_for_protocol(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test", &[], ToolProtocol::OpenAiChat).is_err());
-                assert_eq!(read_json_or_default(&path, serde_json::json!([])).unwrap(), current, "failed/empty refresh must not clear a working configuration");
+                assert!(
+                    apply_workbuddy_config_with_model_info_for_protocol(
+                        TOOL_CONFIG_OPENAI_BASE_URL,
+                        "sk-test",
+                        &live,
+                        ToolProtocol::OpenAiChat
+                    )
+                    .unwrap()
+                    .already_configured
+                );
+                assert!(
+                    apply_workbuddy_config_with_model_info_for_protocol(
+                        TOOL_CONFIG_OPENAI_BASE_URL,
+                        "sk-test",
+                        &[],
+                        ToolProtocol::OpenAiChat
+                    )
+                    .is_err()
+                );
+                assert_eq!(
+                    read_json_or_default(&path, serde_json::json!([])).unwrap(),
+                    current,
+                    "failed/empty refresh must not clear a working configuration"
+                );
                 remove_workbuddy_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").unwrap();
-                assert_eq!(read_json_or_default(&path, serde_json::json!([])).unwrap(), original);
+                assert_eq!(
+                    read_json_or_default(&path, serde_json::json!([])).unwrap(),
+                    original
+                );
             });
         }
     }
@@ -397,12 +527,7 @@
                 "supportedEfforts": ["ultra"]
             }
         });
-        configure_workbuddy_model_entry(
-            &mut entry,
-            &workbuddy_model,
-            endpoint_url,
-            "sk-test",
-        );
+        configure_workbuddy_model_entry(&mut entry, &workbuddy_model, endpoint_url, "sk-test");
 
         assert_eq!(
             entry["reasoning"]["supportedEfforts"],
@@ -412,12 +537,7 @@
 
         let mut disable_capable = workbuddy_test_models()[0].clone();
         disable_capable.reasoning_efforts = vec!["none".to_string()];
-        configure_workbuddy_model_entry(
-            &mut entry,
-            &disable_capable,
-            endpoint_url,
-            "sk-test",
-        );
+        configure_workbuddy_model_entry(&mut entry, &disable_capable, endpoint_url, "sk-test");
         assert_eq!(
             entry["reasoning"],
             serde_json::json!({"canDisableThinking": true})
@@ -445,7 +565,8 @@
             "http://127.0.0.1:38787/v1/responses",
             "sk-test",
             ToolProtocol::OpenAiResponses,
-        );
+        )
+        .unwrap();
         assert_eq!(
             responses["supportsReasoningEffort"],
             serde_json::json!([
@@ -469,7 +590,8 @@
             "http://127.0.0.1:38787/v1/chat/completions",
             "sk-test",
             ToolProtocol::OpenAiChat,
-        );
+        )
+        .unwrap();
         assert_eq!(chat["reasoningEffortFormat"], "chat-completions");
 
         let no_efforts = vscode_model_entry(
@@ -477,7 +599,8 @@
             "http://127.0.0.1:38787/v1/responses",
             "sk-test",
             ToolProtocol::OpenAiResponses,
-        );
+        )
+        .unwrap();
         assert!(no_efforts.get("supportsReasoningEffort").is_none());
         assert!(no_efforts.get("reasoningEffortFormat").is_none());
     }
@@ -523,20 +646,43 @@
     #[test]
     fn shared_short_model_catalog_feeds_all_tool_format_builders() {
         let models = crate::tool_model_metadata::tool_models_from_ids(&[
-            "Vendor/Zulu".into(), "First/MiXeD:free".into(), "Other/mixed:free".into(),
+            "Vendor/Zulu".into(),
+            "First/MiXeD:free".into(),
+            "Other/mixed:free".into(),
             "Vendor/Alpha[1M]".into(),
         ]);
         let expected = ["alpha", "mixed:free", "zulu"];
         let opencode = opencode_models_object(&models);
-        assert_eq!(opencode.keys().map(String::as_str).collect::<Vec<_>>(), expected);
-        let openclaw = openclaw_model_entries(&models);
-        assert_eq!(openclaw.iter().map(|entry| entry["id"].as_str().unwrap()).collect::<Vec<_>>(), expected);
+        assert_eq!(
+            opencode.keys().map(String::as_str).collect::<Vec<_>>(),
+            expected
+        );
+        let openclaw =
+            openclaw_model_entries(&models, TOOL_CONFIG_ROOT_URL, ToolProtocol::OpenAiResponses);
+        assert_eq!(
+            openclaw
+                .iter()
+                .map(|entry| entry["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
         for (model, id) in models.iter().zip(expected) {
-            let vscode = vscode_model_entry(model, "http://127.0.0.1:1/v1/chat/completions", "sk-test", ToolProtocol::OpenAiChat);
+            let vscode = vscode_model_entry(
+                model,
+                "http://127.0.0.1:1/v1/chat/completions",
+                "sk-test",
+                ToolProtocol::OpenAiChat,
+            )
+            .unwrap();
             assert_eq!(vscode["id"], id);
             assert_eq!(vscode["name"], id);
             let mut workbuddy = serde_json::json!({});
-            configure_workbuddy_model_entry(&mut workbuddy, model, "http://127.0.0.1:1/v1/chat/completions", "sk-test");
+            configure_workbuddy_model_entry(
+                &mut workbuddy,
+                model,
+                "http://127.0.0.1:1/v1/chat/completions",
+                "sk-test",
+            );
             assert_eq!(workbuddy["id"], id);
             assert_eq!(workbuddy["name"], id);
         }
@@ -711,18 +857,51 @@
                 {"id": "mixed:free", "name": "mixed:free", "vendor": "Custom", "url": endpoint, "apiKey": "sk-test", "userField": "duplicate"}
             ]});
             fs::write(&path, serde_json::to_vec_pretty(&original).unwrap()).unwrap();
-            let models = crate::tool_model_metadata::tool_models_from_ids(&["Vendor/Zulu".into(), "First/MiXeD:free".into()]);
-            apply_workbuddy_config_with_model_info_for_protocol(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test", &models, ToolProtocol::OpenAiChat).unwrap();
+            let models = crate::tool_model_metadata::tool_models_from_ids(&[
+                "Vendor/Zulu".into(),
+                "First/MiXeD:free".into(),
+            ]);
+            apply_workbuddy_config_with_model_info_for_protocol(
+                TOOL_CONFIG_OPENAI_BASE_URL,
+                "sk-test",
+                &models,
+                ToolProtocol::OpenAiChat,
+            )
+            .unwrap();
             let configured = read_json_or_default(&path, serde_json::json!({})).unwrap();
             let entries = configured["models"].as_array().unwrap();
-            let managed = entries.iter().filter(|entry| workbuddy_model_uses_connection(entry, endpoint, "sk-test")).collect::<Vec<_>>();
-            assert_eq!(managed.iter().map(|entry| entry["id"].as_str().unwrap()).collect::<Vec<_>>(), ["mixed:free", "zulu"]);
+            let managed = entries
+                .iter()
+                .filter(|entry| workbuddy_model_uses_connection(entry, endpoint, "sk-test"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                managed
+                    .iter()
+                    .map(|entry| entry["id"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["mixed:free", "zulu"]
+            );
             assert_eq!(managed[0]["userField"], "first");
             assert_eq!(entries[1], original["models"][1]);
-            assert_eq!(configured["availableModels"], serde_json::json!(["mixed:free", "zulu", "Keep/Manual"]));
-            assert!(apply_workbuddy_config_with_model_info_for_protocol(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test", &models, ToolProtocol::OpenAiChat).unwrap().already_configured);
+            assert_eq!(
+                configured["availableModels"],
+                serde_json::json!(["mixed:free", "zulu", "Keep/Manual"])
+            );
+            assert!(
+                apply_workbuddy_config_with_model_info_for_protocol(
+                    TOOL_CONFIG_OPENAI_BASE_URL,
+                    "sk-test",
+                    &models,
+                    ToolProtocol::OpenAiChat
+                )
+                .unwrap()
+                .already_configured
+            );
             remove_workbuddy_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").unwrap();
-            assert_eq!(read_json_or_default(&path, serde_json::json!({})).unwrap(), original);
+            assert_eq!(
+                read_json_or_default(&path, serde_json::json!({})).unwrap(),
+                original
+            );
         });
     }
 
@@ -858,15 +1037,12 @@
             });
             fs::write(
                 &settings_path,
-                serde_json::to_string_pretty(&original_settings)
-                    .expect("serialize original settings")
+                serde_json::to_string_pretty(&original_settings).expect("serialize original settings")
                     + "\n",
             )
             .expect("seed VS Code settings");
-            let models = tool_models_from_ids(&[
-                "gpt-5.6-terra".to_string(),
-                "gpt-5.6-sol".to_string(),
-            ]);
+            let models =
+                tool_models_from_ids(&["gpt-5.6-terra".to_string(), "gpt-5.6-sol".to_string()]);
 
             let applied = apply_vscode_config_with_model_info_for_protocol(
                 TOOL_CONFIG_OPENAI_BASE_URL,
@@ -876,11 +1052,15 @@
             )
             .expect("apply VS Code");
             assert!(!applied.already_configured);
-            let configured = read_json_or_default(&path, serde_json::json!([]))
-                .expect("read configured VS Code");
+            let configured =
+                read_json_or_default(&path, serde_json::json!([])).expect("read configured VS Code");
             let providers = configured.as_array().expect("provider array");
             assert_eq!(providers.len(), 2);
-            assert!(providers.iter().any(|provider| provider["name"] == "Existing"));
+            assert!(
+                providers
+                    .iter()
+                    .any(|provider| provider["name"] == "Existing")
+            );
             let provider = providers
                 .iter()
                 .find(|provider| provider["name"] == "CONST API")
@@ -888,35 +1068,43 @@
             assert_eq!(provider["apiType"], "responses");
             assert_eq!(provider["apiKey"], "sk-test");
             assert_eq!(provider["models"].as_array().map(Vec::len), Some(2));
-            assert!(provider["models"]
-                .as_array()
-                .expect("models")
-                .iter()
-                .all(|model| model["url"] == "http://127.0.0.1:38787/v1/responses"));
-            assert!(provider["models"]
-                .as_array()
-                .expect("models")
-                .iter()
-                .all(|model| model["requestHeaders"]["Authorization"] == "Bearer sk-test"));
-            assert!(provider["models"]
-                .as_array()
-                .expect("models")
-                .iter()
-                .all(|model| model["reasoningEffortFormat"] == "responses"));
-            assert!(provider["models"]
-                .as_array()
-                .expect("models")
-                .iter()
-                .all(|model| model["supportsReasoningEffort"]
+            assert!(
+                provider["models"]
                     .as_array()
-                    .is_some_and(|efforts| !efforts.is_empty())));
+                    .expect("models")
+                    .iter()
+                    .all(|model| model["url"] == "http://127.0.0.1:38787/v1/responses")
+            );
+            assert!(
+                provider["models"]
+                    .as_array()
+                    .expect("models")
+                    .iter()
+                    .all(|model| model["requestHeaders"]["Authorization"] == "Bearer sk-test")
+            );
+            assert!(
+                provider["models"]
+                    .as_array()
+                    .expect("models")
+                    .iter()
+                    .all(|model| model["reasoningEffortFormat"] == "responses")
+            );
+            assert!(
+                provider["models"]
+                    .as_array()
+                    .expect("models")
+                    .iter()
+                    .all(|model| model["supportsReasoningEffort"]
+                        .as_array()
+                        .is_some_and(|efforts| !efforts.is_empty()))
+            );
             let settings = read_json_or_default(&settings_path, serde_json::json!({}))
                 .expect("read configured VS Code settings");
             assert_eq!(settings["chat.byokUtilityModelDefault"], "mainAgent");
             assert_eq!(settings["editor.fontSize"], 15);
 
-            let checked = check_vscode_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
-                .expect("check VS Code");
+            let checked =
+                check_vscode_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").expect("check VS Code");
             assert!(checked.already_configured);
             assert_eq!(
                 checked.details.get("tool_protocol").map(String::as_str),
@@ -964,27 +1152,35 @@
                 ToolProtocol::OpenAiChat,
             )
             .expect("switch VS Code protocol");
-            let switched = read_json_or_default(&path, serde_json::json!([]))
-                .expect("read switched VS Code");
+            let switched =
+                read_json_or_default(&path, serde_json::json!([])).expect("read switched VS Code");
             let provider = switched
                 .as_array()
-                .and_then(|providers| providers.iter().find(|provider| provider["name"] == "CONST API"))
+                .and_then(|providers| {
+                    providers
+                        .iter()
+                        .find(|provider| provider["name"] == "CONST API")
+                })
                 .expect("switched provider");
             assert_eq!(provider["apiType"], "chat-completions");
-            assert!(provider["models"]
-                .as_array()
-                .expect("models")
-                .iter()
-                .all(|model| model["url"] == "http://127.0.0.1:38787/v1/chat/completions"));
-            assert!(provider["models"]
-                .as_array()
-                .expect("models")
-                .iter()
-                .all(|model| model["reasoningEffortFormat"] == "chat-completions"));
+            assert!(
+                provider["models"]
+                    .as_array()
+                    .expect("models")
+                    .iter()
+                    .all(|model| model["url"] == "http://127.0.0.1:38787/v1/chat/completions")
+            );
+            assert!(
+                provider["models"]
+                    .as_array()
+                    .expect("models")
+                    .iter()
+                    .all(|model| model["reasoningEffortFormat"] == "chat-completions")
+            );
 
             remove_vscode_config().expect("remove VS Code");
-            let restored = read_json_or_default(&path, serde_json::json!([]))
-                .expect("read restored VS Code");
+            let restored =
+                read_json_or_default(&path, serde_json::json!([])).expect("read restored VS Code");
             assert_eq!(restored, original);
             let restored_settings = read_json_or_default(&settings_path, serde_json::json!({}))
                 .expect("read restored VS Code settings");
@@ -1064,10 +1260,8 @@
     #[test]
     fn dynamic_model_catalog_does_not_control_local_tool_status() {
         with_temp_home(|_| {
-            let models = tool_models_from_ids(&[
-                "gpt-5.6-terra".to_string(),
-                "gpt-5.6-sol".to_string(),
-            ]);
+            let models =
+                tool_models_from_ids(&["gpt-5.6-terra".to_string(), "gpt-5.6-sol".to_string()]);
             apply_vscode_config_with_model_info_for_protocol(
                 TOOL_CONFIG_OPENAI_BASE_URL,
                 "sk-test",
@@ -1112,9 +1306,8 @@
                 &model_ids,
             )
             .expect("apply Claude Desktop with models");
-            let checked =
-                check_claude_desktop_config(TOOL_CONFIG_ANTHROPIC_BASE_URL, "sk-test")
-                    .expect("check Claude Desktop without a live model snapshot");
+            let checked = check_claude_desktop_config(TOOL_CONFIG_ANTHROPIC_BASE_URL, "sk-test")
+                .expect("check Claude Desktop without a live model snapshot");
             assert!(checked.already_configured);
             assert!(
                 !check_claude_desktop_config(TOOL_CONFIG_ANTHROPIC_BASE_URL, "sk-other")
@@ -1129,37 +1322,80 @@
         with_temp_home(|home| {
             let mut cfg = crate::default_config();
             cfg.allow_model_equivalence = false;
-            let models = crate::tool_model_metadata::tool_models_from_response(&serde_json::json!({"data":[
-                {"id":"claude-sonnet-4-6","const_api":{"context_tokens":1000000,"output_tokens":128000}},
-                {"id":"claude-haiku-4-5","const_api":{"context_tokens":200000,"output_tokens":64000}}
-            ]}));
+            let models = crate::tool_model_metadata::tool_models_from_response(
+                &serde_json::json!({"data":[
+                    {"id":"claude-sonnet-4-6","const_api":{"context_tokens":1000000,"output_tokens":128000}},
+                    {"id":"claude-haiku-4-5","const_api":{"context_tokens":200000,"output_tokens":64000}}
+                ]}),
+            );
             let path = home.join(".claude/settings.json");
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             let original = "{\"modelPicker\":{\"options\":[{\"model\":\"user-model\"}]},\"permissions\":{\"allow\":[\"Read\"]}}";
             fs::write(&path, original).unwrap();
-            let choices = ClaudeModelSettings { main:"claude-sonnet-4-6".into(), haiku:"claude-haiku-4-5[1m]".into(), ..Default::default() };
+            let choices = ClaudeModelSettings {
+                main: "claude-sonnet-4-6".into(),
+                haiku: "claude-haiku-4-5[1m]".into(),
+                ..Default::default()
+            };
             let settings = claude_settings_with_context(&cfg, &choices, &models);
             assert_eq!(settings.main, "claude-sonnet-4-6[1m]");
             assert_eq!(settings.haiku, "claude-haiku-4-5");
-            let non_claude = crate::tool_model_metadata::tool_models_from_response(&serde_json::json!({"data":[
-                {"id":"gemini-3.7-flash","const_api":{"context_tokens":1048576}}
-            ]}));
-            assert_eq!(claude_model_with_context(&cfg, "gemini-3.7-flash", &non_claude), "gemini-3.7-flash");
-            apply_claude_config_with_model_info(TOOL_CONFIG_ROOT_URL, "sk-test", &settings, &models, &cfg).unwrap();
+            let non_claude =
+                crate::tool_model_metadata::tool_models_from_response(&serde_json::json!({"data":[
+                    {"id":"gemini-3.7-flash","const_api":{"context_tokens":1048576}}
+                ]}));
+            assert_eq!(
+                claude_model_with_context(&cfg, "gemini-3.7-flash", &non_claude),
+                "gemini-3.7-flash"
+            );
+            apply_claude_config_with_model_info(
+                TOOL_CONFIG_ROOT_URL,
+                "sk-test",
+                &settings,
+                &models,
+                &cfg,
+            )
+            .unwrap();
             let written = read_json_or_default(&path, serde_json::json!({})).unwrap();
-            assert_eq!(written["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"], "claude-sonnet-4-6[1m]");
+            assert_eq!(
+                written["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"],
+                "claude-sonnet-4-6[1m]"
+            );
             assert!(written["env"].get("DISABLE_COMPACT").is_none());
             assert!(written["modelPicker"]["options"].as_array().unwrap().iter().any(|m| m["model"] == "claude-sonnet-4-6[1m]" && m["label"] == "claude-sonnet-4-6"));
-            apply_claude_desktop_config_with_model_info(TOOL_CONFIG_ROOT_URL, "sk-test", &models, &cfg).unwrap();
-            let desktop = read_json_or_default(&claude_desktop_paths().profile_path, serde_json::json!({})).unwrap();
+            apply_claude_desktop_config_with_model_info(TOOL_CONFIG_ROOT_URL, "sk-test", &models, &cfg)
+                .unwrap();
+            let desktop =
+                read_json_or_default(&claude_desktop_paths().profile_path, serde_json::json!({}))
+                    .unwrap();
             let entries = desktop["inferenceModels"].as_array().unwrap();
-            assert!(entries.iter().any(|m| m["name"] == "claude-sonnet-4-6" && m["supports1m"] == true && m["prefer1m"] == true));
-            assert!(entries.iter().any(|m| m["name"] == "claude-haiku-4-5" && m["supports1m"] == false));
+            assert!(entries.iter().any(|m| m["name"] == "claude-sonnet-4-6"
+                && m["supports1m"] == true
+                && m["prefer1m"] == true));
+            assert!(
+                entries
+                    .iter()
+                    .any(|m| m["name"] == "claude-haiku-4-5" && m["supports1m"] == false)
+            );
             assert!(!desktop.to_string().contains("[1m]"));
-            let lowered = crate::tool_model_metadata::tool_models_from_response(&serde_json::json!({"data":[{"id":"claude-sonnet-4-6","const_api":{"context_tokens":128000}}]}));
+            let lowered = crate::tool_model_metadata::tool_models_from_response(
+                &serde_json::json!({"data":[{"id":"claude-sonnet-4-6","const_api":{"context_tokens":128000}}]}),
+            );
             let settings = claude_settings_with_context(&cfg, &choices, &lowered);
-            apply_claude_config_with_model_info(TOOL_CONFIG_ROOT_URL, "sk-test", &settings, &lowered, &cfg).unwrap();
-            assert!(!read_json_or_default(&path, serde_json::json!({})).unwrap().to_string().contains("[1m]"));
+            apply_claude_config_with_model_info(
+                TOOL_CONFIG_ROOT_URL,
+                "sk-test",
+                &settings,
+                &lowered,
+                &cfg,
+            )
+            .unwrap();
+            assert!(
+                !read_json_or_default(&path, serde_json::json!({}))
+                    .unwrap()
+                    .to_string()
+                    .contains("[1m]")
+            );
             remove_claude_config(TOOL_CONFIG_ROOT_URL, "sk-test").unwrap();
             assert_eq!(fs::read_to_string(&path).unwrap(), original);
         });
@@ -1183,12 +1419,8 @@
                 .cloned()
                 .expect("initial inference models");
 
-            apply_claude_desktop_config_with_models(
-                TOOL_CONFIG_ANTHROPIC_BASE_URL,
-                "sk-test",
-                &[],
-            )
-            .expect("reapply Claude Desktop with an empty model catalog");
+            apply_claude_desktop_config_with_models(TOOL_CONFIG_ANTHROPIC_BASE_URL, "sk-test", &[])
+                .expect("reapply Claude Desktop with an empty model catalog");
             let after = read_json_or_default(&profile_path, serde_json::json!({}))
                 .expect("read reapplied Claude Desktop profile");
 
@@ -1294,16 +1526,17 @@
                         &model_info,
                         ToolProtocol::OpenAiChat,
                     ),
-                    "kimicode" | "mimocode" | "qwencode" | "openscience"
-                    | "vibe-trading" | "zcode" | "copilot" | "raven" | "pi"
-                    | "cline" | "reasonix" | "deepseek-harness" | "open-interpreter" | "goose"
-                    | "mistral-vibe" | "open-design" | "anythingllm" => apply_additional_tool_config_with_model_info_for_protocol(
-                        tool,
-                        TOOL_CONFIG_OPENAI_BASE_URL,
-                        "sk-test",
-                        &model_info,
-                        resolve_tool_protocol(tool, None).expect("additional tool protocol"),
-                    ),
+                    "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading" | "zcode"
+                    | "copilot" | "raven" | "pi" | "cline" | "reasonix" | "deepseek-harness"
+                    | "open-interpreter" | "goose" | "mistral-vibe" | "open-design" | "anythingllm" => {
+                        apply_additional_tool_config_with_model_info_for_protocol(
+                            tool,
+                            TOOL_CONFIG_OPENAI_BASE_URL,
+                            "sk-test",
+                            &model_info,
+                            resolve_tool_protocol(tool, None).expect("additional tool protocol"),
+                        )
+                    }
                     _ => apply_tool_config_by_name(
                         tool,
                         TOOL_CONFIG_OPENAI_BASE_URL,
@@ -1331,17 +1564,16 @@
                             &model_info,
                             ToolProtocol::OpenAiChat,
                         ),
-                        "kimicode" | "mimocode" | "qwencode" | "openscience"
-                        | "vibe-trading" | "zcode" | "copilot" | "raven" | "pi"
-                        | "cline" | "reasonix" | "deepseek-harness" | "open-interpreter"
-                        | "goose" | "mistral-vibe" | "open-design" | "anythingllm" => {
+                        "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading"
+                        | "zcode" | "copilot" | "raven" | "pi" | "cline" | "reasonix"
+                        | "deepseek-harness" | "open-interpreter" | "goose" | "mistral-vibe"
+                        | "open-design" | "anythingllm" => {
                             apply_additional_tool_config_with_model_info_for_protocol(
                                 tool,
                                 TOOL_CONFIG_OPENAI_BASE_URL,
                                 "sk-test",
                                 &model_info,
-                                resolve_tool_protocol(tool, None)
-                                    .expect("additional tool protocol"),
+                                resolve_tool_protocol(tool, None).expect("additional tool protocol"),
                             )
                         }
                         _ => apply_tool_config_by_name(
@@ -1357,7 +1589,10 @@
                         "{tool} preview must ignore formatting-only rewrites: {preview:#?}"
                     );
                     assert!(preview.files.is_empty(), "{tool} preview must not write");
-                    assert!(preview.backups.is_empty(), "{tool} preview must not back up");
+                    assert!(
+                        preview.backups.is_empty(),
+                        "{tool} preview must not back up"
+                    );
                 }
 
                 let checked = check_tool_config_by_name(
@@ -1372,7 +1607,7 @@
                     "{tool} must ignore formatting-only rewrites: {checked:#?}"
                 );
 
-                let changed_key = check_tool_config_by_name(
+                let mut changed_key = check_tool_config_by_name(
                     tool,
                     TOOL_CONFIG_OPENAI_BASE_URL,
                     TOOL_CONFIG_ROOT_URL,
@@ -1383,7 +1618,49 @@
                     !changed_key.already_configured,
                     "{tool} must still detect a changed managed credential"
                 );
+                attach_tool_config_presence(&mut changed_key).unwrap();
+                assert_eq!(
+                    changed_key.details["has_managed_config"], "true",
+                    "{tool} changed credentials must not hide existing configuration"
+                );
             }
+        });
+    }
+
+    #[test]
+    fn config_presence_index_tracks_writes_restore_and_missing_files() {
+        with_temp_home(|home| {
+            let path = home.join(".mimo-test.json");
+            let mut status = ToolApplyBuilder::default().finish("mimocode");
+            attach_tool_config_presence(&mut status).unwrap();
+            assert_eq!(status.details["has_managed_config"], "false");
+            let mut builder = ToolApplyBuilder::default();
+            write_text_with_backup(
+                &path,
+                "{\"provider\":\"const-api\"}",
+                "mimocode",
+                &mut builder,
+            )
+            .unwrap();
+            let mut status = ToolApplyBuilder::default().finish("mimocode");
+            attach_tool_config_presence(&mut status).unwrap();
+            assert_eq!(status.details["has_managed_config"], "true");
+            assert!(!status.already_configured);
+            let before = fs::read(&path).unwrap();
+            let manifest_before = fs::read(tool_config_manifest_path()).unwrap();
+            assert!(tool_has_owned_config_files("mimocode").unwrap());
+            assert!(!tool_has_owned_config_files("kimicode").unwrap());
+            assert_eq!(fs::read(&path).unwrap(), before);
+            assert_eq!(
+                fs::read(tool_config_manifest_path()).unwrap(),
+                manifest_before
+            );
+            fs::remove_file(&path).unwrap();
+            assert!(!tool_has_owned_config_files("mimocode").unwrap());
+            fs::write(&path, &before).unwrap();
+            assert!(tool_has_owned_config_files("mimocode").unwrap());
+            restore_tool_config_from_manifest("mimocode").unwrap();
+            assert!(!tool_has_owned_config_files("mimocode").unwrap());
         });
     }
 
@@ -1392,50 +1669,48 @@
         with_temp_home(|home| {
             let base_url = TOOL_CONFIG_OPENAI_BASE_URL;
             let api_key = "sk-test";
-            let models = tool_models_from_ids(&[
-                "gpt-5.6-sol".to_string(),
-                "claude-sonnet-4-6".to_string(),
-            ]);
+            let models =
+                tool_models_from_ids(&["gpt-5.6-sol".to_string(), "claude-sonnet-4-6".to_string()]);
             let originals = vec![
-                (
-                    kimicode_config_path(),
-                    "theme = \"dark\"\n\n[providers.user]\ntype = \"openai\"\napi_key = \"sk-user\"\n".to_string(),
-                ),
-                (
-                    mimocode_config_path().expect("MiMo path"),
-                    "{\n  // user setting\n  \"keep\": {\"value\": 1}\n}\n".to_string(),
-                ),
-                (
-                    qwencode_config_path(),
-                    "{\n  \"keep\": {\"value\": 2}\n}\n".to_string(),
-                ),
-                (
-                    openscience_config_path().expect("OpenScience path"),
-                    "{\n  // user setting\n  \"keep\": {\"value\": 3}\n}\n".to_string(),
-                ),
-                (
-                    vibe_trading_config_path(),
-                    "KEEP_ME=yes\n".to_string(),
-                ),
-                (
-                    zcode_config_path(),
-                    concat!(
-                        "{\n",
-                        "  \"keep\": {\"value\": 4},\n",
-                        "  \"model\": \"user/model\",\n",
-                        "  \"provider\": {\n",
-                        "    \"user\": {\n",
-                        "      \"name\": \"User\",\n",
-                        "      \"kind\": \"openai-compatible\",\n",
-                        "      \"options\": {\"baseURL\": \"https://example.test/v1\", \"apiKey\": \"user-key\"},\n",
-                        "      \"models\": {\"model\": {\"name\": \"Model\"}}\n",
-                        "    }\n",
-                        "  }\n",
-                        "}\n"
-                    )
-                    .to_string(),
-                ),
-            ];
+                    (
+                        kimicode_config_path(),
+                        "theme = \"dark\"\n\n[providers.user]\ntype = \"openai\"\napi_key = \"sk-user\"\n".to_string(),
+                    ),
+                    (
+                        mimocode_config_path().expect("MiMo path"),
+                        "{\n  // user setting\n  \"keep\": {\"value\": 1}\n}\n".to_string(),
+                    ),
+                    (
+                        qwencode_config_path(),
+                        "{\n  \"keep\": {\"value\": 2}\n}\n".to_string(),
+                    ),
+                    (
+                        openscience_config_path().expect("OpenScience path"),
+                        "{\n  // user setting\n  \"keep\": {\"value\": 3}\n}\n".to_string(),
+                    ),
+                    (
+                        vibe_trading_config_path(),
+                        "KEEP_ME=yes\n".to_string(),
+                    ),
+                    (
+                        zcode_config_path(),
+                        concat!(
+                            "{\n",
+                            "  \"keep\": {\"value\": 4},\n",
+                            "  \"model\": \"user/model\",\n",
+                            "  \"provider\": {\n",
+                            "    \"user\": {\n",
+                            "      \"name\": \"User\",\n",
+                            "      \"kind\": \"openai-compatible\",\n",
+                            "      \"options\": {\"baseURL\": \"https://example.test/v1\", \"apiKey\": \"user-key\"},\n",
+                            "      \"models\": {\"model\": {\"name\": \"Model\"}}\n",
+                            "    }\n",
+                            "  }\n",
+                            "}\n"
+                        )
+                        .to_string(),
+                    ),
+                ];
             for (path, content) in &originals {
                 fs::create_dir_all(path.parent().expect("config parent"))
                     .expect("create config parent");
@@ -1475,7 +1750,7 @@
             .expect("read MiMo config");
             assert_eq!(mimo["keep"]["value"], 1);
             assert_eq!(
-                mimo["provider"][ADDITIONAL_CONST_API_PROVIDER_ID]["options"]["baseURL"],
+                mimo["provider"][ADDITIONAL_CONST_API_PROVIDER_ID]["api"],
                 base_url
             );
             let qwen = read_json_or_default(&qwencode_config_path(), serde_json::json!({}))
@@ -1546,122 +1821,120 @@
         with_temp_home(|_| {
             let base_url = TOOL_CONFIG_OPENAI_BASE_URL;
             let api_key = "sk-test";
-            let models = tool_models_from_ids(&[
-                "gpt-5.6-sol".to_string(),
-                "claude-sonnet-4-6".to_string(),
-            ]);
+            let models =
+                tool_models_from_ids(&["gpt-5.6-sol".to_string(), "claude-sonnet-4-6".to_string()]);
             let (cline_providers_path, cline_models_path) =
                 cline_provider_paths().expect("Cline paths");
             let (reasonix_config_path, reasonix_env_path) = reasonix_config_paths();
             let (goose_provider_path, goose_env_path) = goose_config_paths();
             let (mistral_config_path, mistral_env_path) = mistral_vibe_config_paths();
             let originals = vec![
-                (copilot_env_path(), "KEEP_COPILOT=yes\n".to_string()),
-                (
-                    raven_config_path(),
-                    concat!(
-                        "{\n",
-                        "  \"keep\": {\"value\": 1},\n",
-                        "  \"providers\": {\"other\": {\"apiKey\": \"user-key\"}},\n",
-                        "  \"agents\": {\"other\": {\"enabled\": true}}\n",
-                        "}\n"
-                    )
-                    .to_string(),
-                ),
-                (
-                    pi_models_path(),
-                    concat!(
-                        "{\n",
-                        "  \"keep\": {\"value\": 2},\n",
-                        "  \"providers\": {\"user\": {\"baseUrl\": \"https://example.test\"}}\n",
-                        "}\n"
-                    )
-                    .to_string(),
-                ),
-                (
-                    cline_providers_path.clone(),
-                    concat!(
-                        "{\n",
-                        "  \"version\": 1,\n",
-                        "  \"keep\": {\"value\": 3},\n",
-                        "  \"providers\": {\"user\": {\"settings\": {\"model\": \"user-model\"}}}\n",
-                        "}\n"
-                    )
-                    .to_string(),
-                ),
-                (
-                    cline_models_path.clone(),
-                    concat!(
-                        "{\n",
-                        "  \"version\": 1,\n",
-                        "  \"keep\": {\"value\": 4},\n",
-                        "  \"providers\": {\"user\": {\"provider\": {\"name\": \"User\"}, \"models\": {}}}\n",
-                        "}\n"
-                    )
-                    .to_string(),
-                ),
-                (
-                    reasonix_config_path.clone(),
-                    concat!(
-                        "theme = \"dark\"\n\n",
-                        "[[providers]]\n",
-                        "name = \"user\"\n",
-                        "kind = \"openai\"\n",
-                        "base_url = \"https://example.test/v1\"\n",
-                        "models = [\"user-model\"]\n",
-                        "default = \"user-model\"\n",
-                        "api_key_env = \"USER_KEY\"\n"
-                    )
-                    .to_string(),
-                ),
-                (
-                    reasonix_env_path.clone(),
-                    "KEEP_REASONIX=yes\nUSER_KEY=user-secret\n".to_string(),
-                ),
-                (
-                    open_interpreter_profile_path(),
-                    "keep: true\nllm:\n  temperature: 0.3\n".to_string(),
-                ),
-                (
-                    goose_provider_path.clone(),
-                    "{\n  \"keep\": {\"value\": 5},\n  \"headers\": {\"x-user\": \"keep\"}\n}\n"
+                    (copilot_env_path(), "KEEP_COPILOT=yes\n".to_string()),
+                    (
+                        raven_config_path(),
+                        concat!(
+                            "{\n",
+                            "  \"keep\": {\"value\": 1},\n",
+                            "  \"providers\": {\"other\": {\"apiKey\": \"user-key\"}},\n",
+                            "  \"agents\": {\"other\": {\"enabled\": true}}\n",
+                            "}\n"
+                        )
                         .to_string(),
-                ),
-                (goose_env_path.clone(), "KEEP_GOOSE=yes\n".to_string()),
-                (
-                    mistral_config_path.clone(),
-                    concat!(
-                        "theme = \"dark\"\n\n",
-                        "[[providers]]\n",
-                        "name = \"user\"\n",
-                        "api_base = \"https://example.test/v1\"\n",
-                        "api_key_env_var = \"USER_KEY\"\n",
-                        "api_style = \"openai\"\n",
-                        "backend = \"generic\"\n\n",
-                        "[[models]]\n",
-                        "name = \"user-model\"\n",
-                        "provider = \"user\"\n",
-                        "alias = \"user/user-model\"\n"
-                    )
-                    .to_string(),
-                ),
-                (
-                    mistral_env_path.clone(),
-                    "KEEP_VIBE=yes\nUSER_KEY=user-secret\n".to_string(),
-                ),
-                (
-                    open_design_config_path().expect("Open Design path"),
-                    concat!(
-                        "{\n",
-                        "  \"keep\": {\"value\": 6},\n",
-                        "  \"agentId\": \"claude\",\n",
-                        "  \"agentModels\": {\"claude\": {\"model\": \"user-model\"}},\n",
-                        "  \"agentCliEnv\": {\"claude\": {\"USER\": \"keep\"}}\n",
-                        "}\n"
-                    )
-                    .to_string(),
-                ),
-            ];
+                    ),
+                    (
+                        pi_models_path(),
+                        concat!(
+                            "{\n",
+                            "  \"keep\": {\"value\": 2},\n",
+                            "  \"providers\": {\"user\": {\"baseUrl\": \"https://example.test\"}}\n",
+                            "}\n"
+                        )
+                        .to_string(),
+                    ),
+                    (
+                        cline_providers_path.clone(),
+                        concat!(
+                            "{\n",
+                            "  \"version\": 1,\n",
+                            "  \"keep\": {\"value\": 3},\n",
+                            "  \"providers\": {\"user\": {\"settings\": {\"model\": \"user-model\"}}}\n",
+                            "}\n"
+                        )
+                        .to_string(),
+                    ),
+                    (
+                        cline_models_path.clone(),
+                        concat!(
+                            "{\n",
+                            "  \"version\": 1,\n",
+                            "  \"keep\": {\"value\": 4},\n",
+                            "  \"providers\": {\"user\": {\"provider\": {\"name\": \"User\"}, \"models\": {}}}\n",
+                            "}\n"
+                        )
+                        .to_string(),
+                    ),
+                    (
+                        reasonix_config_path.clone(),
+                        concat!(
+                            "theme = \"dark\"\n\n",
+                            "[[providers]]\n",
+                            "name = \"user\"\n",
+                            "kind = \"openai\"\n",
+                            "base_url = \"https://example.test/v1\"\n",
+                            "models = [\"user-model\"]\n",
+                            "default = \"user-model\"\n",
+                            "api_key_env = \"USER_KEY\"\n"
+                        )
+                        .to_string(),
+                    ),
+                    (
+                        reasonix_env_path.clone(),
+                        "KEEP_REASONIX=yes\nUSER_KEY=user-secret\n".to_string(),
+                    ),
+                    (
+                        open_interpreter_profile_path(),
+                        "keep: true\nllm:\n  temperature: 0.3\n".to_string(),
+                    ),
+                    (
+                        goose_provider_path.clone(),
+                        "{\n  \"keep\": {\"value\": 5},\n  \"headers\": {\"x-user\": \"keep\"}\n}\n"
+                            .to_string(),
+                    ),
+                    (goose_env_path.clone(), "KEEP_GOOSE=yes\n".to_string()),
+                    (
+                        mistral_config_path.clone(),
+                        concat!(
+                            "theme = \"dark\"\n\n",
+                            "[[providers]]\n",
+                            "name = \"user\"\n",
+                            "api_base = \"https://example.test/v1\"\n",
+                            "api_key_env_var = \"USER_KEY\"\n",
+                            "api_style = \"openai\"\n",
+                            "backend = \"generic\"\n\n",
+                            "[[models]]\n",
+                            "name = \"user-model\"\n",
+                            "provider = \"user\"\n",
+                            "alias = \"user/user-model\"\n"
+                        )
+                        .to_string(),
+                    ),
+                    (
+                        mistral_env_path.clone(),
+                        "KEEP_VIBE=yes\nUSER_KEY=user-secret\n".to_string(),
+                    ),
+                    (
+                        open_design_config_path().expect("Open Design path"),
+                        concat!(
+                            "{\n",
+                            "  \"keep\": {\"value\": 6},\n",
+                            "  \"agentId\": \"claude\",\n",
+                            "  \"agentModels\": {\"claude\": {\"model\": \"user-model\"}},\n",
+                            "  \"agentCliEnv\": {\"claude\": {\"USER\": \"keep\"}}\n",
+                            "}\n"
+                        )
+                        .to_string(),
+                    ),
+                ];
             for (path, content) in &originals {
                 fs::create_dir_all(path.parent().expect("P0/P1 config parent"))
                     .expect("create P0/P1 config parent");
@@ -1709,20 +1982,24 @@
                 raven["agents"]["defaults"]["model"],
                 raven["providers"]["custom"]["models"][0]
             );
-            assert!(raven["providers"]["custom"]["models"]
-                .as_array()
-                .expect("Raven model list")
-                .iter()
-                .all(|model| model.as_str().is_some_and(|id| id.starts_with("custom/"))));
+            assert!(
+                raven["providers"]["custom"]["models"]
+                    .as_array()
+                    .expect("Raven model list")
+                    .iter()
+                    .all(|model| model.as_str().is_some_and(|id| id.starts_with("custom/")))
+            );
 
-            let pi = read_json_or_default(&pi_models_path(), serde_json::json!({}))
-                .expect("read Pi config");
+            let pi =
+                read_json_or_default(&pi_models_path(), serde_json::json!({})).expect("read Pi config");
             assert_eq!(pi["keep"]["value"], 2);
-            assert_eq!(pi["providers"][ADDITIONAL_CONST_API_PROVIDER_ID]["api"], "openai-responses");
+            assert_eq!(
+                pi["providers"][ADDITIONAL_CONST_API_PROVIDER_ID]["api"],
+                "openai-responses"
+            );
 
-            let cline_providers =
-                read_json_or_default(&cline_providers_path, serde_json::json!({}))
-                    .expect("read Cline providers");
+            let cline_providers = read_json_or_default(&cline_providers_path, serde_json::json!({}))
+                .expect("read Cline providers");
             let cline_models = read_json_or_default(&cline_models_path, serde_json::json!({}))
                 .expect("read Cline models");
             assert_eq!(cline_providers["keep"]["value"], 3);
@@ -1736,9 +2013,11 @@
             assert!(reasonix.contains("theme = \"dark\""));
             assert!(reasonix.contains("name = \"user\""));
             assert!(reasonix.contains("name = \"const-api\""));
-            assert!(fs::read_to_string(&reasonix_env_path)
-                .expect("read Reasonix env")
-                .contains("KEEP_REASONIX=yes"));
+            assert!(
+                fs::read_to_string(&reasonix_env_path)
+                    .expect("read Reasonix env")
+                    .contains("KEEP_REASONIX=yes")
+            );
 
             let interpreter = fs::read_to_string(open_interpreter_profile_path())
                 .expect("read Open Interpreter profile");
@@ -1752,21 +2031,27 @@
             assert_eq!(goose["keep"]["value"], 5);
             assert_eq!(goose["headers"]["x-user"], "keep");
             assert_eq!(goose["engine"], "openai");
-            assert!(fs::read_to_string(&goose_env_path)
-                .expect("read Goose env")
-                .contains("KEEP_GOOSE=yes"));
+            assert!(
+                fs::read_to_string(&goose_env_path)
+                    .expect("read Goose env")
+                    .contains("KEEP_GOOSE=yes")
+            );
 
             let mistral = fs::read_to_string(&mistral_config_path).expect("read Vibe config");
             assert!(mistral.contains("theme = \"dark\""));
             assert!(mistral.contains("name = \"user\""));
             assert!(mistral.contains("name = \"const-api\""));
-            assert!(fs::read_to_string(&mistral_env_path)
-                .expect("read Vibe env")
-                .contains("KEEP_VIBE=yes"));
+            assert!(
+                fs::read_to_string(&mistral_env_path)
+                    .expect("read Vibe env")
+                    .contains("KEEP_VIBE=yes")
+            );
 
-            let open_design =
-                read_json_or_default(&open_design_config_path().expect("Open Design path"), serde_json::json!({}))
-                    .expect("read Open Design config");
+            let open_design = read_json_or_default(
+                &open_design_config_path().expect("Open Design path"),
+                serde_json::json!({}),
+            )
+            .expect("read Open Design config");
             assert_eq!(open_design["keep"]["value"], 6);
             assert_eq!(open_design["agentModels"]["claude"]["model"], "user-model");
             assert_eq!(open_design["agentCliEnv"]["claude"]["USER"], "keep");
@@ -2052,9 +2337,9 @@
                             )
                         };
                         apply("sk-before-migration").unwrap();
-                        let refs: serde_json::Value = serde_yaml::from_str(
-                            &fs::read_to_string(&credentials_path).unwrap(),
-                        ).unwrap();
+                        let refs: serde_json::Value =
+                            serde_yaml::from_str(&fs::read_to_string(&credentials_path).unwrap())
+                                .unwrap();
                         // Simulate Harness's official flat-layout migration and
                         // the browser login record it creates after first launch.
                         let mut migrated = serde_json::json!({
@@ -2066,29 +2351,34 @@
                         });
                         fs::write(&credentials_path, serde_yaml::to_string(&migrated).unwrap())
                             .unwrap();
-                        assert!(preview_tool_config_apply(|| apply("sk-before-migration"))
-                            .unwrap().already_configured);
+                        assert!(
+                            preview_tool_config_apply(|| apply("sk-before-migration"))
+                                .unwrap()
+                                .already_configured
+                        );
                         if reapply {
                             apply("sk-after-migration").unwrap();
                         }
                         if external_edit {
-                            migrated = serde_yaml::from_str(
-                                &fs::read_to_string(&credentials_path).unwrap(),
-                            ).unwrap();
+                            migrated =
+                                serde_yaml::from_str(&fs::read_to_string(&credentials_path).unwrap())
+                                    .unwrap();
                             migrated["refs"][DEEPSEEK_HARNESS_CREDENTIAL_ENV_KEY] =
                                 "user-edited-key".into();
-                            original[DEEPSEEK_HARNESS_CREDENTIAL_ENV_KEY] =
-                                "user-edited-key".into();
+                            original[DEEPSEEK_HARNESS_CREDENTIAL_ENV_KEY] = "user-edited-key".into();
                             fs::write(&credentials_path, serde_yaml::to_string(&migrated).unwrap())
                                 .unwrap();
                         }
                         remove_additional_tool_config("deepseek-harness").unwrap();
-                        let restored: serde_json::Value = serde_yaml::from_str(
-                            &fs::read_to_string(&credentials_path).unwrap(),
-                        ).unwrap();
-                        assert_eq!(restored, serde_json::json!({
-                            "version": 1, "refs": original, "records": migrated["records"],
-                        }));
+                        let restored: serde_json::Value =
+                            serde_yaml::from_str(&fs::read_to_string(&credentials_path).unwrap())
+                                .unwrap();
+                        assert_eq!(
+                            restored,
+                            serde_json::json!({
+                                "version": 1, "refs": original, "records": migrated["records"],
+                            })
+                        );
                     });
                 }
             }
@@ -2097,11 +2387,18 @@
 
     #[test]
     fn deepseek_harness_versioned_credentials_accept_empty_refs() {
-        for raw in ["version: 1\n", "version: 1\nrefs:\n", "version: 1\nrefs: {}\n"] {
+        for raw in [
+            "version: 1\n",
+            "version: 1\nrefs:\n",
+            "version: 1\nrefs: {}\n",
+        ] {
             let updated = upsert_deepseek_harness_credentials(raw, "sk-test").unwrap();
             let value: serde_yaml::Value = serde_yaml::from_str(&updated).unwrap();
             assert_eq!(value["version"], 1);
-            assert_eq!(value["refs"][DEEPSEEK_HARNESS_CREDENTIAL_ENV_KEY], "sk-test");
+            assert_eq!(
+                value["refs"][DEEPSEEK_HARNESS_CREDENTIAL_ENV_KEY],
+                "sk-test"
+            );
         }
     }
 
@@ -2124,9 +2421,14 @@
                     id: "model-a".to_string(),
                     ..ToolModelInfo::default()
                 }];
-                let apply = || apply_deepseek_harness_config(
-                    TOOL_CONFIG_OPENAI_BASE_URL, "sk-test", &models, ToolProtocol::OpenAiChat,
-                );
+                let apply = || {
+                    apply_deepseek_harness_config(
+                        TOOL_CONFIG_OPENAI_BASE_URL,
+                        "sk-test",
+                        &models,
+                        ToolProtocol::OpenAiChat,
+                    )
+                };
                 assert!(preview_tool_config_apply(apply).is_err());
                 assert!(apply().is_err());
                 assert_eq!(fs::read_to_string(&settings_path).unwrap(), settings);
@@ -2206,14 +2508,14 @@
             let original = "KEEP_SCIENCE_SETTING=1\n";
             fs::write(&path, original).expect("seed Claude Science config");
 
-            let applied = apply_claude_science_config(
-                TOOL_CONFIG_ANTHROPIC_BASE_URL,
-                "sk-science",
-            )
-            .expect("apply Claude Science");
+            let applied = apply_claude_science_config(TOOL_CONFIG_ANTHROPIC_BASE_URL, "sk-science")
+                .expect("apply Claude Science");
             assert!(applied.file_statuses.iter().any(|status| status.changed));
             assert_eq!(
-                applied.details.get("configuration_scope").map(String::as_str),
+                applied
+                    .details
+                    .get("configuration_scope")
+                    .map(String::as_str),
                 Some("const_api_launch_environment")
             );
             let configured = fs::read_to_string(&path).expect("read Claude Science config");
@@ -2225,20 +2527,21 @@
                 env_file_value(&configured, "ANTHROPIC_AUTH_TOKEN"),
                 Some("sk-science")
             );
-            assert_eq!(env_file_value(&configured, "KEEP_SCIENCE_SETTING"), Some("1"));
+            assert_eq!(
+                env_file_value(&configured, "KEEP_SCIENCE_SETTING"),
+                Some("1")
+            );
 
-            assert!(check_claude_science_config(
-                TOOL_CONFIG_ANTHROPIC_BASE_URL,
-                "sk-science",
-            )
-            .expect("check Claude Science")
-            .already_configured);
-            assert!(!check_claude_science_config(
-                TOOL_CONFIG_ANTHROPIC_BASE_URL,
-                "sk-other",
-            )
-            .expect("check Claude Science changed key")
-            .already_configured);
+            assert!(
+                check_claude_science_config(TOOL_CONFIG_ANTHROPIC_BASE_URL, "sk-science",)
+                    .expect("check Claude Science")
+                    .already_configured
+            );
+            assert!(
+                !check_claude_science_config(TOOL_CONFIG_ANTHROPIC_BASE_URL, "sk-other",)
+                    .expect("check Claude Science changed key")
+                    .already_configured
+            );
 
             remove_claude_science_config().expect("remove Claude Science");
             assert_eq!(
@@ -2346,13 +2649,8 @@
                 "experimental_bearer_token = \"sk-test\"\n",
             );
             let mut legacy_result = ToolApplyBuilder::default();
-            write_text_with_backup(
-                &config_path,
-                legacy_applied,
-                "codex",
-                &mut legacy_result,
-            )
-            .expect("simulate legacy Codex apply");
+            write_text_with_backup(&config_path, legacy_applied, "codex", &mut legacy_result)
+                .expect("simulate legacy Codex apply");
 
             let mut user_edited = fs::read_to_string(&config_path)
                 .expect("read legacy Codex config")
@@ -2362,16 +2660,13 @@
             fs::write(&config_path, user_edited.to_string())
                 .expect("simulate later user preference edit");
 
-            apply_codex_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
-                .expect("reapply Codex config");
+            apply_codex_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").expect("reapply Codex config");
             let applied = fs::read_to_string(&config_path)
                 .expect("read reapplied Codex config")
                 .parse::<DocumentMut>()
                 .expect("parse reapplied Codex config");
             assert_eq!(
-                applied
-                    .get("model_reasoning_effort")
-                    .and_then(Item::as_str),
+                applied.get("model_reasoning_effort").and_then(Item::as_str),
                 Some("xhigh"),
                 "a later user edit must survive reapply"
             );
@@ -2383,8 +2678,7 @@
                 "an untouched legacy CONST value must restore the pre-CONST value"
             );
 
-            remove_codex_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
-                .expect("cancel Codex config");
+            remove_codex_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").expect("cancel Codex config");
             let restored = fs::read_to_string(&config_path)
                 .expect("read restored Codex config")
                 .parse::<DocumentMut>()
@@ -2656,6 +2950,8 @@
             ("http://127.0.0.1:38787/v1", 38787),
             ("http://127.0.0.1:38787/anthropic", 38787),
             ("http://127.0.0.1:38787/gemini", 38787),
+            ("http://127.0.0.1:38787/anthropic/v1", 38787),
+            ("http://127.0.0.1:38787/gemini/v1beta", 38787),
             ("http://0.0.0.0:52109", 52109),
             ("http://localhost:43127", 43127),
             ("http://127.0.0.1:19432", 19432),
@@ -2752,10 +3048,7 @@
                         claude_desktop_paths().profile_path,
                         format!("{expected_root}/anthropic"),
                     ),
-                    (
-                        home.join(".gemini/.env"),
-                        format!("{expected_root}/gemini"),
-                    ),
+                    (home.join(".gemini/.env"), format!("{expected_root}/gemini")),
                     (
                         home.join(".config/opencode/opencode.json"),
                         format!("{expected_root}/v1"),
@@ -2837,8 +3130,7 @@
                 ToolProtocol::OpenAiResponses
             );
             assert_eq!(
-                resolve_tool_protocol(tool, Some("openai_chat"))
-                    .expect("dual-protocol tool chat"),
+                resolve_tool_protocol(tool, Some("openai_chat")).expect("dual-protocol tool chat"),
                 ToolProtocol::OpenAiChat
             );
         }
@@ -2848,8 +3140,7 @@
         );
         assert!(resolve_tool_protocol("open-design", Some("openai_chat")).is_err());
         assert_eq!(
-            resolve_tool_protocol("deepseek-harness", None)
-                .expect("DeepSeek Harness default"),
+            resolve_tool_protocol("deepseek-harness", None).expect("DeepSeek Harness default"),
             ToolProtocol::OpenAiChat
         );
         for (name, protocol) in [
@@ -2871,9 +3162,7 @@
             "open-interpreter",
             "goose",
             "mistral-vibe",
-            "mimocode",
             "qwencode",
-            "openscience",
             "vibe-trading",
             "zcode",
         ] {
@@ -2883,15 +3172,25 @@
             );
             assert!(resolve_tool_protocol(tool, Some("openai_responses")).is_err());
         }
+        for tool in ["mimocode", "openscience"] {
+            assert_eq!(
+                default_tool_protocol(tool).unwrap(),
+                ToolProtocol::OpenAiChat
+            );
+            assert!(resolve_tool_protocol(tool, Some("openai_responses")).is_ok());
+        }
+        assert!(resolve_tool_protocol("mimocode", Some("anthropic_messages")).is_ok());
+        assert!(resolve_tool_protocol("mimocode", Some("gemini_native")).is_ok());
+        assert!(resolve_tool_protocol("openscience", Some("anthropic_messages")).is_err());
+        assert!(resolve_tool_protocol("openscience", Some("gemini_native")).is_err());
         assert_eq!(
             resolve_tool_protocol("opencode", Some("openai_chat")).expect("opencode chat"),
             ToolProtocol::OpenAiChat
         );
-        assert!(resolve_tool_protocol("opencode", Some("anthropic_messages")).is_err());
-        assert!(resolve_tool_protocol("opencode", Some("gemini_native")).is_err());
+        assert!(resolve_tool_protocol("opencode", Some("anthropic_messages")).is_ok());
+        assert!(resolve_tool_protocol("opencode", Some("gemini_native")).is_ok());
         assert_eq!(
-            resolve_tool_protocol("openclaw", Some("anthropic_messages"))
-                .expect("openclaw messages"),
+            resolve_tool_protocol("openclaw", Some("anthropic_messages")).expect("openclaw messages"),
             ToolProtocol::AnthropicMessages
         );
         assert_eq!(
@@ -2925,7 +3224,8 @@
             let provider =
                 opencode_const_api_provider("http://127.0.0.1:38787/v1", "sk-test", &[], protocol);
             assert_eq!(provider["npm"], package);
-            assert_eq!(provider["options"]["baseURL"], base_url);
+            assert_eq!(provider["api"], base_url);
+            assert!(provider["options"].get("baseURL").is_none());
             assert!(provider["options"].get("setCacheKey").is_none());
         }
     }
@@ -2952,15 +3252,10 @@
             let api_key = "sk-test";
 
             for protocol in [ToolProtocol::OpenAiResponses, ToolProtocol::OpenAiChat] {
-                apply_opencode_config_with_model_info_for_protocol(
-                    base_url,
-                    api_key,
-                    &[],
-                    protocol,
-                )
-                .expect("apply OpenCode protocol");
-                let checked = check_opencode_config(base_url, api_key)
-                    .expect("check OpenCode protocol");
+                apply_opencode_config_with_model_info_for_protocol(base_url, api_key, &[], protocol)
+                    .expect("apply OpenCode protocol");
+                let checked =
+                    check_opencode_config(base_url, api_key).expect("check OpenCode protocol");
                 assert!(checked.already_configured);
                 assert_eq!(
                     checked.details.get("tool_protocol").map(String::as_str),
@@ -2990,8 +3285,7 @@
             for protocol in [ToolProtocol::OpenAiChat] {
                 apply_hermes_config_for_protocol(root_url, api_key, protocol)
                     .expect("apply Hermes protocol");
-                let checked =
-                    check_hermes_config(root_url, api_key).expect("check Hermes protocol");
+                let checked = check_hermes_config(root_url, api_key).expect("check Hermes protocol");
                 assert!(checked.already_configured);
                 assert_eq!(
                     checked.details.get("tool_protocol").map(String::as_str),
@@ -3020,14 +3314,15 @@
             fs::write(&onboarding_path, onboarding_original).expect("seed claude onboarding");
 
             apply_claude_config("http://127.0.0.1:38787", "sk-test").expect("apply claude");
-            let applied_settings: serde_json::Value = serde_json::from_str(
-                &fs::read_to_string(&path).expect("read applied Claude settings"),
-            )
-            .expect("parse applied Claude settings");
+            let applied_settings: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).expect("read applied Claude settings"))
+                    .expect("parse applied Claude settings");
             assert!(applied_settings["env"].get("ANTHROPIC_API_KEY").is_none());
-            assert!(applied_settings["env"]
-                .get("CLAUDE_CODE_USE_VERTEX")
-                .is_none());
+            assert!(
+                applied_settings["env"]
+                    .get("CLAUDE_CODE_USE_VERTEX")
+                    .is_none()
+            );
             let applied_onboarding: serde_json::Value = serde_json::from_str(
                 &fs::read_to_string(&onboarding_path).expect("read applied onboarding"),
             )
@@ -3060,9 +3355,8 @@
             fs::write(&settings_path, settings_original).expect("seed gemini settings");
 
             apply_gemini_config("http://127.0.0.1:38787", "sk-test").expect("apply gemini");
-            let applied_env = env_text_to_owned_json(
-                &fs::read_to_string(&path).expect("read applied Gemini env"),
-            );
+            let applied_env =
+                env_text_to_owned_json(&fs::read_to_string(&path).expect("read applied Gemini env"));
             assert!(applied_env.get("GOOGLE_GENAI_USE_VERTEXAI").is_none());
             assert!(applied_env.get("GEMINI_CLI_HOME").is_none());
             let applied_settings: serde_json::Value = serde_json::from_str(
@@ -3330,8 +3624,13 @@
                 )
                 .expect("seed Claude Desktop config");
             }
-            fs::create_dir_all(paths.meta_path.parent().expect("Claude Desktop meta parent"))
-                .expect("mkdir Claude Desktop library");
+            fs::create_dir_all(
+                paths
+                    .meta_path
+                    .parent()
+                    .expect("Claude Desktop meta parent"),
+            )
+            .expect("mkdir Claude Desktop library");
             fs::write(
                 &paths.legacy_profile_path,
                 serde_json::to_vec_pretty(&serde_json::json!({
@@ -3425,14 +3724,19 @@
             )
             .expect("switch Gemini to native route");
 
-            let env = env_text_to_owned_json(
-                &fs::read_to_string(&env_path).expect("read native Gemini env"),
-            );
+            let env =
+                env_text_to_owned_json(&fs::read_to_string(&env_path).expect("read native Gemini env"));
             for name in GEMINI_CLI_EXTERNAL_ENVIRONMENT_NAMES {
                 assert!(env.get(*name).is_none(), "{name} should be removed");
             }
-            assert_eq!(env.get("GEMINI_MODEL").and_then(serde_json::Value::as_str), Some("user-model"));
-            assert_eq!(env.get("KEEP_ME").and_then(serde_json::Value::as_str), Some("yes"));
+            assert_eq!(
+                env.get("GEMINI_MODEL").and_then(serde_json::Value::as_str),
+                Some("user-model")
+            );
+            assert_eq!(
+                env.get("KEEP_ME").and_then(serde_json::Value::as_str),
+                Some("yes")
+            );
             let settings = read_json_or_default(&settings_path, serde_json::json!({}))
                 .expect("read native Gemini settings");
             assert_eq!(
@@ -3483,41 +3787,40 @@
     #[test]
     fn claude_transaction_rollback_preserves_other_tool_manifest_entries() {
         with_temp_home(|home| {
-            apply_gemini_config("http://127.0.0.1:38787", "sk-test")
-                .expect("apply Gemini");
+            apply_gemini_config("http://127.0.0.1:38787", "sk-test").expect("apply Gemini");
             let gemini_path = home.join(".gemini/.env");
             let gemini_before = fs::read(&gemini_path).expect("read Gemini");
             let transaction_paths = claude_desktop_transaction_paths();
 
-            let failed: Result<()> = with_tool_config_file_transaction(
-                "claude-desktop",
-                &transaction_paths,
-                || {
-                    apply_claude_desktop_config(
-                        "http://127.0.0.1:38787",
-                        "sk-test",
-                    )?;
+            let failed: Result<()> =
+                with_tool_config_file_transaction("claude-desktop", &transaction_paths, || {
+                    apply_claude_desktop_config("http://127.0.0.1:38787", "sk-test")?;
                     Err(anyhow!("injected failure"))
-                },
+                });
+            assert!(
+                failed
+                    .expect_err("transaction must fail")
+                    .to_string()
+                    .contains("injected failure")
             );
-            assert!(failed
-                .expect_err("transaction must fail")
-                .to_string()
-                .contains("injected failure"));
 
             assert_eq!(
                 fs::read(&gemini_path).expect("read Gemini after rollback"),
                 gemini_before
             );
             let manifest = load_tool_config_manifest().expect("load manifest");
-            assert!(manifest
-                .files
-                .values()
-                .any(|ownership| ownership.tool == "gemini"));
-            assert!(!manifest
-                .files
-                .values()
-                .any(|ownership| ownership.tool == "claude-desktop"));
+            assert!(
+                manifest
+                    .files
+                    .values()
+                    .any(|ownership| ownership.tool == "gemini")
+            );
+            assert!(
+                !manifest
+                    .files
+                    .values()
+                    .any(|ownership| ownership.tool == "claude-desktop")
+            );
             let paths = claude_desktop_paths();
             assert!(!paths.profile_path.exists());
             assert!(!paths.meta_path.exists());
@@ -3527,10 +3830,8 @@
     #[test]
     fn cancel_preserves_user_changes_to_new_managed_json_fields() {
         with_temp_home(|home| {
-            apply_claude_config("http://127.0.0.1:38787", "sk-test")
-                .expect("apply Claude");
-            apply_gemini_config("http://127.0.0.1:38787", "sk-test")
-                .expect("apply Gemini");
+            apply_claude_config("http://127.0.0.1:38787", "sk-test").expect("apply Claude");
+            apply_gemini_config("http://127.0.0.1:38787", "sk-test").expect("apply Gemini");
 
             let claude_path = home.join(".claude.json");
             let mut claude: serde_json::Value = serde_json::from_str(
@@ -3545,10 +3846,9 @@
             .expect("edit Claude onboarding");
 
             let gemini_path = home.join(".gemini/settings.json");
-            let mut gemini: serde_json::Value = serde_json::from_str(
-                &fs::read_to_string(&gemini_path).expect("read Gemini settings"),
-            )
-            .expect("parse Gemini settings");
+            let mut gemini: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&gemini_path).expect("read Gemini settings"))
+                    .expect("parse Gemini settings");
             gemini["security"]["auth"]["selectedType"] = serde_json::json!("vertex-ai");
             fs::write(
                 &gemini_path,
@@ -3556,10 +3856,8 @@
             )
             .expect("edit Gemini settings");
 
-            remove_claude_config("http://127.0.0.1:38787", "sk-test")
-                .expect("cancel Claude");
-            remove_gemini_config("http://127.0.0.1:38787", "sk-test")
-                .expect("cancel Gemini");
+            remove_claude_config("http://127.0.0.1:38787", "sk-test").expect("cancel Claude");
+            remove_gemini_config("http://127.0.0.1:38787", "sk-test").expect("cancel Gemini");
 
             let claude_after: serde_json::Value = serde_json::from_str(
                 &fs::read_to_string(&claude_path).expect("read Claude after cancel"),
@@ -3762,20 +4060,21 @@
             let provider = configured["custom_providers"]
                 .as_sequence()
                 .and_then(|providers| {
-                    providers.iter().find(|provider| {
-                        provider["name"].as_str() == Some(CODEX_CONST_API_PROVIDER_ID)
-                    })
+                    providers
+                        .iter()
+                        .find(|provider| provider["name"].as_str() == Some(CODEX_CONST_API_PROVIDER_ID))
                 })
                 .expect("reconfigured CONST API provider");
             assert_eq!(provider["api_key"].as_str(), Some("sk-second"));
             assert_eq!(provider["model"].as_str(), Some("discovered-a"));
             assert_eq!(provider["models"].as_sequence().map(Vec::len), Some(2));
-            assert!(configured["custom_providers"]
-                .as_sequence()
-                .expect("configured providers")
-                .iter()
-                .any(|provider| provider["base_url"].as_str()
-                    == Some("https://legacy.example/v1")));
+            assert!(
+                configured["custom_providers"]
+                    .as_sequence()
+                    .expect("configured providers")
+                    .iter()
+                    .any(|provider| provider["base_url"].as_str() == Some("https://legacy.example/v1"))
+            );
 
             remove_hermes_config("http://127.0.0.1:38787", "sk-second")
                 .expect("Hermes cancel after runtime refresh");
@@ -3788,62 +4087,68 @@
             assert_eq!(restored, expected);
         });
     }
-#[test]
+    #[test]
     fn tool_model_sync_policy_covers_every_model_persisting_tool() {
-    for tool in [
-        "copilot",
-        "open-design",
-        "open-interpreter",
-        "anythingllm",
-        "vibe-trading",
-    ] {
-        assert_eq!(
-            tool_model_sync_policy(tool),
-            ToolModelSyncPolicy::Selected,
-            "tool={tool}"
-        );
-    }
-    for tool in [
-        "claude-desktop",
-        "cline",
-        "deepseek-harness",
-        "goose",
-        "kimicode",
-        "mimocode",
-        "mistral-vibe",
-        "openclaw",
-        "opencode",
-        "openscience",
-        "pi",
-        "qwencode",
-        "raven",
-        "reasonix",
-        "vscode",
-        "workbuddy",
-        "zcode",
-    ] {
-        assert_eq!(
-            tool_model_sync_policy(tool),
-            ToolModelSyncPolicy::Catalog,
-            "tool={tool}"
-        );
-    }
-    for tool in ["codex", "claude", "claude-science", "gemini", "hermes"] {
-        assert_eq!(
-            tool_model_sync_policy(tool),
-            ToolModelSyncPolicy::None,
-            "tool={tool}"
-        );
+        for tool in [
+            "copilot",
+            "open-design",
+            "open-interpreter",
+            "anythingllm",
+            "vibe-trading",
+        ] {
+            assert_eq!(
+                tool_model_sync_policy(tool),
+                ToolModelSyncPolicy::Selected,
+                "tool={tool}"
+            );
+        }
+        for tool in [
+            "claude-desktop",
+            "cline",
+            "deepseek-harness",
+            "goose",
+            "kimicode",
+            "mimocode",
+            "mistral-vibe",
+            "grok-build",
+            "minimax-code",
+            "openclaw",
+            "opencode",
+            "openscience",
+            "pi",
+            "qwencode",
+            "raven",
+            "reasonix",
+            "vscode",
+            "workbuddy",
+            "zcode",
+        ] {
+            assert_eq!(
+                tool_model_sync_policy(tool),
+                ToolModelSyncPolicy::Catalog,
+                "tool={tool}"
+            );
+        }
+        for tool in ["codex", "claude", "claude-science", "gemini", "hermes"] {
+            assert_eq!(
+                tool_model_sync_policy(tool),
+                ToolModelSyncPolicy::None,
+                "tool={tool}"
+            );
         }
     }
 
     #[test]
     fn tool_profiles_are_unique_and_self_consistent() {
         let mut ids = std::collections::BTreeSet::new();
-        assert_eq!(TOOL_PROFILES.len(), 27);
+        assert_eq!(TOOL_PROFILES.len(), 33);
         for profile in TOOL_PROFILES {
             assert!(ids.insert(profile.id), "duplicate tool={}", profile.id);
-            assert!(!profile.display_name.trim().is_empty(), "tool={}", profile.id);
+            assert!(
+                !profile.display_name.trim().is_empty(),
+                "tool={}",
+                profile.id
+            );
             assert!(!profile.protocols.is_empty(), "tool={}", profile.id);
             assert!(
                 profile.protocols.contains(&profile.default_protocol),
@@ -3857,17 +4162,18 @@
     fn tool_config_preview_is_semantic_and_write_free() {
         with_temp_home(|home| {
             let path = home.join(".gemini/.env");
-            let preview = preview_tool_config_apply(|| {
-                apply_gemini_config(TOOL_CONFIG_ROOT_URL, "sk-test")
-            })
-            .expect("preview missing Gemini configuration");
+            let preview =
+                preview_tool_config_apply(|| apply_gemini_config(TOOL_CONFIG_ROOT_URL, "sk-test"))
+                    .expect("preview missing Gemini configuration");
 
             assert!(!preview.already_configured);
             assert!(preview.files.is_empty());
             assert!(preview.backups.is_empty());
             assert!(!path.exists(), "preview must not create the target file");
             assert!(
-                !crate::client_data_root().join(TOOL_CONFIG_MANIFEST).exists(),
+                !crate::client_data_root()
+                    .join(TOOL_CONFIG_MANIFEST)
+                    .exists(),
                 "preview must not create the ownership manifest"
             );
 
@@ -3885,19 +4191,22 @@
             })
             .expect_err("preview transaction error");
             assert!(preview_error.to_string().contains("preview failure"));
-            assert!(!path.exists(), "failed preview must not touch the target file");
             assert!(
-                !crate::client_data_root().join(TOOL_CONFIG_MANIFEST).exists(),
+                !path.exists(),
+                "failed preview must not touch the target file"
+            );
+            assert!(
+                !crate::client_data_root()
+                    .join(TOOL_CONFIG_MANIFEST)
+                    .exists(),
                 "failed preview must not roll back or write the ownership manifest"
             );
 
-            apply_gemini_config(TOOL_CONFIG_ROOT_URL, "sk-test")
-                .expect("apply Gemini configuration");
+            apply_gemini_config(TOOL_CONFIG_ROOT_URL, "sk-test").expect("apply Gemini configuration");
             let before = fs::read(&path).expect("read applied configuration");
-            let preview = preview_tool_config_apply(|| {
-                apply_gemini_config(TOOL_CONFIG_ROOT_URL, "sk-test")
-            })
-            .expect("preview applied Gemini configuration");
+            let preview =
+                preview_tool_config_apply(|| apply_gemini_config(TOOL_CONFIG_ROOT_URL, "sk-test"))
+                    .expect("preview applied Gemini configuration");
 
             assert!(preview.already_configured);
             assert!(preview.files.is_empty());

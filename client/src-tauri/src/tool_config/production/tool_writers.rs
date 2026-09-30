@@ -1,6 +1,4 @@
-fn upsert_claude_onboarding_state(
-    mut root: serde_json::Value,
-) -> serde_json::Value {
+fn upsert_claude_onboarding_state(mut root: serde_json::Value) -> serde_json::Value {
     ensure_json_object(&mut root);
     root["hasCompletedOnboarding"] = serde_json::json!(true);
     root
@@ -15,9 +13,7 @@ fn remove_json_environment_names(
     }
 }
 
-fn upsert_gemini_auth_settings(
-    mut root: serde_json::Value,
-) -> serde_json::Value {
+fn upsert_gemini_auth_settings(mut root: serde_json::Value) -> serde_json::Value {
     ensure_json_object(&mut root);
     if !root
         .get("security")
@@ -49,8 +45,13 @@ pub(crate) fn claude_model_with_context(
     models: &[ToolModelInfo],
 ) -> String {
     let model = crate::config::public_model_name(model);
-    let (_, _, supports_1m) = crate::tool_model_metadata::route_token_limits(config, &model, models);
-    if supports_1m && model.starts_with("claude-") { format!("{model}[1m]") } else { model }
+    let (_, _, supports_1m) =
+        crate::tool_model_metadata::route_token_limits(config, &model, models);
+    if supports_1m && model.starts_with("claude-") {
+        format!("{model}[1m]")
+    } else {
+        model
+    }
 }
 
 pub(crate) fn claude_settings_with_context(
@@ -59,7 +60,12 @@ pub(crate) fn claude_settings_with_context(
     models: &[ToolModelInfo],
 ) -> ClaudeModelSettings {
     let mut settings = settings.clone();
-    for model in [&mut settings.main, &mut settings.opus, &mut settings.sonnet, &mut settings.haiku] {
+    for model in [
+        &mut settings.main,
+        &mut settings.opus,
+        &mut settings.sonnet,
+        &mut settings.haiku,
+    ] {
         if !model.trim().is_empty() && model.trim() != CLAUDE_MODEL_FOLLOW_MAIN {
             *model = claude_model_with_context(config, model, models);
         }
@@ -92,9 +98,7 @@ fn resolved_claude_role_model(
     }
 }
 
-fn resolved_claude_model_settings(
-    settings: &ClaudeModelSettings,
-) -> Result<[Option<String>; 4]> {
+fn resolved_claude_model_settings(settings: &ClaudeModelSettings) -> Result<[Option<String>; 4]> {
     if settings.main.trim() == CLAUDE_MODEL_FOLLOW_MAIN {
         return Err(anyhow!("CLAUDE_MODEL_INVALID: main cannot follow itself"));
     }
@@ -102,12 +106,7 @@ fn resolved_claude_model_settings(
     let opus = resolved_claude_role_model(&settings.opus, "opus", &main)?;
     let sonnet = resolved_claude_role_model(&settings.sonnet, "sonnet", &main)?;
     let haiku = resolved_claude_role_model(&settings.haiku, "haiku", &main)?;
-    Ok([
-        main,
-        opus,
-        sonnet,
-        haiku,
-    ])
+    Ok([main, opus, sonnet, haiku])
 }
 
 pub(crate) fn validate_claude_model_settings(settings: &ClaudeModelSettings) -> Result<()> {
@@ -123,12 +122,7 @@ fn upsert_claude_config(
     let root_url = tool_surface_url(root_url, "anthropic");
     let mut root = read_json_or_default(path, serde_json::json!({}))?;
     ensure_json_object(&mut root);
-    restore_managed_json_fields_for_reapply(
-        "claude",
-        path,
-        &mut root,
-        &CLAUDE_MODEL_CONFIG_PATHS,
-    )?;
+    restore_managed_json_fields_for_reapply("claude", path, &mut root, &CLAUDE_MODEL_CONFIG_PATHS)?;
     if root.get("env").is_none() || !root["env"].is_object() {
         root["env"] = serde_json::json!({});
     }
@@ -190,13 +184,18 @@ pub(crate) fn apply_claude_config_with_model_info(
     let mut root = upsert_claude_config(root_url, api_key, &path, settings)?;
     restore_managed_json_fields_for_reapply("claude", &path, &mut root, &[&["modelPicker"]])?;
     if !models.is_empty() {
-        let ids = models.iter().map(|model| model.id.clone()).collect::<Vec<_>>();
+        let ids = models
+            .iter()
+            .map(|model| model.id.clone())
+            .collect::<Vec<_>>();
         let options = crate::model_compatibility::anthropic_model_routes(config, &ids)
             .into_iter()
-            .map(|id| serde_json::json!({
-                "model": claude_model_with_context(config, &id, models),
-                "label": id,
-            }))
+            .map(|id| {
+                serde_json::json!({
+                    "model": claude_model_with_context(config, &id, models),
+                    "label": id,
+                })
+            })
             .collect::<Vec<_>>();
         if !options.is_empty() {
             // Official user-settings schema (Claude Code 2.1.242+). One clean
@@ -212,12 +211,7 @@ pub(crate) fn apply_claude_config_with_model_info(
         serde_json::json!({}),
     )?);
     write_json_with_backup(&path, &root, "claude", &mut result)?;
-    write_json_with_backup(
-        &onboarding_path,
-        &onboarding,
-        "claude",
-        &mut result,
-    )?;
+    write_json_with_backup(&onboarding_path, &onboarding, "claude", &mut result)?;
     Ok(result.finish("claude"))
 }
 
@@ -364,9 +358,7 @@ fn claude_desktop_meta_for_apply(mut meta: serde_json::Value) -> serde_json::Val
     if object
         .get("appliedProfileId")
         .and_then(serde_json::Value::as_str)
-        .map(|id| {
-            id == CLAUDE_DESKTOP_LEGACY_PROFILE_ID || id == CLAUDE_DESKTOP_PROFILE_ID
-        })
+        .map(|id| id == CLAUDE_DESKTOP_LEGACY_PROFILE_ID || id == CLAUDE_DESKTOP_PROFILE_ID)
         .unwrap_or(false)
     {
         object.remove("appliedProfileId");
@@ -487,8 +479,7 @@ fn cleanup_legacy_claude_desktop_config(
     }
 
     if paths.legacy_profile_path.exists() && !has_cc_switch_entry {
-        let profile =
-            read_json_or_default(&paths.legacy_profile_path, serde_json::json!({}))?;
+        let profile = read_json_or_default(&paths.legacy_profile_path, serde_json::json!({}))?;
         if claude_desktop_profile_matches_const_api(&profile, root_url, api_key) {
             let before = fs::read(&paths.legacy_profile_path)?;
             record_post_restore_cleanup(
@@ -540,13 +531,7 @@ fn cleanup_legacy_claude_desktop_config(
             bytes.push(b'\n');
             Some(bytes)
         };
-        record_post_restore_cleanup(
-            result,
-            &paths.meta_path,
-            before,
-            after,
-            "claude-desktop",
-        )?;
+        record_post_restore_cleanup(result, &paths.meta_path, before, after, "claude-desktop")?;
     }
     result.details.insert(
         "claude_desktop_legacy_migration".to_string(),
@@ -575,7 +560,10 @@ pub(crate) fn apply_claude_desktop_config_with_models_and_config(
     config: &crate::model::ClientConfig,
 ) -> Result<ToolApplyResult> {
     apply_claude_desktop_config_with_model_info(
-        root_url, api_key, &crate::tool_model_metadata::tool_models_from_ids(model_ids), config,
+        root_url,
+        api_key,
+        &crate::tool_model_metadata::tool_models_from_ids(model_ids),
+        config,
     )
 }
 
@@ -592,19 +580,13 @@ pub(crate) fn apply_claude_desktop_config_with_model_info(
         let mut migration_result = ToolApplyBuilder::default().finish("claude-desktop");
         let current_meta =
             read_claude_desktop_meta_for_apply(&paths.meta_path, &mut migration_result)?;
-        let legacy_marker_was_present =
-            claude_desktop_meta_has_legacy_marker(&current_meta);
+        let legacy_marker_was_present = claude_desktop_meta_has_legacy_marker(&current_meta);
         if legacy_marker_was_present {
             migration_result = merge_tool_apply_results(
                 migration_result,
                 restore_tool_config_from_manifest("claude-desktop")?,
             );
-            cleanup_legacy_claude_desktop_config(
-                &mut migration_result,
-                &root_url,
-                api_key,
-                true,
-            )?;
+            cleanup_legacy_claude_desktop_config(&mut migration_result, &root_url, api_key, true)?;
         }
 
         let mut result = ToolApplyBuilder::default();
@@ -634,16 +616,16 @@ pub(crate) fn apply_claude_desktop_config_with_model_info(
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
             .and_then(|existing| existing.get("inferenceModels").cloned())
-            .and_then(|models| models.as_array().filter(|models| !models.is_empty()).cloned())
+            .and_then(|models| {
+                models
+                    .as_array()
+                    .filter(|models| !models.is_empty())
+                    .cloned()
+            })
         {
             profile["inferenceModels"] = serde_json::Value::Array(existing_models);
         }
-        write_json_with_backup(
-            &paths.profile_path,
-            &profile,
-            "claude-desktop",
-            &mut result,
-        )?;
+        write_json_with_backup(&paths.profile_path, &profile, "claude-desktop", &mut result)?;
         release_managed_fields_after_reapply(
             "claude-desktop",
             &paths.profile_path,
@@ -700,10 +682,8 @@ pub(crate) fn apply_gemini_config(root_url: &str, api_key: &str) -> Result<ToolA
     let path = home_dir().join(".gemini").join(".env");
     let settings_path = home_dir().join(".gemini").join("settings.json");
     let mut result = ToolApplyBuilder::default();
-    let settings = upsert_gemini_auth_settings(read_json_or_default(
-        &settings_path,
-        serde_json::json!({}),
-    )?);
+    let settings =
+        upsert_gemini_auth_settings(read_json_or_default(&settings_path, serde_json::json!({}))?);
     let content = upsert_env_vars(
         &read_text_or_empty(&path)?,
         &[
@@ -716,12 +696,7 @@ pub(crate) fn apply_gemini_config(root_url: &str, api_key: &str) -> Result<ToolA
         GEMINI_CLI_CONFLICTING_ENV_NAMES.contains(&name)
     });
     write_text_with_backup(&path, &content, "gemini", &mut result)?;
-    write_json_with_backup(
-        &settings_path,
-        &settings,
-        "gemini",
-        &mut result,
-    )?;
+    write_json_with_backup(&settings_path, &settings, "gemini", &mut result)?;
     Ok(result.finish("gemini"))
 }
 
@@ -730,10 +705,8 @@ pub(crate) fn check_gemini_config(root_url: &str, api_key: &str) -> Result<ToolA
     let path = home_dir().join(".gemini").join(".env");
     let settings_path = home_dir().join(".gemini").join("settings.json");
     let mut result = ToolApplyBuilder::default();
-    let settings = upsert_gemini_auth_settings(read_json_or_default(
-        &settings_path,
-        serde_json::json!({}),
-    )?);
+    let settings =
+        upsert_gemini_auth_settings(read_json_or_default(&settings_path, serde_json::json!({}))?);
     let content = upsert_env_vars(
         &read_text_or_empty(&path)?,
         &[
@@ -796,9 +769,7 @@ fn workbuddy_models(root: &serde_json::Value) -> Result<&[serde_json::Value]> {
     }
 }
 
-fn workbuddy_models_mut(
-    root: &mut serde_json::Value,
-) -> Result<&mut Vec<serde_json::Value>> {
+fn workbuddy_models_mut(root: &mut serde_json::Value) -> Result<&mut Vec<serde_json::Value>> {
     match root {
         serde_json::Value::Array(models) => Ok(models),
         serde_json::Value::Object(object) => object
@@ -833,10 +804,7 @@ fn include_workbuddy_available_models(root: &mut serde_json::Value, model_ids: &
     }
 }
 
-fn workbuddy_model_is_available(
-    root: &serde_json::Value,
-    entry: &serde_json::Value,
-) -> bool {
+fn workbuddy_model_is_available(root: &serde_json::Value, entry: &serde_json::Value) -> bool {
     let Some(available_models) = root
         .as_object()
         .and_then(|object| object.get("availableModels"))
@@ -908,8 +876,11 @@ fn configure_workbuddy_reasoning(
     model: &ToolModelInfo,
 ) {
     let supported_efforts = workbuddy_reasoning_efforts(model);
-    let can_disable_thinking =
-        model.reasoning && model.reasoning_efforts.iter().any(|effort| effort == "none");
+    let can_disable_thinking = model.reasoning
+        && model
+            .reasoning_efforts
+            .iter()
+            .any(|effort| effort == "none");
     if supported_efforts.is_empty() && !can_disable_thinking {
         // In WorkBuddy an absent list means that the model supports a thinking
         // mode but does not expose the per-request effort selector.
@@ -1029,20 +1000,7 @@ fn configure_workbuddy_context_window(
         .remove("contextWindow")
         .filter(serde_json::Value::is_object)
         .unwrap_or_else(|| serde_json::json!({}));
-    let mut lengths = window
-        .get("supportedLengths")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_u64)
-        .filter(|value| *value > 0 && *value <= context_tokens)
-        .collect::<Vec<_>>();
-    if context_tokens > 200_000 {
-        lengths.push(200_000);
-    }
-    lengths.push(context_tokens);
-    lengths.sort_unstable();
-    lengths.dedup();
+    let lengths = tool_context_budget_choices(window.get("supportedLengths"), context_tokens, None);
     if lengths.len() < 2 {
         return;
     }
@@ -1054,6 +1012,30 @@ fn configure_workbuddy_context_window(
     window["supportedLengths"] = serde_json::json!(lengths);
     window["defaultLength"] = serde_json::json!(default);
     object.insert("contextWindow".to_string(), window);
+}
+
+// Shared only by tools whose selectors control a local context/compaction
+// budget. Do not export these choices as upstream model capabilities.
+fn tool_context_budget_choices(
+    existing: Option<&serde_json::Value>,
+    context: u64,
+    output: Option<u64>,
+) -> Vec<u64> {
+    let minimum = output.unwrap_or_default();
+    let mut choices = existing
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_u64)
+        .filter(|value| *value > minimum && *value <= context)
+        .collect::<Vec<_>>();
+    if context > 200_000 && minimum < 200_000 {
+        choices.push(200_000);
+    }
+    choices.push(context);
+    choices.sort_unstable();
+    choices.dedup();
+    choices
 }
 
 fn workbuddy_model_uses_endpoint(entry: &serde_json::Value, endpoint_url: &str) -> bool {
@@ -1075,10 +1057,7 @@ fn workbuddy_model_uses_connection(
     api_key: &str,
 ) -> bool {
     workbuddy_model_uses_endpoint(entry, endpoint_url)
-        && entry
-            .get("apiKey")
-            .and_then(serde_json::Value::as_str)
-            == Some(api_key)
+        && entry.get("apiKey").and_then(serde_json::Value::as_str) == Some(api_key)
 }
 
 fn workbuddy_model_uses_const_local_proxy(entry: &serde_json::Value) -> bool {
@@ -1266,7 +1245,11 @@ fn normalize_workbuddy_managed_model_ids(
     api_key: &str,
     ordered_ids: &[String],
 ) -> Result<()> {
-    let ranks = ordered_ids.iter().enumerate().map(|(index, id)| (id.as_str(), index)).collect::<std::collections::HashMap<_, _>>();
+    let ranks = ordered_ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (id.as_str(), index))
+        .collect::<std::collections::HashMap<_, _>>();
     let rank = |id: &str| ranks.get(id).copied().unwrap_or(usize::MAX);
     let mut renamed = std::collections::HashMap::new();
     let models = workbuddy_models_mut(root)?;
@@ -1336,20 +1319,15 @@ fn normalize_workbuddy_managed_model_ids(
     Ok(())
 }
 
-pub(crate) fn check_workbuddy_config(
-    base_url: &str,
-    api_key: &str,
-) -> Result<ToolApplyResult> {
+pub(crate) fn check_workbuddy_config(base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
     let protocol = ToolProtocol::OpenAiChat;
     let endpoint_url = workbuddy_endpoint_url(base_url, protocol)?;
     let path = workbuddy_models_path();
     let root = read_json_or_default(&path, serde_json::json!([]))?;
-    let models_configured = workbuddy_models(&root)?
-        .iter()
-        .any(|entry| {
-            workbuddy_model_is_configured(entry, &endpoint_url, api_key)
-                && workbuddy_model_is_available(&root, entry)
-        });
+    let models_configured = workbuddy_models(&root)?.iter().any(|entry| {
+        workbuddy_model_is_configured(entry, &endpoint_url, api_key)
+            && workbuddy_model_is_available(&root, entry)
+    });
     let mut builder = ToolApplyBuilder::default();
     observe_json(&path, &root, &mut builder)?;
     let mut result = builder.finish("workbuddy");
@@ -1371,10 +1349,9 @@ fn cleanup_unmanaged_workbuddy_models(
     let before = fs::read(&path)?;
     let mut root = serde_json::from_slice::<serde_json::Value>(&before)
         .with_context(|| format!("parse {}", path.display()))?;
-    let models = workbuddy_models_mut(&mut root)?;
-    let original_len = models.len();
-    models.retain(|entry| !workbuddy_model_uses_connection(entry, &endpoint_url, api_key));
-    if models.len() == original_len {
+    let original_len = workbuddy_models_mut(&mut root)?.len();
+    prune_workbuddy_managed_models(&mut root, &endpoint_url, api_key, &[])?;
+    if workbuddy_models_mut(&mut root)?.len() == original_len {
         return Ok(());
     }
     let mut after = serde_json::to_vec_pretty(&root)?;
@@ -1382,10 +1359,7 @@ fn cleanup_unmanaged_workbuddy_models(
     record_post_restore_cleanup(result, &path, before, Some(after), "workbuddy")
 }
 
-pub(crate) fn remove_workbuddy_config(
-    base_url: &str,
-    api_key: &str,
-) -> Result<ToolApplyResult> {
+pub(crate) fn remove_workbuddy_config(base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
     let mut result = restore_tool_config_from_manifest("workbuddy")?;
     if result
         .details
@@ -1402,7 +1376,11 @@ fn vscode_api_type(protocol: ToolProtocol) -> Result<&'static str> {
     match protocol {
         ToolProtocol::OpenAiResponses => Ok("responses"),
         ToolProtocol::OpenAiChat => Ok("chat-completions"),
-        _ => Err(anyhow!("VS Code only supports OpenAI protocols in CONST API")),
+        ToolProtocol::AnthropicMessages => Ok("messages"),
+        _ => Err(anyhow!(
+            "VS Code does not support tool protocol {}",
+            protocol.as_str()
+        )),
     }
 }
 
@@ -1410,9 +1388,19 @@ fn vscode_endpoint_url(base_url: &str, protocol: ToolProtocol) -> Result<String>
     let operation = match protocol {
         ToolProtocol::OpenAiResponses => "responses",
         ToolProtocol::OpenAiChat => "chat/completions",
-        _ => return Err(anyhow!("VS Code only supports OpenAI protocols in CONST API")),
+        ToolProtocol::AnthropicMessages => "v1/messages",
+        _ => {
+            return Err(anyhow!(
+                "VS Code does not support tool protocol {}",
+                protocol.as_str()
+            ));
+        }
     };
-    Ok(format!("{}/{}", base_url.trim_end_matches('/'), operation))
+    Ok(format!(
+        "{}/{}",
+        tool_surface_url(base_url, protocol.surface()),
+        operation
+    ))
 }
 
 fn vscode_model_entry(
@@ -1420,7 +1408,7 @@ fn vscode_model_entry(
     endpoint_url: &str,
     api_key: &str,
     protocol: ToolProtocol,
-) -> serde_json::Value {
+) -> Result<serde_json::Value> {
     let display_name = if model.display_name.trim().is_empty() {
         &model.id
     } else {
@@ -1430,6 +1418,7 @@ fn vscode_model_entry(
         "id": model.id,
         "name": display_name,
         "url": endpoint_url,
+        "apiType": vscode_api_type(protocol)?,
         "toolCalling": model.tool_call,
         "vision": model.input_modalities.iter().any(|value| value == "image"),
         "thinking": model.reasoning,
@@ -1459,11 +1448,12 @@ fn vscode_model_entry(
         let format = match protocol {
             ToolProtocol::OpenAiResponses => "responses",
             ToolProtocol::OpenAiChat => "chat-completions",
-            _ => return entry,
+            ToolProtocol::AnthropicMessages => "messages",
+            _ => return Ok(entry),
         };
         entry["reasoningEffortFormat"] = serde_json::json!(format);
     }
-    entry
+    Ok(entry)
 }
 
 fn vscode_const_api_provider(
@@ -1472,7 +1462,6 @@ fn vscode_const_api_provider(
     models: &[ToolModelInfo],
     protocol: ToolProtocol,
 ) -> Result<serde_json::Value> {
-    let endpoint_url = vscode_endpoint_url(base_url, protocol)?;
     let mut models = models.iter().collect::<Vec<_>>();
     models.sort_by(|left, right| crate::tool_model_metadata::tool_model_display_order(left, right));
     Ok(serde_json::json!({
@@ -1482,8 +1471,11 @@ fn vscode_const_api_provider(
         "apiType": vscode_api_type(protocol)?,
         "models": models
             .into_iter()
-            .map(|model| vscode_model_entry(model, &endpoint_url, api_key, protocol))
-            .collect::<Vec<_>>()
+            .map(|model| {
+                let protocol = tool_model_protocol("vscode", model, protocol);
+                vscode_model_entry(model, &vscode_endpoint_url(base_url, protocol)?, api_key, protocol)
+            })
+            .collect::<Result<Vec<_>>>()?
     }))
 }
 
@@ -1499,11 +1491,13 @@ fn vscode_const_api_provider_for_status(
             false,
         ));
     };
-    let endpoint_url = vscode_endpoint_url(base_url, protocol)?;
     let provider_object = provider
         .as_object_mut()
         .ok_or_else(|| anyhow!("VS Code provider is not an object"))?;
-    provider_object.insert("name".to_string(), serde_json::json!(CONST_API_DISPLAY_NAME));
+    provider_object.insert(
+        "name".to_string(),
+        serde_json::json!(CONST_API_DISPLAY_NAME),
+    );
     provider_object.insert("vendor".to_string(), serde_json::json!("customendpoint"));
     provider_object.insert("apiKey".to_string(), serde_json::json!(api_key));
     provider_object.insert(
@@ -1531,7 +1525,19 @@ fn vscode_const_api_provider_for_status(
             {
                 models_configured = false;
             }
-            model_object.insert("url".to_string(), serde_json::json!(endpoint_url));
+            let model_protocol = match model_object
+                .get("apiType")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some("responses") => ToolProtocol::OpenAiResponses,
+                Some("chat-completions") => ToolProtocol::OpenAiChat,
+                Some("messages") => ToolProtocol::AnthropicMessages,
+                _ => protocol,
+            };
+            model_object.insert(
+                "url".to_string(),
+                serde_json::json!(vscode_endpoint_url(base_url, model_protocol)?),
+            );
             model_object.insert("streaming".to_string(), serde_json::json!(true));
             let request_headers = model_object
                 .entry("requestHeaders".to_string())
@@ -1598,24 +1604,19 @@ pub(crate) fn apply_vscode_config_with_model_info_for_protocol(
     Ok(result)
 }
 
-pub(crate) fn check_vscode_config(
-    base_url: &str,
-    api_key: &str,
-) -> Result<ToolApplyResult> {
+pub(crate) fn check_vscode_config(base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
     let path = vscode_chat_language_models_path();
     let mut root = read_json_or_default(&path, serde_json::json!([]))?;
-    let existing_provider = root
-        .as_array()
-        .and_then(|providers| {
-            providers.iter().find(|entry| {
-                entry.get("name").and_then(serde_json::Value::as_str)
-                    == Some(CONST_API_DISPLAY_NAME)
-            })
-        });
+    let existing_provider = root.as_array().and_then(|providers| {
+        providers.iter().find(|entry| {
+            entry.get("name").and_then(serde_json::Value::as_str) == Some(CONST_API_DISPLAY_NAME)
+        })
+    });
     let protocol = existing_provider
         .and_then(|provider| provider.get("apiType").and_then(serde_json::Value::as_str))
         .and_then(|value| match value {
             "responses" => Some(ToolProtocol::OpenAiResponses),
+            "messages" => Some(ToolProtocol::AnthropicMessages),
             "chat-completions" => Some(ToolProtocol::OpenAiChat),
             _ => None,
         })
@@ -1697,8 +1698,12 @@ pub(crate) fn apply_opencode_config_with_model_info_for_protocol(
     remove_opencode_legacy_const_api_providers(&mut root, base_url, api_key);
     root["provider"][CODEX_CONST_API_PROVIDER_ID] =
         opencode_const_api_provider(base_url, api_key, models, protocol);
-    let content = serde_json::to_string_pretty(&root)?;
-    write_text_with_backup(&path, &(content + "\n"), "opencode", &mut result)?;
+    let content = json_text_with_model_order(
+        &root,
+        &["provider", CODEX_CONST_API_PROVIDER_ID, "models"],
+        models,
+    )?;
+    write_text_with_backup(&path, &content, "opencode", &mut result)?;
     let mut result = result.finish("opencode");
     attach_tool_protocol(&mut result, protocol);
     Ok(result)
@@ -1720,15 +1725,7 @@ pub(crate) fn check_opencode_config(base_url: &str, api_key: &str) -> Result<Too
     remove_opencode_legacy_const_api_providers(&mut root, base_url, api_key);
     let mut provider = existing_provider
         .unwrap_or_else(|| opencode_const_api_provider(base_url, api_key, &[], protocol));
-    ensure_json_object(&mut provider);
-    provider["npm"] = serde_json::json!(opencode_provider_package(protocol));
-    provider["name"] = serde_json::json!(CONST_API_DISPLAY_NAME);
-    if provider.get("options").is_none_or(|value| !value.is_object()) {
-        provider["options"] = serde_json::json!({});
-    }
-    provider["options"]["baseURL"] =
-        serde_json::json!(tool_surface_url(base_url, protocol.surface()));
-    provider["options"]["apiKey"] = serde_json::json!(api_key);
+    refresh_opencode_provider_connection("opencode", &mut provider, base_url, api_key, protocol);
     if matches!(protocol, ToolProtocol::OpenAiResponses) {
         remove_opencode_legacy_cache_disable(&mut provider);
     }
@@ -1750,15 +1747,14 @@ pub(crate) fn apply_openclaw_config_for_protocol(
     api_key: &str,
     protocol: ToolProtocol,
 ) -> Result<ToolApplyResult> {
-    apply_openclaw_config_with_model_info_for_protocol(
-        root_url,
-        api_key,
-        &[],
-        protocol,
-    )
+    apply_openclaw_config_with_model_info_for_protocol(root_url, api_key, &[], protocol)
 }
 
-fn openclaw_model_entries(models: &[ToolModelInfo]) -> Vec<serde_json::Value> {
+fn openclaw_model_entries(
+    models: &[ToolModelInfo],
+    base_url: &str,
+    fallback: ToolProtocol,
+) -> Vec<serde_json::Value> {
     let mut models = models.iter().collect::<Vec<_>>();
     let mut seen = HashSet::new();
     models.retain(|model| seen.insert(model.id.as_str()));
@@ -1805,9 +1801,12 @@ fn openclaw_model_entries(models: &[ToolModelInfo]) -> Vec<serde_json::Value> {
                     });
                 }
             }
+            let protocol = tool_model_protocol("openclaw", model, fallback);
             let mut entry = serde_json::json!({
                 "id": id,
                 "name": display_name,
+                "api": pi_sdk_api_mode(protocol),
+                "baseUrl": pi_sdk_base_url(base_url, protocol),
                 "reasoning": model.reasoning,
                 "input": input,
                 "compat": compat
@@ -1829,7 +1828,7 @@ pub(crate) fn apply_openclaw_config_with_model_info_for_protocol(
     models: &[ToolModelInfo],
     protocol: ToolProtocol,
 ) -> Result<ToolApplyResult> {
-    let root_url = tool_surface_url(root_url, protocol.surface());
+    let provider_url = pi_sdk_base_url(root_url, protocol);
     let path = openclaw_config_path()?;
     let mut result = ToolApplyBuilder::default();
     let mut root = read_json5_or_default(&path, serde_json::json!({}))?;
@@ -1840,12 +1839,12 @@ pub(crate) fn apply_openclaw_config_with_model_info_for_protocol(
     if root["models"].get("providers").is_none() || !root["models"]["providers"].is_object() {
         root["models"]["providers"] = serde_json::json!({});
     }
-    remove_openclaw_const_api_providers(&mut root, &root_url, api_key);
+    remove_openclaw_const_api_providers(&mut root, &provider_url, api_key);
     root["models"]["providers"][CODEX_CONST_API_PROVIDER_ID] = serde_json::json!({
-        "baseUrl": root_url,
+        "baseUrl": provider_url,
         "apiKey": api_key,
-        "api": openclaw_api_mode(protocol),
-        "models": openclaw_model_entries(models)
+        "api": pi_sdk_api_mode(protocol),
+        "models": openclaw_model_entries(models, root_url, protocol)
     });
     remove_openclaw_legacy_default_model(&mut root);
     write_json_with_backup(&path, &root, "openclaw", &mut result)?;
@@ -1859,7 +1858,7 @@ pub(crate) fn check_openclaw_config(root_url: &str, api_key: &str) -> Result<Too
     let mut result = ToolApplyBuilder::default();
     let mut root = read_json5_or_default(&path, serde_json::json!({}))?;
     let protocol = detect_openclaw_tool_protocol(&root).unwrap_or(ToolProtocol::OpenAiResponses);
-    let root_url = tool_surface_url(root_url, protocol.surface());
+    let provider_url = pi_sdk_base_url(root_url, protocol);
     ensure_json_object(&mut root);
     if root.get("models").is_none() || !root["models"].is_object() {
         root["models"] = serde_json::json!({"mode": "merge", "providers": {}});
@@ -1872,13 +1871,24 @@ pub(crate) fn check_openclaw_config(root_url: &str, api_key: &str) -> Result<Too
         .or_else(|| root["models"]["providers"].get(LEGACY_CONST_API_PROVIDER_ID))
         .and_then(|provider| provider.get("models"))
         .cloned();
-    remove_openclaw_const_api_providers(&mut root, &root_url, api_key);
+    remove_openclaw_const_api_providers(&mut root, &provider_url, api_key);
     let mut provider = serde_json::json!({
-        "baseUrl": root_url,
+        "baseUrl": provider_url,
         "apiKey": api_key,
-        "api": openclaw_api_mode(protocol)
+        "api": pi_sdk_api_mode(protocol)
     });
-    if let Some(models) = existing_models {
+    if let Some(mut models) = existing_models {
+        if let Some(entries) = models.as_array_mut() {
+            for entry in entries {
+                if let Some(selected) = entry
+                    .get("api")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(pi_sdk_protocol)
+                {
+                    entry["baseUrl"] = serde_json::json!(pi_sdk_base_url(root_url, selected));
+                }
+            }
+        }
         provider["models"] = models;
     }
     root["models"]["providers"][CODEX_CONST_API_PROVIDER_ID] = provider;
@@ -1981,9 +1991,10 @@ pub(crate) fn apply_tool_config_by_name_for_protocol(
         "workbuddy" => {
             apply_workbuddy_config_with_model_info_for_protocol(base_url, api_key, &[], protocol)
         }
-        "copilot" | "raven" | "pi" | "cline" | "reasonix" | "deepseek-harness" | "open-interpreter"
-        | "goose" | "mistral-vibe" | "open-design" | "kimicode" | "mimocode"
-        | "qwencode" | "openscience" | "vibe-trading" | "zcode" | "anythingllm" => {
+        "copilot" | "copilot-desktop" | "raven" | "pi" | "cline" | "reasonix"
+        | "deepseek-harness" | "open-interpreter" | "goose" | "mistral-vibe" | "open-design"
+        | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading" | "zcode"
+        | "anythingllm" | "grok-build" | "minimax-code" => {
             apply_additional_tool_config_with_model_info_for_protocol(
                 tool,
                 base_url,
@@ -2044,9 +2055,11 @@ pub(crate) fn check_tool_config_by_name(
         "hermes" => check_hermes_config(root_url, api_key),
         "vscode" => check_vscode_config(base_url, api_key),
         "workbuddy" => check_workbuddy_config(base_url, api_key),
-        "copilot" | "raven" | "pi" | "cline" | "reasonix" | "deepseek-harness" | "open-interpreter"
-        | "goose" | "mistral-vibe" | "open-design" | "kimicode" | "mimocode"
-        | "qwencode" | "openscience" | "vibe-trading" | "zcode" | "anythingllm" => {
+        "trae" | "trae-cn" | "trae-work" => check_trae_config(tool, base_url, api_key),
+        "copilot" | "copilot-desktop" | "raven" | "pi" | "cline" | "reasonix"
+        | "deepseek-harness" | "open-interpreter" | "goose" | "mistral-vibe" | "open-design"
+        | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading" | "zcode"
+        | "anythingllm" | "grok-build" | "minimax-code" => {
             check_additional_tool_config(tool, base_url, api_key)
         }
         _ => Err(anyhow!("unknown tool: {tool}")),
@@ -2081,8 +2094,7 @@ pub(crate) fn remove_tool_config_by_name_with_mode(
     remove_mode.validate_for_tool(tool)?;
     let mut result = match tool {
         "codex" => {
-            let mut ignore_progress =
-                |_: &str, _: Option<u64>, _: Option<u64>, _: Option<f64>| {};
+            let mut ignore_progress = |_: &str, _: Option<u64>, _: Option<u64>, _: Option<f64>| {};
             remove_codex_config_with_progress_and_mode(
                 base_url,
                 api_key,
@@ -2091,9 +2103,7 @@ pub(crate) fn remove_tool_config_by_name_with_mode(
             )
         }
         "claude" => remove_claude_config_with_mode(root_url, api_key, remove_mode),
-        "claude-desktop" => {
-            remove_claude_desktop_config_with_mode(root_url, api_key, remove_mode)
-        }
+        "claude-desktop" => remove_claude_desktop_config_with_mode(root_url, api_key, remove_mode),
         "claude-science" => remove_claude_science_config(),
         "gemini" => remove_gemini_config_with_mode(root_url, api_key, remove_mode),
         "opencode" => remove_opencode_config(base_url, api_key),
@@ -2101,11 +2111,10 @@ pub(crate) fn remove_tool_config_by_name_with_mode(
         "hermes" => remove_hermes_config(root_url, api_key),
         "vscode" => remove_vscode_config(),
         "workbuddy" => remove_workbuddy_config(base_url, api_key),
-        "copilot" | "raven" | "pi" | "cline" | "reasonix" | "deepseek-harness" | "open-interpreter"
-        | "goose" | "mistral-vibe" | "open-design" | "kimicode" | "mimocode"
-        | "qwencode" | "openscience" | "vibe-trading" | "zcode" | "anythingllm" => {
-            remove_additional_tool_config(tool)
-        }
+        "copilot" | "copilot-desktop" | "raven" | "pi" | "cline" | "reasonix"
+        | "deepseek-harness" | "open-interpreter" | "goose" | "mistral-vibe" | "open-design"
+        | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading" | "zcode"
+        | "anythingllm" | "grok-build" | "minimax-code" => remove_additional_tool_config(tool),
         _ => Err(anyhow!("unknown tool: {tool}")),
     }?;
     attach_tool_config_remove_mode(&mut result, remove_mode, None);

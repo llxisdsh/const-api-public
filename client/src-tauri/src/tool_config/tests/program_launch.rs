@@ -188,6 +188,9 @@
         assert!(dirs.contains(&home.join(".hermes/node/bin")));
         assert!(dirs.contains(&home.join(".kimi-code/bin")));
         assert!(dirs.contains(&home.join(".mimocode/bin")));
+        assert!(dirs.contains(&home.join(".grok/bin")));
+        assert!(dirs.contains(&home.join(".minimax-code/bin")));
+        assert!(dirs.contains(&home.join(".minimax-code")));
         assert!(dirs.contains(&nvm_bin));
         assert!(dirs.contains(&fnm_bin));
         #[cfg(target_os = "windows")]
@@ -417,6 +420,8 @@
         assert_eq!(tool_program_commands("open-interpreter"), &["interpreter"]);
         assert_eq!(tool_program_commands("goose"), &["goose"]);
         assert_eq!(tool_program_commands("mistral-vibe"), &["vibe"]);
+        assert_eq!(tool_program_commands("grok-build"), &["grok"]);
+        assert_eq!(tool_program_commands("minimax-code"), &["mcode"]);
         assert_eq!(tool_program_commands("open-design"), &["od"]);
 
         #[cfg(target_os = "windows")]
@@ -425,9 +430,15 @@
                 known_tool_process_names("claude-science"),
                 &["claude-science.exe"]
             );
-            assert_eq!(known_tool_process_names("kimicode"), &["Kimi Code.exe", "kimi.exe"]);
-            assert_eq!(known_tool_process_names("mimocode"), &["mimo.exe"]);
-            assert_eq!(known_tool_process_names("qwencode"), &["qwen-code-desktop.exe", "Qwen Code Desktop.exe", "qwen.exe"]);
+            assert_eq!(
+                known_tool_process_names("kimicode"),
+                &["Kimi Code.exe", "kimi.exe"]
+            );
+            assert_eq!(known_tool_process_names("mimocode"), &["Xiaomi MiMo.exe", "Xiaomi MiMo AI.exe", "mimo.exe"]);
+            assert_eq!(
+                known_tool_process_names("qwencode"),
+                &["qwen-code-desktop.exe", "Qwen Code Desktop.exe", "qwen.exe"]
+            );
             assert_eq!(known_tool_process_names("openscience"), &["ai4s-workbench.exe"]);
             assert_eq!(
                 known_tool_process_names("vibe-trading"),
@@ -436,12 +447,15 @@
             assert_eq!(known_tool_process_names("copilot"), &["copilot.exe"]);
             assert_eq!(known_tool_process_names("raven"), &["raven.exe"]);
             assert_eq!(known_tool_process_names("pi"), &["pi.exe"]);
-            assert_eq!(known_tool_process_names("cline"), &["cline-app.exe", "cline.exe"]);
+            assert_eq!(
+                known_tool_process_names("cline"),
+                &["cline-app.exe", "cline.exe"]
+            );
             assert_eq!(
                 known_tool_process_names("reasonix"),
                 &["Reasonix.exe", "reasonix.exe"]
             );
-            assert_eq!(known_tool_process_names("deepseek-harness"), &["dsh.exe"]);
+            assert_eq!(known_tool_process_names("deepseek-harness"), &["DeepSeek Harness.exe", "dsh.exe"]);
             assert_eq!(
                 known_tool_process_names("open-interpreter"),
                 &["interpreter.exe"]
@@ -637,7 +651,7 @@
     }
 
     #[test]
-    fn deepseek_harness_prefers_installed_command_over_saved_npx_cache() {
+    fn saved_npx_choice_is_preserved_but_automatic_selection_prefers_installed_command() {
         let cached = "/home/me/.npm/_npx/old/node_modules/.bin/dsh";
         let installed = "/home/me/.local/bin/dsh";
         let candidates = vec![
@@ -657,15 +671,16 @@
                 ..Default::default()
             },
         ];
-        assert_eq!(
+        assert!(
             preferred_tool_program_path_for_saved_selection(
                 "deepseek-harness",
                 cached,
                 &candidates,
             )
-            .as_deref(),
-            Some(installed)
+            .is_none()
         );
+        assert_eq!(select_tool_launch_candidate("deepseek-harness", &candidates).unwrap().path, cached);
+        assert_eq!(select_automatic_tool_launch_candidate("deepseek-harness", &candidates).unwrap().path, installed);
         assert!(preferred_tool_program_path_for_saved_selection(
             "deepseek-harness",
             installed,
@@ -719,15 +734,17 @@
         );
         assert_eq!(candidates[0].version.as_deref(), Some("0.1.0-rc.7"));
         assert_eq!(candidates[1].version.as_deref(), Some("0.1.5-rc.2"));
-        assert_eq!(
+        assert!(
             preferred_tool_program_path_for_saved_selection(
                 "deepseek-harness",
                 &candidates[0].path,
                 &candidates,
             )
-            .as_deref(),
-            Some(candidates[1].path.as_str())
+            .is_none()
         );
+        // Version comparison only orders automatic candidates, never a saved choice.
+        assert_eq!(select_tool_launch_candidate("deepseek-harness", &candidates).unwrap().path, candidates[0].path);
+        candidates[0].selected = false;
         assert_eq!(
             select_tool_launch_candidate("deepseek-harness", &candidates).map(|value| &value.path),
             Some(&candidates[1].path)
@@ -950,9 +967,26 @@
             .expect("LOCALAPPDATA");
 
         let expected = [
-            ("cline", "Programs/Cline/cline-app.exe", &["cline-app.exe", "cline.exe"][..]),
-            ("kimicode", "Programs/kimi-code-app/Kimi Code.exe", &["Kimi Code.exe", "kimi.exe"][..]),
-            ("qwencode", "Programs/Qwen Code Desktop/qwen-code-desktop.exe", &["qwen-code-desktop.exe", "Qwen Code Desktop.exe", "qwen.exe"][..]),
+            (
+                "cline",
+                "Programs/Cline/cline-app.exe",
+                &["cline-app.exe", "cline.exe"][..],
+            ),
+            (
+                "kimicode",
+                "Programs/kimi-code-app/Kimi Code.exe",
+                &["Kimi Code.exe", "kimi.exe"][..],
+            ),
+            (
+                "qwencode",
+                "Programs/Qwen Code Desktop/qwen-code-desktop.exe",
+                &["qwen-code-desktop.exe", "Qwen Code Desktop.exe", "qwen.exe"][..],
+            ),
+            (
+                "trae-work",
+                "Programs/TRAE SOLO CN/TRAE SOLO CN.exe",
+                &["TRAE SOLO CN.exe", "TraeWork CN.exe"][..],
+            ),
             (
                 "zcode",
                 "Programs/ZCode/ZCode.exe",
@@ -987,7 +1021,7 @@
                 "missing {tool} Windows program candidate"
             );
             assert_eq!(known_tool_process_names(tool), process_names);
-            if tool == "zcode" {
+            if matches!(tool, "zcode" | "trae-work") {
                 assert!(tool_program_commands(tool).is_empty());
             } else {
                 assert!(!tool_program_commands(tool).is_empty());
@@ -1117,7 +1151,7 @@
     }
 
     #[test]
-    fn desktop_tools_prefer_a_desktop_program_over_a_saved_command() {
+    fn desktop_tools_keep_explicit_cli_choices_and_prefer_desktop_only_automatically() {
         for (tool, command, executable) in [
             ("hermes", "hermes", "Hermes.exe"),
             ("opencode", "opencode", "OpenCode.exe"),
@@ -1154,17 +1188,17 @@
 
             let selected =
                 select_tool_launch_candidate(tool, &candidates).expect("desktop candidate");
-            assert_eq!(selected.path, desktop_path, "{tool}");
-            assert_eq!(
-                preferred_desktop_program_path_for_saved_selection(
+            assert_eq!(selected.path, command_path, "{tool}");
+            assert!(
+                preferred_tool_program_path_for_saved_selection(
                     tool,
                     &command_path,
                     &candidates,
                 )
-                .as_deref(),
-                Some(desktop_path.as_str()),
+                .is_none(),
                 "{tool}"
             );
+            assert_eq!(select_automatic_tool_launch_candidate(tool, &candidates).unwrap().path, desktop_path, "{tool}");
         }
     }
 
@@ -1286,6 +1320,12 @@
     #[test]
     fn every_known_tool_program_path_matches_the_program_allowlist() {
         for tool in [
+            "deepseek-harness",
+            "minimax-code",
+            "copilot-desktop",
+            "trae",
+            "trae-cn",
+            "trae-work",
             "cline",
             "kimicode",
             "qwencode",
@@ -1315,19 +1355,32 @@
     #[test]
     fn shared_config_desktop_tools_prefer_desktop_and_keep_cli_fallback() {
         for (tool, command, windows_exe, mac_app, linux_exe) in [
-            ("cline", "cline", "cline-app.exe", "Cline.app", Some("cline-app")),
+            ("deepseek-harness", "dsh", "DeepSeek Harness.exe", "DeepSeek Harness.app", None),
+            ("minimax-code", "mcode", "MiniMax Code.exe", "MiniMax Code.app", Some("minimax-code")),
+            (
+                "cline", "cline", "cline-app.exe", "Cline.app", Some("cline-app"),
+            ),
             ("kimicode", "kimi", "Kimi Code.exe", "Kimi Code.app", None),
-            ("qwencode", "qwen", "qwen-code-desktop.exe", "Qwen Code Desktop.app", Some("qwen-code-desktop")),
+            ("mimocode", "mimo", "Xiaomi MiMo.exe", "Xiaomi MiMo.app", None),
+            (
+                "qwencode", "qwen", "qwen-code-desktop.exe", "Qwen Code Desktop.app",
+                Some("qwen-code-desktop"),
+            ),
         ] {
             let profile = tool_profile(tool).unwrap();
             assert!(profile.desktop_preferred);
             assert!(profile.macos_app_names.contains(&mac_app));
             assert_eq!(profile.command_launch, ToolCommandLaunch::Terminal);
+            for path in [format!("/tools/{command}"), format!("C:/tools/{command}.exe")] {
+                assert_eq!(selected_path_kind(tool, &path), "command", "{tool}: {path}");
+            }
+            assert_ne!(selected_path_kind(tool, mac_app), "command", "{tool}: app bundle");
+            assert_ne!(selected_path_kind(tool, windows_exe), "command", "{tool}: desktop exe");
             let cli = ToolProgramCandidate {
                 path: format!("/tools/{command}"),
                 kind: "command".into(),
                 exists: true,
-                selected: true,
+                selected: false,
                 ..Default::default()
             };
             let mut variants = vec![(windows_exe, "windows_exe"), (mac_app, "mac_app")];
@@ -1336,20 +1389,62 @@
                 variants.push((linux_exe, "linux_desktop"));
             }
             for (program, kind) in variants {
-                let mut candidates = vec![cli.clone(), ToolProgramCandidate {
-                    path: format!("/apps/{program}"),
-                    kind: kind.into(),
-                    exists: true,
-                    ..Default::default()
-                }];
-                assert_eq!(select_tool_launch_candidate(tool, &candidates).unwrap().path,
-                    candidates[1].path, "{tool}: prefer {program}");
+                let mut candidates = vec![
+                    cli.clone(),
+                    ToolProgramCandidate {
+                        path: format!("/apps/{program}"),
+                        kind: kind.into(),
+                        exists: true,
+                        ..Default::default()
+                    },
+                ];
+                assert_eq!(
+                    select_tool_launch_candidate(tool, &candidates).unwrap().path,
+                    candidates[1].path,
+                    "{tool}: prefer {program}"
+                );
+                candidates[0].selected = true;
+                assert_eq!(
+                    select_tool_launch_candidate(tool, &candidates).unwrap().path,
+                    cli.path,
+                    "{tool}: explicit CLI choice outranks desktop"
+                );
+                assert!(preferred_tool_program_path_for_saved_selection(tool, &cli.path, &candidates).is_none());
+                if tool == "deepseek-harness" {
+                    assert_eq!(tool_candidate_launch_args(tool, &cli), &["web"]);
+                    assert!(tool_candidate_launch_args(tool, &candidates[1]).is_empty());
+                }
+                candidates[0].selected = false;
                 candidates[1].exists = false;
-                assert_eq!(select_tool_launch_candidate(tool, &candidates).unwrap().path,
-                    cli.path, "{tool}: keep command when desktop is absent");
+                assert_eq!(
+                    select_tool_launch_candidate(tool, &candidates).unwrap().path,
+                    cli.path,
+                    "{tool}: keep command when desktop is absent"
+                );
             }
-            assert!(!is_tool_owned_program_path(tool, Path::new("/apps/code-sidecar.exe")),
-                "never claim a shared runtime as the tool executable");
+            assert!(
+                !is_tool_owned_program_path(tool, Path::new("/apps/code-sidecar.exe")),
+                "never claim a shared runtime as the tool executable"
+            );
+        }
+    }
+
+    #[test]
+    fn locator_edition_follows_launch_policy_instead_of_executable_extension() {
+        for (tool, path, expected) in [
+            ("deepseek-harness", "D:/Apps/DeepSeek Harness/DeepSeek Harness.exe", Some("desktop")),
+            ("deepseek-harness", "C:/npm/dsh.cmd", Some("cli")),
+            ("deepseek-harness", "C:/tools/dsh.exe", Some("cli")),
+            ("minimax-code", "C:/Apps/MiniMax Code.exe", Some("desktop")),
+            ("minimax-code", "C:/tools/mcode.exe", Some("cli")),
+            ("qwencode", "C:/npm/qwen.cmd", Some("cli")),
+            ("kimicode", "C:/Apps/Kimi Code.exe", Some("desktop")),
+            ("vscode", "C:/bin/code.cmd", Some("desktop")),
+            ("claude", "C:/tools/claude.exe", Some("cli")),
+            ("deepseek-harness", "C:/tools/node.exe", None),
+        ] {
+            let candidate = ToolProgramCandidate { path: path.into(), kind: selected_path_kind(tool, path), ..Default::default() };
+            assert_eq!(tool_program_candidate_edition(tool, &candidate), expected, "{tool}: {path}");
         }
     }
 
@@ -1441,7 +1536,7 @@
         ];
 
         assert_eq!(
-            preferred_desktop_program_path_for_saved_selection(
+            preferred_tool_program_path_for_saved_selection(
                 "vscode",
                 stale_path,
                 &stale_candidates,
@@ -1458,7 +1553,7 @@
             selected: true,
             ..Default::default()
         }];
-        assert!(preferred_desktop_program_path_for_saved_selection(
+        assert!(preferred_tool_program_path_for_saved_selection(
             "vscode",
             current_path,
             &valid_candidates,
@@ -1497,7 +1592,7 @@
                 ToolProgramCandidate {
                     path: format!(r"C:\Users\me\bin\{command}.exe"),
                     label: "native command".to_string(),
-                    kind: "windows_exe".to_string(),
+                    kind: selected_path_kind(tool, &format!(r"C:\Users\me\bin\{command}.exe")),
                     exists: true,
                     ..Default::default()
                 },
@@ -1506,7 +1601,7 @@
             let selected =
                 select_tool_launch_candidate(tool, &candidates).expect("command candidate");
             assert_eq!(selected.path, command_path, "{tool}");
-            assert!(preferred_desktop_program_path_for_saved_selection(
+            assert!(preferred_tool_program_path_for_saved_selection(
                 tool,
                 &command_path,
                 &candidates,
@@ -1518,6 +1613,16 @@
     #[test]
     fn desktop_program_preference_classifies_every_supported_tool() {
         for tool in [
+            "mimocode",
+            "deepseek-harness",
+            "minimax-code",
+            "copilot-desktop",
+            "trae",
+            "trae-cn",
+            "trae-work",
+            "cline",
+            "kimicode",
+            "qwencode",
             "openscience",
             "codex",
             "claude-desktop",
@@ -1540,17 +1645,47 @@
             "copilot",
             "raven",
             "pi",
-            "cline",
-            "deepseek-harness",
             "open-interpreter",
             "mistral-vibe",
-            "kimicode",
-            "mimocode",
-            "qwencode",
             "vibe-trading",
         ] {
             assert!(!tool_prefers_desktop_program(tool), "{tool}");
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn registered_desktop_paths_support_custom_install_dirs_without_claiming_cli_products() {
+        assert!(windows_installed_product_matches("MiniMax Code 3.0.74", "MiniMax Code"));
+        assert!(windows_installed_product_matches("GitHub Copilot", "GitHub Copilot"));
+        assert!(!windows_installed_product_matches("GitHub Copilot CLI", "GitHub Copilot"));
+        assert!(!windows_installed_product_matches("MiniMax Code Helper", "MiniMax Code"));
+        let profile = tool_profile("minimax-code").unwrap();
+        for (location, icon) in [
+            (Some(r#""D:\Custom Apps\MiniMax Code""#), None),
+            (None, Some(r#""D:\Custom Apps\MiniMax Code\uninstallerIcon.ico",0"#)),
+            (None, Some(r"D:\Custom Apps\MiniMax Code\MiniMax Code.exe")),
+        ] {
+            let paths = windows_installed_entry_paths(profile, location, icon);
+            assert_eq!(paths, vec![PathBuf::from(r"D:\Custom Apps\MiniMax Code\MiniMax Code.exe")]);
+            assert!(is_tool_owned_program_path("minimax-code", &paths[0]));
+        }
+        assert!(windows_installed_entry_paths(profile, Some("relative\\dir"), None).is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn native_installed_desktop_discovery_returns_only_existing_owned_executables() {
+        let started = Instant::now();
+        for tool in ["minimax-code", "kimicode", "qwencode", "copilot-desktop"] {
+            let paths = windows_installed_program_paths(tool);
+            for path in &paths {
+                assert!(path.is_file());
+                assert!(is_tool_owned_program_path(tool, path));
+            }
+            std::eprintln!("registered {tool}: {} existing desktop candidates", paths.len());
+        }
+        std::eprintln!("native registry discovery for four tools: {:?}", started.elapsed());
     }
 
     #[test]

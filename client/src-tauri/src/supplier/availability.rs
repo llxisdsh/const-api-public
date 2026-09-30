@@ -35,6 +35,20 @@ pub(crate) struct GroupResult {
     pub automatic_confirmed: bool,
 }
 
+impl GroupResult {
+    fn applies_to_catalog(&self, channel: &ChannelConfig) -> bool {
+        match crate::config::resolve_model_name(&channel.models, &self.representative) {
+            Some(model) => {
+                catalog_identity(channel, model)
+                    == canonical_catalog_source(channel, &self.upstream_model)
+            }
+            // Suspension belongs to the group, not to the sampled model. Catalog
+            // retirement is not recovery; a later check selects a current sample.
+            None => self.status == "suspended",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct Report {
     pub groups: Vec<GroupResult>,
@@ -477,7 +491,7 @@ fn canonical_catalog_source(channel: &ChannelConfig, source: &str) -> String {
 }
 
 /// Read the effective conclusions, not an incomplete later attempt or stale config copy.
-/// Empty is authoritative: a changed identity/catalog must not display old conclusions.
+/// Removed samples retain group suspensions; changed identities invalidate conclusions.
 pub(crate) fn groups_for_channel(channel: &ChannelConfig) -> Vec<GroupResult> {
     let identity = fingerprint(channel);
     let state = store()
@@ -491,13 +505,7 @@ pub(crate) fn groups_for_channel(channel: &ChannelConfig) -> Vec<GroupResult> {
             snapshot
                 .groups
                 .values()
-                .filter(|result| {
-                    crate::config::resolve_model_name(&channel.models, &result.representative)
-                        .is_some_and(|model| {
-                            catalog_identity(channel, model)
-                                == canonical_catalog_source(channel, &result.upstream_model)
-                        })
-                })
+                .filter(|result| result.applies_to_catalog(channel))
                 .cloned()
                 .collect()
         })
@@ -518,11 +526,7 @@ pub(crate) fn reconcile_catalog(channel: &ChannelConfig) {
         return;
     };
     let before = snapshot.groups.len();
-    snapshot.groups.retain(|_, g| {
-        crate::config::resolve_model_name(&channel.models, &g.representative).is_some_and(|model| {
-            catalog_identity(channel, model) == canonical_catalog_source(channel, &g.upstream_model)
-        })
-    });
+    snapshot.groups.retain(|_, g| g.applies_to_catalog(channel));
     let changed = before != snapshot.groups.len();
     if changed {
         snapshot.admission_pending = false;
@@ -558,11 +562,7 @@ pub(crate) fn has_check_snapshot(channel: &ChannelConfig) -> bool {
                     matches!(
                         result.status.as_str(),
                         "available" | "suspended" | "inconclusive" | "deferred"
-                    ) && crate::config::resolve_model_name(&channel.models, &result.representative)
-                        .is_some_and(|model| {
-                            catalog_identity(channel, model)
-                                == canonical_catalog_source(channel, &result.upstream_model)
-                        })
+                    ) && result.applies_to_catalog(channel)
                 })
         })
 }
@@ -1318,11 +1318,20 @@ mod tests {
                 warp::http::Method::GET,
                 "refresh must not run paid probes"
             );
-            seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warp::reply::json(&serde_json::json!({"data": ids.map(|id| serde_json::json!({
+            let refresh = seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let models = ids.map(|id| {
+                // Catalog turnover must not heal the previously suspended family.
+                let id = if refresh > 0 && id == "anthropic/claude-3-haiku" {
+                    "anthropic/claude-sonnet-5.5"
+                } else {
+                    id
+                };
+                serde_json::json!({
                 "id":id, "context_length":1000000, "supported_parameters":["tools"],
                 "architecture":{"input_modalities":["text"],"output_modalities":["text"]}
-            }))}))
+                })
+            });
+            warp::reply::json(&serde_json::json!({"data": models}))
         });
         let (addr, server) = crate::bind_ephemeral!(route, ([127, 0, 0, 1], 0));
         let server = tokio::spawn(server);
@@ -1394,7 +1403,7 @@ mod tests {
             assert_eq!(
                 groups_for_channel(&channel).len(),
                 4,
-                "Google must remain visible"
+                "group conclusions must survive representative retirement"
             );
             let permitted = effective_models(&channel, channel.models.clone());
             assert_eq!(
@@ -1427,6 +1436,59 @@ mod tests {
         );
         server.abort();
         store().lock().unwrap().channels.remove(&channel.id);
+    }
+
+    #[test]
+    fn suspended_group_survives_catalog_gap_and_restart_until_successful_check() {
+        let mut channel = crate::default_config().channels.remove(0);
+        channel.id = "availability-retired-representative".into();
+        channel.models = vec!["claude-3-haiku".into()];
+        let result = GroupResult {
+            group: "anthropic_closed".into(),
+            representative: channel.models[0].clone(),
+            upstream_model: catalog_identity(&channel, &channel.models[0]),
+            status: "suspended".into(),
+            checked_at: 42,
+            ..Default::default()
+        };
+        let mut snapshot = Snapshot {
+            fingerprint: fingerprint(&channel),
+            ..Default::default()
+        };
+        snapshot.merge(&[result]);
+        store()
+            .lock()
+            .unwrap()
+            .channels
+            .insert(channel.id.clone(), snapshot);
+        channel.models.clear();
+        reconcile_catalog(&channel);
+        channel.models = vec!["claude-sonnet-5.5".into()];
+        reconcile_catalog(&channel);
+        assert!(has_check_snapshot(&channel));
+        assert_eq!(
+            groups_for_channel(&channel)[0].representative,
+            "claude-3-haiku"
+        );
+        assert!(effective_models(&channel, channel.models.clone()).is_empty());
+        assert_eq!(representatives(&channel)[0].1, "claude-sonnet-5.5");
+        let mut state = store().lock().unwrap();
+        let saved = serde_json::to_vec(&*state).unwrap();
+        let mut restored = decode(&saved)
+            .unwrap()
+            .channels
+            .remove(&channel.id)
+            .unwrap();
+        assert!(!restored.allows("claude-sonnet-5.5"));
+        restored.merge(&[GroupResult {
+            group: "anthropic_closed".into(),
+            representative: channel.models[0].clone(),
+            upstream_model: catalog_identity(&channel, &channel.models[0]),
+            status: "available".into(),
+            ..Default::default()
+        }]);
+        assert!(restored.allows("claude-sonnet-5.5"));
+        state.channels.remove(&channel.id);
     }
 
     #[test]

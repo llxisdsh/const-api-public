@@ -9,6 +9,10 @@ import tauriMainSource from "../src-tauri/src/main.rs?raw";
 import operationCoreSource from "../src-tauri/src/tool_config/production/core.rs?raw";
 
 const rendererSource = `${mainSource}\n${controllerSource}`;
+const sharedUseSource = controllerSource.slice(
+  controllerSource.indexOf("  async function useTool("),
+  controllerSource.indexOf("  async function removeToolConfig("),
+);
 const dialogStylesSource = readFileSync(
   resolve(process.cwd(), "src/styles/dialogs-and-supplier.css"),
   "utf8",
@@ -128,7 +132,10 @@ describe("tool config operation IPC", () => {
     ).toHaveLength(8);
     expect(
       tauriMainSource.match(/execute_atomic_tool_config_operation_with_preview\(/g),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
+    expect(tauriMainSource).toMatch(
+      /async fn execute_trae_tool_config_operation[\s\S]*?execute_atomic_tool_config_operation_with_preview/,
+    );
     expect(tauriMainSource).toContain('tool == "workbuddy"');
     expect(tauriMainSource).toMatch(
       /"copilot"[\s\S]*?"raven"[\s\S]*?"pi"[\s\S]*?"cline"[\s\S]*?"reasonix"[\s\S]*?"deepseek-harness"[\s\S]*?"open-design"/,
@@ -145,21 +152,24 @@ describe("tool config operation IPC", () => {
   });
 
   it("injects configured launch environment only for the direct-launch branch", () => {
-    expect(mainSource).toMatch(
-      /primaryAction === "configure_and_launch"[\s\S]*?startToolProgram\(card\.tool, card\.title, true\)/,
+    expect(sharedUseSource).toMatch(
+      /action === "configure_and_launch"[\s\S]*?startToolProgram\(tool, title, true\)/,
     );
     expect(tauriMainSource).toMatch(
       /use_configured_environment[\s\S]*?matches!\([\s\S]*?tool\.as_str\(\)[\s\S]*?"claude" \| "claude-science" \| "gemini" \| "copilot" \| "goose"/,
     );
   });
 
-  it("routes the primary launch action through location, configuration, and direct launch", () => {
-    expect(mainSource).toContain("toolPrimaryAction(configStatus, configurationChanged)");
-    expect(mainSource).toMatch(
-      /primaryAction === "locate"[\s\S]*?openToolLocator\(card\.tool, card\.title, true\)/,
+  it("routes every primary action through a fresh check and the shared controller", () => {
+    expect(mainSource).toContain("useTool(card.tool, card.title, configurationChanged)");
+    expect(sharedUseSource).toMatch(
+      /await refreshSingleToolConfigStatus\(tool, undefined, false\)[\s\S]*?toolPrimaryAction\(status, configurationChanged\)/,
     );
-    expect(mainSource).toMatch(
-      /primaryAction === "configure_and_launch"[\s\S]*?launchToolConfig\(card\.tool, card\.title\)/,
+    expect(sharedUseSource).toMatch(
+      /action === "locate"[\s\S]*?openToolLocator\(tool, title, true\)/,
+    );
+    expect(sharedUseSource).toMatch(
+      /action === "configure_and_launch"[\s\S]*?launchToolConfig\(tool, title\)/,
     );
     expect(mainSource).toMatch(
       /onConfigure=\{\(\) => \{[\s\S]*?prepareToolUse\(\)[\s\S]*?applyToolConfig\(card\.tool, card\.title\)/,
@@ -186,7 +196,7 @@ describe("tool config operation IPC", () => {
     expect(toolOperationExports.toolConfigSuccessNotice("Codex 配置完成。")).toBe(
       "Codex 配置完成。 如需恢复原来的接入设置，右键该工具选择“取消配置”即可。",
     );
-    expect(mainSource).toContain("launchToolConfig(card.tool, card.title)");
+    expect(sharedUseSource).toContain("launchToolConfig(tool, title)");
     expect(mainSource).toContain("applyToolConfig(card.tool, card.title)");
     expect(controllerSource).toMatch(
       /async function configureTool[\s\S]*?showConfiguredResult[\s\S]*?toolConfigSuccessNotice/,
@@ -446,6 +456,12 @@ describe("tool config operation IPC", () => {
     expect(toolOperationExports.toolConfigProgressRatio({
       stage: "writing_config",
     })).toBe(0.32);
+    expect(toolOperationExports.toolConfigProgressLabel({
+      stage: "writing_config", completed: 3, total: 12,
+    })).toBe("写入配置 3/12");
+    expect(toolOperationExports.toolConfigProgressRatio({
+      stage: "writing_config", completed: 3, total: 12,
+    })).toBeCloseTo(0.46);
     expect(toolOperationExports.advanceToolConfigProgress(
       { stage: "awaiting_confirmation", ratio: 0.18 },
       { stage: "preparing" },

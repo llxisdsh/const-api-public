@@ -11,6 +11,11 @@ pub(super) fn probe_uses_named_tool_choice(
     catalog: &[ModelObservation],
     model: &str,
 ) -> bool {
+    if crate::protocol::anthropic_dialect::anthropic_model_dialect(model)
+        .forced_tool_choice_unsupported
+    {
+        return false;
+    }
     !uses_model_scoped_checks(channel)
         || catalog
             .iter()
@@ -65,6 +70,23 @@ pub(super) enum Feature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_55_probes_do_not_force_an_unsupported_tool_choice() {
+        let channel = channel_from_supplier("claude-55-probe".into(), &default_supplier_config());
+        for model in [
+            "claude-sonnet-5-5",
+            "anthropic/claude-sonnet-5.5",
+            "claude-opus-5-5",
+        ] {
+            assert!(!probe_uses_named_tool_choice(&channel, &[], model));
+        }
+        assert!(probe_uses_named_tool_choice(
+            &channel,
+            &[],
+            "claude-sonnet-5"
+        ));
+    }
 
     #[test]
     fn named_tool_choice_follows_aggregator_model_metadata() {

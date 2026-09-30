@@ -334,11 +334,8 @@ const CLAUDE_CODE_ROUTE_AUTH_ENV_NAMES: &[&str] = &[
     "CLAUDE_CONFIG_DIR",
 ];
 const CLAUDE_CODE_CONFLICTING_ENV_NAMES: &[&str] = CLAUDE_CODE_ROUTE_AUTH_ENV_NAMES;
-const CLAUDE_CODE_NATIVE_ROUTE_SETTING_NAMES: &[&str] = &[
-    "apiKeyHelper",
-    "awsAuthRefresh",
-    "awsCredentialExport",
-];
+const CLAUDE_CODE_NATIVE_ROUTE_SETTING_NAMES: &[&str] =
+    &["apiKeyHelper", "awsAuthRefresh", "awsCredentialExport"];
 
 const CLAUDE_SCIENCE_CONFLICTING_ENV_NAMES: &[&str] = &["ANTHROPIC_API_KEY"];
 const CLAUDE_SCIENCE_EXTERNAL_ENVIRONMENT_NAMES: &[&str] = &[
@@ -357,8 +354,7 @@ const GEMINI_CLI_CONFLICTING_ENV_NAMES: &[&str] = &[
     "GEMINI_CLI_HOME",
 ];
 
-const CLAUDE_CODE_EXTERNAL_ENVIRONMENT_NAMES: &[&str] =
-    CLAUDE_CODE_ROUTE_AUTH_ENV_NAMES;
+const CLAUDE_CODE_EXTERNAL_ENVIRONMENT_NAMES: &[&str] = CLAUDE_CODE_ROUTE_AUTH_ENV_NAMES;
 
 const GEMINI_CLI_EXTERNAL_ENVIRONMENT_NAMES: &[&str] = &[
     "GOOGLE_GEMINI_BASE_URL",
@@ -396,10 +392,7 @@ fn external_launch_environment_warning(defined: &[&str]) -> String {
     )
 }
 
-pub(crate) fn attach_external_launch_environment_warning(
-    result: &mut ToolApplyResult,
-    tool: &str,
-) {
+pub(crate) fn attach_external_launch_environment_warning(result: &mut ToolApplyResult, tool: &str) {
     let defined =
         defined_tool_environment_variables_with(tool, |name| std::env::var_os(name).is_some());
     if defined.is_empty() {
@@ -548,8 +541,7 @@ fn default_tool_protocol(tool: &str) -> Result<ToolProtocol> {
 }
 
 fn tool_supports_protocol(tool: &str, protocol: ToolProtocol) -> bool {
-    tool_profile(tool)
-        .is_some_and(|profile| profile.protocols.contains(&protocol))
+    tool_profile(tool).is_some_and(|profile| profile.protocols.contains(&protocol))
 }
 
 pub(crate) fn resolve_tool_protocol(tool: &str, requested: Option<&str>) -> Result<ToolProtocol> {
@@ -566,6 +558,50 @@ pub(crate) fn resolve_tool_protocol(tool: &str, requested: Option<&str>) -> Resu
         ));
     }
     Ok(protocol)
+}
+
+// Only writers with a verified per-model API override call this. For other
+// tools, the menu selection remains the one global protocol for every model.
+fn tool_model_protocol(tool: &str, model: &ToolModelInfo, fallback: ToolProtocol) -> ToolProtocol {
+    let Some(profile) = tool_profile(tool) else {
+        return fallback;
+    };
+    select_model_protocol(model, fallback, profile.protocols)
+}
+
+fn select_model_protocol(
+    model: &ToolModelInfo,
+    fallback: ToolProtocol,
+    supported: &[ToolProtocol],
+) -> ToolProtocol {
+    let native = |protocol: ToolProtocol| {
+        supported.contains(&protocol)
+            && model
+                .native_protocols
+                .iter()
+                .any(|value| value == protocol.as_str())
+    };
+    // Discovery aggregates channels and its generic preference can be Responses
+    // even for Claude. Catalog identity breaks that tie, but never proves that
+    // a protocol is available: both the live native set and tool must allow it.
+    let catalog_preference = match model.catalog_vendor.as_str() {
+        "anthropic" => Some(ToolProtocol::AnthropicMessages),
+        "openai" => Some(ToolProtocol::OpenAiResponses),
+        "google" if model.family.starts_with("gemini-") => Some(ToolProtocol::GeminiNative),
+        _ => None,
+    };
+    catalog_preference
+        .filter(|protocol| native(*protocol))
+        .or_else(|| {
+            model
+                .preferred_protocol
+                .as_deref()
+                .and_then(ToolProtocol::parse)
+                .filter(|protocol| native(*protocol))
+        })
+        .or_else(|| native(fallback).then_some(fallback))
+        .or_else(|| supported.iter().copied().find(|protocol| native(*protocol)))
+        .unwrap_or(fallback)
 }
 
 pub(crate) fn attach_tool_protocol(result: &mut ToolApplyResult, protocol: ToolProtocol) {
@@ -714,10 +750,7 @@ fn test_home_active() -> bool {
 #[cfg(any(test, debug_assertions))]
 fn const_api_test_home() -> Option<PathBuf> {
     #[cfg(test)]
-    if let Ok(override_home) = TEST_HOME_OVERRIDE
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-    {
+    if let Ok(override_home) = TEST_HOME_OVERRIDE.get_or_init(|| Mutex::new(None)).lock() {
         if override_home.is_some() {
             return override_home.clone();
         }
@@ -857,9 +890,9 @@ impl WindowsHelperJob {
         use windows_sys::Win32::{
             Foundation::GetLastError,
             System::JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-                SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
             },
         };
 
@@ -890,7 +923,10 @@ impl WindowsHelperJob {
             ));
         }
         let assigned = unsafe {
-            AssignProcessToJobObject(job.0, child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE)
+            AssignProcessToJobObject(
+                job.0,
+                child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE,
+            )
         };
         if assigned == 0 {
             return Err(anyhow!(
@@ -912,11 +948,7 @@ impl Drop for WindowsHelperJob {
 }
 
 #[cfg(target_os = "windows")]
-fn terminate_helper_job(
-    job: &WindowsHelperJob,
-    child: &mut Child,
-    purpose: &str,
-) -> Result<()> {
+fn terminate_helper_job(job: &WindowsHelperJob, child: &mut Child, purpose: &str) -> Result<()> {
     let terminated =
         unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(job.0, 1) };
     if terminated == 0 {
@@ -1176,8 +1208,8 @@ fn test_process_match_names(tool: &str) -> Option<HashSet<String>> {
 type TestBeforeAuthorizedCloseHook = Box<dyn FnOnce() + Send>;
 
 #[cfg(test)]
-fn test_before_authorized_close_hook(
-) -> &'static std::sync::Mutex<Option<TestBeforeAuthorizedCloseHook>> {
+fn test_before_authorized_close_hook()
+-> &'static std::sync::Mutex<Option<TestBeforeAuthorizedCloseHook>> {
     static HOOK: std::sync::OnceLock<std::sync::Mutex<Option<TestBeforeAuthorizedCloseHook>>> =
         std::sync::OnceLock::new();
     HOOK.get_or_init(|| std::sync::Mutex::new(None))

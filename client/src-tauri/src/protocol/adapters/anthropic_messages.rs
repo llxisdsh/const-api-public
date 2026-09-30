@@ -1971,10 +1971,12 @@ fn encode_tool_choice(
 fn encode_thinking(body: &mut Value, reasoning: &ReasoningConfig, model: &str) {
     let dialect = anthropic_model_dialect(model);
     if reasoning.is_explicitly_disabled() {
-        // Fable 5 and Mythos 5 keep thinking enabled and reject an explicit
+        // Some newer models keep thinking enabled and reject an explicit
         // disabled command. Omitting the unsupported command keeps the model
         // usable; native Anthropic requests remain byte-for-byte untouched.
-        if !dialect.thinking_always_on {
+        if dialect.thinking_between_tools {
+            body["thinking"] = json!({"type":"between_tools"});
+        } else if !dialect.thinking_always_on {
             body["thinking"] = json!({"type":"disabled"});
         }
         return;
@@ -2290,6 +2292,26 @@ mod tests {
         OpenAiResponsesAdapter
             .encode_request(&request, &plan, &target_context)
             .unwrap()
+    }
+
+    #[test]
+    fn claude_55_disabled_thinking_uses_the_supported_wire_shape() {
+        let reasoning = ReasoningConfig {
+            mode: ReasoningMode::Disabled,
+            effort: Some(ReasoningEffort::None),
+            token_budget: None,
+            summary: ReasoningSummaryMode::None,
+            provider_extensions: Vec::new(),
+        };
+        let mut body = serde_json::json!({});
+        super::encode_thinking(&mut body, &reasoning, "claude-sonnet-5-5");
+        assert_eq!(
+            body,
+            serde_json::json!({"thinking":{"type":"between_tools"}})
+        );
+        let mut body = serde_json::json!({});
+        super::encode_thinking(&mut body, &reasoning, "claude-opus-5-5");
+        assert_eq!(body, serde_json::json!({}));
     }
 
     #[test]

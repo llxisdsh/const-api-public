@@ -2546,20 +2546,22 @@ mod buffered_response_tests {
             assert_eq!(request.headers()["user-agent"], user_agent);
             assert_eq!(request.headers()["openai-beta"], "tools=future-v9");
         }
-        for version in ["2.1.220", "2.1.272", "3.0.0"] {
-            let body = serde_json::json!({"model":"claude-test", "stream":true,
+        for version in ["2.1.220", "2.1.285", "3.0.0"] {
+            let model = "claude-sonnet-5-5";
+            let body = serde_json::json!({"model":model, "stream":true,
                 "system":[{"type":"text","text":format!("x-anthropic-billing-header: cc_version={version}; cc_entrypoint=cli;")}],
                 "messages":[{"role":"user","content":[{"type":"future_content_v9","opaque":{"keep":true}}]}],
-                "tools":[{"type":"future_tool_v9","name":"future"}],"future_top":{"keep":true}
+                "thinking":{"type":"between_tools"},
+                "tools":[{"type":"browser_toolset_20260801"},{"type":"future_tool_v9","name":"future"}],"future_top":{"keep":true}
             }).to_string();
             let mut headers = reqwest::header::HeaderMap::new();
             let user_agent = format!("claude-cli/{version} (external, cli)");
             headers.insert("user-agent", user_agent.parse().unwrap());
             headers.insert("anthropic-beta", "future-feature-2099-01-01".parse().unwrap());
-            let conversion = upstream_request_for_api_format_with_profiles_report("anthropic_messages", "/v1/messages", &body, "claude-test", &[]).unwrap();
+            let conversion = upstream_request_for_api_format_with_profiles_report("anthropic_messages", "/v1/messages", &body, model, &[]).unwrap();
             assert!(conversion.tool_mapping.is_empty());
             assert_eq!(conversion.body, body);
-            let adjusted = ensure_claude_messages_body_with_faults(&conversion.body, "claude-test").unwrap();
+            let adjusted = ensure_claude_messages_body_with_faults(&conversion.body, model).unwrap();
             let prepared = prepare_claude_subscription_oauth_body(&adjusted.body, "mock-credential-reference").unwrap();
             assert_eq!(prepared, body);
             let request = claude_subscription_request_with_headers(&client, "https://example.test/v1/messages", "mock-supplier-token", prepared, Some(&headers)).build().unwrap();

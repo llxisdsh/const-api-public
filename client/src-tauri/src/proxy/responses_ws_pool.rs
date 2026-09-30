@@ -165,6 +165,7 @@ pub(crate) struct ResponsesWsPoolSession {
 
 pub(crate) struct ResponsesWsPoolTurn {
     lease: Option<ResponsesWsLaneLease>,
+    stream_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -363,10 +364,11 @@ impl ResponsesWsPoolSession {
             .bucket
             .acquire(preferred, self.preferred_lane, require_affinity)
             .await?;
-        let outbound = if self.bucket.capability.value.load(Ordering::Acquire)
-            == RESPONSES_WS_CAPABILITY_MULTIPLEX
-        {
-            responses_ws_pool_add_stream_id(text, lease.stream_id())?
+        let stream_id = (self.bucket.capability.value.load(Ordering::Acquire)
+            == RESPONSES_WS_CAPABILITY_MULTIPLEX)
+            .then(|| lease.stream_id());
+        let outbound = if let Some(stream_id) = &stream_id {
+            responses_ws_pool_add_stream_id(text, stream_id.clone())?
         } else {
             text.to_string()
         };
@@ -375,7 +377,10 @@ impl ResponsesWsPoolSession {
         self.acquire_ms = duration_millis_u64(acquire_started.elapsed());
         self.preferred_lane = Some(lease.lane);
         self.replace_preferred(lease.connection.clone());
-        Ok(ResponsesWsPoolTurn { lease: Some(lease) })
+        Ok(ResponsesWsPoolTurn {
+            lease: Some(lease),
+            stream_id,
+        })
     }
 
     async fn probe_stream_id_capability(&mut self, text: &str) -> Result<()> {
@@ -540,6 +545,19 @@ impl Drop for ResponsesWsPoolSession {
 }
 
 impl ResponsesWsPoolTurn {
+    async fn interrupt(&self, text: &str) -> Result<()> {
+        let lease = self
+            .lease
+            .as_ref()
+            .ok_or_else(|| anyhow!("Responses WebSocket pooled turn is finished"))?;
+        let text = if let Some(stream_id) = &self.stream_id {
+            responses_ws_pool_add_stream_id(text, stream_id.clone())?
+        } else {
+            text.to_owned()
+        };
+        lease.send_frame(text).await
+    }
+
     pub(crate) async fn next(
         &mut self,
     ) -> Option<Result<tokio_tungstenite::tungstenite::Message>> {
@@ -1425,6 +1443,10 @@ impl ResponsesWsLaneLease {
             .is_some();
         self.connection
             .start_turn(self.lane, generation, expects_stream_id)?;
+        self.send_frame(text).await
+    }
+
+    async fn send_frame(&self, text: String) -> Result<()> {
         let (sent_tx, sent_rx) = tokio::sync::oneshot::channel();
         self.connection
             .writer
@@ -1707,6 +1729,44 @@ mod responses_ws_pool_tests {
     }
 
     #[tokio::test]
+    async fn interrupt_stays_on_the_active_pool_lane_without_starting_a_turn() {
+        use tokio_tungstenite::tungstenite::Message;
+        const INTERRUPT: &str = r#"{ "type":"response.interrupt","response_id":"resp-1","mode":"discard_partial_items","future":true }"#;
+        for multiplex in [false, true] {
+            let (_bucket, connection, mut server) = buffered_test_connection().await;
+            let mut lease = connection.try_allocate(false).expect("lane");
+            let stream_id = multiplex.then(|| lease.stream_id());
+            let create = r#"{"type":"response.create","input":[]}"#;
+            let body = stream_id.as_ref().map_or_else(
+                || create.to_owned(),
+                |id| responses_ws_pool_add_stream_id(create, id.clone()).expect("stream id"),
+            );
+            lease.start_turn(body).await.expect("start");
+            server.next().await.expect("create").expect("frame");
+            let mut turn = ResponsesWsPoolTurn { lease: Some(lease), stream_id: stream_id.clone() };
+            turn.interrupt(INTERRUPT).await.expect("interrupt");
+            let received = server.next().await.expect("control").expect("frame").into_text().expect("text");
+            if let Some(id) = &stream_id {
+                let mut expected: serde_json::Value = serde_json::from_str(INTERRUPT).expect("JSON");
+                expected["stream_id"] = id.clone().into();
+                assert_eq!(serde_json::from_str::<serde_json::Value>(&received).expect("JSON"), expected);
+            } else {
+                assert_eq!(received, INTERRUPT);
+            }
+            assert_eq!(connection.turns_started.load(Ordering::Relaxed), 1);
+            assert!(connection.slots.lock().expect("slots")[0].turn_active);
+            let mut terminal = serde_json::json!({"type":"response.completed","response":{"id":"resp-1","usage":{"output_tokens":2}}});
+            if let Some(id) = stream_id { terminal["stream_id"] = id.into(); }
+            server.send(Message::Text(terminal.to_string().into())).await.expect("terminal");
+            let message = turn.next().await.expect("event").expect("frame").into_text().expect("text");
+            assert!(message.contains("output_tokens"));
+            turn.finish();
+            assert!(connection.try_allocate(false).is_some(), "lane is reusable after terminal");
+            connection.request_close("test_finished");
+        }
+    }
+
+    #[tokio::test]
     async fn buffer_backpressure_preserves_order_and_services_writes() {
         use tokio_tungstenite::tungstenite::Message;
         let (_bucket, connection, mut server) = buffered_test_connection().await;
@@ -1752,7 +1812,7 @@ mod responses_ws_pool_tests {
         assert!(server.next().await.expect("ping").expect("frame").is_ping());
         assert!(!connection.is_broken());
         assert_eq!(lease.receiver.len(), 2);
-        let mut turn = ResponsesWsPoolTurn { lease: Some(lease) };
+        let mut turn = ResponsesWsPoolTurn { lease: Some(lease), stream_id: None };
         assert_eq!(
             turn.next().await.expect("event").expect("frame"),
             messages[0]
@@ -1799,7 +1859,7 @@ mod responses_ws_pool_tests {
         .await
         .expect("second event is read and waiting for credits");
         connection.request_close("test_shutdown");
-        let mut turn = ResponsesWsPoolTurn { lease: Some(lease) };
+        let mut turn = ResponsesWsPoolTurn { lease: Some(lease), stream_id: None };
         // Drain the already-read pending frame ahead of the final error, even
         // though no byte credits remain at shutdown.
         wait_buffered(turn.lease.as_ref().expect("lease"), 3).await;

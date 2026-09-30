@@ -45,6 +45,8 @@ fn const_api_local_tool_url_surface(value: &str) -> Option<&str> {
     port.parse::<u16>().ok()?;
     match surface {
         "" | "v1" | "anthropic" | "gemini" => Some(surface),
+        "anthropic/v1" => Some("anthropic"),
+        "gemini/v1beta" => Some("gemini"),
         _ => None,
     }
 }
@@ -61,7 +63,10 @@ fn local_tool_url_port(value: &str) -> Option<u16> {
             continue;
         };
         let (port, surface) = endpoint.split_once('/').unwrap_or((endpoint, ""));
-        if !matches!(surface, "" | "v1" | "anthropic" | "gemini") {
+        if !matches!(
+            surface,
+            "" | "v1" | "anthropic" | "gemini" | "anthropic/v1" | "gemini/v1beta"
+        ) {
             continue;
         }
         if let Ok(port) = port.parse::<u16>() {
@@ -78,7 +83,13 @@ fn tool_surface_url(root_url: &str, surface: &str) -> String {
     }
 
     let mut root = root_url.trim().trim_end_matches('/');
-    for suffix in ["/v1", "/anthropic", "/gemini"] {
+    for suffix in [
+        "/anthropic/v1",
+        "/gemini/v1beta",
+        "/v1",
+        "/anthropic",
+        "/gemini",
+    ] {
         if let Some(stripped) = root.strip_suffix(suffix) {
             root = stripped;
             break;
@@ -143,20 +154,148 @@ fn opencode_const_api_provider(
     model_info: &[ToolModelInfo],
     protocol: ToolProtocol,
 ) -> serde_json::Value {
-    let base_url = tool_surface_url(base_url, protocol.surface());
+    opencode_compatible_provider("opencode", base_url, api_key, model_info, protocol)
+}
+
+fn opencode_compatible_provider(
+    tool: &str,
+    base_url: &str,
+    api_key: &str,
+    model_info: &[ToolModelInfo],
+    protocol: ToolProtocol,
+) -> serde_json::Value {
     let mut provider = serde_json::json!({
         "npm": opencode_provider_package(protocol),
         "name": CONST_API_DISPLAY_NAME,
+        "api": opencode_api_url(base_url, protocol),
         "options": {
-            "baseURL": base_url,
             "apiKey": api_key
         }
     });
-    let models = opencode_models_object(model_info);
+    let mut models = opencode_models_object(model_info);
+    for model in model_info {
+        if let Some(entry) = models.get_mut(model.id.trim()) {
+            let selected = tool_model_protocol(tool, model, protocol);
+            entry["provider"] = serde_json::json!({
+                "npm": opencode_provider_package(selected),
+                "api": opencode_api_url(base_url, selected)
+            });
+            if tool == "openscience" {
+                // This fork supports a per-model npm override, but ignores
+                // model.provider.api. Its supported protocols share /v1.
+                entry["provider"].as_object_mut().unwrap().remove("api");
+            }
+            if matches!(
+                selected,
+                ToolProtocol::AnthropicMessages | ToolProtocol::GeminiNative
+            ) {
+                // Variants are open records, but native SDK options use closed
+                // enums. Do not offer values that fail before reaching CONST.
+                // Without an effort list, leave token-budget variants to the tool.
+                if let Some(variants) = entry
+                    .get_mut("variants")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    variants.retain(|effort, _| match selected {
+                        ToolProtocol::AnthropicMessages => matches!(
+                            effort.as_str(),
+                            "none" | "low" | "medium" | "high" | "xhigh" | "max"
+                        ),
+                        ToolProtocol::GeminiNative => matches!(
+                            effort.as_str(),
+                            "none" | "minimal" | "low" | "medium" | "high"
+                        ),
+                        _ => unreachable!("native thinking protocol checked above"),
+                    });
+                    for (effort, options) in variants.iter_mut() {
+                        *options = match selected {
+                            ToolProtocol::AnthropicMessages if effort == "none" => {
+                                serde_json::json!({
+                                    "thinking": {"type": "disabled"}
+                                })
+                            }
+                            // OpenCode merges each variant with its native
+                            // defaults. Retain budget-based thinking for older
+                            // Claude models and adaptive/display settings for
+                            // newer ones; effort does not imply one thinking mode.
+                            ToolProtocol::AnthropicMessages => serde_json::json!({
+                                "effort": effort
+                            }),
+                            ToolProtocol::GeminiNative if effort == "none" => serde_json::json!({
+                                "thinkingConfig": {"includeThoughts": true, "thinkingBudget": 0}
+                            }),
+                            ToolProtocol::GeminiNative => serde_json::json!({
+                                "thinkingConfig": {"includeThoughts": true, "thinkingLevel": effort}
+                            }),
+                            _ => unreachable!("native thinking protocol checked above"),
+                        };
+                    }
+                }
+            }
+        }
+    }
     if !models.is_empty() {
         provider["models"] = serde_json::Value::Object(models);
     }
     provider
+}
+
+fn refresh_opencode_provider_connection(
+    tool: &str,
+    provider: &mut serde_json::Value,
+    base_url: &str,
+    api_key: &str,
+    protocol: ToolProtocol,
+) {
+    ensure_json_object(provider);
+    provider["name"] = serde_json::json!(CONST_API_DISPLAY_NAME);
+    provider["npm"] = serde_json::json!(opencode_provider_package(protocol));
+    ensure_json_object_field(provider, "options");
+    // A provider-wide baseURL overrides per-model endpoints in OpenCode/MiMo.
+    provider["options"]
+        .as_object_mut()
+        .unwrap()
+        .remove("baseURL");
+    provider["api"] = serde_json::json!(opencode_api_url(base_url, protocol));
+    provider["options"]["apiKey"] = serde_json::json!(api_key);
+    if let Some(models) = provider
+        .get_mut("models")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for model in models.values_mut() {
+            if let Some(selected) = model
+                .pointer("/provider/npm")
+                .and_then(serde_json::Value::as_str)
+                .and_then(opencode_package_protocol)
+            {
+                if tool != "openscience" {
+                    model["provider"]["api"] =
+                        serde_json::json!(opencode_api_url(base_url, selected));
+                }
+            }
+        }
+    }
+}
+
+fn opencode_api_url(base_url: &str, protocol: ToolProtocol) -> String {
+    // AI SDK providers append /messages and /models/... themselves, unlike
+    // the Anthropic/Google SDKs used by the other tools.
+    let base = tool_surface_url(base_url, protocol.surface());
+    match protocol {
+        ToolProtocol::AnthropicMessages => format!("{base}/v1"),
+        ToolProtocol::GeminiNative => format!("{base}/v1beta"),
+        _ => base,
+    }
+}
+
+fn opencode_package_protocol(package: &str) -> Option<ToolProtocol> {
+    match package {
+        "@ai-sdk/openai" => Some(ToolProtocol::OpenAiResponses),
+        "@ai-sdk/openai-compatible" => Some(ToolProtocol::OpenAiChat),
+        "@ai-sdk/anthropic" => Some(ToolProtocol::AnthropicMessages),
+        "@ai-sdk/google" => Some(ToolProtocol::GeminiNative),
+        _ => None,
+    }
 }
 
 fn remove_opencode_legacy_cache_disable(provider: &mut serde_json::Value) {
@@ -190,13 +329,7 @@ fn detect_opencode_tool_protocol(root: &serde_json::Value) -> Option<ToolProtoco
         .or_else(|| providers.get(LEGACY_CONST_API_PROVIDER_ID))?
         .get("npm")?
         .as_str()?;
-    match package {
-        "@ai-sdk/openai" => Some(ToolProtocol::OpenAiResponses),
-        "@ai-sdk/openai-compatible" => Some(ToolProtocol::OpenAiChat),
-        "@ai-sdk/anthropic" => Some(ToolProtocol::AnthropicMessages),
-        "@ai-sdk/google" => Some(ToolProtocol::GeminiNative),
-        _ => None,
-    }
+    opencode_package_protocol(package)
 }
 
 fn claude_desktop_inference_models(
@@ -212,14 +345,19 @@ fn claude_desktop_inference_models(
         .map(str::to_string)
         .collect::<Vec<_>>();
     let mut routes = crate::model_compatibility::anthropic_model_routes(config, &model_ids);
-    if let Some(policy) = models.iter().find_map(|model| model.presentation.as_deref()) {
+    if let Some(policy) = models
+        .iter()
+        .find_map(|model| model.presentation.as_deref())
+    {
         // Alias generation must not resurrect models hidden from the tool
         // list. Route eligibility and context intersections are unchanged.
         routes.retain(|route| !policy.rank(&crate::config::public_model_name(route)).1);
-        routes.sort_by_cached_key(|route| (
-            std::cmp::Reverse(policy.rank(&crate::config::public_model_name(route)).0),
-            route.clone(),
-        ));
+        routes.sort_by_cached_key(|route| {
+            (
+                std::cmp::Reverse(policy.rank(&crate::config::public_model_name(route)).0),
+                route.clone(),
+            )
+        });
     }
     routes
         .into_iter()
@@ -286,14 +424,82 @@ fn opencode_models_object(
                 })
                 .collect::<serde_json::Map<_, _>>();
             if !variants.is_empty() {
-                // Explicit variants prevent OpenCode from guessing supported
-                // strengths from the model ID and provider package.
+                // Supply declared depths even for model IDs unknown to the
+                // tool. OpenCode may merge additional built-in variants.
                 value["variants"] = serde_json::Value::Object(variants);
             }
         }
         models.insert(id.to_string(), value);
     }
     models
+}
+
+// Keep admin order at the tool-file boundary without enabling serde_json's
+// preserve_order globally (which would also change proxy/canonical JSON paths).
+fn json_text_with_model_order(
+    root: &serde_json::Value,
+    model_path: &[&str],
+    models: &[ToolModelInfo],
+) -> Result<String> {
+    struct Ordered<'a> {
+        value: &'a serde_json::Value,
+        path: &'a [&'a str],
+        ids: &'a [&'a str],
+    }
+    impl Serialize for Ordered<'_> {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            use serde::ser::SerializeMap;
+            let object = self.value.as_object().ok_or_else(|| {
+                serde::ser::Error::custom("tool model catalog path must contain objects")
+            })?;
+            let mut map = serializer.serialize_map(Some(object.len()))?;
+            if let Some((next, rest)) = self.path.split_first() {
+                for (key, value) in object {
+                    if key == next {
+                        map.serialize_entry(
+                            key,
+                            &Ordered {
+                                value,
+                                path: rest,
+                                ids: self.ids,
+                            },
+                        )?;
+                    } else {
+                        map.serialize_entry(key, value)?;
+                    }
+                }
+            } else {
+                let mut emitted = HashSet::new();
+                for id in self.ids {
+                    if let Some(value) = object.get(*id)
+                        && emitted.insert(*id)
+                    {
+                        map.serialize_entry(id, value)?;
+                    }
+                }
+                for (key, value) in object {
+                    if !emitted.contains(key.as_str()) {
+                        map.serialize_entry(key, value)?;
+                    }
+                }
+            }
+            map.end()
+        }
+    }
+    let mut models = models.iter().collect::<Vec<_>>();
+    models.sort_by(|a, b| crate::tool_model_metadata::tool_model_display_order(a, b));
+    let ids = models
+        .iter()
+        .map(|model| model.id.trim())
+        .collect::<Vec<_>>();
+    Ok(serde_json::to_string_pretty(&Ordered {
+        value: root,
+        path: model_path,
+        ids: &ids,
+    })? + "\n")
 }
 
 fn is_opencode_legacy_const_api_provider(
@@ -325,6 +531,7 @@ fn is_opencode_legacy_const_api_provider(
     let options = provider.get("options").and_then(|value| value.as_object());
     let local_base_url = options
         .and_then(|options| options.get("baseURL"))
+        .or_else(|| provider.get("api"))
         .and_then(|value| value.as_str())
         .map(|value| is_current_or_const_api_local_url(value, base_url))
         .unwrap_or(false);
@@ -337,15 +544,41 @@ fn is_opencode_legacy_const_api_provider(
     let known_provider_id =
         key == CODEX_CONST_API_PROVIDER_ID || key == LEGACY_CONST_API_PROVIDER_ID;
     (name_is_legacy && (has_legacy_model || local_base_url || old_api_key))
-        || (known_provider_id && (local_base_url || old_api_key))
+        || (known_provider_id
+            && (local_base_url
+                || old_api_key
+                || provider
+                    .get("api")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(is_const_api_local_tool_url)))
 }
 
-fn openclaw_api_mode(protocol: ToolProtocol) -> &'static str {
+// OpenClaw, Pi and MiniMax Code use pi-ai protocol names and base URLs.
+fn pi_sdk_api_mode(protocol: ToolProtocol) -> &'static str {
     match protocol {
         ToolProtocol::OpenAiResponses => "openai-responses",
         ToolProtocol::OpenAiChat => "openai-completions",
         ToolProtocol::AnthropicMessages => "anthropic-messages",
         ToolProtocol::GeminiNative => "google-generative-ai",
+    }
+}
+
+fn pi_sdk_protocol(api: &str) -> Option<ToolProtocol> {
+    match api {
+        "openai-responses" => Some(ToolProtocol::OpenAiResponses),
+        "openai-completions" => Some(ToolProtocol::OpenAiChat),
+        "anthropic-messages" => Some(ToolProtocol::AnthropicMessages),
+        "google-generative-ai" => Some(ToolProtocol::GeminiNative),
+        _ => None,
+    }
+}
+
+fn pi_sdk_base_url(base_url: &str, protocol: ToolProtocol) -> String {
+    let base = tool_surface_url(base_url, protocol.surface());
+    if protocol == ToolProtocol::GeminiNative {
+        format!("{base}/v1beta")
+    } else {
+        base
     }
 }
 
@@ -356,13 +589,7 @@ fn detect_openclaw_tool_protocol(root: &serde_json::Value) -> Option<ToolProtoco
         .or_else(|| providers.get(LEGACY_CONST_API_PROVIDER_ID))?
         .get("api")?
         .as_str()?;
-    match mode {
-        "openai-responses" => Some(ToolProtocol::OpenAiResponses),
-        "openai-completions" => Some(ToolProtocol::OpenAiChat),
-        "anthropic-messages" => Some(ToolProtocol::AnthropicMessages),
-        "google-generative-ai" => Some(ToolProtocol::GeminiNative),
-        _ => None,
-    }
+    pi_sdk_protocol(mode)
 }
 
 fn remove_openclaw_const_api_providers(
@@ -559,9 +786,7 @@ fn upsert_hermes_custom_provider_list(
     if provider
         .get(yaml_key("models"))
         .and_then(|value| value.as_mapping())
-        .is_some_and(|models| {
-            models.len() == 1 && models.contains_key(yaml_key("code-cheap"))
-        })
+        .is_some_and(|models| models.len() == 1 && models.contains_key(yaml_key("code-cheap")))
     {
         provider.remove(yaml_key("models"));
     }
@@ -617,13 +842,11 @@ fn yaml_string(value: &str) -> serde_yaml::Value {
 // This ID is owned by CONST API and must remain stable. Claude Desktop treats it
 // as an opaque config-library selector; the profile filename, entries[].id and
 // _meta.appliedId must all agree.
-pub(crate) const CLAUDE_DESKTOP_PROFILE_ID: &str =
-    "2b067cc3-e571-442d-bf7e-03d05d72b0aa";
+pub(crate) const CLAUDE_DESKTOP_PROFILE_ID: &str = "2b067cc3-e571-442d-bf7e-03d05d72b0aa";
 // Older CONST API builds accidentally reused CC Switch's profile ID and wrote
 // it under the unsupported `appliedProfileId` key. Keep the value only for a
 // narrowly-scoped migration; never use it for new profiles.
-pub(crate) const CLAUDE_DESKTOP_LEGACY_PROFILE_ID: &str =
-    "00000000-0000-4000-8000-000000157210";
+pub(crate) const CLAUDE_DESKTOP_LEGACY_PROFILE_ID: &str = "00000000-0000-4000-8000-000000157210";
 pub(crate) const CLAUDE_DESKTOP_PROFILE_NAME: &str = "CONST API";
 
 pub(crate) struct ClaudeDesktopPaths {

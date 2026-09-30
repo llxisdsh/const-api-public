@@ -232,10 +232,9 @@ import {
   codexModelSourceFromStatus,
   toolConfigDetailState,
   toolConfigurationActionKey,
-  toolPrimaryAction,
+  toolHasManagedConfig,
   toolProtocolId,
   toolProtocolMenuState,
-  toolSyncsModelsOnLaunch
 } from "./toolMenuPresentation";
 import {
   compareToolProgramCandidates,
@@ -590,8 +589,7 @@ function ProductApp({
     resolveToolRemoveDialog,
     resolveChannelDuplicateDialog,
     applyToolConfig,
-    startToolProgram,
-    launchToolConfig,
+    useTool,
     removeToolConfig,
     openToolLocator,
     chooseToolProgram,
@@ -1074,12 +1072,12 @@ function ProductApp({
                 <ToolDockMenuProvider>
                 {visibleToolCards.map((card) => {
                   const configStatus = toolConfigStatuses[card.tool];
-                  const configuredOnDisk = Boolean(configStatus?.already_configured);
+                  const hasConfiguration = toolHasManagedConfig(configStatus);
                   const configuredProtocol = toolProtocolId(configStatus?.details?.tool_protocol);
                   const protocolState = toolProtocolMenuState(
                     card.tool,
                     toolProtocolSelections[card.tool] ?? DEFAULT_TOOL_PROTOCOLS[card.tool],
-                    configuredOnDisk ? configuredProtocol : null,
+                    hasConfiguration ? configuredProtocol : null,
                   );
                   const protocolChanged = protocolState.changed;
                   const modelSettingsChanged = card.tool === "claude"
@@ -1097,8 +1095,6 @@ function ProductApp({
                   const launching = Boolean(toolLaunching[card.tool]);
                   const operationLabel = toolOperationLabels[card.tool];
                   const operationProgress = toolOperationProgress[card.tool];
-                  const primaryAction = toolPrimaryAction(configStatus, configurationChanged);
-                  const syncModelsOnLaunch = toolSyncsModelsOnLaunch(configStatus);
                   const actionLabel = t(toolConfigurationActionKey(configStatus));
                   const disabled = launching;
                   const codexDetails = card.tool === "codex" ? configStatus?.details : undefined;
@@ -1129,9 +1125,10 @@ function ProductApp({
                       description={t(`toolCatalog.${card.tool}.description`, { defaultValue: card.description })}
                       icon={card.icon}
                       customIcon={card.customIcon}
+                      badge={"badge" in card ? card.badge : undefined}
                       fallback={card.fallback}
                       tone={card.tone}
-                      configured={configuredOnDisk}
+                      configured={hasConfiguration}
                       statusText={operationLabel || statusText}
                       statusTone={launching ? "pending" : statusTone}
                       actionLabel={actionLabel}
@@ -1140,15 +1137,7 @@ function ProductApp({
                       progress={launching ? toolConfigVisualProgressRatio(operationProgress) : undefined}
                       onAction={() => {
                         if (!prepareToolUse()) return;
-                        if (primaryAction === "locate") {
-                          void openToolLocator(card.tool, card.title, true);
-                          return;
-                        }
-                        if (primaryAction === "configure_and_launch" || syncModelsOnLaunch) {
-                          void launchToolConfig(card.tool, card.title);
-                          return;
-                        }
-                        void startToolProgram(card.tool, card.title, true);
+                        void useTool(card.tool, card.title, configurationChanged);
                       }}
                       onConfigure={() => {
                         if (!prepareToolUse()) return;
@@ -1165,7 +1154,9 @@ function ProductApp({
                             <div className="tool-dock-combined-panel">
                               <div className="tool-dock-combined-section">
                                 <div className="tool-dock-protocol-field">
-                                  <strong title={t("access.toolDetail.protocol")}>{t("access.toolDetail.protocol")}</strong>
+                                  <strong title={protocolState.perModel ? t("labels.toolMenu.perModelProtocol") : t("access.toolDetail.protocol")}>
+                                    {protocolState.perModel ? t("labels.toolMenu.fallbackProtocol") : t("access.toolDetail.protocol")}
+                                  </strong>
                                   <ToolProtocolPanel
                                     title={card.title}
                                     state={protocolState}
@@ -1591,6 +1582,7 @@ function ProductApp({
                                     <div>
                                       <div className="program-candidate-title">
                                         <strong>{title}</strong>
+                                        {candidate.edition && <small>{t(`access.locator.editions.${candidate.edition}`)}</small>}
                                         {candidate.recommended && <small className="recommended-badge">{t("access.locator.recommended")}</small>}
                                         <small>{status}</small>
                                       </div>

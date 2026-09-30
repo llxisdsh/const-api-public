@@ -262,7 +262,12 @@ import {
   DEFAULT_TOOL_PROTOCOLS,
   TOOL_PROTOCOLS_BY_TOOL,
   codexModelSourceFromStatus,
+  toolConfigCheckFailed,
+  toolConfigCapabilityWarning,
+  toolHasManagedConfig,
+  toolPrimaryAction,
   toolProtocolId,
+  toolSyncsModelsOnLaunch,
   type CodexModelSource,
   type ToolProtocolId
 } from "./toolMenuPresentation";
@@ -539,7 +544,7 @@ export function toolConfigProgressLabel(progress: ToolOperationProgress) {
     case "awaiting_confirmation": return tr("labels.toolMenu.progress.awaitingConfirmation");
     case "awaiting_manual_close": return tr("labels.toolMenu.progress.awaitingManualClose");
     case "closing_process": return tr("labels.toolMenu.progress.closingProcess");
-    case "writing_config": return tr("labels.toolMenu.progress.writingConfig");
+    case "writing_config": return tr("labels.toolMenu.progress.writingConfig", { displayCount: count ? ` ${count}` : "" });
     case "scanning_sessions":
       return tr("labels.toolMenu.progress.scanningSessions", { displayCount: count ? ` ${count}` : "" });
     case "planning_session_index": return tr("labels.toolMenu.progress.planningIndex");
@@ -577,7 +582,7 @@ export function toolConfigProgressRatio(progress?: ToolOperationProgress | null)
     case "awaiting_confirmation": return 0.18;
     case "awaiting_manual_close": return 0.2;
     case "closing_process": return 0.26;
-    case "writing_config": return 0.32;
+    case "writing_config": return 0.32 + stageFraction * 0.56;
     case "scanning_sessions": return 0.32 + stageFraction * 0.18;
     case "planning_session_index": return 0.52;
     case "migrating_sessions": return 0.55 + stageFraction * 0.3;
@@ -902,7 +907,8 @@ export function useAppController({
 
   const [toolConfigChecking, setToolConfigChecking] = useState(false);
 
-  const toolConfigStatusEpochRef = useRef(0);
+  const toolConfigStatusEpochRef = useRef<Record<string, number>>({});
+  const toolConfigBulkEpochRef = useRef(0);
 
   const toolProtocolDraftTouchedRef = useRef<Record<string, boolean>>({});
 
@@ -946,6 +952,7 @@ export function useAppController({
     } | null>(null);
 
   const [showMissingToolCandidates, setShowMissingToolCandidates] = useState(false);
+  const toolLocatorContinuationRef = useRef<(() => Promise<void>) | null>(null);
 
   const [supplierModels, setSupplierModels] = useState<string[]>([]);
 
@@ -1483,9 +1490,13 @@ export function useAppController({
       "claude-desktop": { icon: null, customIcon: "claude", fallback: Laptop, tone: "#b45309" },
       "claude-science": { icon: null, customIcon: "claude-science", fallback: Bot, tone: "#d97757" },
       gemini: { icon: null, customIcon: "gemini", fallback: BrainCircuit, tone: "#1d4ed8" },
-      copilot: { icon: null, customIcon: "copilot", fallback: Code2, tone: "#8534f3" },
+      copilot: { icon: null, customIcon: "copilot", fallback: Code2, tone: "#171717" },
+      "copilot-desktop": { icon: null, customIcon: "copilot", fallback: Code2, tone: "#171717" },
       vscode: { icon: null, customIcon: "vscode", fallback: Code2, tone: "#007acc" },
       cline: { icon: null, customIcon: "cline", fallback: Bot, tone: "#24292f" },
+      trae: { icon: null, customIcon: "trae", fallback: Code2, tone: "#32f08c" },
+      "trae-cn": { icon: null, customIcon: "trae", fallback: Code2, tone: "#32f08c" },
+      "trae-work": { icon: null, customIcon: "trae-work", fallback: Code2, tone: "#171717" },
       opencode: { icon: null, customIcon: "opencode", fallback: Bot, tone: "#211e1e" },
       openclaw: { icon: null, customIcon: "openclaw", fallback: Zap, tone: "#dc2626" },
       goose: { icon: null, customIcon: "goose", fallback: Bot, tone: "#111827" },
@@ -1493,14 +1504,16 @@ export function useAppController({
       reasonix: { icon: null, customIcon: "reasonix", fallback: BrainCircuit, tone: "#09090b" },
       "deepseek-harness": { icon: null, customIcon: "deepseek-harness", fallback: BrainCircuit, tone: "var(--text)" },
       pi: { icon: null, customIcon: "pi", fallback: Terminal, tone: "#171717" },
-      kimicode: { icon: null, customIcon: "kimi", fallback: Terminal, tone: "#111827" },
-      mimocode: { icon: null, customIcon: "mimocode", fallback: Code2, tone: "#ff7a45" },
+      kimicode: { icon: null, customIcon: "kimi", fallback: Terminal, tone: "#2787f5" },
+      mimocode: { icon: null, customIcon: "mimocode", fallback: Code2, tone: "#171717" },
+      "minimax-code": { icon: null, customIcon: "minimax-code", fallback: Terminal, tone: "#171717" },
+      "grok-build": { icon: null, customIcon: "grok", fallback: Terminal, tone: "#171717" },
       qwencode: { icon: null, customIcon: "qwen", fallback: BrainCircuit, tone: "#6d44e8" },
       "mistral-vibe": { icon: null, customIcon: "mistral-vibe", fallback: Terminal, tone: "#fa500f" },
       hermes: { icon: null, customIcon: "hermes", fallback: Cable, tone: "#475569" },
       "open-interpreter": { icon: null, customIcon: "open-interpreter", fallback: Terminal, tone: "#171717" },
       anythingllm: { icon: null, customIcon: "anythingllm", fallback: Bot, tone: "#171717" },
-      openscience: { icon: null, customIcon: "openscience", fallback: Bot, tone: "#123a8c" },
+      openscience: { icon: null, customIcon: "openscience", fallback: Bot, tone: "#7874ff" },
       "open-design": { icon: null, customIcon: "open-design", fallback: Bot, tone: "#202020" },
       workbuddy: { icon: null, customIcon: "workbuddy", fallback: Bot, tone: "#0bc89f" },
       "vibe-trading": { icon: null, customIcon: "vibe-trading", fallback: Bot, tone: "#ef5a46" },
@@ -1682,7 +1695,7 @@ export function useAppController({
   useEffect(() => {
       if (!isTauriRuntime() || !config.listen) return;
       void refreshToolConfigStatuses();
-    }, [config.listen, claudeModelSettings]);
+    }, [config.listen, config.api_key, claudeModelSettings]);
 
   useEffect(() => {
       const nextChannels = config.channels.length > 0 ? config.channels : [channelFromSupplier("channel-1", config.supplier)];
@@ -4221,7 +4234,8 @@ export function useAppController({
 
   async function refreshToolConfigStatuses() {
       if (!isTauriRuntime()) return;
-      const epoch = ++toolConfigStatusEpochRef.current;
+      const bulkEpoch = ++toolConfigBulkEpochRef.current;
+      const epochs = Object.fromEntries(toolCards.map(({ tool }) => [tool, nextToolConfigStatusEpoch(tool)]));
       setToolConfigChecking(true);
       try {
         const entries = await Promise.all(toolCards.map(async (card) => {
@@ -4239,15 +4253,21 @@ export function useAppController({
             return [card.tool, null] as const;
           }
         }));
-        if (epoch !== toolConfigStatusEpochRef.current) return;
-        setToolConfigStatuses(Object.fromEntries(entries));
-        const codexStatus = entries.find(([tool]) => tool === "codex")?.[1];
+        const currentEntries = entries.filter(([tool]) => epochs[tool] === toolConfigStatusEpochRef.current[tool]);
+        setToolConfigStatuses((current) => {
+          const next = { ...current };
+          for (const [tool, status] of currentEntries) {
+            next[tool] = status ?? toolConfigCheckFailed(current[tool]);
+          }
+          return next;
+        });
+        const codexStatus = currentEntries.find(([tool]) => tool === "codex")?.[1];
         if (codexStatus && !codexModelSourceTouchedRef.current) {
           setCodexModelSource(codexModelSourceFromStatus(codexStatus));
         }
         setToolProtocolSelections((current) => {
           const next = { ...current };
-          for (const [tool, status] of entries) {
+          for (const [tool, status] of currentEntries) {
             if (toolProtocolDraftTouchedRef.current[tool]) continue;
             const detected = toolProtocolId(status?.details?.tool_protocol);
             if (detected && TOOL_PROTOCOLS_BY_TOOL[tool]?.includes(detected)) {
@@ -4258,7 +4278,7 @@ export function useAppController({
         });
         void refreshCodexSessionScan();
       } finally {
-        if (epoch === toolConfigStatusEpochRef.current) {
+        if (bulkEpoch === toolConfigBulkEpochRef.current) {
           setToolConfigChecking(false);
         }
       }
@@ -4279,30 +4299,44 @@ export function useAppController({
       claudeSettings: ClaudeModelSettings | undefined = tool === "claude"
         ? claudeModelSettings
         : undefined,
+      syncSelections = true,
     ) {
-      const epoch = ++toolConfigStatusEpochRef.current;
-      setToolConfigChecking(false);
-      const status = await withUiTimeout(
-        invoke<ToolApplyResult>("check_tool_config", {
-          tool,
-          claudeModelSettings: claudeSettings,
-        }),
-        TOOL_STATUS_TIMEOUT_MS,
-        tr("toolOperations.statusCheckTimeout"),
-      );
-      if (epoch === toolConfigStatusEpochRef.current) {
+      const epoch = nextToolConfigStatusEpoch(tool);
+      let status: ToolApplyResult;
+      try {
+        status = await withUiTimeout(
+          invoke<ToolApplyResult>("check_tool_config", {
+            tool,
+            claudeModelSettings: claudeSettings,
+          }),
+          TOOL_STATUS_TIMEOUT_MS,
+          tr("toolOperations.statusCheckTimeout"),
+        );
+      } catch (error) {
+        if (epoch === toolConfigStatusEpochRef.current[tool]) {
+          setToolConfigStatuses((current) => ({ ...current, [tool]: toolConfigCheckFailed(current[tool]) }));
+        }
+        throw error;
+      }
+      if (epoch === toolConfigStatusEpochRef.current[tool]) {
         setToolConfigStatuses((current) => ({ ...current, [tool]: status }));
-        if (tool === "codex") {
+        if (syncSelections && tool === "codex") {
           codexModelSourceTouchedRef.current = false;
           setCodexModelSource(codexModelSourceFromStatus(status));
         }
         const detected = toolProtocolId(status.details?.tool_protocol);
-        if (detected && TOOL_PROTOCOLS_BY_TOOL[tool]?.includes(detected)) {
+        if (syncSelections && detected && TOOL_PROTOCOLS_BY_TOOL[tool]?.includes(detected)) {
           toolProtocolDraftTouchedRef.current[tool] = false;
           setToolProtocolSelections((current) => ({ ...current, [tool]: detected }));
         }
       }
       return status;
+    }
+
+  function nextToolConfigStatusEpoch(tool: string) {
+      const epoch = (toolConfigStatusEpochRef.current[tool] ?? 0) + 1;
+      toolConfigStatusEpochRef.current[tool] = epoch;
+      return epoch;
     }
 
   async function refreshToolConfigStatusAfterSuccess(
@@ -4311,18 +4345,25 @@ export function useAppController({
       result: ToolApplyResult,
       claudeSettings?: ClaudeModelSettings,
     ) {
+      // Apply results describe pre-write comparisons, not post-write readiness.
+      // Retain evidence of a completed write while the independent check runs.
+      const appliedStatus: ToolApplyResult = {
+        ...result,
+        already_configured: false,
+        details: {
+          ...result.details,
+          has_managed_config: String(toolHasManagedConfig(result) || result.files.length > 0),
+        },
+      };
+      setToolConfigStatuses((current) => ({ ...current, [tool]: appliedStatus }));
       try {
         return {
           status: await refreshSingleToolConfigStatus(tool, claudeSettings),
           warning: "",
         };
       } catch (error) {
-        const optimisticStatus: ToolApplyResult = {
-          ...result,
-        };
-        setToolConfigStatuses((current) => ({ ...current, [tool]: optimisticStatus }));
         return {
-          status: optimisticStatus,
+          status: toolConfigCheckFailed(appliedStatus)!,
           warning: tr("toolOperations.statusRefreshFailed", {
             tool: title,
             error: localizedError(error),
@@ -4710,12 +4751,26 @@ export function useAppController({
             backups: result.backups.length,
           }));
         }
+        const capabilityWarning = toolConfigCapabilityWarning(refreshedStatus) ?? toolConfigCapabilityWarning(result);
+        if (capabilityWarning) showToast(capabilityWarning, "info", 9000);
         if (statusRefreshWarning) showToast(statusRefreshWarning, "error", 5200);
         if (effectiveClaudeSettings) {
           storeAppliedClaudeModelSettings(effectiveClaudeSettings);
         }
         return true;
       } catch (error) {
+        if (
+          restartAfterConfig && String(error).includes("TOOL_PROGRAM_SELECTION_REQUIRED")
+        ) {
+          await openToolLocator(tool, title, true);
+          toolLocatorContinuationRef.current = async () => {
+            await configureTool(tool, title, true, effectiveClaudeSettings);
+          };
+          return false;
+        }
+        // A failed operation may already have written some owned entries.
+        // Refresh presence without overwriting the user's un-applied choices.
+        await refreshSingleToolConfigStatus(tool, effectiveClaudeSettings, false).catch(() => {});
         if (
           restartAfterConfig
           && toolConfigCanLaunchExistingAfterFailure(error)
@@ -4772,6 +4827,11 @@ export function useAppController({
         await invoke<string>("start_tool_program", { tool, useConfiguredEnvironment });
         showToast(tr("toolOperations.launched", { tool: title }), "success");
       } catch (error) {
+        if (String(error).includes("TOOL_PROGRAM_SELECTION_REQUIRED")) {
+          await openToolLocator(tool, title, true);
+          toolLocatorContinuationRef.current = () => startToolProgram(tool, title, useConfiguredEnvironment);
+          return;
+        }
         showToast(tr("toolOperations.launchFailed", { tool: title, error: localizedError(error) }), "error", 5200);
       } finally {
         finishToolOperation(tool);
@@ -4780,6 +4840,29 @@ export function useAppController({
 
   async function launchToolConfig(tool: string, title: string) {
       await configureTool(tool, title, true);
+    }
+
+  async function useTool(tool: string, title: string, configurationChanged = false) {
+      if (!beginToolOperation(tool)) return;
+      let status: ToolApplyResult;
+      try {
+        updateToolOperationLabel(tool, tr("toolOperations.progress.refreshStatus"));
+        status = await refreshSingleToolConfigStatus(tool, undefined, false);
+      } catch (error) {
+        showToast(tr("toolOperations.statusCheckFailed", { tool: title, error: localizedError(error) }), "error", 5200);
+        return;
+      } finally {
+        finishToolOperation(tool);
+      }
+      const action = toolPrimaryAction(status, configurationChanged);
+      if (action === "locate") {
+        await openToolLocator(tool, title, true);
+        toolLocatorContinuationRef.current = () => useTool(tool, title, configurationChanged);
+      } else if (action === "configure_and_launch" || toolSyncsModelsOnLaunch(status)) {
+        await launchToolConfig(tool, title);
+      } else {
+        await startToolProgram(tool, title, true);
+      }
     }
 
   async function removeToolConfig(tool: string, title: string) {
@@ -4806,12 +4889,6 @@ export function useAppController({
         if (resetClaudeSettings) {
           storeAppliedClaudeModelSettings(resetClaudeSettings);
         }
-        toolConfigStatusEpochRef.current += 1;
-        setToolConfigStatuses((current) => {
-          const next = { ...current };
-          delete next[tool];
-          return next;
-        });
         try {
           updateToolOperationLabel(tool, tr("toolOperations.progress.refreshStatus"));
           const checked = await refreshSingleToolConfigStatus(tool, resetClaudeSettings);
@@ -4827,7 +4904,7 @@ export function useAppController({
           const sessionSyncError = result.details?.session_sync_error;
           const attentionReason = noManifestOwnership
             ? tr("toolOperations.removeNoOwnedConfig", { tool: title })
-            : checked.already_configured
+            : toolHasManagedConfig(checked)
               ? tr("toolOperations.removeStillDetected", { tool: title })
               : sessionIndexError
                 ? tr("labels.sessionIndexFailed", { error: sessionIndexError })
@@ -4854,10 +4931,6 @@ export function useAppController({
             mode: "notice",
           });
         } catch (checkError) {
-          setToolConfigStatuses((current) => ({
-            ...current,
-            [tool]: { ...result, already_configured: false },
-          }));
           await askConfirm({
             title: tr("toolOperations.dialogs.removeResultAttentionTitle", { tool: title }),
             message: tr("toolOperations.dialogs.removeResultAttentionMessage", {
@@ -4873,6 +4946,7 @@ export function useAppController({
           });
         }
       } catch (error) {
+        await refreshSingleToolConfigStatus(tool, undefined, false).catch(() => {});
         await askConfirm({
           title: tr("toolOperations.dialogs.removeResultFailedTitle", { tool: title }),
           message: tr("toolOperations.dialogs.removeResultFailureMessage", {
@@ -4889,6 +4963,11 @@ export function useAppController({
     }
 
   async function openToolLocator(tool: string, title: string, continueWithLaunch = false) {
+      // Rescanning the same chooser must retain the original action (opening
+      // without configuration must not become configuring after selection).
+      if (!continueWithLaunch || toolLocator?.tool !== tool) {
+        toolLocatorContinuationRef.current = null;
+      }
       setShowMissingToolCandidates(false);
       setToolLocator({ tool, title, result: null, loading: true, error: "", continueWithLaunch });
       try {
@@ -4907,7 +4986,10 @@ export function useAppController({
         showToast(tr("toolOperations.programLocationSaved", { tool: title }), "success");
         if (continueWithLaunch) {
           setToolLocator(null);
-          await launchToolConfig(tool, title);
+          const resume = toolLocatorContinuationRef.current;
+          toolLocatorContinuationRef.current = null;
+          if (resume) await resume();
+          else await launchToolConfig(tool, title);
           return;
         }
         setToolLocator({ tool, title, result, loading: false, error: "", continueWithLaunch: false });
@@ -4923,7 +5005,10 @@ export function useAppController({
         showToast(tr("toolOperations.programLocationSaved", { tool: title }), "success");
         if (continueWithLaunch) {
           setToolLocator(null);
-          await launchToolConfig(tool, title);
+          const resume = toolLocatorContinuationRef.current;
+          toolLocatorContinuationRef.current = null;
+          if (resume) await resume();
+          else await launchToolConfig(tool, title);
           return;
         }
         setToolLocator({ tool, title, result, loading: false, error: "", continueWithLaunch: false });
@@ -5631,6 +5716,7 @@ export function useAppController({
     resolveChannelDuplicateDialog,
     applyToolConfig,
     startToolProgram,
+    useTool,
     launchToolConfig,
     removeToolConfig,
     openToolLocator,

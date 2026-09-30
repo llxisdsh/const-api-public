@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 /// It changes together with the adapter; discovering a newer package version
 /// at runtime is not evidence that this binary implements its wire contract.
 /// The models endpoint also gates its catalog on this version's `client_version`.
-pub(crate) const BUNDLED_CODEX_CLIENT_VERSION: &str = "0.157.1";
+pub(crate) const BUNDLED_CODEX_CLIENT_VERSION: &str = "0.159.2";
 pub(crate) const CODEX_ORIGINATOR: &str = "codex_cli_rs";
 
 pub(crate) fn codex_identity_for_version(

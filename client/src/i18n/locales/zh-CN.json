@@ -519,6 +519,10 @@
       "showMissing": "显示不可用位置（{{count}}）",
       "autoDetected": "自动发现",
       "hermesInstaller": "Hermes 安装器",
+      "editions": {
+        "desktop": "桌面版",
+        "cli": "命令行版（CLI）"
+      },
       "kinds": {
         "windowsExecutable": "Windows 可执行程序",
         "windowsApp": "Windows 应用",
@@ -1651,11 +1655,15 @@
       "configuredRisk": "已配置 · 外部启动有风险",
       "configured": "已配置",
       "needsConfiguration": "需写入配置",
+      "configurationIncomplete": "已有配置 · 需检查或补全",
       "fileMissing": "未发现配置文件",
       "protocolAria": "{{title}} 接入协议",
       "fixedProtocol": "此工具仅支持该协议",
+      "fallbackProtocol": "兜底协议",
+      "perModelProtocol": "每个模型自动匹配原生协议；没有匹配信息时才使用此协议。",
       "protocolChange": "已配置 {{protocol}}，执行配置后切换。",
       "environment": "环境",
+      "capabilityLimit": "能力限制",
       "extensionsAria": "VS Code 扩展",
       "useCurrent": "使用当前配置",
       "afterCurrent": "完成当前配置后生效",
@@ -1696,7 +1704,7 @@
         "awaitingConfirmation": "等待确认",
         "awaitingManualClose": "等待手动关闭",
         "closingProcess": "关闭程序",
-        "writingConfig": "写入配置",
+        "writingConfig": "写入配置{{displayCount}}",
         "scanningSessions": "扫描会话{{displayCount}}",
         "planningIndex": "整理会话索引",
         "migratingSessions": "迁移会话{{displayCount}}",
@@ -1828,8 +1836,20 @@
     "copilot": {
       "description": "支持 OpenAI 兼容自带密钥渠道的 GitHub 终端编码代理"
     },
+    "copilot-desktop": {
+      "description": "自动配置自定义模型的 GitHub Copilot 桌面版，密钥保存在系统凭据库"
+    },
     "cline": {
       "description": "桌面端与终端共用模型配置的 Cline 编码代理"
+    },
+    "trae": {
+      "description": "自动配置自定义模型的 TraeCode 国际版；需先登录 Trae"
+    },
+    "trae-cn": {
+      "description": "自动配置自定义模型的 TraeCode 国内版；需先登录 Trae"
+    },
+    "trae-work": {
+      "description": "为 TraeWork 桌面版的本地任务配置模型；需先登录 TraeWork"
     },
     "opencode": {
       "description": "覆盖终端、桌面与 IDE 的开源 AI 编码代理"
@@ -1847,7 +1867,7 @@
       "description": "同时提供桌面端与终端端的开源推理编码代理"
     },
     "deepseek-harness": {
-      "description": "DeepSeek 开源的插件化智能体框架与本地 Web 工作区"
+      "description": "DeepSeek 开源的插件化智能体框架，支持桌面端与本地 Web 工作区"
     },
     "pi": {
       "description": "pi-mono 提供的轻量、可扩展终端编码代理"
@@ -1864,11 +1884,17 @@
     "mistral-vibe": {
       "description": "Mistral AI 开源的终端编码代理"
     },
+    "grok-build": {
+      "description": "xAI 终端编码工具；同步模型列表，并为每个模型选择匹配的 API 协议"
+    },
+    "minimax-code": {
+      "description": "MiniMax 桌面端与终端共用模型配置；默认优先桌面版，统一使用工具菜单中选择的协议"
+    },
     "open-design": {
       "description": "通过官方 Codex 适配器接入的本地优先开源 AI 设计工作区"
     },
     "vscode": {
-      "description": "通过自定义 OpenAI 端点使用 CONST API 的 VS Code Chat 与 Agent"
+      "description": "在 VS Code Chat 与 Agent 中使用 CONST API，按模型匹配协议"
     },
     "workbuddy": {
       "description": "面向办公、研究与多步骤任务的专业桌面智能体"
@@ -1877,7 +1903,7 @@
       "description": "桌面端与终端共用模型配置的 Kimi Code 编码代理"
     },
     "mimocode": {
-      "description": "小米 MiMo 开源的终端编码代理"
+      "description": "小米 MiMo 编码工具，优先桌面版，与命令行共用模型配置"
     },
     "qwencode": {
       "description": "桌面端与终端共用模型配置的 Qwen Code 编码工具"
@@ -2199,6 +2225,7 @@
     "committedNotStarted": "{{tool}} 已配置，但程序未能启动；可稍后手动启动。",
     "statusCheckTimeout": "{{tool}} 状态检查超时。",
     "statusRefreshFailed": "{{tool}} 已更新，但状态刷新失败：{{error}}",
+    "statusCheckFailed": "无法检查 {{tool}} 的配置：{{error}}",
     "incomplete": "{{tool}} 未返回完整的操作结果。",
     "launchConfirmationMissing": "{{tool}} 已配置，但缺少启动确认信息。",
     "manualStartRequired": "{{tool}} 已配置，请手动启动以使用新设置。",
@@ -2208,6 +2235,7 @@
     "filesCurrent": "配置文件已是最新。",
     "targetProvider": "目标 Provider：{{provider}}。",
     "alreadyConfigured": "{{tool}} 已完成配置。",
+    "traeImageInputLimited": "Trae 未启用以下模型的图片输入，文本配置可用：{{models}}。",
     "configured": "{{tool}} 配置完成：更新 {{changed}}/{{checked}} 个文件，创建 {{backups}} 个备份。",
     "restoreHint": "如需恢复原来的接入设置，右键该工具选择“取消配置”即可。",
     "configureFailed": "{{action}}{{tool}}失败：{{error}}",
@@ -2215,7 +2243,7 @@
     "launchFailed": "启动 {{tool}} 失败：{{error}}",
     "modelRefreshUnavailableUsedExisting": "{{tool}} 的模型列表暂时无法刷新，已使用现有有效配置启动。",
     "removeNoOwnedConfig": "未发现 CONST API 为 {{tool}} 管理的配置。",
-    "removeStillDetected": "{{tool}} 仍检测到有效配置。",
+    "removeStillDetected": "{{tool}} 仍检测到 CONST API 配置，可能尚未清理完毕或仍被共享工具使用。",
     "removed": "{{tool}} 已取消配置。",
     "removedNativeRoute": "{{tool}} 已恢复工具原生接入。",
     "removedStatusRefreshFailed": "{{tool}} 配置已移除，但状态刷新失败：{{error}}",
@@ -2613,6 +2641,17 @@
     "expand": "展开提醒：{{title}}"
   },
   "errors": {
+    "traeFields": {
+      "multimodal": "图片输入",
+      "thinking_enable": "思考模式",
+      "custom_model_type": "模型系列",
+      "prompt_max_tokens": "输入上下文窗口",
+      "max_tokens": "输出上限",
+      "max_turn": "工具调用轮数",
+      "temperature": "温度",
+      "top_p": "Top P",
+      "top_k": "Top K"
+    },
     "codes": {
       "unauthorized": "认证失败，请重新登录。",
       "forbidden": "没有执行此操作的权限。",
@@ -2682,6 +2721,7 @@
       "empty_model_catalog": "模型目录为空。",
       "tool_config_confirmation_process_replaced": "授权进程在安全结束前发生了变化。",
       "tool_config_models_unavailable": "{{detail}} 没有可用的模型目录。",
+      "tool_config_copilot_desktop_initialize": "请先更新并打开一次 GitHub Copilot 桌面版，让它完成本机数据初始化，再重新配置。已有配置不会被覆盖。",
       "tool_config_process_close_failed": "无法安全关闭程序。",
       "tool_config_process_close_timeout": "程序未能在限定时间内关闭。",
       "tool_config_process_still_running": "仍检测到程序或其后台进程，可能正在退出或被其他程序重新启动。本次尚未写入配置。",
@@ -2692,6 +2732,10 @@
       "tool_config_start_failed": "无法启动程序。",
       "tool_config_start_precheck_failed": "启动前无法确认程序状态。",
       "tool_config_write_failed": "无法写入配置。",
+      "tool_config_trae_http_failed": "Trae 模型配置服务返回 HTTP {{status}}，配置未完成，请稍后重试。",
+      "tool_config_trae_rejected": "Trae 模型配置服务拒绝了操作（错误码 {{vendor_code}}），配置未完成。",
+      "tool_config_trae_verification_failed": "Trae 模型连接或高级配置未通过回读校验。未删除已有模型，请检查 Trae 中的相应模型后重新配置。",
+      "tool_config_trae_advanced_verification_failed": "Trae 模型“{{model}}”的“{{field}}”未通过回读校验。未删除已有模型，请检查该模型设置后重新配置。",
       "tool_start_candidate_missing": "未找到可启动的程序。",
       "tool_start_unstable": "程序在确认启动前提前退出。"
     }

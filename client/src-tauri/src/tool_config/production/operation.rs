@@ -1164,6 +1164,19 @@ where
     let _guard = lock_tool_config_operation(tool, &operation_lock, operation)?;
     update_tool_config_operation_progress(operation, "checking_config", None, None);
     ensure_tool_config_operation_active(operation, "configuration preview")?;
+    // Ask before changing configuration or stopping an app, not after a commit.
+    if operation.restart && tool_prefers_desktop_program(tool) {
+        #[cfg(test)]
+        let simulated = test_tool_runtime_snapshot(tool).is_some();
+        #[cfg(not(test))]
+        let simulated = false;
+        if !simulated {
+            require_unambiguous_tool_program(
+                tool,
+                &tool_program_candidates_without_process_scan(tool)?,
+            )?;
+        }
+    }
     let mut preview_result = preview().map_err(|err| {
         anyhow!(
             "TOOL_CONFIG_PREVIEW_FAILED: preview {} configuration: {err:#}",
@@ -1840,6 +1853,7 @@ fn launch_tool_program_with_environment_inner(
     }
 
     let location = locate_tool_program(tool)?;
+    require_unambiguous_tool_program(tool, &location.candidates)?;
     let Some(candidate) = select_tool_launch_candidate(tool, &location.candidates) else {
         return Err(anyhow!(
             "TOOL_START_CANDIDATE_MISSING: no launchable {} program was found",

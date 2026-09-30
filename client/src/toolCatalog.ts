@@ -9,12 +9,15 @@ export type ToolModelSyncPolicy = "none" | "selected" | "catalog";
 export type ToolCatalogEntry = {
   tool: string;
   title: string;
+  // Distinguish parallel editions, not every terminal-based tool.
+  badge?: "CLI" | "CN";
   description: string;
   officialLinks: readonly ToolCatalogLink[];
   fallbackLinks?: readonly ToolCatalogLink[];
   protocols: readonly ToolProtocolId[];
   defaultProtocol: ToolProtocolId;
   modelSyncPolicy: ToolModelSyncPolicy;
+  protocolScope?: "model";
 };
 
 // Official links point to vendor-owned sites or canonical project repositories.
@@ -84,6 +87,7 @@ export const TOOL_CATALOG = {
   copilot: {
     tool: "copilot",
     title: "GitHub Copilot CLI",
+    badge: "CLI",
     description: "GitHub's terminal coding agent using an OpenAI-compatible BYOK provider",
     protocols: ["openai_chat"],
     defaultProtocol: "openai_chat",
@@ -91,6 +95,18 @@ export const TOOL_CATALOG = {
     officialLinks: [
       { label: "Official website", url: "https://github.com/features/copilot/cli" },
       { label: "Documentation", url: "https://docs.github.com/en/copilot/concepts/agents/copilot-cli/about-copilot-cli" },
+    ],
+  },
+  "copilot-desktop": {
+    tool: "copilot-desktop",
+    title: "GitHub Copilot",
+    description: "GitHub Copilot desktop app with automatic BYOK models and system-keychain credentials",
+    protocols: ["openai_responses", "openai_chat", "anthropic_messages"],
+    defaultProtocol: "openai_responses",
+    protocolScope: "model",
+    modelSyncPolicy: "catalog",
+    officialLinks: [
+      { label: "Documentation and download", url: "https://docs.github.com/en/copilot/how-tos/github-copilot-app/use-byok-models" },
     ],
   },
   cline: {
@@ -108,7 +124,8 @@ export const TOOL_CATALOG = {
     tool: "opencode",
     title: "OpenCode",
     description: "Open-source AI coding agent for terminal, desktop, and IDE",
-    protocols: ["openai_responses", "openai_chat"],
+    protocols: ["openai_responses", "anthropic_messages", "gemini_native", "openai_chat"],
+    protocolScope: "model",
     defaultProtocol: "openai_responses",
     modelSyncPolicy: "catalog",
     officialLinks: [
@@ -116,12 +133,44 @@ export const TOOL_CATALOG = {
       { label: "GitHub", url: "https://github.com/anomalyco/opencode" },
     ],
   },
+  trae: {
+    tool: "trae",
+    title: "TraeCode",
+    description: "Trae Code with automatic custom-model configuration; sign in to Trae first",
+    protocols: ["openai_chat", "openai_responses", "anthropic_messages"],
+    defaultProtocol: "openai_chat",
+    protocolScope: "model",
+    modelSyncPolicy: "catalog",
+    officialLinks: [{ label: "Official download", url: "https://www.trae.ai/download" }],
+  },
+  "trae-cn": {
+    tool: "trae-cn",
+    title: "TraeCode CN",
+    badge: "CN",
+    description: "Trae Code China with automatic custom-model configuration; sign in to Trae first",
+    protocols: ["openai_chat", "openai_responses", "anthropic_messages"],
+    defaultProtocol: "openai_chat",
+    protocolScope: "model",
+    modelSyncPolicy: "catalog",
+    officialLinks: [{ label: "Official download", url: "https://www.trae.cn/download" }],
+  },
+  "trae-work": {
+    tool: "trae-work",
+    title: "TraeWork",
+    description: "TraeWork desktop custom models for local tasks; sign in to TraeWork first",
+    protocols: ["openai_chat", "openai_responses", "anthropic_messages"],
+    defaultProtocol: "openai_chat",
+    protocolScope: "model",
+    modelSyncPolicy: "catalog",
+    officialLinks: [{ label: "Official download", url: "https://www.trae.cn/download" }],
+  },
   openclaw: {
     tool: "openclaw",
     title: "OpenClaw",
     description: "Personal AI assistant for local use and chat channels",
     protocols: ["openai_responses", "openai_chat", "anthropic_messages", "gemini_native"],
     defaultProtocol: "openai_responses",
+    protocolScope: "model",
     modelSyncPolicy: "catalog",
     officialLinks: [
       { label: "Official website", url: "https://openclaw.ai/" },
@@ -166,7 +215,7 @@ export const TOOL_CATALOG = {
   "deepseek-harness": {
     tool: "deepseek-harness",
     title: "DeepSeek Harness",
-    description: "DeepSeek's open-source, plugin-based agent harness with a local Web UI",
+    description: "DeepSeek's open-source, plugin-based agent harness with desktop and local Web clients",
     protocols: ["openai_chat", "openai_responses", "anthropic_messages"],
     defaultProtocol: "openai_chat",
     modelSyncPolicy: "catalog",
@@ -179,7 +228,8 @@ export const TOOL_CATALOG = {
     tool: "pi",
     title: "Pi",
     description: "Minimal, extensible terminal coding agent from pi-mono",
-    protocols: ["openai_responses", "openai_chat"],
+    protocols: ["openai_responses", "anthropic_messages", "gemini_native", "openai_chat"],
+    protocolScope: "model",
     defaultProtocol: "openai_responses",
     modelSyncPolicy: "catalog",
     officialLinks: [
@@ -201,9 +251,10 @@ export const TOOL_CATALOG = {
   vscode: {
     tool: "vscode",
     title: "VS Code",
-    description: "VS Code Chat and Agent through a custom OpenAI endpoint",
-    protocols: ["openai_responses", "openai_chat"],
+    description: "VS Code Chat and Agent with model-specific protocol selection",
+    protocols: ["openai_responses", "openai_chat", "anthropic_messages"],
     defaultProtocol: "openai_responses",
+    protocolScope: "model",
     modelSyncPolicy: "catalog",
     officialLinks: [
       { label: "Official download", url: "https://code.visualstudio.com/Download" },
@@ -226,6 +277,7 @@ export const TOOL_CATALOG = {
     description: "Kimi Code desktop and terminal agent with shared model configuration",
     protocols: ["openai_responses", "openai_chat"],
     defaultProtocol: "openai_responses",
+    protocolScope: "model",
     modelSyncPolicy: "catalog",
     officialLinks: [
       { label: "Official download", url: "https://www.kimi.com/code" },
@@ -236,8 +288,9 @@ export const TOOL_CATALOG = {
     tool: "mimocode",
     title: "MiMo Code",
     description: "Xiaomi MiMo's open-source coding agent for the terminal",
-    protocols: ["openai_chat"],
+    protocols: ["openai_chat", "openai_responses", "anthropic_messages", "gemini_native"],
     defaultProtocol: "openai_chat",
+    protocolScope: "model",
     modelSyncPolicy: "catalog",
     officialLinks: [
       { label: "GitHub", url: "https://github.com/XiaomiMiMo/MiMo-Code" },
@@ -258,8 +311,9 @@ export const TOOL_CATALOG = {
     tool: "openscience",
     title: "Open Science",
     description: "Open-source research workspace and scientific agent",
-    protocols: ["openai_chat"],
+    protocols: ["openai_chat", "openai_responses"],
     defaultProtocol: "openai_chat",
+    protocolScope: "model",
     modelSyncPolicy: "catalog",
     officialLinks: [
       { label: "GitHub", url: "https://github.com/ai4s-research/open-science" },
@@ -323,6 +377,29 @@ export const TOOL_CATALOG = {
       { label: "GitHub", url: "https://github.com/HKUDS/Vibe-Trading" },
     ],
   },
+  "grok-build": {
+    tool: "grok-build",
+    title: "Grok Build",
+    description: "xAI terminal coding agent with a custom model catalog and per-model API protocols",
+    protocols: ["openai_responses", "anthropic_messages", "openai_chat"],
+    defaultProtocol: "openai_responses",
+    protocolScope: "model",
+    modelSyncPolicy: "catalog",
+    officialLinks: [
+      { label: "GitHub", url: "https://github.com/xai-org/grok-build" },
+    ],
+  },
+  "minimax-code": {
+    tool: "minimax-code",
+    title: "MiniMax Code",
+    description: "MiniMax desktop and terminal agent with shared custom-provider and model configuration",
+    protocols: ["anthropic_messages", "openai_responses", "openai_chat"],
+    defaultProtocol: "anthropic_messages",
+    modelSyncPolicy: "catalog",
+    officialLinks: [
+      { label: "GitHub", url: "https://github.com/MiniMax-AI/minimax-code" },
+    ],
+  },
   zcode: {
     tool: "zcode",
     title: "ZCode",
@@ -352,7 +429,11 @@ export const TOOL_CATALOG_ORDER = [
   "openclaw",
   "gemini",
   "copilot",
+  "copilot-desktop",
   "cline",
+  "trae",
+  "trae-cn",
+  "trae-work",
   "raven",
   "pi",
   "claude-science",
@@ -367,6 +448,8 @@ export const TOOL_CATALOG_ORDER = [
   "openscience",
   "open-design",
   "vibe-trading",
+  "grok-build",
+  "minimax-code",
   "zcode",
 ] as const satisfies readonly ToolCatalogId[];
 

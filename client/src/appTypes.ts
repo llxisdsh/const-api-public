@@ -75,7 +75,7 @@ export type LanShareSelfStatus = LanShareUsageSnapshot & {
   output_weight: number;
 };
 
-export type CustomBrandIcon = "anythingllm" | "azure" | "bedrock" | "claude" | "claude-science" | "cline" | "codex" | "copilot" | "deepseek-harness" | "gemini" | "goose" | "hermes" | "kimi" | "mimocode" | "mistral-vibe" | "omniroute" | "open-design" | "open-interpreter" | "openclaw" | "opencode" | "openscience" | "pi" | "qwen" | "raven" | "reasonix" | "vibe-trading" | "vscode" | "workbuddy" | "zcode";
+export type CustomBrandIcon = "anythingllm" | "azure" | "bedrock" | "claude" | "claude-science" | "cline" | "codex" | "copilot" | "deepseek-harness" | "gemini" | "goose" | "grok" | "hermes" | "kimi" | "mimocode" | "minimax-code" | "mistral-vibe" | "omniroute" | "open-design" | "open-interpreter" | "openclaw" | "opencode" | "openscience" | "pi" | "qwen" | "raven" | "reasonix" | "trae" | "trae-work" | "vibe-trading" | "vscode" | "workbuddy" | "zcode";
 
 export type CopyField =
   | "base-url"
@@ -408,6 +408,7 @@ export type ToolProgramCandidate = {
   path: string;
   label: string;
   kind: string;
+  edition?: "desktop" | "cli";
   exists: boolean;
   modified_at_unix?: number;
   version?: string;

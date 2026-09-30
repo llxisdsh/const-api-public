@@ -4,11 +4,17 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { Circle } from "lucide-react";
 import { describe, expect, test, vi } from "vitest";
 import { ToolDockMenuProvider } from "../ToolDockMenu";
+import kimiIconUrl from "../assets/tool-icons/kimi-code.svg";
+import kimiIconSource from "../assets/tool-icons/kimi-code.svg?raw";
+import mimoCodeIconUrl from "../assets/tool-icons/mimocode.svg";
+import miniMaxCodeIconUrl from "../assets/tool-icons/minimax-code.svg";
+import miniMaxCodeIconSource from "../assets/tool-icons/minimax-code.svg?raw";
 import { installWebviewShortcutGuard } from "../webviewShortcutGuard";
 import {
   BlockingConfirmDialog,
   ClaudeModelSettingsPanel,
   CompactChoiceMenu,
+  customBrandIconUrl,
   HiddenToolMenu,
   ModelInput,
   QuickCard,
@@ -230,6 +236,44 @@ describe("ToolRemoveDialog", () => {
 });
 
 describe("QuickCard", () => {
+  test("keeps the MiniMax interior transparent instead of painting a white inset", () => {
+    const svg = new DOMParser().parseFromString(miniMaxCodeIconSource, "image/svg+xml");
+    expect(svg.querySelector("parsererror")).toBeNull();
+    const outline = svg.querySelector('path[fill-rule="evenodd"]');
+    expect(outline?.getAttribute("d")?.match(/M/g)).toHaveLength(2);
+    expect([...svg.querySelectorAll("[fill]")].every((element) => (
+      ["none", "#111"].includes(element.getAttribute("fill") ?? "")
+    ))).toBe(true);
+  });
+
+  test("keeps Kimi artwork vector-only so dark mode has no white raster matte", () => {
+    expect(kimiIconSource).not.toMatch(/<image\b|data:image|<clipPath\b/);
+    expect(kimiIconSource).toContain("<radialGradient");
+  });
+
+  test.each([
+    ["mimocode", "mimocode", mimoCodeIconUrl],
+    ["minimax-code", "minimax-code", miniMaxCodeIconUrl],
+    ["kimicode", "kimi", kimiIconUrl],
+  ] as const)("uses the Windows desktop artwork for %s", (id, customIcon, assetUrl) => {
+    const { container } = render(<ToolDockMenuProvider><QuickCard
+      id={id} title={id} icon={null} customIcon={customIcon}
+      fallback={Circle} tone="#2787f5" actionLabel="配置" onAction={vi.fn()}
+    /></ToolDockMenuProvider>);
+    expect(container.querySelector(".brand-badge img")?.getAttribute("src")).toBe(assetUrl);
+  });
+
+  test("shows an edition badge separately from the original logo", () => {
+    const { container } = render(<ToolDockMenuProvider><QuickCard
+      id="trae-cn" title="TraeCode CN" icon={null} customIcon="trae"
+      badge="CN" fallback={Circle} tone="#32f08c" actionLabel="配置"
+      onAction={vi.fn()}
+    /></ToolDockMenuProvider>);
+    expect(container.querySelector(".tool-edition-badge")).toHaveTextContent("CN");
+    expect(container.querySelector(".brand-badge .tool-edition-badge")).toBeNull();
+    expect(container.querySelector(".brand-badge img")?.getAttribute("src")).toBe(customBrandIconUrl("trae"));
+  });
+
   test("hides cancel configuration when the caller provides no removal action", () => {
     const onConfigure = vi.fn();
     render(<ToolDockMenuProvider><QuickCard

@@ -18,7 +18,7 @@ fn tool_model_discovery_priority_reaches_array_based_tool_writers() {
     let codex = build_codex_model_catalog(&models, &serde_json::json!({})).unwrap();
     assert_eq!(codex["models"][0]["slug"], "gpt-future");
     assert_eq!(codex["models"][0]["priority"], 0);
-    assert_eq!(openclaw_model_entries(&models)[0]["id"], "gpt-future");
+    assert_eq!(openclaw_model_entries(&models, TOOL_CONFIG_ROOT_URL, ToolProtocol::OpenAiResponses)[0]["id"], "gpt-future");
     assert_eq!(vscode_const_api_provider("http://localhost/v1", "test", &models, ToolProtocol::OpenAiChat).unwrap()["models"][0]["id"], "gpt-future");
     assert_eq!(configured_additional_tool_models("test", &models).unwrap()[0].id, "gpt-future");
     let mut workbuddy = serde_json::json!([]);

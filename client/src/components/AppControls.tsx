@@ -17,18 +17,25 @@ import claudeScienceIconUrl from "../assets/tool-icons/claude-science.png";
 import codexIconUrl from "../assets/tool-icons/codex.svg";
 import copilotIconUrl from "../assets/tool-icons/copilot.svg";
 import clineIconUrl from "../assets/tool-icons/cline.svg";
+import traeIconUrl from "../assets/tool-icons/trae.svg";
+import traeWorkIconUrl from "../assets/tool-icons/trae-work.svg";
 import deepseekHarnessIconUrl from "../assets/tool-icons/deepseek-harness.svg";
 import geminiIconUrl from "../assets/tool-icons/gemini.svg";
 import gooseIconUrl from "../assets/tool-icons/goose.svg";
+import grokIconUrl from "../assets/tool-icons/grok.svg";
 import hermesIconUrl from "../assets/tool-icons/hermesagent.png";
-import kimiIconUrl from "../assets/tool-icons/kimi.svg";
+// Desktop foreground marks; source/provenance lives in each SVG.
+import kimiIconUrl from "../assets/tool-icons/kimi-code.svg";
 import mimoCodeIconUrl from "../assets/tool-icons/mimocode.svg";
+import miniMaxCodeIconUrl from "../assets/tool-icons/minimax-code.svg";
 import omniRouteIconUrl from "../assets/tool-icons/omniroute.svg";
 import openDesignIconUrl from "../assets/tool-icons/open-design.svg";
 import openInterpreterIconUrl from "../assets/tool-icons/open-interpreter.svg";
 import openClawIconUrl from "../assets/tool-icons/openclaw.svg";
 import openCodeIconUrl from "../assets/tool-icons/opencode.svg";
-import openScienceIconUrl from "../assets/tool-icons/open-science.svg";
+// Application mark from ai4s-research/open-science/apps/desktop/src/assets/logo.webp;
+// its favicon is a different illustration.
+import openScienceIconUrl from "../assets/tool-icons/open-science.webp";
 import qwenIconUrl from "../assets/tool-icons/qwen.svg";
 import piIconUrl from "../assets/tool-icons/pi.svg";
 import ravenIconUrl from "../assets/tool-icons/raven.svg";
@@ -37,7 +44,7 @@ import mistralVibeIconUrl from "../assets/tool-icons/mistral-vibe.svg";
 import vibeTradingIconUrl from "../assets/tool-icons/vibe-trading.png";
 import vscodeIconUrl from "../assets/tool-icons/vscode.svg";
 import workBuddyIconUrl from "../assets/tool-icons/workbuddy.svg";
-import zcodeIconUrl from "../assets/tool-icons/zcode.png";
+import zcodeIconUrl from "../assets/tool-icons/zcode.svg";
 import { useToolDockMenu } from "../ToolDockMenu";
 import type { ToolCatalogId } from "../toolCatalog";
 import {
@@ -537,7 +544,7 @@ export function ToolProtocolPanel({
         value={state.selected}
         disabled={disabled || state.fixed}
         floating
-        title={state.fixed ? t("labels.toolMenu.fixedProtocol") : undefined}
+        title={state.perModel ? t("labels.toolMenu.perModelProtocol") : state.fixed ? t("labels.toolMenu.fixedProtocol") : undefined}
         options={state.protocols.map((protocol) => ({
           value: protocol,
           label: TOOL_PROTOCOL_OPTIONS[protocol].label,
@@ -709,6 +716,12 @@ export function ToolConfigDetailPanel({
         <div className="tool-truth-row tool-truth-warning">
           <span title={t("labels.toolMenu.environment")}>{t("labels.toolMenu.environment")}</span>
           <strong>{state.externalLaunchWarning}</strong>
+        </div>
+      )}
+      {state.capabilityWarning && (
+        <div className="tool-truth-row tool-truth-warning">
+          <span>{t("labels.toolMenu.capabilityLimit")}</span>
+          <strong>{state.capabilityWarning}</strong>
         </div>
       )}
     </div>
@@ -1063,6 +1076,7 @@ export function QuickCard({
   description,
   icon,
   customIcon,
+  badge,
   fallback: Fallback,
   tone,
   configured,
@@ -1084,6 +1098,7 @@ export function QuickCard({
   description?: string;
   icon: BrandIconData | null;
   customIcon?: CustomBrandIcon;
+  badge?: "CLI" | "CN";
   fallback: LucideIcon;
   tone: string;
   configured?: boolean;
@@ -1296,6 +1311,7 @@ export function QuickCard({
           )}
           <BrandBadge icon={icon} customIcon={customIcon} fallback={Fallback} tone={tone} />
         </button>
+        {badge && <span className="tool-edition-badge" aria-hidden="true">{badge}</span>}
       </div>
       <small
         className={`tool-dock-status-text ${busy ? `${statusTone ?? "pending"} is-live` : "idle"}`}
@@ -1408,6 +1424,7 @@ export function QuickCard({
 type HiddenToolCard = {
   tool: ToolCatalogId;
   title: string;
+  badge?: "CLI" | "CN";
   icon: BrandIconData | null;
   customIcon?: CustomBrandIcon;
   fallback: LucideIcon;
@@ -1608,6 +1625,7 @@ export function HiddenToolMenu({
                   tone={card.tone}
                 />
                 <span>{card.title}</span>
+                {card.badge && <small className="tool-edition-label">{card.badge}</small>}
               </button>
             ))}
             <button
@@ -1680,18 +1698,26 @@ export function customBrandIconUrl(icon: CustomBrandIcon) {
       return copilotIconUrl;
     case "cline":
       return clineIconUrl;
+    case "trae":
+      return traeIconUrl;
+    case "trae-work":
+      return traeWorkIconUrl;
     case "deepseek-harness":
       return deepseekHarnessIconUrl;
     case "gemini":
       return geminiIconUrl;
     case "goose":
       return gooseIconUrl;
+    case "grok":
+      return grokIconUrl;
     case "hermes":
       return hermesIconUrl;
     case "kimi":
       return kimiIconUrl;
     case "mimocode":
       return mimoCodeIconUrl;
+    case "minimax-code":
+      return miniMaxCodeIconUrl;
     case "omniroute":
       return omniRouteIconUrl;
     case "open-design":

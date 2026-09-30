@@ -357,7 +357,89 @@ fn save_tool_config_manifest(manifest: &ToolConfigManifest) -> Result<()> {
     let path = tool_config_manifest_path();
     let mut content = serde_json::to_vec_pretty(manifest)?;
     content.push(b'\n');
-    atomic_write(&path, &content).with_context(|| format!("save {}", path.display()))
+    let mut cache = tool_config_presence_cache()
+        .lock()
+        .map_err(|_| anyhow!("TOOL_CONFIG_PRESENCE_LOCK_POISONED: presence lock poisoned"))?;
+    atomic_write(&path, &content).with_context(|| format!("save {}", path.display()))?;
+    *cache = None;
+    Ok(())
+}
+
+struct ToolConfigPresenceIndex {
+    stamp: (PathBuf, std::time::SystemTime, u64),
+    files: HashMap<String, Vec<PathBuf>>,
+}
+
+fn tool_config_presence_cache() -> &'static Mutex<Option<ToolConfigPresenceIndex>> {
+    static CACHE: OnceLock<Mutex<Option<ToolConfigPresenceIndex>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn tool_has_owned_config_files(tool: &str) -> Result<bool> {
+    if !manifest_manages_tool(tool) {
+        return Ok(false);
+    }
+    let _guard = tool_config_manifest_lock()
+        .lock()
+        .map_err(|_| anyhow!("TOOL_CONFIG_MANIFEST_LOCK_POISONED: manifest lock poisoned"))?;
+    let path = tool_config_manifest_path();
+    let mut cache = tool_config_presence_cache()
+        .lock()
+        .map_err(|_| anyhow!("TOOL_CONFIG_PRESENCE_LOCK_POISONED: presence lock poisoned"))?;
+    let metadata = match fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            *cache = None;
+            return Ok(false);
+        }
+        Err(error) => return Err(error).with_context(|| format!("stat {}", path.display())),
+    };
+    let stamp = (path.clone(), metadata.modified()?, metadata.len());
+    if cache.as_ref().is_none_or(|index| index.stamp != stamp) {
+        // All cards share this small projection. Do not retain credential-bearing
+        // backup contents or deserialize the full manifest once per tool.
+        #[derive(Deserialize)]
+        struct Entry {
+            tool: String,
+        }
+        #[derive(Deserialize)]
+        struct Index {
+            #[serde(default)]
+            files: HashMap<String, Entry>,
+        }
+        let raw = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+        let index: Index =
+            serde_json::from_slice(&raw).with_context(|| format!("parse {}", path.display()))?;
+        let mut files: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        for (path, entry) in index.files {
+            files
+                .entry(entry.tool)
+                .or_default()
+                .push(PathBuf::from(path));
+        }
+        *cache = Some(ToolConfigPresenceIndex { stamp, files });
+    }
+    Ok(cache
+        .as_ref()
+        .unwrap()
+        .files
+        .get(tool)
+        .is_some_and(|files| files.iter().any(|path| path.is_file())))
+}
+
+pub(crate) fn attach_tool_config_presence(result: &mut ToolApplyResult) -> Result<()> {
+    // Presence is deliberately weaker than readiness. A stale key or partial
+    // write must not hide configuration that cancellation can still restore.
+    let present = result.already_configured
+        || result
+            .details
+            .get("has_managed_config")
+            .is_some_and(|value| value == "true")
+        || tool_has_owned_config_files(&result.tool)?;
+    result
+        .details
+        .insert("has_managed_config".into(), present.to_string());
+    Ok(())
 }
 
 fn manifest_manages_tool(tool: &str) -> bool {
@@ -374,6 +456,8 @@ fn manifest_manages_tool(tool: &str) -> bool {
             | "vscode"
             | "workbuddy"
             | "copilot"
+            | "grok-build"
+            | "minimax-code"
             | "raven"
             | "pi"
             | "cline"
@@ -550,6 +634,17 @@ fn toml_item_to_owned_json(item: &Item) -> Option<serde_json::Value> {
     }
 }
 
+fn named_entry_key(value: &serde_json::Value) -> Option<String> {
+    let name = value.as_str().filter(|name| !name.is_empty())?;
+    if let Some(encoded) = name.strip_prefix(TOML_VALUE_PREFIX) {
+        // TOML ownership keeps value spelling, but a named entry's identity
+        // must not change when the tool rewrites single/double quotes.
+        let value = encoded.trim().parse::<toml_edit::Value>().ok()?;
+        return Some(format!("{TOML_VALUE_PREFIX}{}", toml_value(value.as_str()?)));
+    }
+    Some(name.to_string())
+}
+
 fn named_array_parts(
     value: Option<&serde_json::Value>,
 ) -> Option<(
@@ -563,15 +658,12 @@ fn named_array_parts(
     let mut named = BTreeMap::new();
     let mut unnamed = Vec::new();
     for entry in array {
-        let name = entry
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .filter(|name| !name.is_empty());
+        let name = entry.get("name").and_then(named_entry_key);
         let Some(name) = name else {
             unnamed.push(entry);
             continue;
         };
-        if named.insert(name.to_string(), entry).is_some() {
+        if named.insert(name, entry).is_some() {
             return None;
         }
     }
@@ -585,7 +677,30 @@ fn named_array_entry<'a>(
     value?
         .as_array()?
         .iter()
-        .find(|entry| entry.get("name").and_then(serde_json::Value::as_str) == Some(name))
+        .find(|entry| entry.get("name").and_then(named_entry_key).as_deref() == Some(name))
+}
+
+fn tool_config_logical_entry_path(path: &[ToolConfigFieldPath]) -> bool {
+    if matches!(path.last(), Some(ToolConfigFieldPath::Named(_))) {
+        return true;
+    }
+    let [.., ToolConfigFieldPath::Key(collection), ToolConfigFieldPath::Key(id)] = path else {
+        return false;
+    };
+    match collection.as_str() {
+        "provider" | "providers" | "model_providers" | "modelProviders" | "custom_provider" => {
+            matches!(id.as_str(), "const-api" | "CONST_API" | "const_api")
+        }
+        "model" | "models" => {
+            id.starts_with("const-api/") || id.starts_with("CONST_API/")
+                || path[..path.len() - 2].windows(2).any(|parent| {
+                    matches!(parent, [ToolConfigFieldPath::Key(collection), ToolConfigFieldPath::Key(provider)]
+                        if matches!(collection.as_str(), "provider" | "providers" | "model_providers" | "modelProviders" | "custom_provider")
+                        && matches!(provider.as_str(), "const-api" | "CONST_API" | "const_api"))
+                })
+        }
+        _ => false,
+    }
 }
 
 fn collect_tool_config_owned_fields(
@@ -597,12 +712,11 @@ fn collect_tool_config_owned_fields(
     if original == applied {
         return;
     }
-    // A named array entry created by CONST API is owned as one logical item.
+    // A provider/model entry created by CONST API is owned as one logical item.
     // Tools may append runtime metadata to that item later; cancellation can
-    // still remove the entry by its stable name without touching siblings.
-    if matches!(path.last(), Some(ToolConfigFieldPath::Named(_)))
-        && (original.is_none() || applied.is_none())
-    {
+    // still remove it by its namespace/name without touching siblings. Existing
+    // entries continue to use field-level restoration, never blanket deletion.
+    if tool_config_logical_entry_path(path) && (original.is_none() || applied.is_none()) {
         fields.push(ToolConfigOwnedField {
             path: path.clone(),
             original: original
@@ -706,9 +820,9 @@ fn owned_field_json_value(value: &ToolConfigFieldValue) -> Option<&serde_json::V
     }
 }
 
-fn owned_field_is_added_named_entry(field: &ToolConfigOwnedField) -> bool {
+fn owned_field_is_added_entry(field: &ToolConfigOwnedField) -> bool {
     matches!(field.original, ToolConfigFieldValue::Missing)
-        && matches!(field.path.last(), Some(ToolConfigFieldPath::Named(_)))
+        && tool_config_logical_entry_path(&field.path)
 }
 
 fn refine_tool_config_owned_fields(
@@ -829,7 +943,7 @@ fn set_tool_config_field_value(
                 return;
             };
             let position = array.iter().position(|entry| {
-                entry.get("name").and_then(serde_json::Value::as_str) == Some(name.as_str())
+                entry.get("name").and_then(named_entry_key).as_deref() == Some(name.as_str())
             });
             if path.len() == 1 {
                 match (position, value) {
@@ -916,6 +1030,23 @@ fn tool_config_document_is_empty(value: &serde_json::Value) -> bool {
 }
 
 fn toml_item_from_owned_value(value: &serde_json::Value) -> Result<Item> {
+    if let Some(object) = value.as_object() {
+        let mut table = Table::new();
+        for (key, value) in object {
+            table[key] = toml_item_from_owned_value(value)?;
+        }
+        return Ok(Item::Table(table));
+    }
+    if let Some(entries) = value.as_array() {
+        let mut array = toml_edit::ArrayOfTables::new();
+        for entry in entries {
+            let Item::Table(table) = toml_item_from_owned_value(entry)? else {
+                return Err(anyhow!("invalid TOML manifest array entry"));
+            };
+            array.push(table);
+        }
+        return Ok(Item::ArrayOfTables(array));
+    }
     let encoded = value
         .as_str()
         .and_then(|value| value.strip_prefix(TOML_VALUE_PREFIX))
@@ -929,17 +1060,31 @@ fn toml_item_from_owned_value(value: &serde_json::Value) -> Result<Item> {
 }
 
 fn toml_field_value_at(doc: &DocumentMut, path: &[ToolConfigFieldPath]) -> ToolConfigFieldValue {
-    let mut item = doc.as_item();
-    for segment in path {
-        let ToolConfigFieldPath::Key(key) = segment else {
-            return ToolConfigFieldValue::Missing;
+    fn lookup(table: &Table, path: &[ToolConfigFieldPath]) -> Option<serde_json::Value> {
+        let Some((ToolConfigFieldPath::Key(key), tail)) = path.split_first() else {
+            return None;
         };
-        let Some(next) = item.get(key) else {
-            return ToolConfigFieldValue::Missing;
-        };
-        item = next;
+        let item = table.get(key)?;
+        if tail.is_empty() {
+            return toml_item_to_owned_json(item);
+        }
+        if let Some((ToolConfigFieldPath::Named(name), tail)) = tail.split_first() {
+            let table = item.as_array_of_tables()?.iter().find(|table| {
+                table.get("name")
+                    .and_then(toml_item_to_owned_json)
+                    .as_ref()
+                    .and_then(named_entry_key)
+                    .as_deref() == Some(name)
+            })?;
+            return if tail.is_empty() {
+                Some(toml_table_to_owned_json(table))
+            } else {
+                lookup(table, tail)
+            };
+        }
+        lookup(item.as_table()?, tail)
     }
-    toml_item_to_owned_json(item)
+    lookup(doc.as_table(), path)
         .map(ToolConfigFieldValue::Value)
         .unwrap_or(ToolConfigFieldValue::Missing)
 }
@@ -957,10 +1102,9 @@ fn toml_field_values_match(
         let ToolConfigFieldValue::Value(value) = field else {
             return Ok(None);
         };
-        let Some(raw) = value.as_str().and_then(|value| value.strip_prefix(TOML_VALUE_PREFIX)) else {
-            return Ok(None);
-        };
-        toml_edit::de::from_str(&format!("value = {raw}"))
+        let mut document = DocumentMut::new();
+        document["value"] = toml_item_from_owned_value(value)?;
+        toml_edit::de::from_str(&document.to_string())
             .map(Some)
             .context("parse TOML value for managed-field comparison")
     };
@@ -993,7 +1137,53 @@ fn set_toml_field_value(
         if matches!(value, ToolConfigFieldValue::Missing) {
             return Ok(());
         }
-        table[key] = Item::Table(Table::new());
+        table[key] = if matches!(path.get(1), Some(ToolConfigFieldPath::Named(_))) {
+            Item::ArrayOfTables(toml_edit::ArrayOfTables::new())
+        } else {
+            Item::Table(Table::new())
+        };
+    }
+    if let Some(ToolConfigFieldPath::Named(name)) = path.get(1) {
+        let Some(array) = table.get_mut(key).and_then(Item::as_array_of_tables_mut) else {
+            return Ok(());
+        };
+        let position = array.iter().position(|table| {
+            table.get("name")
+                .and_then(toml_item_to_owned_json)
+                .as_ref()
+                .and_then(named_entry_key)
+                .as_deref() == Some(name)
+        });
+        if path.len() == 2 {
+            if let ToolConfigFieldValue::Value(value) = value {
+                let Item::Table(restored) = toml_item_from_owned_value(value)? else {
+                    return Err(anyhow!("invalid TOML manifest named entry"));
+                };
+                if let Some(position) = position {
+                    *array.get_mut(position).expect("located array entry") = restored;
+                } else {
+                    array.push(restored);
+                }
+            } else if let Some(position) = position {
+                array.remove(position);
+            }
+            return Ok(());
+        }
+        let position = match position {
+            Some(position) => position,
+            None if matches!(value, ToolConfigFieldValue::Missing) => return Ok(()),
+            None => {
+                let mut entry = Table::new();
+                entry["name"] = toml_item_from_owned_value(&serde_json::Value::String(name.clone()))?;
+                array.push(entry);
+                array.len() - 1
+            }
+        };
+        return set_toml_field_value(
+            array.get_mut(position).expect("located array entry"),
+            &path[2..],
+            value,
+        );
     }
     let Some(next) = table.get_mut(key).and_then(Item::as_table_mut) else {
         return Ok(());
@@ -1104,6 +1294,16 @@ fn normalize_tool_config_ownership_fields(
     ownership: &mut ToolConfigOwnership,
     fallback_applied: Option<&[u8]>,
 ) -> Result<()> {
+    if ownership.format == ToolConfigFormat::Toml {
+        for field in &mut ownership.fields {
+            for segment in &mut field.path {
+                if let ToolConfigFieldPath::Named(name) = segment {
+                    *name = named_entry_key(&serde_json::Value::String(name.clone()))
+                        .ok_or_else(|| anyhow!("invalid TOML manifest entry name"))?;
+                }
+            }
+        }
+    }
     if ownership.fields.is_empty() {
         let original = ownership_original_bytes(ownership)?;
         let applied = ownership_applied_bytes(ownership)?
@@ -1115,6 +1315,50 @@ fn normalize_tool_config_ownership_fields(
     } else {
         ownership.fields =
             refine_tool_config_owned_fields(std::mem::take(&mut ownership.fields));
+    }
+    // Older manifests recorded new provider objects leaf by leaf. Coalesce only
+    // when those records prove ownership of the entire applied entry; never
+    // infer ownership merely from a provider's name or from the live file.
+    let mut candidates = Vec::new();
+    for field in &ownership.fields {
+        for length in 1..field.path.len() {
+            let prefix = &field.path[..length];
+            if tool_config_logical_entry_path(prefix) && !candidates.iter().any(|p| p == prefix) {
+                candidates.push(prefix.to_vec());
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let original = ownership_original_bytes(ownership)?;
+    let Some(applied) = ownership_applied_bytes(ownership)? else {
+        return Ok(());
+    };
+    let original = parse_tool_config_document(ownership.format, original.as_deref())?;
+    let applied = parse_tool_config_document(ownership.format, Some(&applied))?;
+    for path in candidates {
+        if tool_config_field_value_at(&original, &path) != ToolConfigFieldValue::Missing {
+            continue;
+        }
+        let children = ownership.fields.iter().filter(|f| f.path.starts_with(&path)).collect::<Vec<_>>();
+        if children.is_empty() || children.iter().any(|f| f.original != ToolConfigFieldValue::Missing) {
+            continue;
+        }
+        let mut recorded = serde_json::json!({});
+        for child in children {
+            set_tool_config_field_value(&mut recorded, &child.path[path.len()..], &child.applied);
+        }
+        let applied = tool_config_field_value_at(&applied, &path);
+        if applied != ToolConfigFieldValue::Value(recorded) {
+            continue;
+        }
+        ownership.fields.retain(|f| !f.path.starts_with(&path));
+        ownership.fields.push(ToolConfigOwnedField {
+            path,
+            original: ToolConfigFieldValue::Missing,
+            applied,
+        });
     }
     Ok(())
 }
@@ -1292,6 +1536,12 @@ fn remember_tool_config_write(tool: &str, path: &Path, content: &[u8]) -> Result
             &mut changed_fields,
         );
         for changed in changed_fields {
+            if let Some(parent) = ownership.fields.iter_mut().find(|field| {
+                owned_field_is_added_entry(field) && changed.path.starts_with(&field.path)
+            }) {
+                parent.applied = tool_config_field_value_at(&applied_document, &parent.path);
+                continue;
+            }
             if let Some(existing) = ownership
                 .fields
                 .iter_mut()
@@ -1367,7 +1617,9 @@ fn restore_structured_tool_config_fields(
             let mut changed = false;
             for field in &ownership.fields {
                 let current_value = toml_field_value_at(&doc, &field.path);
-                if toml_field_values_match(&current_value, &field.applied)? {
+                if owned_field_is_added_entry(field)
+                    || toml_field_values_match(&current_value, &field.applied)?
+                {
                     set_toml_field_value(doc.as_table_mut(), &field.path, &field.original)?;
                     changed = true;
                 } else if !toml_field_values_match(&current_value, &field.original)? {
@@ -1430,7 +1682,7 @@ fn restore_structured_tool_config_fields(
             let mut changed = false;
             for field in &ownership.fields {
                 let current_value = tool_config_field_value_at(&document, &field.path);
-                if current_value == field.applied || owned_field_is_added_named_entry(field) {
+                if current_value == field.applied || owned_field_is_added_entry(field) {
                     set_tool_config_field_value(&mut document, &field.path, &field.original);
                     changed = true;
                 } else if current_value != field.original {

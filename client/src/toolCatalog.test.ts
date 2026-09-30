@@ -27,8 +27,10 @@ describe("tool catalog", () => {
       "www.codebuddy.cn",
       "www.kimi.com",
       "zcode.z.ai",
+      "www.trae.ai",
+      "www.trae.cn",
     ]);
-    expect(Object.keys(TOOL_CATALOG)).toHaveLength(27);
+    expect(Object.keys(TOOL_CATALOG)).toHaveLength(33);
     for (const entry of Object.values(TOOL_CATALOG)) {
       expect(entry.title).toBeTruthy();
       expect(entry.description.length).toBeGreaterThan(8);
@@ -60,15 +62,45 @@ describe("tool catalog", () => {
     expect(TOOL_CATALOG.cline.title).toBe("Cline");
   });
 
+  test("keeps Copilot desktop separate from CLI configuration", () => {
+    expect(TOOL_CATALOG["copilot-desktop"].protocolScope).toBe("model");
+    expect(TOOL_CATALOG["copilot-desktop"].modelSyncPolicy).toBe("catalog");
+    expect(TOOL_CATALOG["copilot-desktop"].protocols).toContain("anthropic_messages");
+    expect(TOOL_CATALOG.copilot.modelSyncPolicy).toBe("selected");
+  });
+
+  test("only labels parallel CLI and CN editions that need disambiguation", () => {
+    expect(TOOL_CATALOG_ORDER.flatMap((tool) => {
+      const badge = toolCatalogEntry(tool)?.badge;
+      return badge ? [[tool, badge]] : [];
+    })).toEqual([
+      ["copilot", "CLI"],
+      ["trae-cn", "CN"],
+    ]);
+  });
+
   test("does not resolve unknown or inherited object keys", () => {
     expect(toolCatalogEntry("opencode")).toBe(TOOL_CATALOG.opencode);
     expect(toolCatalogEntry("toString")).toBeNull();
     expect(toolCatalogEntry("unknown")).toBeNull();
   });
 
-  test("keeps managed integrations without advertising unsupported Trae tools", () => {
-    expect(toolCatalogEntry("trae")).toBeNull();
-    expect(toolCatalogEntry("trae-cn")).toBeNull();
+  test("uses model-level Grok protocols and provider-level MiniMax protocols", () => {
+    expect(TOOL_CATALOG["grok-build"].protocolScope).toBe("model");
+    expect(toolCatalogEntry("minimax-code")?.protocolScope).not.toBe("model");
+    expect(TOOL_CATALOG["minimax-code"].defaultProtocol).toBe("anthropic_messages");
+    for (const tool of ["grok-build", "minimax-code"] as const) {
+      expect(TOOL_CATALOG[tool].modelSyncPolicy).toBe("catalog");
+      expect(TOOL_CATALOG[tool].protocols).toHaveLength(3);
+    }
+  });
+
+  test("keeps Trae editions separately managed with per-model protocols", () => {
+    for (const tool of ["trae", "trae-cn", "trae-work"] as const) {
+      expect(TOOL_CATALOG[tool].protocolScope).toBe("model");
+      expect(TOOL_CATALOG[tool].protocols).toEqual(["openai_chat", "openai_responses", "anthropic_messages"]);
+      expect(TOOL_CATALOG[tool].modelSyncPolicy).toBe("catalog");
+    }
     expect(TOOL_CATALOG.anythingllm.modelSyncPolicy).toBe("selected");
     expect(TOOL_CATALOG["open-interpreter"].officialLinks).toContainEqual({
       label: "GitHub", url: "https://github.com/openinterpreter/openinterpreter",
@@ -81,6 +113,19 @@ describe("tool catalog", () => {
       label: "GitHub",
       url: "https://github.com/openai/codex",
     });
+  });
+
+  test("distinguishes fork and partial model-level protocol contracts", () => {
+    expect(TOOL_CATALOG.mimocode.protocolScope).toBe("model");
+    expect(TOOL_CATALOG.mimocode.protocols).toHaveLength(4);
+    expect(TOOL_CATALOG.openscience.protocolScope).toBe("model");
+    expect(TOOL_CATALOG.openscience.protocols).toEqual(["openai_chat", "openai_responses"]);
+    expect(TOOL_CATALOG.kimicode.protocolScope).toBe("model");
+    // Only Anthropic can override Kimi's provider; this menu chooses the
+    // provider fallback, not a pretend four-protocol per-model schema.
+    expect(TOOL_CATALOG.kimicode.protocols).toEqual(["openai_responses", "openai_chat"]);
+    expect(toolCatalogEntry("qwencode")?.protocolScope).toBeUndefined();
+    expect(toolCatalogEntry("cline")?.protocolScope).toBeUndefined();
   });
 
   test("keeps every managed tool exactly once in the fixed dock order", () => {

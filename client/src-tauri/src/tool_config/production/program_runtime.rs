@@ -647,6 +647,11 @@ pub(crate) fn tool_program_located_without_process_scan(tool: &str) -> Result<bo
 }
 
 fn tool_launch_candidate_without_process_scan(tool: &str) -> Result<Option<ToolProgramCandidate>> {
+    let candidates = tool_program_candidates_without_process_scan(tool)?;
+    Ok(select_tool_launch_candidate(tool, &candidates).cloned())
+}
+
+fn tool_program_candidates_without_process_scan(tool: &str) -> Result<Vec<ToolProgramCandidate>> {
     let mut locations = load_tool_program_locations()?;
     let mut selected_path = locations.get(tool).cloned().unwrap_or_default();
     let known_paths = known_tool_program_paths(tool);
@@ -693,7 +698,32 @@ fn tool_launch_candidate_without_process_scan(tool: &str) -> Result<Option<ToolP
     for candidate in &mut candidates {
         annotate_tool_program_candidate(tool, candidate);
     }
-    Ok(select_tool_launch_candidate(tool, &candidates).cloned())
+    Ok(candidates)
+}
+
+fn tool_program_selection_required(tool: &str, candidates: &[ToolProgramCandidate]) -> bool {
+    if !tool_prefers_desktop_program(tool)
+        || candidates.iter().any(|c| c.selected && is_launchable_tool_candidate(tool, c))
+    {
+        return false;
+    }
+    // Different editions sharing one adapter need a user decision. Old install
+    // versions of the same executable still use the existing version ranking.
+    candidates
+        .iter()
+        .filter(|c| is_launchable_tool_candidate(tool, c) && is_desktop_program_candidate(c))
+        .map(|c| normalized_tool_program_identity(&c.path))
+        .collect::<HashSet<_>>()
+        .len() > 1
+}
+
+fn require_unambiguous_tool_program(tool: &str, candidates: &[ToolProgramCandidate]) -> Result<()> {
+    if tool_program_selection_required(tool, candidates) {
+        return Err(anyhow!(
+            "TOOL_PROGRAM_SELECTION_REQUIRED: multiple desktop editions are installed for {tool}"
+        ));
+    }
+    Ok(())
 }
 
 const DEEPSEEK_HARNESS_WEB_URL: &str = "http://127.0.0.1:3080";
@@ -831,7 +861,14 @@ fn launch_tool_program_inner(
         return Ok(launched);
     }
 
-    if tool == "deepseek-harness" {
+    let location = locate_tool_program(tool)?;
+    require_unambiguous_tool_program(tool, &location.candidates)?;
+    let candidate = select_tool_launch_candidate(tool, &location.candidates);
+    // The desktop shell owns a separate backend and does not use the CLI's
+    // fixed browser port. Resolve the user's program choice before probing it.
+    let harness_web = tool == "deepseek-harness"
+        && candidate.is_none_or(|candidate| !is_desktop_program_candidate(candidate));
+    if harness_web {
         match deepseek_harness_web_probe()? {
             DeepSeekHarnessWebProbe::Ready | DeepSeekHarnessWebProbe::ReadyRequiresBrowserAuth => {
                 open_deepseek_harness_web_url(launch_context)?;
@@ -849,9 +886,6 @@ fn launch_tool_program_inner(
         }
     }
 
-    let location = locate_tool_program(tool)?;
-    let candidate = select_tool_launch_candidate(tool, &location.candidates);
-
     let Some(candidate) = candidate else {
         return Err(anyhow!(
             "TOOL_START_CANDIDATE_MISSING: no launchable {} found",
@@ -859,6 +893,7 @@ fn launch_tool_program_inner(
         ));
     };
     let path = PathBuf::from(&candidate.path);
+    let launch_args = tool_candidate_launch_args(tool, candidate);
     let confirm_running =
         matches!(
             candidate.kind.as_str(),
@@ -871,7 +906,7 @@ fn launch_tool_program_inner(
         }
         "windows_exe" => {
             let mut command = Command::new(&path);
-            command.args(tool_program_launch_args(tool));
+            command.args(launch_args);
             spawn_launch_command(&mut command, launch_context, &path.display().to_string())?;
             Ok(("Configure and restart".to_string(), path))
         }
@@ -883,7 +918,7 @@ fn launch_tool_program_inner(
             launch_command_tool_with_env_and_args(
                 tool,
                 &path,
-                tool_program_launch_args(tool),
+                launch_args,
                 &[],
                 &[],
                 launch_context,
@@ -896,7 +931,7 @@ fn launch_tool_program_inner(
                     launch_command_tool_with_env_and_args(
                         tool,
                         &path,
-                        tool_program_launch_args(tool),
+                        launch_args,
                         &[],
                         &[],
                         launch_context,
@@ -908,14 +943,14 @@ fn launch_tool_program_inner(
                 }
             } else {
                 let mut command = Command::new(&path);
-                command.args(tool_program_launch_args(tool));
+                command.args(launch_args);
                 spawn_launch_command(&mut command, launch_context, &path.display().to_string())?;
                 Ok(("Configure and restart".to_string(), path))
             }
         }
     };
     let launched = launched?;
-    if tool == "deepseek-harness" {
+    if harness_web {
         // Newer dsh versions open their one-time authenticated URL themselves.
         // Opening the bare URL here would show a 401 page instead.
         if wait_for_deepseek_harness_web_start()? == DeepSeekHarnessWebProbe::Ready {
@@ -1123,6 +1158,9 @@ pub(crate) fn tool_program_running(tool: &str) -> Result<bool> {
         return Ok(tool_process_snapshot(tool)?.running());
     }
     if tool == "deepseek-harness" {
+        if tool_process_snapshot(tool)?.running() {
+            return Ok(true);
+        }
         return Ok(matches!(
             deepseek_harness_web_probe()?,
             DeepSeekHarnessWebProbe::Ready | DeepSeekHarnessWebProbe::ReadyRequiresBrowserAuth
@@ -1798,6 +1836,17 @@ fn tool_program_launch_args(tool: &str) -> &'static [&'static str] {
         .unwrap_or_default()
 }
 
+fn tool_candidate_launch_args(
+    tool: &str,
+    candidate: &ToolProgramCandidate,
+) -> &'static [&'static str] {
+    if tool == "deepseek-harness" && is_desktop_program_candidate(candidate) {
+        &[]
+    } else {
+        tool_program_launch_args(tool)
+    }
+}
+
 #[cfg(all(
     not(target_os = "windows"),
     any(test, not(target_os = "macos"))
@@ -2002,28 +2051,6 @@ fn is_desktop_program_candidate(candidate: &ToolProgramCandidate) -> bool {
     ) || (cfg!(target_os = "linux") && candidate.path.ends_with(".AppImage"))
 }
 
-fn preferred_desktop_program_path_for_saved_selection(
-    tool: &str,
-    selected_path: &str,
-    candidates: &[ToolProgramCandidate],
-) -> Option<String> {
-    if selected_path.trim().is_empty() || !tool_prefers_desktop_program(tool) {
-        return None;
-    }
-    let selected = candidates.iter().find(|candidate| {
-        tool_program_candidate_paths_equal(&candidate.path, selected_path)
-    })?;
-    if is_desktop_program_candidate(selected)
-        && is_launchable_tool_candidate(tool, selected)
-    {
-        return None;
-    }
-    let preferred = select_tool_launch_candidate(tool, candidates)?;
-    (is_desktop_program_candidate(preferred)
-        && !tool_program_candidate_paths_equal(&preferred.path, selected_path))
-    .then(|| preferred.path.clone())
-}
-
 fn preferred_tool_program_path_for_saved_selection(
     tool: &str,
     selected_path: &str,
@@ -2036,20 +2063,18 @@ fn preferred_tool_program_path_for_saved_selection(
         tool_program_candidate_paths_equal(&candidate.path, selected_path)
     })?;
     if !is_launchable_tool_candidate(tool, selected) {
+        if tool_program_selection_required(tool, candidates) {
+            return None;
+        }
         return select_tool_launch_candidate(tool, candidates)
             .filter(|candidate| {
                 !tool_program_candidate_paths_equal(&candidate.path, selected_path)
             })
             .map(|candidate| candidate.path.clone());
     }
-    if is_npx_cache_path(selected_path) {
-        return select_automatic_tool_launch_candidate(tool, candidates)
-            .filter(|candidate| {
-                compare_tool_program_candidates(tool, candidate, selected).is_gt()
-            })
-            .map(|candidate| candidate.path.clone());
-    }
-    preferred_desktop_program_path_for_saved_selection(tool, selected_path, candidates)
+    // A valid saved path is an explicit user choice, including an older CLI or
+    // an npx entry. Desktop/version preference applies only to automatic selection.
+    None
 }
 
 fn refresh_saved_tool_program_selection(
@@ -2081,22 +2106,7 @@ fn select_tool_launch_candidate<'a>(
         .filter(|candidate| is_launchable_tool_candidate(tool, candidate))
         .find(|candidate| candidate.selected);
     if let Some(selected) = selected {
-        let has_desktop_program = candidates.iter().any(|candidate| {
-            is_desktop_program_candidate(candidate)
-                && is_launchable_tool_candidate(tool, candidate)
-        });
-        if is_npx_cache_path(&selected.path)
-            && let Some(preferred) = select_automatic_tool_launch_candidate(tool, candidates)
-            && compare_tool_program_candidates(tool, preferred, selected).is_gt()
-        {
-            return Some(preferred);
-        }
-        if !tool_prefers_desktop_program(tool)
-            || is_desktop_program_candidate(selected)
-            || !has_desktop_program
-        {
-            return Some(selected);
-        }
+        return Some(selected);
     }
     select_automatic_tool_launch_candidate(tool, candidates)
 }
@@ -2341,9 +2351,9 @@ fn remember_running_tool_program_path(tool: &str) -> Result<()> {
     }
     let path_text = path.display().to_string();
     let mut locations = load_tool_program_locations()?;
-    let should_prefer_running_chatgpt = tool == "codex" && is_chatgpt_desktop_path(&path);
-    let should_update = should_prefer_running_chatgpt
-        || locations
+    // A restart may discover another edition running. Remember it only when
+    // there is no usable saved choice; never replace a user's selected program.
+    let should_update = locations
             .get(tool)
             .map(|selected| {
                 let selected_path = Path::new(selected);
@@ -3301,6 +3311,7 @@ fn push_candidate(
         path,
         label: label.to_string(),
         kind,
+        edition: None,
         exists,
         modified_at_unix,
         version,
@@ -3341,6 +3352,7 @@ fn annotate_tool_program_candidate(tool: &str, candidate: &mut ToolProgramCandid
         candidate.label = "Hermes Desktop".to_string();
     }
     candidate.launchable = is_launchable_tool_candidate(tool, candidate);
+    candidate.edition = tool_program_candidate_edition(tool, candidate).map(str::to_string);
     candidate.recommended =
         candidate.launchable && is_recommended_tool_program_candidate(tool, candidate);
     candidate.status = if !candidate.exists {
@@ -3359,6 +3371,27 @@ fn annotate_tool_program_candidate(tool: &str, candidate: &mut ToolProgramCandid
         "Not launchable".to_string()
     };
     candidate.reason = tool_program_candidate_reason(tool, candidate);
+}
+
+fn tool_program_candidate_edition(
+    tool: &str,
+    candidate: &ToolProgramCandidate,
+) -> Option<&'static str> {
+    if !is_tool_owned_program_path(tool, Path::new(&candidate.path))
+        || (tool == "hermes" && is_hermes_setup_app_path(Path::new(&candidate.path)))
+    {
+        return None;
+    }
+    if is_desktop_program_candidate(candidate) {
+        return Some("desktop");
+    }
+    // A command shim such as `code` can open a desktop app; file extensions
+    // alone do not identify the edition. Reuse the actual launch policy.
+    match tool_profile(tool)?.command_launch {
+        ToolCommandLaunch::Desktop => Some("desktop"),
+        ToolCommandLaunch::Terminal => Some("cli"),
+        ToolCommandLaunch::Disabled => None,
+    }
 }
 
 fn is_recommended_tool_program_candidate(tool: &str, candidate: &ToolProgramCandidate) -> bool {
@@ -3568,11 +3601,9 @@ fn is_linux_desktop_program_path(tool: &str, path: &str) -> bool {
 }
 
 fn tool_path_candidate_kind(tool: &str, path: &str) -> String {
-    if cfg!(target_os = "linux") && is_linux_desktop_program_path(tool, path) {
-        "linux_desktop".to_string()
-    } else {
-        path_candidate_kind(path)
-    }
+    // Running/discovered native CLIs need the same terminal classification as
+    // manually located ones; an .exe suffix alone does not make one a desktop app.
+    selected_path_kind(tool, path)
 }
 
 fn selected_path_kind(tool: &str, path: &str) -> String {
@@ -3580,7 +3611,19 @@ fn selected_path_kind(tool: &str, path: &str) -> String {
         return "linux_desktop".to_string();
     }
     let identity = normalized_tool_program_identity(path);
-    if !tool_prefers_desktop_program(tool)
+    // Some tools share a config but ship separate desktop/CLI executables.
+    // A manually located CLI outside PATH must still open in a terminal. Do
+    // not apply this inference to tools whose desktop and CLI share a name,
+    // or to a macOS app bundle (Cline.app and `cline` are distinct entries).
+    let distinct_cli = !path.ends_with(".app")
+        && tool_profile(tool).is_some_and(|profile| {
+            profile.command_launch == ToolCommandLaunch::Terminal
+                && !profile.windows_program_paths.is_empty()
+                && profile.windows_program_paths.iter().all(|(_, executable)| {
+                    normalized_tool_program_identity(executable) != identity
+                })
+        });
+    if (!tool_prefers_desktop_program(tool) || distinct_cli)
         && tool_program_commands(tool)
             .iter()
             .any(|command| normalized_tool_program_identity(command) == identity)
@@ -3683,11 +3726,20 @@ fn command_search_dirs(home: &Path) -> Vec<PathBuf> {
         push_unique_path(&mut paths, home.join(".kimi-code/bin"));
         push_unique_path(&mut paths, home.join(".mimocode/bin"));
         push_unique_path(&mut paths, home.join(".grok/bin"));
+        push_unique_path(&mut paths, home.join(".minimax-code/bin"));
+        push_unique_path(&mut paths, home.join(".minimax-code"));
         push_unique_path(&mut paths, home.join(".reasonix/bin"));
         push_unique_path(&mut paths, home.join(".raven/bin"));
         push_unique_path(&mut paths, home.join(".cline/bin"));
         extend_existing_versioned_bin_dirs(&mut paths, home.join(".nvm/versions/node"));
         extend_existing_versioned_bin_dirs(&mut paths, home.join(".local/state/fnm_multishells"));
+    }
+
+    if !test_home_active() {
+        if let Some(root) = nonempty_env_path("MCODE_INSTALL_DIR").map(expand_tool_home_path) {
+            push_unique_path(&mut paths, root.join("bin"));
+            push_unique_path(&mut paths, root);
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -4315,6 +4367,11 @@ fn known_tool_program_paths(tool: &str) -> Vec<PathBuf> {
         for base_dir in base_dirs {
             for (dir, exe) in exe_paths {
                 paths.push(base_dir.join(dir).join(exe));
+            }
+        }
+        if !test_home_active() {
+            for path in windows_installed_program_paths(tool) {
+                push_unique_path(&mut paths, path);
             }
         }
     }

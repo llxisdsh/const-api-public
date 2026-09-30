@@ -99,6 +99,8 @@ include!("tool_config/production/core.rs");
 include!("tool_config/production/catalog.rs");
 #[cfg(target_os = "windows")]
 include!("tool_config/production/windows_process.rs");
+#[cfg(target_os = "windows")]
+include!("tool_config/production/windows_installed_programs.rs");
 include!("tool_config/production/storage.rs");
 include!("tool_config/production/codex.rs");
 include!("tool_config/production/codex_catalog.rs");
@@ -107,6 +109,13 @@ include!("tool_config/production/additional_tools.rs");
 include!("tool_config/production/deepseek_harness_settings.rs");
 include!("tool_config/production/open_interpreter.rs");
 include!("tool_config/production/anythingllm.rs");
+include!("tool_config/production/grok_build.rs");
+include!("tool_config/production/minimax_code.rs");
+#[path = "tool_config/trae.rs"]
+mod trae;
+pub(crate) use trae::{check_trae_config, prepare_trae_config};
+#[path = "tool_config/copilot_desktop.rs"]
+mod copilot_desktop;
 include!("tool_config/production/operation.rs");
 include!("tool_config/production/program_runtime.rs");
 include!("tool_config/production/formats.rs");
@@ -124,4 +133,8 @@ mod tests {
     include!("tool_config/tests/open_interpreter.rs");
     include!("tool_config/tests/anythingllm.rs");
     include!("tool_config/tests/integration_contracts.rs");
+    include!("tool_config/tests/model_protocols.rs");
+    include!("tool_config/tests/model_capabilities.rs");
+    include!("tool_config/tests/model_order.rs");
+    include!("tool_config/tests/grok_minimax.rs");
 }

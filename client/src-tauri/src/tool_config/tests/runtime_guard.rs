@@ -1,4 +1,4 @@
-    fn with_temp_home<T>(f: impl FnOnce(&Path) -> T) -> T {
+    pub(super) fn with_temp_home<T>(f: impl FnOnce(&Path) -> T) -> T {
         let _guard = test_home_lock()
             .lock()
             .unwrap_or_else(|err| err.into_inner());

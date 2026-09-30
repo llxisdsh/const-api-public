@@ -1568,6 +1568,27 @@ enum SupplierResponsesUpstreamReceiver {
 }
 
 impl SupplierResponsesUpstreamSender {
+    // Interrupt the current turn on its existing socket/lane. Never acquire a
+    // new connection or replay a control frame after a transport failure.
+    async fn interrupt(
+        &mut self,
+        receiver: &mut SupplierResponsesUpstreamReceiver,
+        text: &str,
+    ) -> Result<()> {
+        match (self, receiver) {
+            (Self::Dedicated { sender, .. }, SupplierResponsesUpstreamReceiver::Dedicated(_)) => {
+                sender
+                    .send(tokio_tungstenite::tungstenite::Message::Text(text.to_owned().into()))
+                    .await
+                    .map_err(Into::into)
+            }
+            (Self::Pooled(_), SupplierResponsesUpstreamReceiver::Pooled(Some(turn))) => {
+                turn.interrupt(text).await
+            }
+            _ => Err(anyhow!("Responses WebSocket has no active turn to interrupt")),
+        }
+    }
+
     fn attach(&self, payload: &mut serde_json::Map<String, serde_json::Value>) {
         match self {
             Self::Dedicated { diagnostics, .. } => diagnostics.attach(payload),
@@ -1934,9 +1955,6 @@ pub(crate) async fn run_supplier_responses_duplex(
                 };
                 match command.kind.as_str() {
                     "duplex_client_frame" => {
-                        if turn_active {
-                            return Err(anyhow!("supplier duplex turn already in progress"));
-                        }
                         if command.payload.get("frame_type").and_then(serde_json::Value::as_str) != Some("text") {
                             return Err(anyhow!("Responses WebSocket currently accepts text frames only"));
                         }
@@ -1945,6 +1963,13 @@ pub(crate) async fn run_supplier_responses_duplex(
                             .get("data")
                             .and_then(serde_json::Value::as_str)
                             .ok_or_else(|| anyhow!("supplier duplex text frame is missing data"))?;
+                        if turn_active && is_responses_interrupt_frame(text) {
+                            upstream_sender.interrupt(&mut upstream_receiver, text).await?;
+                            continue;
+                        }
+                        if turn_active {
+                            return Err(anyhow!("supplier duplex turn already in progress"));
+                        }
                         let outbound_text = safety_identifier.as_deref().map_or_else(
                             || text.to_string(),
                             |identifier| String::from_utf8_lossy(
@@ -2808,6 +2833,24 @@ async fn run_responses_websocket_proxy(
                     break;
                 };
                 if client_message.is_text() || client_message.is_binary() {
+                    if turn_active
+                        && let Ok(text) = client_response_create_text(&client_message)
+                        && is_responses_interrupt_frame(text)
+                    {
+                        if upstream_sender
+                            .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+                            .await
+                            .is_err()
+                        {
+                            if let Some(diagnostics) = upstream_diagnostics.as_mut() {
+                                diagnostics.set_close_reason("upstream_send_failed");
+                            }
+                            break;
+                        }
+                        // Keep the active request and its usage until the
+                        // upstream's terminal response, just like Codex itself.
+                        continue;
+                    }
                     if turn_active {
                         if send_responses_websocket_error(
                             &mut client_sender,
@@ -4331,6 +4374,16 @@ fn client_response_create_text(
     ))
 }
 
+fn is_responses_interrupt_frame(text: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Event<'a> {
+        #[serde(rename = "type")]
+        kind: &'a str,
+    }
+    serde_json::from_str::<Event<'_>>(text)
+        .is_ok_and(|event| event.kind == "response.interrupt")
+}
+
 fn validate_response_create_frame(
     text: &str,
 ) -> std::result::Result<serde_json::Value, (&'static str, &'static str)> {
@@ -5327,6 +5380,15 @@ fn responses_websocket_resource_owners(
 #[cfg(test)]
 mod responses_websocket_tests {
     use super::*;
+
+    #[test]
+    fn interrupt_is_a_control_event_not_a_create_request() {
+        let frame = r#"{"type":"response.interrupt","response_id":"resp-1","mode":"discard_partial_items","future":true}"#;
+        assert!(is_responses_interrupt_frame(frame));
+        assert!(validate_response_create_frame(frame).is_err(), "first frame must still be create");
+        assert!(!is_responses_interrupt_frame(r#"{"type":"response.create","input":[]}"#));
+        assert!(!is_responses_interrupt_frame("not JSON"));
+    }
 
     #[tokio::test]
     async fn websocket_upstream_connects_have_a_hard_deadline() {

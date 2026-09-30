@@ -3,6 +3,9 @@ import {
   DEFAULT_TOOL_PROTOCOLS,
   codexModelSourceFromStatus,
   toolConfigDetailState,
+  toolConfigCheckFailed,
+  toolConfigCapabilityWarning,
+  toolHasManagedConfig,
   toolConfigurationActionKey,
   toolPrimaryAction,
   toolProtocolMenuState,
@@ -10,6 +13,29 @@ import {
 } from "./toolMenuPresentation";
 
 describe("tool menu presentation", () => {
+  test("reports a vision limitation without treating usable text configuration as missing", () => {
+    const status = { already_configured: true, details: { trae_image_input_limited: "glm-5.1, glm-5.2" } };
+    const state = toolConfigDetailState(status, false);
+    expect(state.tone).toBe("ready");
+    expect(state.capabilityWarning).toContain("glm-5.1, glm-5.2");
+    expect(toolHasManagedConfig(status)).toBe(true);
+    expect(toolPrimaryAction(status)).toBe("launch");
+    expect(toolConfigCapabilityWarning({ details: {} })).toBeUndefined();
+  });
+  test("only per-model tools present the menu protocol as a fallback", () => {
+    for (const tool of ["trae", "trae-cn", "trae-work", "copilot-desktop", "vscode", "opencode", "openclaw", "pi", "grok-build", "mimocode", "openscience", "kimicode"]) {
+      expect(toolProtocolMenuState(tool).perModel).toBe(true);
+    }
+    for (const tool of ["deepseek-harness", "cline", "qwencode", "codex"]) {
+      expect(toolProtocolMenuState(tool).perModel).toBe(false);
+    }
+    expect(toolProtocolMenuState("deepseek-harness", "anthropic_messages", "anthropic_messages")).toMatchObject({
+      selected: "anthropic_messages", configured: "anthropic_messages", changed: false,
+    });
+    expect(toolProtocolMenuState("trae-cn", "anthropic_messages", "anthropic_messages")).toMatchObject({
+      selected: "anthropic_messages", configured: "anthropic_messages", changed: false,
+    });
+  });
   test("Codex injection is opt-in and follows the applied configuration", () => {
     expect(codexModelSourceFromStatus(undefined)).toBe("codex");
     expect(codexModelSourceFromStatus({ details: {} })).toBe("codex");
@@ -154,7 +180,31 @@ describe("tool menu presentation", () => {
     expect(toolSyncsModelsOnLaunch(undefined)).toBe(false);
   });
 
-  test("labels configuration as reconfiguration only after a valid setup exists", () => {
+  test("separates configuration presence from readiness for every tool", () => {
+    const partial = { already_configured: false, details: { has_managed_config: "true" } };
+    expect(toolHasManagedConfig(partial)).toBe(true);
+    expect(toolPrimaryAction(partial)).toBe("configure_and_launch");
+    expect(toolConfigurationActionKey(partial)).toBe("access.reconfigure");
+    expect(toolConfigDetailState(partial, false)).toMatchObject({
+      status: "已有配置 · 需检查或补全", tone: "pending",
+    });
+    expect(toolHasManagedConfig({ already_configured: true })).toBe(true);
+    expect(toolHasManagedConfig({ already_configured: false })).toBe(false);
+    expect(toolHasManagedConfig(undefined)).toBe(false);
+  });
+
+  test("failed checks retain known presence but never grant launch readiness", () => {
+    const failed = toolConfigCheckFailed({ already_configured: true, details: { tool_protocol: "openai_chat" } });
+    expect(toolHasManagedConfig(failed)).toBe(true);
+    expect(failed?.already_configured).toBe(false);
+    expect(failed?.details.tool_protocol).toBe("openai_chat");
+    expect(toolConfigDetailState(failed, false)).toMatchObject({ status: "检查失败", tone: "error" });
+    expect(toolPrimaryAction(failed)).toBe("configure_and_launch");
+    expect(toolConfigCheckFailed(undefined)).toBeNull();
+    expect(toolHasManagedConfig(toolConfigCheckFailed({ already_configured: false }))).toBe(false);
+  });
+
+  test("labels configuration as reconfiguration after a setup exists", () => {
     expect(toolConfigurationActionKey({ already_configured: true })).toBe("access.reconfigure");
     expect(toolConfigurationActionKey({ already_configured: false })).toBe("access.configure");
     expect(toolConfigurationActionKey(undefined)).toBe("access.configure");

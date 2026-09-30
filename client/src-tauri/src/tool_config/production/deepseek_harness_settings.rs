@@ -113,47 +113,73 @@ struct DeepseekHarnessSettingsFile {
     sections: Vec<&'static str>,
 }
 
-fn deepseek_harness_profile_patch_path() -> PathBuf {
+fn deepseek_harness_profile_patch_path(profile: &str) -> PathBuf {
     tool_home_override_or_default("DSH_HOME", ".dsh")
         .join("profiles")
-        .join("web")
+        .join(profile)
         .join("cordis.patch.yml")
 }
 
-fn deepseek_harness_settings_files() -> Result<Vec<DeepseekHarnessSettingsFile>> {
+fn deepseek_harness_settings_groups() -> Result<Vec<Vec<DeepseekHarnessSettingsFile>>> {
     let (legacy, _) = deepseek_harness_config_paths();
     let legacy_file = || {
-        vec![DeepseekHarnessSettingsFile {
+        vec![vec![DeepseekHarnessSettingsFile {
             path: legacy.clone(),
             sections: DEEPSEEK_HARNESS_SETTINGS_SECTIONS.to_vec(),
-        }]
+        }]]
     };
     if legacy.exists() {
         return Ok(legacy_file());
     }
     let root = tool_home_override_or_default("DSH_HOME", ".dsh");
     let home_patch = root.join("cordis.patch.yml");
-    let profile_patch = deepseek_harness_profile_patch_path();
+    let profile_patch = deepseek_harness_profile_patch_path("web");
+    let desktop_patch = deepseek_harness_profile_patch_path("desktop");
     let home = deepseek_harness_patch_settings(&read_text_or_empty(&home_patch)?)?;
     let profile = deepseek_harness_patch_settings(&read_text_or_empty(&profile_patch)?)?;
-    if home.is_empty() && profile.is_empty() && !root.join("settings.yaml.imported").exists() {
+    let desktop = deepseek_harness_patch_settings(&read_text_or_empty(&desktop_patch)?)?;
+    if home.is_empty()
+        && profile.is_empty()
+        && desktop.is_empty()
+        && !root.join("settings.yaml.imported").exists()
+    {
         // Fresh installations: old builds read this directly; current new builds
         // import it themselves. Their resulting files select patches next time.
         return Ok(legacy_file());
     }
-    // Config overrides replace a whole plugin config. Edit each section at its
-    // effective layer, rather than copying inherited user settings into home.
-    let (home_sections, profile_sections): (Vec<_>, Vec<_>) = DEEPSEEK_HARNESS_SETTINGS_SECTIONS
+    let mut profiles = vec![profile_patch];
+    // An installed desktop that has not started yet also needs its profile.
+    // Once initialized, this is just a filesystem check, never a process probe.
+    if desktop_patch.exists()
+        || (!test_home_active()
+            && tool_program_candidates_without_process_scan("deepseek-harness")?
+                .iter()
+                .any(|candidate| {
+                    is_desktop_program_candidate(candidate)
+                        && is_launchable_tool_candidate("deepseek-harness", candidate)
+                }))
+    {
+        profiles.insert(0, desktop_patch);
+    }
+    // Desktop and web have separate profile patches but share home overrides.
+    // Preserve each profile's own providers/settings; never copy one over the other.
+    Ok(profiles
         .into_iter()
-        .partition(|section| home.contains_key(yaml_key(section)));
-    Ok([
-        (profile_patch, profile_sections),
-        (home_patch, home_sections),
-    ]
-    .into_iter()
-    .filter(|(_, sections)| !sections.is_empty())
-    .map(|(path, sections)| DeepseekHarnessSettingsFile { path, sections })
-    .collect())
+        .map(|profile_patch| {
+            let (home_sections, profile_sections): (Vec<_>, Vec<_>) =
+                DEEPSEEK_HARNESS_SETTINGS_SECTIONS
+                    .into_iter()
+                    .partition(|section| home.contains_key(yaml_key(section)));
+            [
+                (profile_patch, profile_sections),
+                (home_patch.clone(), home_sections),
+            ]
+            .into_iter()
+            .filter(|(_, sections)| !sections.is_empty())
+            .map(|(path, sections)| DeepseekHarnessSettingsFile { path, sections })
+            .collect()
+        })
+        .collect())
 }
 
 fn deepseek_harness_settings_text(path: &Path) -> Result<String> {
@@ -236,11 +262,38 @@ fn migrate_deepseek_harness_settings_ownership(manifest: &mut ToolConfigManifest
     {
         return;
     }
-    // The official importer always writes into the active profile, not home.
-    let patch = deepseek_harness_profile_patch_path();
-    if !patch.exists() {
+    // The official importer writes into whichever profile starts first. Match
+    // its imported provider, not a hard-coded web path (which may be empty).
+    let Ok(imported) = read_text_or_empty(&legacy.with_file_name("settings.yaml.imported"))
+        .and_then(|raw| parse_deepseek_harness_yaml_mapping(&raw, "imported settings"))
+    else {
         return;
-    }
+    };
+    let provider = |settings: &serde_yaml::Mapping| {
+        settings
+            .get(yaml_key("llm-pi-ai"))?
+            .get("providers")?
+            .get(ADDITIONAL_CONST_API_PROVIDER_ID)
+            .cloned()
+    };
+    let Some(imported_provider) = provider(&imported) else {
+        return;
+    };
+    let matches = ["web", "desktop"]
+        .into_iter()
+        .map(deepseek_harness_profile_patch_path)
+        .filter(|path| {
+            read_text_or_empty(path)
+                .and_then(|raw| deepseek_harness_patch_settings(&raw))
+                .ok()
+                .and_then(|settings| provider(&settings))
+                .is_some_and(|current| current == imported_provider)
+        })
+        .collect::<Vec<_>>();
+    let [patch] = matches.as_slice() else {
+        // Ambiguous or externally changed imports do not authorize adopting a file.
+        return;
+    };
     let patch_key = manifest_file_key(&patch);
     if manifest.files.contains_key(&patch_key) {
         return;

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="16 16 224 224" fill="none">
+  <!-- Vector rendering of the Windows Kimi Code foreground mark.
+       Keep the robot and terminal geometry; no app tile or white raster matte. -->
+  <defs>
+    <radialGradient id="head" cx="119" cy="128" r="80" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1A82FC"/>
+      <stop offset=".72" stop-color="#3391FF"/>
+      <stop offset="1" stop-color="#63ACFF"/>
+    </radialGradient>
+  </defs>
+  <circle cx="119" cy="128" r="80" fill="url(#head)"/>
+  <path d="M189 58.5A13 13 0 1 1 202 71.5H189Z" fill="#1783FF"/>
+  <g fill="#fff">
+    <rect x="111" y="84" width="20" height="38" rx="10" transform="rotate(-8 121 103)"/>
+    <rect x="153" y="79.5" width="18" height="37" rx="9" transform="rotate(-8 162 98)"/>
+  </g>
+  <rect x="36" y="147.5" width="183" height="60.5" rx="6" fill="#002E58"/>
+  <path d="M51.5 166.5L68.5 177.5L51.5 188.5" stroke="#fff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M86.5 191H102.5" stroke="#007CFF" stroke-width="8" stroke-linecap="round"/>
+</svg>

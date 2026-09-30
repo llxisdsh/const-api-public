@@ -252,10 +252,10 @@ const GROK_MODELS_URL: &str = "https://cli-chat-proxy.grok.com/v1/models";
 const GROK_RESPONSES_URL: &str = "https://cli-chat-proxy.grok.com/v1/responses";
 const GROK_BILLING_WEEKLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const GROK_BILLING_MONTHLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing";
-// Official https://x.ai/cli/stable, checked 2026-09-23.
-const GROK_CLI_VERSION: &str = "1.0.41";
-const GROK_CLI_USER_AGENT: &str = "xai-grok-workspace/1.0.41";
-const GROK_BILLING_USER_AGENT: &str = "grok-pager/1.0.41 grok-shell/1.0.41 (macos; aarch64)";
+// Official https://x.ai/cli/stable, checked 2026-09-30.
+const GROK_CLI_VERSION: &str = "1.0.44";
+const GROK_CLI_USER_AGENT: &str = "xai-grok-workspace/1.0.44";
+const GROK_BILLING_USER_AGENT: &str = "grok-pager/1.0.44 grok-shell/1.0.44 (macos; aarch64)";
 const ANTIGRAVITY_OAUTH_CLIENT_ID: &str = match option_env!("CONST_LOCAL_ANTIGRAVITY_CLIENT_ID") { Some(value) => value, None => "" };
 const ANTIGRAVITY_OAUTH_CLIENT_SECRET: &str = match option_env!("CONST_LOCAL_ANTIGRAVITY_CLIENT_SECRET") { Some(value) => value, None => "" };
 const ANTIGRAVITY_OAUTH_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -265,8 +265,8 @@ const ANTIGRAVITY_API_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_DAILY_API_BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_REDIRECT_URI: &str = "http://localhost:51121/oauth-callback";
 const ANTIGRAVITY_SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs";
-// Official Antigravity Hub updater manifest, checked 2026-09-23.
-const ANTIGRAVITY_DEFAULT_USER_AGENT_VERSION: &str = "2.15.1";
+// Official Antigravity Hub updater manifest, checked 2026-09-30.
+const ANTIGRAVITY_DEFAULT_USER_AGENT_VERSION: &str = "2.18.1";
 const ANTIGRAVITY_GOOG_API_CLIENT: &str = "gl-node/22.21.1";
 const SKIP_LOCAL_SHORT_CIRCUIT_HEADER: &str = "x-const-api-skip-local";
 const USE_LOCAL_SHORT_CIRCUIT_HEADER: &str = "x-const-api-use-local";
@@ -2893,7 +2893,17 @@ async fn execute_tool_config_operation(
     };
 
     let result = match catch_runtime_panic(format!("tool config operation {operation_id}"), async {
-        if tool == "codex" {
+        if matches!(tool.as_str(), "trae" | "trae-cn" | "trae-work") {
+            execute_trae_tool_config_operation(
+                &state,
+                Arc::clone(&operation),
+                &tool,
+                action,
+                protocol,
+                confirmation_token,
+            )
+            .await
+        } else if tool == "codex" {
             execute_codex_tool_config_operation_inner(
                 &state,
                 Arc::clone(&operation),
@@ -2926,6 +2936,70 @@ async fn execute_tool_config_operation(
     finish_tool_config_operation(&operation, result.is_ok());
     drop(lease);
     result
+}
+
+async fn execute_trae_tool_config_operation(
+    state: &State<'_, AppState>,
+    operation: Arc<ToolConfigOperationControl>,
+    tool: &str,
+    action: ToolConfigAction,
+    protocol: Option<String>,
+    confirmation_token: Option<String>,
+) -> Result<ToolConfigOperationResponse, String> {
+    let cfg = load_config_from_path(&state.config_path).map_err(|err| err.to_string())?;
+    let urls = tool_config_urls(&cfg)?;
+    let removing = action == ToolConfigAction::Remove;
+    let api_key = if removing {
+        cfg.api_key.trim().to_string()
+    } else {
+        require_config_api_key(&cfg)?
+    };
+    let protocol =
+        resolve_tool_protocol(tool, protocol.as_deref()).map_err(|err| err.to_string())?;
+    let models = if removing {
+        Vec::new()
+    } else {
+        require_tool_model_snapshot_for_operation(&cfg, &operation, tool, tool).await?
+    };
+    let prepared = prepare_trae_config(tool, &urls.openai, &api_key, &models, protocol, removing)
+        .await
+        .map_err(|err| err.to_string())?;
+    ensure_tool_config_operation_active(&operation, "Trae model configuration prepared")
+        .map_err(|err| err.to_string())?;
+    let context_digest = tool_config_operation_context_digest(
+        &state.config_path,
+        &api_key,
+        &urls,
+        Some(protocol),
+        &prepared.context_digest().map_err(|err| err.to_string())?,
+    );
+    let runtime = tokio::runtime::Handle::current();
+    let tool = tool.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let preview = prepared.preview();
+        execute_atomic_tool_config_operation_with_preview(
+            &operation,
+            Some(protocol.as_str()),
+            &context_digest,
+            confirmation_token.as_deref(),
+            || Ok(preview),
+            || {
+                runtime.block_on(prepared.commit(|completed, total| {
+                    update_tool_config_operation_progress(
+                        &operation,
+                        "writing_config",
+                        Some(completed as u64),
+                        Some(total as u64),
+                    );
+                }))
+            },
+            |context| launch_tool_program_for_atomic_operation(&tool, context),
+        )
+        .map(tool_config_operation_response)
+        .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| format!("TOOL_CONFIG_TRAE_JOIN_FAILED: {err}"))?
 }
 
 async fn execute_codex_tool_config_operation_inner(
@@ -3225,6 +3299,7 @@ async fn execute_tool_config_operation_inner(
     } else if matches!(
         tool,
         "copilot"
+            | "copilot-desktop"
             | "raven"
             | "pi"
             | "cline"
@@ -3234,6 +3309,8 @@ async fn execute_tool_config_operation_inner(
             | "anythingllm"
             | "goose"
             | "mistral-vibe"
+            | "grok-build"
+            | "minimax-code"
             | "open-design"
             | "kimicode"
             | "mimocode"
@@ -3244,6 +3321,7 @@ async fn execute_tool_config_operation_inner(
     ) {
         let tool_label = match tool {
             "copilot" => "GitHub Copilot CLI",
+            "copilot-desktop" => "GitHub Copilot",
             "raven" => "Raven",
             "pi" => "Pi",
             "cline" => "Cline",
@@ -3253,6 +3331,8 @@ async fn execute_tool_config_operation_inner(
             "anythingllm" => "AnythingLLM",
             "goose" => "Goose",
             "mistral-vibe" => "Mistral Vibe",
+            "grok-build" => "Grok Build",
+            "minimax-code" => "MiniMax Code",
             "open-design" => "Open Design",
             "kimicode" => "Kimi Code",
             "mimocode" => "MiMo Code",
@@ -3523,6 +3603,7 @@ async fn check_tool_config(
         .details
         .entry("model_sync_policy".to_string())
         .or_insert_with(|| tool_model_sync_policy(&tool).as_str().to_string());
+    tool_config::attach_tool_config_presence(&mut result).map_err(|err| err.to_string())?;
     attach_external_launch_environment_warning(&mut result, &tool);
     match tool_program_located_without_process_scan(&tool) {
         Ok(located) => {

@@ -11,6 +11,8 @@ pub(crate) struct ToolModelInfo {
     pub(crate) id: String,
     pub(crate) display_name: String,
     pub(crate) family: String,
+    // Identity from the signed/embedded catalog, not a guess from the model ID.
+    pub(crate) catalog_vendor: String,
     pub(crate) reasoning: bool,
     pub(crate) reasoning_efforts: Vec<String>,
     pub(crate) tool_call: bool,
@@ -20,6 +22,8 @@ pub(crate) struct ToolModelInfo {
     pub(crate) supports_1m: bool,
     pub(crate) input_modalities: Vec<String>,
     pub(crate) output_modalities: Vec<String>,
+    pub(crate) native_protocols: Vec<String>,
+    pub(crate) preferred_protocol: Option<String>,
     pub(crate) display_priority: i32,
     // Shared once per fetched list, including when a tool generates Claude
     // aliases after discovery. Never serialized into third-party tool schemas.
@@ -61,6 +65,9 @@ pub(crate) struct ToolModelMetadataDocument {
     pub(crate) catalog_models: Vec<EmbeddedToolCatalogModel>,
     #[serde(default)]
     pub(crate) models: HashMap<String, ToolModelCatalogEntry>,
+    // None is an older signed component; an explicit empty map is authoritative.
+    #[serde(default)]
+    model_aliases: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -132,6 +139,11 @@ pub(crate) fn tool_models_from_response(value: &Value) -> Vec<ToolModelInfo> {
     let presentation =
         crate::model_discovery::ModelPresentation::from_payload(value).map(std::sync::Arc::new);
     with_document(|document| {
+        let vendors: HashMap<_, _> = document
+            .catalog_models
+            .iter()
+            .map(|model| (model.id.as_str(), model.vendor.as_str()))
+            .collect();
         let mut seen = HashSet::new();
         let mut models = value
             .get("data")
@@ -154,6 +166,11 @@ pub(crate) fn tool_models_from_response(value: &Value) -> Vec<ToolModelInfo> {
                     }),
                 );
                 model.id = normalized.clone();
+                model.catalog_vendor = vendors
+                    .get(normalized.as_str())
+                    .copied()
+                    .unwrap_or_default()
+                    .to_string();
                 model.display_name = normalized;
                 if let Some(policy) = presentation.as_ref() {
                     let (priority, hidden) = policy.rank(&model.id);
@@ -201,7 +218,10 @@ pub(crate) fn active_tool_models() -> Vec<ToolModelInfo> {
         .into_iter()
         .map(|model| model.id)
         .collect::<Vec<_>>();
-    tool_models_from_ids(&model_ids)
+    tool_models_from_response(&serde_json::json!({
+        "data": model_ids.iter().map(|id| serde_json::json!({"id": id})).collect::<Vec<_>>(),
+        "const_api_model_presentation": crate::model_discovery::ModelPresentation::packaged(),
+    }))
 }
 
 pub(crate) fn active_tool_compatibility_groups() -> Vec<EmbeddedToolCompatibilityGroup> {
@@ -400,6 +420,7 @@ fn tool_model_from_entry(
             .unwrap_or(id)
             .to_string(),
         family: catalog_entry.family,
+        catalog_vendor: String::new(),
         reasoning,
         reasoning_efforts,
         tool_call,
@@ -410,6 +431,24 @@ fn tool_model_from_entry(
             && metadata.get("supports_1m").and_then(Value::as_bool) != Some(false),
         input_modalities,
         output_modalities,
+        // Older catalogs only expose supported_protocols. Do not infer a wire
+        // protocol from a display/model name, or treat convertible protocols as native.
+        native_protocols: metadata
+            .get("native_protocols")
+            .or_else(|| metadata.get("supported_protocols"))
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        preferred_protocol: metadata
+            .get("preferred_protocol")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         display_priority: metadata
             .get("display_priority")
             .and_then(Value::as_i64)
@@ -557,6 +596,50 @@ fn with_document<T>(read: impl FnOnce(&ToolModelMetadataDocument) -> T) -> T {
     }
 }
 
+fn identity_aliases(document: &ToolModelMetadataDocument) -> &HashMap<String, String> {
+    document.model_aliases.as_ref().unwrap_or_else(|| {
+        embedded_document()
+            .model_aliases
+            .as_ref()
+            .expect("packaged model aliases are required")
+    })
+}
+
+fn model_identity_key(value: &str) -> std::borrow::Cow<'_, str> {
+    let value = crate::config::without_context_hint(value);
+    if value.bytes().any(|byte| byte.is_ascii_uppercase()) || !value.is_ascii() {
+        std::borrow::Cow::Owned(value.to_lowercase())
+    } else {
+        std::borrow::Cow::Borrowed(value)
+    }
+}
+
+pub(crate) fn model_identity(value: &str) -> String {
+    let key = model_identity_key(value);
+    with_document(|document| {
+        identity_aliases(document)
+            .get(key.as_ref())
+            .cloned()
+            .unwrap_or_else(|| key.into_owned())
+    })
+}
+
+pub(crate) fn same_model_identity(left: &str, right: &str) -> bool {
+    let left = model_identity_key(left);
+    let right = model_identity_key(right);
+    with_document(|document| {
+        let aliases = identity_aliases(document);
+        aliases
+            .get(left.as_ref())
+            .map(String::as_str)
+            .unwrap_or(left.as_ref())
+            == aliases
+                .get(right.as_ref())
+                .map(String::as_str)
+                .unwrap_or(right.as_ref())
+    })
+}
+
 pub(crate) fn active_model_catalog_version() -> ModelCatalogVersionInfo {
     active_metadata()
         .read()
@@ -684,6 +767,20 @@ fn validate_tool_model_metadata_document(
         }
     }
     let mut group_ids = HashSet::new();
+    if let Some(aliases) = &document.model_aliases {
+        for (alias, canonical) in aliases {
+            if alias.is_empty()
+                || alias != &normalize_model_id(alias)
+                || alias == canonical
+                || catalog_ids.contains(alias)
+                || !catalog_ids.contains(canonical)
+            {
+                return Err(anyhow!(
+                    "tool model identity alias {alias} has an invalid target {canonical}"
+                ));
+            }
+        }
+    }
     let mut compatibility_key_owners = HashMap::<String, String>::new();
     for group in &document.compatibility_groups {
         let id = normalize_model_id(&group.id);
@@ -830,6 +927,40 @@ fn non_empty(value: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_aliases_follow_online_document_with_legacy_fallback() {
+        let mut document = embedded_document().clone();
+        document.model_aliases = Some(HashMap::from([(
+            "online-name".into(),
+            "claude-opus-5-5".into(),
+        )]));
+        validate_tool_model_metadata_document(&document, None).unwrap();
+        let aliases = identity_aliases(&document);
+        assert_eq!(
+            aliases.get("online-name").map(String::as_str),
+            Some("claude-opus-5-5")
+        );
+        assert!(!aliases.contains_key("claude-opus-5.5")); // No union with stale packaged entries.
+        document.model_aliases = Some(HashMap::new());
+        assert!(identity_aliases(&document).is_empty());
+        document.model_aliases = None; // An old component has no identity projection.
+        assert_eq!(
+            identity_aliases(&document),
+            identity_aliases(embedded_document())
+        );
+        let mut legacy = serde_json::to_value(&document).unwrap();
+        legacy.as_object_mut().unwrap().remove("model_aliases");
+        let legacy = serde_json::to_vec(&legacy).unwrap();
+        parse_tool_model_metadata(&legacy, None).unwrap();
+        document.model_aliases = Some(HashMap::from([("bad".into(), "missing-model".into())]));
+        assert!(validate_tool_model_metadata_document(&document, None).is_err());
+        document.model_aliases = Some(HashMap::from([(
+            "claude-sonnet-5-5".into(),
+            "claude-opus-5-5".into(),
+        )]));
+        assert!(validate_tool_model_metadata_document(&document, None).is_err());
+    }
 
     #[test]
     fn compatible_routes_intersect_context_limits_only_when_enabled() {
@@ -1147,6 +1278,15 @@ mod tests {
     #[test]
     fn active_tool_models_provide_offline_config_fallback_metadata() {
         let models = active_tool_models();
+        let presentation = crate::model_discovery::ModelPresentation::packaged();
+        assert!(models.windows(2).all(|pair| {
+            tool_model_display_order(&pair[0], &pair[1]) != std::cmp::Ordering::Greater
+        }));
+        assert!(
+            models
+                .iter()
+                .all(|model| { presentation.rank(&model.id) == (model.display_priority, false) })
+        );
         let model = models
             .iter()
             .find(|model| model.id == "gpt-5.6-sol")
@@ -1226,5 +1366,24 @@ mod tests {
             .expect("catalog metadata");
         assert!(!metadata.reasoning);
         assert!(!metadata.tool_call);
+    }
+
+    #[test]
+    fn tool_protocol_metadata_preserves_native_and_legacy_boundaries() {
+        let models = tool_models_from_response(&serde_json::json!({"data":[
+            {"id":"native-test","const_api":{"native_protocols":["anthropic_messages"],"supported_protocols":["openai_chat"],"preferred_protocol":"anthropic_messages"}},
+            {"id":"legacy-test","const_api":{"supported_protocols":["openai_chat"]}},
+            {"id":"empty-native-test","const_api":{"native_protocols":[],"supported_protocols":["openai_chat"]}},
+            {"id":"unknown-test"}
+        ]}));
+        let find = |id: &str| models.iter().find(|model| model.id == id).unwrap();
+        assert_eq!(find("native-test").native_protocols, ["anthropic_messages"]);
+        assert_eq!(
+            find("native-test").preferred_protocol.as_deref(),
+            Some("anthropic_messages")
+        );
+        assert_eq!(find("legacy-test").native_protocols, ["openai_chat"]);
+        assert!(find("empty-native-test").native_protocols.is_empty());
+        assert!(find("unknown-test").native_protocols.is_empty());
     }
 }
