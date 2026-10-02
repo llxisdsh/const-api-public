@@ -249,10 +249,7 @@ pub(crate) fn load_bundled_endpoint_manifest() -> Result<VerifiedEndpointManifes
     )
 }
 
-pub(crate) fn bundled_endpoint_discovery() -> Result<EndpointDiscoveryResult> {
-    let bundled = load_bundled_endpoint_manifest()?;
-    endpoint_discovery_from_verified_manifest("embedded", &bundled)
-}
+pub(crate) fn bundled_endpoint_discovery() -> Result<EndpointDiscoveryResult> { Ok(EndpointDiscoveryResult { source: "local_only".into(), version: 0, platform_id: String::new(), endpoints: Vec::new(), refresh_warning: None }) }
 
 pub(crate) fn endpoint_registry_cache_path(config_path: &Path) -> PathBuf {
     config_path.with_file_name(ENDPOINT_REGISTRY_CACHE_FILE)

@@ -35,6 +35,27 @@ pub(crate) fn enforce(config: &mut crate::model::ClientConfig) {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn bundled_endpoint_discovery_is_disabled_before_default_config_loading() {
+        let discovery = crate::endpoint::bundled_endpoint_discovery()
+            .expect("Local has no hosted endpoint registry to validate");
+        assert_eq!(discovery.source, "local_only");
+        assert_eq!(discovery.version, 0);
+        assert!(discovery.platform_id.is_empty());
+        assert!(discovery.endpoints.is_empty());
+        assert!(discovery.refresh_warning.is_none());
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("client.json");
+        let defaults = crate::config::default_config();
+        std::fs::write(&path, serde_json::to_vec(&defaults).unwrap()).unwrap();
+        let config = crate::config::load_config_from_path(&path).unwrap();
+        assert!(config.platform_id.is_empty());
+        assert!(config.endpoints.is_empty());
+        assert!(config.registry_sources.is_empty());
+        assert_eq!(config.registry_version, 0);
+    }
+
+    #[test]
     fn application_update_commands_are_unavailable() {
         for result in [
             crate::update_sources::set_automatic_updates(),
