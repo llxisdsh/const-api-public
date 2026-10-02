@@ -142,3 +142,5 @@ Original exported source is [MIT licensed](LICENSE). Third-party dependencies an
 assets retain their own licenses; see [Third-party notices](THIRD_PARTY_NOTICES.md).
 The license does not grant access to the hosted service, upstream subscriptions,
 or rights to third-party trademarks.
+
+Community: [LINUX DO](https://linux.do/).

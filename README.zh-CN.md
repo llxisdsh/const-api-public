@@ -121,3 +121,5 @@ npm run dev
 
 导出的自有源码采用 [MIT 许可](LICENSE)。第三方依赖和资源保留各自许可，见
 [第三方声明](THIRD_PARTY_NOTICES.md)。源码许可不包含平台服务访问权、上游订阅权益或第三方商标权。
+
+社区交流：[LINUX DO](https://linux.do/)。
