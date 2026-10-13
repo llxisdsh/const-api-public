@@ -10,6 +10,7 @@ import {
   SOURCE_DRIVER_MANIFEST_VERSION,
   SOURCE_DRIVERS,
   sourceDriverById,
+  sourceDriversForCategory,
   sourceDriversForApiAccess,
   sourceDriversForLanSharing,
   sourceDriversForCustom,
@@ -19,6 +20,25 @@ import {
 } from "./sourceDrivers";
 
 describe("source drivers", () => {
+  test("defaults Claude Fast off and persists an explicit opt-in", () => {
+    const channel = sourceDriverInitialChannelV5(sourceDriverById("claude_subscription"), {
+      id: "claude-fast", name: "Claude Fast", credentialRef: "credential://test",
+    });
+    expect(channel.subscription?.claude_fast_enabled).toBe(false);
+    channel.subscription!.claude_fast_enabled = true;
+    const saved = JSON.parse(JSON.stringify(serializeChannelV5(channel)));
+    expect(reloadChannelV5(saved).subscription?.claude_fast_enabled).toBe(true);
+    delete saved.subscription.claude_fast_enabled;
+    expect(reloadChannelV5(saved).subscription?.claude_fast_enabled).toBe(false);
+  });
+  test("offers Kiro as a normal subscription without hiding its conversion and usage precision", () => {
+    expect(sourceDriverById("kiro_subscription").subscriptionContract?.generation).toMatchObject({
+      defaultEnabled: true,
+      usageConfidence: "estimated",
+      conversion: { request: "c2" },
+    });
+    expect(sourceDriversForCategory("subscription").some((driver) => driver.id === "kiro_subscription")).toBe(true);
+  });
   test("loads the shared manifest with readable localized metadata", () => {
     expect(SOURCE_DRIVER_MANIFEST_VERSION).toBe(2);
     expect(sourceDriverById("openai_subscription")).toEqual(expect.objectContaining({
@@ -27,12 +47,24 @@ describe("source drivers", () => {
     }));
   });
 
+  test("groups Muse Code with account subscriptions without changing its HTTP executor", () => {
+    expect(sourceDriversForCategory("subscription").map((driver) => driver.id)).toContain("muse_code");
+    expect(sourceDriverById("muse_code")).toMatchObject({
+      category: "subscription",
+      executionKind: "http_surface",
+      executor: { type: "http_surface" },
+      fixedConnection: true,
+    });
+  });
+
   test("links each branded source to its official product or documentation", () => {
     expect(Object.fromEntries(SOURCE_DRIVERS.map((driver) => [driver.id, driver.homepageUrl]))).toEqual({
       openai_subscription: "https://chatgpt.com/",
       claude_subscription: "https://claude.ai/",
       gemini_subscription: "https://antigravity.google/",
       grok_subscription: "https://grok.com/",
+      kiro_subscription: "https://kiro.dev/",
+      cursor_subscription: "https://cursor.com/",
       openai_api: "https://developers.openai.com/",
       anthropic_api: "https://docs.anthropic.com/",
       gemini_api: "https://ai.google.dev/",
@@ -66,6 +98,10 @@ describe("source drivers", () => {
       glm_coding_plan: "https://docs.z.ai/devpack/overview",
       minimax_token_plan: "https://platform.minimax.io/docs/token-plan/intro",
       ollama_cloud: "https://docs.ollama.com/cloud",
+      muse_code: "https://dev.meta.ai/docs/muse-code/subscriptions",
+      copilot_subscription: "https://github.com/features/copilot/plans",
+      abacus_routellm: "https://api.abacus.ai/help/route-llm/",
+      poe_api: "https://creator.poe.com/docs/external-applications/openai-compatible-api",
       omniroute: "https://github.com/diegosouzapw/OmniRoute",
       ollama: "https://ollama.com/",
       lm_studio: "https://lmstudio.ai/",
@@ -115,6 +151,8 @@ describe("source drivers", () => {
       "glm_coding_plan",
       "minimax_token_plan",
       "ollama_cloud",
+      "abacus_routellm",
+      "poe_api",
     ]);
     expect(sourceDriversForLanSharing().map((driver) => driver.id)).toEqual(["lan_share"]);
     expect(sourceDriversForCustom().map((driver) => driver.id)).toEqual(["custom_endpoint"]);
@@ -138,7 +176,7 @@ describe("source drivers", () => {
     expect(() => parseSourceDriverManifest(invalid)).toThrow(/executor/i);
   });
 
-  test("projects subscription operation evidence without treating approximate support as routable", () => {
+  test("projects subscription precision separately from operation admission", () => {
     const openai = sourceDriverById("openai_subscription").subscriptionContract;
     const antigravity = sourceDriverById("gemini_subscription").subscriptionContract;
 
@@ -174,15 +212,13 @@ describe("source drivers", () => {
     delete (retained as { subscription_contract?: unknown }).subscription_contract;
     expect(() => parseSourceDriverManifest(missing)).toThrow(/subscription contract/i);
 
-    const approximate = structuredClone(sourceDriverManifestJson);
-    const antigravity = approximate.drivers.find((candidate) => candidate.id === "gemini_subscription");
-    if (!antigravity?.subscription_contract) throw new Error("missing Antigravity subscription contract");
-    const embed = antigravity.subscription_contract.special_operations.find(
-      (operation) => operation.operation === "embed_content",
-    );
-    if (!embed) throw new Error("missing Antigravity embed fixture");
-    embed.capability.default_enabled = true;
-    expect(() => parseSourceDriverManifest(approximate)).toThrow(/c2\/c3/i);
+    for (const field of ["request", "response", "error", "stream"] as const) {
+      const invalid = structuredClone(sourceDriverManifestJson);
+      const kiro = invalid.drivers.find((candidate) => candidate.id === "kiro_subscription");
+      if (!kiro?.subscription_contract) throw new Error("missing Kiro subscription contract");
+      kiro.subscription_contract.generation.conversion[field] = "c3";
+      expect(() => parseSourceDriverManifest(invalid)).toThrow(/unusable|inconsistent SSE/i);
+    }
   });
 
   test("forbids HTTP sources from declaring subscription capabilities", () => {
@@ -234,9 +270,33 @@ describe("source drivers", () => {
         },
         {
           "category": "subscription",
-          "iconKey": "xai",
+          "iconKey": "grok",
           "id": "grok_subscription",
           "order": 40,
+        },
+        {
+          "category": "subscription",
+          "iconKey": "kiro",
+          "id": "kiro_subscription",
+          "order": 45,
+        },
+        {
+          "category": "subscription",
+          "iconKey": "cursor",
+          "id": "cursor_subscription",
+          "order": 47,
+        },
+        {
+          "category": "subscription",
+          "iconKey": "copilot",
+          "id": "copilot_subscription",
+          "order": 50,
+        },
+        {
+          "category": "subscription",
+          "iconKey": "meta",
+          "id": "muse_code",
+          "order": 55,
         },
         {
           "category": "official_api",
@@ -414,7 +474,7 @@ describe("source drivers", () => {
         },
         {
           "category": "compatible_gateway",
-          "iconKey": "custom",
+          "iconKey": "kilo",
           "id": "kilo_gateway",
           "order": 13,
         },
@@ -426,7 +486,7 @@ describe("source drivers", () => {
         },
         {
           "category": "compatible_gateway",
-          "iconKey": "custom",
+          "iconKey": "commandcode",
           "id": "command_code",
           "order": 15,
         },
@@ -462,6 +522,18 @@ describe("source drivers", () => {
         },
         {
           "category": "compatible_gateway",
+          "iconKey": "abacus",
+          "id": "abacus_routellm",
+          "order": 21,
+        },
+        {
+          "category": "compatible_gateway",
+          "iconKey": "poe",
+          "id": "poe_api",
+          "order": 22,
+        },
+        {
+          "category": "compatible_gateway",
           "iconKey": "network",
           "id": "lan_share",
           "order": 30,
@@ -481,22 +553,30 @@ describe("source drivers", () => {
   });
 
   test("keeps subscription drivers to their known native contracts", () => {
-    const subscriptions = SOURCE_DRIVERS.filter((driver) => driver.category === "subscription");
+    const subscriptions = SOURCE_DRIVERS.filter((driver) => driver.subscriptionProvider);
 
     expect(subscriptions.map((driver) => [driver.id, driver.supportedProtocols])).toEqual([
       ["openai_subscription", ["openai_responses"]],
       ["claude_subscription", ["anthropic_messages"]],
       ["gemini_subscription", ["gemini_native"]],
       ["grok_subscription", ["openai_responses"]],
+      ["kiro_subscription", ["anthropic_messages"]],
+      ["cursor_subscription", ["anthropic_messages"]],
     ]);
     expect(subscriptions.map((driver) => driver.executor)).toEqual([
       { type: "retained_subscription", provider: "openai" },
       { type: "retained_subscription", provider: "claude" },
       { type: "retained_subscription", provider: "antigravity" },
       { type: "retained_subscription", provider: "grok" },
+      { type: "retained_subscription", provider: "kiro" },
+      { type: "retained_subscription", provider: "cursor" },
     ]);
     expect(subscriptions.flatMap((driver) => driver.surfaceBindings.map((binding) => binding.baseUrl)))
-      .toEqual([undefined, undefined, undefined, undefined]);
+      .toEqual([undefined, undefined, undefined, undefined, undefined, undefined]);
+    expect(sourceDriverById("copilot_subscription")).toMatchObject({
+      category: "subscription", fixedConnection: true, executor: { type: "http_surface" },
+      supportedProtocols: ["openai_chat", "openai_responses", "anthropic_messages"],
+    });
   });
 
   test("preserves the official multi-surface defaults", () => {
@@ -578,7 +658,7 @@ describe("source drivers", () => {
     expect(sourceDriverById("gemini_api").surfaceBindings[0].preferredProtocol).toBe("gemini_native");
   });
 
-  test.each(["opencode_go", "opencode_zen", "kilo_gateway", "cline_api", "command_code", "kimi_code", "glm_coding_plan", "minimax_token_plan", "ollama_cloud"] as const)(
+  test.each(["opencode_go", "opencode_zen", "kilo_gateway", "cline_api", "command_code", "kimi_code", "glm_coding_plan", "minimax_token_plan", "ollama_cloud", "muse_code", "copilot_subscription", "abacus_routellm", "poe_api"] as const)(
     "%s fixes its connection while retaining editable credentials and supply settings",
     (id) => {
       const driver = sourceDriverById(id);
@@ -599,7 +679,8 @@ describe("source drivers", () => {
         (value: typeof channel) => { value.surfaces[0].endpoint_profile = "custom"; },
         (value: typeof channel) => { value.discovery = { ...value.discovery, strategy: "custom" }; },
         (value: typeof channel) => {
-          value.default_target = { ...value.default_target, protocol: "openai_responses" };
+          value.surfaces = [{ ...value.surfaces[0], surface: "open_ai" }];
+          value.default_target = { surface: "open_ai", protocol: "openai_responses" };
           value.surfaces[0].protocols = [{ protocol: "openai_responses", preferred: true,
             verification: { state: "declared", checked_at_unix: 0, summary: "" } }];
         },

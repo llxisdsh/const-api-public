@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { DEFAULT_TOOL_MODEL_INJECTION } from "./toolModelInjection";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowDown,
@@ -56,6 +57,8 @@ import { createMarketPriceCache } from "./marketPriceCache";
 import { ToolDockMenuProvider } from "./ToolDockMenu";
 import { SupplierSurfaceConfig } from "./components/SupplierSurfaceConfig";
 import { SupplierChannelChecks } from "./components/SupplierChannelChecks";
+import { SupplierRouteNotice } from "./components/SupplierRouteNotice";
+import { DeviceCodeAuthorization } from "./components/DeviceCodeAuthorization";
 import { PageFindBar } from "./components/PageFindBar";
 import {
   formatAccountUnsignedMoney,
@@ -127,7 +130,6 @@ import {
   supplierPricingWarnings,
   supplierProtocolLatencyLabel,
   supplierProtocolLatencyParts,
-  supplierRouteStatusBlocksReady,
   supplierRouteStatusDetail,
   supplierRouteStatusForChannel,
   surfaceLabel,
@@ -268,6 +270,8 @@ const MarketPricesModal = React.lazy(() => import("./MarketPricesModal")
   .then((module) => ({ default: module.MarketPricesModal })));
 const ModelCompatibilityEditor = React.lazy(() => import("./components/ModelCompatibilityEditor")
   .then((module) => ({ default: module.ModelCompatibilityEditor })));
+const ToolModelInjectionSettings = React.lazy(() => import("./components/ToolModelInjectionSettings")
+  .then((module) => ({ default: module.ToolModelInjectionSettings })));
 const OperationCapabilityMatrix = React.lazy(() => import("./components/OperationCapabilityMatrix")
   .then((module) => ({ default: module.OperationCapabilityMatrix })));
 const SupplierModelPoolDialog = React.lazy(() => import("./components/SupplierModelPoolDialog")
@@ -374,6 +378,7 @@ function ProductApp({
   const [onboardingSeen, setOnboardingSeen] = useState(() => hasSeenOnboarding());
   const [localModeChosen, setLocalModeChosen] = useState(() => hasChosenLocalMode());
   const [onboardingGuideCollapsed, setOnboardingGuideCollapsed] = useState(false);
+  const [toolModelInjectionEditorOpen, setToolModelInjectionEditorOpen] = useState(false);
   const {
     tab,
     setTab,
@@ -387,6 +392,7 @@ function ProductApp({
     setSelectedCallRecord,
     toolConfigStatuses,
     toolConfigChecking,
+    saveToolModelInjectionSettings,
     toolProtocolDraftTouchedRef,
     toolProtocolSelections,
     codexModelSource,
@@ -468,6 +474,8 @@ function ProductApp({
     autostartEnabled,
     autostartBusy,
     changeAutostart,
+    sleepPreventionBusy,
+    changeSleepPrevention,
     developmentEndpointBusy,
     changeDevelopmentEndpoint,
     themePreference,
@@ -690,6 +698,7 @@ function ProductApp({
   const onboardingGuideState = resolveOnboardingGuideState({
     page: tab,
     signedIn,
+    accountStatusReady: account.statusReady,
     localModeChosen,
     localModelReady,
     onboardingSeen,
@@ -904,7 +913,6 @@ function ProductApp({
     supplierStatus,
     selectedChannel.id,
   );
-  const selectedChannelRouteDetail = supplierRouteStatusDetail(selectedChannelRouteStatus);
   const selectedConcurrencyGuidance = supplierConcurrencyGuidance(
     selectedChannel.max_concurrency,
   );
@@ -948,6 +956,7 @@ function ProductApp({
     || subscriptionWizardOpen
     || supplierDetailOpen
     || modelAliasPreviewOpen
+    || toolModelInjectionEditorOpen
     || debugConsoleOpen
     || lanSharingOpen
     || logOpen,
@@ -1410,6 +1419,12 @@ function ProductApp({
                           <Eye size={14} />{t("access.customizeModels")}
                         </button>
                       </div>
+                      <React.Suspense fallback={null}><ToolModelInjectionSettings
+                        settings={config.tool_model_injection ?? DEFAULT_TOOL_MODEL_INJECTION}
+                        open={toolModelInjectionEditorOpen}
+                        onOpenChange={setToolModelInjectionEditorOpen}
+                        onSave={saveToolModelInjectionSettings}
+                      /></React.Suspense>
                     </div>
                   </div>
                 </div>
@@ -1777,7 +1792,7 @@ function ProductApp({
                         </div>
                         <div className="channel-stat quota wide">
                           <small>{t("supplier.quota")}</small>
-                          <span>{quotaStatusLabel(health?.quota_status, channel)}</span>
+                          <span>{quotaStatusLabel(health?.quota_status, channel, health?.quota_windows)}</span>
                         </div>
                         <button
                           type="button"
@@ -1983,7 +1998,7 @@ function ProductApp({
                       />
                     </div>
 
-                    <div className="wizard-steps">
+                    {subscriptionWizardProvider !== "cursor" && <div className="wizard-steps">
                       <div className={`wizard-step ${subscriptionOAuthSession ? "done" : "active"}`}>
                         <div className="wizard-step-index">1</div>
                         <div>
@@ -2005,8 +2020,7 @@ function ProductApp({
                           <span>{t("supplier.oauthSteps.importHint")}</span>
                         </div>
                       </div>
-                    </div>
-
+                    </div>}
                     <div className="wizard-grid">
                       <label>
                         {t("supplier.accountType")}
@@ -2017,11 +2031,23 @@ function ProductApp({
                         />
                         <span className="field-hint">{t("supplier.accountTypeHint")}</span>
                       </label>
-                      <div className="wizard-actions wizard-create-action">
+                      {subscriptionWizardProvider === "cursor" ? <DeviceCodeAuthorization
+                        provider="cursor"
+                        disabled={subscriptionWizardBusy}
+                        onStarting={() => setSubscriptionTokenJson("")}
+                        onAuthorized={(token) => setSubscriptionTokenJson(token)}
+                        onOpenUrl={openExternalUrl}
+                      /> : <div className="wizard-actions wizard-create-action">
                         <button className="primary" onClick={() => createSubscriptionOAuth()} disabled={subscriptionWizardBusy}>
                           <KeyRound size={16} />{subscriptionOAuthSession ? t("supplier.regenerateLink") : t("supplier.generateLink")}
                         </button>
-                      </div>
+                      </div>}
+
+                      {subscriptionWizardProvider === "cursor" && subscriptionTokenJson && <div className="wizard-actions grid-wide">
+                        <button className="primary" onClick={() => void importSubscriptionJson()} disabled={subscriptionWizardBusy}>
+                          <Save size={16} />{t("supplier.saveImportJson")}
+                        </button>
+                      </div>}
 
                       {subscriptionOAuthSession && (
                         <>
@@ -2094,7 +2120,7 @@ function ProductApp({
                             <span className="field-hint">{t("supplier.manualImportHint")}</span>
                           </label>
                           <div className="wizard-actions grid-wide">
-                            <button className="primary" onClick={importSubscriptionJson} disabled={subscriptionWizardBusy || !subscriptionTokenJson.trim()}>
+                            <button className="primary" onClick={() => void importSubscriptionJson()} disabled={subscriptionWizardBusy || !subscriptionTokenJson.trim()}>
                               <Save size={16} />{t("supplier.saveImportJson")}
                             </button>
                           </div>
@@ -2162,7 +2188,7 @@ function ProductApp({
                       </div>
                       <div>
                         <span>{t("supplier.quota")}</span>
-                        <strong>{quotaStatusLabel(selectedChannelQuotaHealth?.quota_status, selectedChannel)}</strong>
+                        <strong>{quotaStatusLabel(selectedChannelQuotaHealth?.quota_status, selectedChannel, selectedChannelQuotaHealth?.quota_windows)}</strong>
                         <small>{quotaDetailLabel(selectedChannelQuotaHealth, selectedChannel)}</small>
                       </div>
                       <div>
@@ -2172,12 +2198,7 @@ function ProductApp({
                       </div>
                     </div>
 
-                    {supplierRouteStatusBlocksReady(selectedChannelRouteStatus) && selectedChannelRouteDetail && (
-                      <div className="supplier-route-diagnostic-notice" role="status">
-                        <strong>{t("supplierRoute.routeDetailTitle")}</strong>
-                        <span>{selectedChannelRouteDetail}</span>
-                      </div>
-                    )}
+                    <SupplierRouteNotice status={selectedChannelRouteStatus} />
 
                     {supplierPricingWarnings(selectedChannelRouteStatus).length > 0 && (
                       <div className="pricing-fallback-notice" role="status">
@@ -2331,6 +2352,8 @@ function ProductApp({
                               {selectedChannel.source_driver === "lan_share" ? "API Key" : t("supplier.upstreamApiKey")}
                               <input
                                 value={selectedChannel.upstream_api_key}
+                                type={["muse_code", "copilot_subscription"].includes(selectedChannel.source_driver) ? "password" : "text"}
+                                readOnly={["muse_code", "copilot_subscription"].includes(selectedChannel.source_driver)}
                                 aria-describedby={selectedChannel.kind === "custom_endpoint" ? "supplier-shared-credential-hint" : undefined}
                                 onChange={(e) => updateSupplier({ upstream_api_key: e.target.value })}
                               />
@@ -2338,6 +2361,13 @@ function ProductApp({
                                 <span className="field-hint">{t("supplier.azureAuthHint")}</span>
                               )}
                             </label>
+                            {["muse_code", "copilot_subscription"].includes(selectedChannel.source_driver) && <DeviceCodeAuthorization
+                              key={selectedChannel.id}
+                              provider={selectedChannel.source_driver === "copilot_subscription" ? "copilot" : "muse_code"}
+                              disabled={selectedChannelBusy || configActionBusy}
+                              onAuthorized={(key) => updateSupplier({ upstream_api_key: key })}
+                              onOpenUrl={(url) => void openExternalUrl(url)}
+                            />}
                             {selectedChannel.kind === "custom_endpoint" && (
                               <span id="supplier-shared-credential-hint" className="field-hint supplier-credential-note">
                                 {t("supplier.apiInterfaces.sharedCredentialHint")}
@@ -2514,8 +2544,11 @@ function ProductApp({
                             onClick={() => setShowSupplierSurfaceBindings((value) => !value)}
                           >
                             <span>
-                              <strong>{t("supplier.advanced.surfaceTitle")}</strong>
-                              <small>{selectedSurfaceBindings.map((binding) => surfaceLabel(binding.surface)).join(" / ") || t("supplier.advanced.notConfigured")}</small>
+                              <strong>{t(selectedSourceDriver.subscriptionContract
+                                ? "supplier.advanced.subscriptionInterfaceTitle" : "supplier.advanced.surfaceTitle")}</strong>
+                              <small>{selectedSourceDriver.executor.type === "retained_subscription"
+                                ? t(`supplier.apiInterfaces.subscriptionTransports.${selectedSourceDriver.executor.provider}`)
+                                : selectedSurfaceBindings.map((binding) => surfaceLabel(binding.surface)).join(" / ") || t("supplier.advanced.notConfigured")}</small>
                             </span>
                             <ChevronDown className="advanced-disclosure-chevron" aria-hidden="true" size={17} />
                           </button>
@@ -2525,6 +2558,7 @@ function ProductApp({
                                 <SupplierSurfaceConfig
                                   mode="readonly"
                                   bindings={selectedSurfaceBindings}
+                                  driver={selectedSourceDriver}
                                 />
                               ) : selectedSurfaceBindings.map((binding) => (
                                   <div className="surface-binding-row surface-binding-row-operations" key={binding.surface}>
@@ -2621,7 +2655,10 @@ function ProductApp({
                           </button>
                           {showSupplierProtocolDeclaration && (
                             <div className="advanced-disclosure-body capability-overview">
-                              <CapabilityProfileList profiles={selectedChannel.capability_profiles ?? []} />
+                              <CapabilityProfileList
+                                profiles={selectedChannel.capability_profiles ?? []}
+                                subscription={Boolean(selectedSourceDriver.subscriptionContract)}
+                              />
                               <React.Suspense fallback={null}>
                                 <OperationCapabilityMatrix driver={selectedSourceDriver} />
                               </React.Suspense>
@@ -2659,7 +2696,7 @@ function ProductApp({
                             </select>
                             <span className="field-hint">{t("supplier.advanced.primaryUpstreamProtocolHint")}</span>
                           </label>)}
-                          {selectedSourceDriver.category !== "subscription" && (
+                          {selectedSourceDriver.executor.type === "http_surface" && (
                             <label>
                               {t("supplier.advanced.userAgentProfile")}
                               <select
@@ -2676,6 +2713,27 @@ function ProductApp({
                           )}
                           {selectedChannel.kind === "subscription_adapter" && (
                             <>
+                              {selectedChannel.source_driver === "claude_subscription" && (
+                                <div>
+                                  <label className={`supply-toggle ${selectedChannel.subscription.claude_fast_enabled ? "checked" : ""}`}>
+                                    <input
+                                      type="checkbox"
+                                      role="switch"
+                                      checked={selectedChannel.subscription.claude_fast_enabled ?? false}
+                                      aria-describedby="claude-fast-hint"
+                                      onChange={(event) => updateSupplier({
+                                        subscription: {
+                                          ...selectedChannel.subscription,
+                                          claude_fast_enabled: event.target.checked,
+                                        },
+                                      })}
+                                    />
+                                    <span className="supply-toggle-track" aria-hidden="true"><span /></span>
+                                    <span>{t("supplier.advanced.claudeFast")}</span>
+                                  </label>
+                                  <p id="claude-fast-hint" className="field-hint">{t("supplier.advanced.claudeFastHint")}</p>
+                                </div>
+                              )}
                               <label className="supplier-subscription-reference">
                                 {t("supplier.advanced.subscriptionPlatform")}
                                 <div className="readonly-field-value">
@@ -2683,6 +2741,10 @@ function ProductApp({
                                     ? "Claude"
                                     : selectedChannel.subscription.platform === "grok"
                                       ? "Grok"
+                                    : selectedChannel.subscription.platform === "kiro"
+                                      ? "Kiro"
+                                    : selectedChannel.subscription.platform === "cursor"
+                                      ? "Cursor"
                                     : selectedChannel.subscription.platform === "antigravity"
                                       ? "Antigravity"
                                       : selectedChannel.subscription.platform === "gemini"
@@ -2951,16 +3013,16 @@ function ProductApp({
                     </div>
                   </div>
                   <div className="about-preference-bar">
-                    {clientModePolicy.presentation.showReleasePreferences && (
                       <div className="about-preference-toggles">
                         <span className="about-info-label">{t("about.startupAndUpdates")}</span>
                         <div className="about-preference-options">
-                          {false && (<label className="about-compact-toggle">
+                          {false && (<label className="about-compact-toggle" title={clientModePolicy.runtime.developmentProfile && !releasePreferencesPreviewOnly ? t("about.releasePreferencesDevHint") : undefined}>
                             <input
                               type="checkbox"
                               checked={releasePreferencesPreviewOnly
                                 ? previewAutoInstallUpdates
                                 : autoInstallUpdates}
+                              disabled={!clientModePolicy.capabilities.releaseUpdates && !releasePreferencesPreviewOnly}
                               onChange={(event) => {
                                 if (releasePreferencesPreviewOnly) {
                                   setPreviewAutoInstallUpdates(event.target.checked);
@@ -2971,13 +3033,13 @@ function ProductApp({
                             />
                             <span>{t("about.autoRestartUpdate")}</span>
                           </label>)}
-                          <label className="about-compact-toggle">
+                          <label className="about-compact-toggle" title={clientModePolicy.runtime.developmentProfile && !releasePreferencesPreviewOnly ? t("about.releasePreferencesDevHint") : undefined}>
                             <input
                               type="checkbox"
                               checked={releasePreferencesPreviewOnly
                                 ? previewAutostartEnabled
                                 : autostartEnabled}
-                              disabled={!releasePreferencesPreviewOnly && autostartBusy}
+                              disabled={!releasePreferencesPreviewOnly && (!clientModePolicy.capabilities.releasePreferences || autostartBusy)}
                               onChange={(event) => {
                                 if (releasePreferencesPreviewOnly) {
                                   setPreviewAutostartEnabled(event.target.checked);
@@ -2990,9 +3052,20 @@ function ProductApp({
                               ? t("about.changing")
                               : t("about.launchAtLogin")}</span>
                           </label>
+                          {config.sleep_prevention_supported && (
+                            <label className="about-compact-toggle" title={t("about.sleepPreventionHint")}>
+                              <input
+                                type="checkbox"
+                                checked={config.prevent_sleep_while_supplying === true}
+                                aria-description={t("about.sleepPreventionHint")}
+                                disabled={sleepPreventionBusy}
+                                onChange={(event) => void changeSleepPrevention(event.target.checked)}
+                              />
+                              <span>{t("about.preventSleepWhileSupplying")}</span>
+                            </label>
+                          )}
                         </div>
                       </div>
-                    )}
                     <div className="about-appearance-controls">
                       <span className="about-info-label">{t("about.interfaceSettings")}</span>
                       <div className="about-appearance-options">

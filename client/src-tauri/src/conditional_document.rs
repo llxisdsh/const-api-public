@@ -103,7 +103,11 @@ impl ConditionalDocumentCache {
                     next = next.header(IF_MODIFIED_SINCE, modified.clone());
                 }
             }
-            let mut response = next.send().await.context("fetch public document")?;
+            let mut response = next
+                .send()
+                .await
+                .inspect_err(crate::http_client::observe_error)
+                .context("fetch public document")?;
             if response.status() == StatusCode::NOT_MODIFIED {
                 if let Some(document) = cached.as_mut() {
                     let has_validator = document.etag.is_some() || document.last_modified.is_some();

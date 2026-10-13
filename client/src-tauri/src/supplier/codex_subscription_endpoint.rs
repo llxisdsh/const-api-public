@@ -1644,6 +1644,32 @@ mod native_codex_endpoint_tests {
     }
 
     #[test]
+    fn native_codex_incremental_catalog_and_message_metadata_remain_byte_stable() {
+        // Mainline Codex moves instructions into input, updates declarations in
+        // place and can replay partial answers. None require a subscription rewrite.
+        let body = r#"{
+  "model":"gpt-6.1-sol","stream":true,"service_tier":"priority",
+  "input":[
+    {"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"function","name":"search","parameters":{"type":"object"}}]}]},
+    {"type":"message","role":"developer","content":[{"type":"input_text","text":"Base instructions"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["model.base_instructions"]}},
+    {"type":"message","role":"assistant","phase":"partial_answer","content":[{"type":"output_text","text":"First result"}]},
+    {"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"search","format":{"type":"text"}}]}]}
+  ],"client_metadata":{"future_field":"preserve"}
+}"#;
+        for version in ["0.159.2", "0.161.0", "0.999.0"] {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert("originator", "codex_cli_rs".parse().unwrap());
+            headers.insert("user-agent", format!("codex_cli_rs/{version} (Windows; x86_64)").parse().unwrap());
+            let prepared = prepare_codex_subscription_endpoint_request(
+                &crate::default_supplier_config(), body, false, "gpt-6.1-sol",
+                Some("must-not-replace-native-context"), Some(&headers),
+            ).unwrap();
+            assert_eq!(prepared.body, body);
+            assert!(prepared.faults.is_empty());
+        }
+    }
+
+    #[test]
     fn non_native_reasoning_replay_omits_only_fields_rejected_by_codex() {
         let body = serde_json::json!({
             "model": "gpt-5.6-sol",

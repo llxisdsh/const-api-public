@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 import {
   API_SURFACE_CONTRACT,
@@ -54,13 +55,15 @@ function operationCapability(
 }
 
 function familyContextForDriver(driver: SourceDriver): APIExecutionContext {
-  return driver.category === "subscription" ? "subscription_driver" : "api_credential";
+  // Menu grouping does not determine whether requests use an adapter or standard HTTP.
+  return driver.executor.type === "retained_subscription" ? "subscription_driver" : "api_credential";
 }
 
 function visibleFamilyCapability(
   driver: SourceDriver,
   family: APIOfficialFamilyContract,
   language: string,
+  t: TFunction,
 ): VisibleCapability | undefined {
   if (family.scope !== "model_api") return undefined;
 
@@ -79,22 +82,20 @@ function visibleFamilyCapability(
     if (enabledOperations.length === 0) return undefined;
     if (enabledOperations.length < operations.length) {
       support = "limited";
-      return {
-        family,
-        support,
-        explanation: language.toLowerCase().startsWith("zh")
-          ? "支持核心调用，部分扩展操作暂不可用"
-          : "Core requests are supported; some extended operations are unavailable",
-      };
+      return { family, support, explanation: t("supplier.capabilities.coreOperationsOnly") };
+    }
+    if (enabledOperations.some((operation) => {
+      const conversion = operationCapability(driver, operation)?.conversion;
+      return conversion && [conversion.request, conversion.response, conversion.stream].includes("c2");
+    })) {
+      return { family, support: "limited", explanation: t("supplier.capabilities.adapterConversion") };
     }
   } else if (driver.category !== "official_api" && support === "supported") {
     support = "limited";
     return {
       family,
       support,
-      explanation: language.toLowerCase().startsWith("zh")
-        ? "实际范围取决于当前模型和上游渠道"
-        : "Availability depends on the selected model and upstream",
+      explanation: t("supplier.capabilities.modelDependent"),
     };
   }
 
@@ -110,11 +111,17 @@ function visibleFamilyCapability(
 export function OperationCapabilityMatrix({ driver }: { readonly driver: SourceDriver }) {
   const { i18n, t } = useTranslation();
   const language = i18n.resolvedLanguage ?? i18n.language ?? "zh-CN";
-  const surfaceIDs = new Set(driver.surfaceBindings.map((binding) =>
-    binding.surface === "open_ai" ? "openai" : binding.surface));
+  // Subscription bindings name the executor's internal target, not its public
+  // ingress. Use the operation contract, without inventing upstream endpoints.
+  const surfaceIDs = new Set(driver.subscriptionContract
+    ? driver.subscriptionContract.acceptedIngressProtocols.map((protocol) =>
+      protocol === "anthropic_messages" ? "anthropic"
+        : protocol === "gemini_native" ? "gemini" : "openai")
+    : driver.surfaceBindings.map((binding) =>
+      binding.surface === "open_ai" ? "openai" : binding.surface));
   const capabilities = API_SURFACE_CONTRACT.official_families
     .filter((family) => surfaceIDs.has(family.surface))
-    .map((family) => visibleFamilyCapability(driver, family, language))
+    .map((family) => visibleFamilyCapability(driver, family, language, t))
     .filter((capability): capability is VisibleCapability => Boolean(capability));
 
   if (capabilities.length === 0) {
@@ -125,7 +132,8 @@ export function OperationCapabilityMatrix({ driver }: { readonly driver: SourceD
     <section className="operation-capability-matrix capability-overview-section">
       <header className="capability-section-heading">
         <h4>{t("supplier.capabilities.apiTitle")}</h4>
-        <p>{t("supplier.capabilities.apiHint")}</p>
+        <p>{t(driver.subscriptionContract
+          ? "supplier.capabilities.subscriptionApiHint" : "supplier.capabilities.apiHint")}</p>
       </header>
       {[...surfaceIDs].map((surfaceID) => {
         const surfaceCapabilities = capabilities.filter(({ family }) => family.surface === surfaceID);

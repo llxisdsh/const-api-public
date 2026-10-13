@@ -366,6 +366,7 @@ where
         .unwrap_or(reqwest::Method::POST);
     let upstream_request = shared
         .client
+        .snapshot()
         .request(reqwest_method, &session.upstream_url)
         .headers(upstream_headers)
         .body(reqwest::Body::wrap_stream(counted));

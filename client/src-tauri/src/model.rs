@@ -143,6 +143,8 @@ pub(crate) struct ClientConfig {
     pub(crate) proxy_auto_start: bool,
     #[serde(default = "crate::default_true")]
     pub(crate) automatic_updates: bool,
+    #[serde(default = "crate::default_true")]
+    pub(crate) prevent_sleep_while_supplying: bool,
     #[serde(default)]
     pub(crate) supplier_auto_start: bool,
     pub(crate) api_key: String,
@@ -160,6 +162,8 @@ pub(crate) struct ClientConfig {
     pub(crate) allow_model_equivalence: bool,
     #[serde(default)]
     pub(crate) prefer_local_supply: bool,
+    #[serde(default)]
+    pub(crate) tool_model_injection: crate::tool_model_injection::ToolModelInjectionSettings,
     // Legacy serialized field, normalized to true. Platform source priority
     // now determines when custom routes are used; it is no longer a preference.
     #[serde(default)]
@@ -276,6 +280,8 @@ impl SupplierConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SubscriptionAdapterConfig {
+    #[serde(default)]
+    pub(crate) claude_fast_enabled: bool,
     #[serde(default = "crate::default_subscription_platform")]
     pub(crate) platform: String,
     #[serde(default)]
@@ -597,6 +603,8 @@ pub(crate) struct ChannelConfigV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SubscriptionConfigV2 {
+    #[serde(default)]
+    pub(crate) claude_fast_enabled: bool,
     pub(crate) platform: String,
     pub(crate) account_label: String,
     pub(crate) max_concurrency: u32,
@@ -780,6 +788,8 @@ impl From<ChannelConfig> for ChannelConfigV2 {
                 | crate::source_driver::SourceDriverId::ClaudeSubscription
                 | crate::source_driver::SourceDriverId::GeminiSubscription
                 | crate::source_driver::SourceDriverId::GrokSubscription
+                | crate::source_driver::SourceDriverId::KiroSubscription
+                | crate::source_driver::SourceDriverId::CursorSubscription
         );
         value.models = crate::config::dedupe_models(value.models);
         let default_model =
@@ -934,6 +944,7 @@ fn observed_default_model(configured: &str, models: &[String]) -> String {
 impl From<SubscriptionAdapterConfig> for SubscriptionConfigV2 {
     fn from(value: SubscriptionAdapterConfig) -> Self {
         Self {
+            claude_fast_enabled: value.claude_fast_enabled,
             platform: value.platform,
             account_label: value.account_label,
             max_concurrency: value.max_concurrency,
@@ -953,6 +964,7 @@ impl From<SubscriptionAdapterConfig> for SubscriptionConfigV2 {
 impl From<SubscriptionConfigV2> for SubscriptionAdapterConfig {
     fn from(value: SubscriptionConfigV2) -> Self {
         Self {
+            claude_fast_enabled: value.claude_fast_enabled,
             platform: value.platform,
             account_label: value.account_label,
             credential_ref: String::new(),
@@ -1376,6 +1388,9 @@ pub(crate) struct ChannelCapabilityProfile {
     /// Original catalog identity, retained before public short-name normalization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) catalog_source_model: Option<String>,
+    /// Subscription-local request controls, not protocol capability evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) kiro_request_schema: Option<serde_json::Value>,
     /// Numeric limits from this channel's live model catalog, not the bundled catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) context_tokens: Option<u64>,
@@ -1673,7 +1688,7 @@ pub(crate) struct SupplierAgentHandle {
     pub(crate) node_ids: Vec<String>,
     pub(crate) suppliers: Vec<SupplierConfig>,
     pub(crate) agent_shutdown: oneshot::Sender<()>,
-    pub(crate) monitor_shutdown: oneshot::Sender<()>,
+    pub(crate) monitor_shutdown: Option<oneshot::Sender<()>>,
     pub(crate) register_update: mpsc::Sender<SupplierRegistrationUpdate>,
 }
 

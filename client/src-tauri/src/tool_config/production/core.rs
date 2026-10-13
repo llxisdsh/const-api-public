@@ -691,11 +691,12 @@ enum ToolConfigFormat {
     Text,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 enum ToolConfigFieldPath {
     Key(String),
     Named(String),
+    Identified(BTreeMap<String, String>),
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

@@ -9,8 +9,8 @@ use log::Record;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::time::{Duration, SystemTime};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 
 const LOG_RETENTION_DAYS: usize = 3;
 const LOG_HISTORY_MAX_FILES: usize = 8;
@@ -124,7 +124,57 @@ fn start_log_cleanup_worker(directory: PathBuf) -> std::io::Result<()> {
     Ok(())
 }
 
-struct ClientLogFilter;
+#[derive(Default)]
+struct NetworkLogWindow {
+    last_report: Option<Instant>,
+    count: u64,
+}
+
+impl NetworkLogWindow {
+    fn record(&mut self, now: Instant) -> Option<u64> {
+        self.count = self.count.saturating_add(1);
+        if self
+            .last_report
+            .is_some_and(|last| now.duration_since(last) < Duration::from_secs(60))
+        {
+            return None;
+        }
+        self.last_report = Some(now);
+        Some(std::mem::take(&mut self.count))
+    }
+}
+
+#[derive(Default)]
+struct ClientLogFilter {
+    // Fixed categories, never one entry per URL/account/request. These known
+    // high-volume failures retain their first sample and a per-minute count.
+    network_windows: Mutex<[NetworkLogWindow; 2]>,
+}
+
+fn repeated_network_log_category(record: &Record<'_>) -> Option<usize> {
+    if record.level() > log::Level::Warn {
+        return None;
+    }
+    if record.target().starts_with("const_api_client::account")
+        && record
+            .args()
+            .to_string()
+            .starts_with("[const-api][account-network]")
+    {
+        return Some(0);
+    }
+    if record.target() == "warp::server::run" {
+        let message = record.args().to_string();
+        if message.starts_with("server connection error: hyper::Error(BodyWrite,")
+            && message.contains("ConnectionReset")
+        {
+            // A reset may interrupt a response, so do not label it benign or
+            // suppress it entirely. Only aggregate identical failure classes.
+            return Some(1);
+        }
+    }
+    None
+}
 
 fn is_benign_incomplete_local_http_message(record: &Record<'_>) -> bool {
     if record.level() != log::Level::Error {
@@ -143,10 +193,34 @@ impl LogLineFilter for ClientLogFilter {
         record: &Record<'_>,
         log_line_writer: &dyn LogLineWriter,
     ) -> std::io::Result<()> {
-        if !is_benign_incomplete_local_http_message(record) {
-            log_line_writer.write(now, record)?;
+        if is_benign_incomplete_local_http_message(record) {
+            return Ok(());
         }
-        Ok(())
+        if let Some(category) = repeated_network_log_category(record) {
+            let count = self
+                .network_windows
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)[category]
+                .record(Instant::now());
+            return match count {
+                Some(count) => log_line_writer.write(
+                    now,
+                    &Record::builder()
+                        .metadata(record.metadata().clone())
+                        .module_path(record.module_path())
+                        .file(record.file())
+                        .line(record.line())
+                        .args(format_args!(
+                            "{} occurrences_since_last_report={}",
+                            record.args(),
+                            count
+                        ))
+                        .build(),
+                ),
+                None => Ok(()),
+            };
+        }
+        log_line_writer.write(now, record)
     }
 }
 
@@ -214,7 +288,7 @@ pub(crate) fn initialize_client_logging(terminal_output: bool, config_root: &Pat
         .write_mode(WriteMode::Async)
         .duplicate_to_stderr(duplicate)
         .add_writer("Raw", Box::new(raw_writer))
-        .filter(Box::new(ClientLogFilter))
+        .filter(Box::new(ClientLogFilter::default()))
         .start()
         .context("start client logger")?;
     let _ = LOGGER_HANDLE.set(handle);
@@ -330,6 +404,46 @@ mod tests {
             .module_path(Some("const_api_client::proxy"))
             .build();
         assert!(!is_benign_incomplete_local_http_message(&other_module));
+    }
+
+    #[test]
+    fn repeated_network_errors_are_counted_without_hiding_other_failures() {
+        let now = Instant::now();
+        let mut window = NetworkLogWindow::default();
+        assert_eq!(window.record(now), Some(1));
+        for _ in 0..10_000 {
+            assert_eq!(window.record(now + Duration::from_secs(30)), None);
+        }
+        assert_eq!(window.record(now + Duration::from_secs(60)), Some(10_001));
+        assert_eq!(window.record(now + Duration::from_secs(120)), Some(1));
+        let account = Record::builder()
+            .level(log::Level::Warn)
+            .target("const_api_client::account")
+            .args(format_args!(
+                "[const-api][account-network] operation=summary class=connect"
+            ))
+            .build();
+        assert_eq!(repeated_network_log_category(&account), Some(0));
+        let reset = Record::builder().level(log::Level::Error).target("warp::server::run")
+            .args(format_args!("server connection error: hyper::Error(BodyWrite, Os {{ code: 10054, kind: ConnectionReset }})")).build();
+        assert_eq!(repeated_network_log_category(&reset), Some(1));
+        assert!(!is_benign_incomplete_local_http_message(&reset));
+        for message in [
+            "server connection error: address in use",
+            "server connection error: hyper::Error(BodyWrite, upstream failure)",
+            "protocol conversion failed",
+        ] {
+            assert_eq!(
+                repeated_network_log_category(
+                    &Record::builder()
+                        .level(log::Level::Error)
+                        .target("warp::server::run")
+                        .args(format_args!("{message}"))
+                        .build()
+                ),
+                None
+            );
+        }
     }
 
     #[test]

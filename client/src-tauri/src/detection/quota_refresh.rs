@@ -196,6 +196,96 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn grok_billing_queries_overlap_and_preserve_partial_results_and_backoff() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use warp::Filter;
+
+        for (weekly_status, monthly_status) in [(200, 200), (401, 200), (200, 503), (502, 429)] {
+            let barrier = Arc::new(tokio::sync::Barrier::new(2));
+            let requests = Arc::new(AtomicUsize::new(0));
+            let seen = requests.clone();
+            let route = warp::get()
+                .and(warp::path("billing"))
+                .and(warp::header::exact("authorization", "Bearer quota-test"))
+                .and(warp::header::exact("x-xai-token-auth", "xai-grok-cli"))
+                .and(warp::query::<std::collections::HashMap<String, String>>())
+                .and_then(move |query: std::collections::HashMap<String, String>| {
+                    let barrier = barrier.clone();
+                    let seen = seen.clone();
+                    async move {
+                        seen.fetch_add(1, Ordering::Relaxed);
+                        // Neither endpoint responds before both have started.
+                        // A serial implementation fails the bounded test.
+                        barrier.wait().await;
+                        let weekly = query.get("format").map(String::as_str) == Some("credits");
+                        let status = if weekly { weekly_status } else { monthly_status };
+                        let body = if status != 200 {
+                            serde_json::json!({"error": if weekly { "weekly unavailable" } else { "monthly unavailable" }})
+                        } else if weekly {
+                            serde_json::json!({"config": {"creditUsagePercent": 25}})
+                        } else {
+                            serde_json::json!({"config": {"used": 100, "monthlyLimit": 100}})
+                        };
+                        Ok::<_, std::convert::Infallible>(warp::reply::with_header(
+                            warp::reply::with_status(
+                                warp::reply::json(&body),
+                                warp::http::StatusCode::from_u16(status).unwrap(),
+                            ),
+                            "retry-after",
+                            if weekly { "120" } else { "180" },
+                        ))
+                    }
+                });
+            let (addr, server) = crate::bind_ephemeral!(route, ([127, 0, 0, 1], 0));
+            let server = tokio::spawn(server);
+            let client = Client::builder().no_proxy().build().unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                fetch_grok_subscription_quota_windows_with_urls(
+                    &client,
+                    "quota-test",
+                    &format!("http://{addr}/billing?format=credits"),
+                    &format!("http://{addr}/billing"),
+                ),
+            )
+            .await;
+            server.abort();
+            let result = result.expect("both billing queries must start concurrently");
+            assert_eq!(requests.load(Ordering::Relaxed), 2, "no extra requests");
+            if weekly_status != 200 && monthly_status != 200 {
+                let error = result.unwrap_err();
+                assert!(error.to_string().contains("weekly unavailable"));
+                assert!(error.to_string().contains("monthly unavailable"));
+                let error = error.downcast_ref::<QuotaFetchError>().unwrap();
+                assert_eq!(error.retry_after, Some(Duration::from_secs(180)));
+            } else {
+                let windows = result.unwrap();
+                let expected = [
+                    (weekly_status, "weekly", 25.0),
+                    (monthly_status, "monthly", 100.0),
+                ]
+                .into_iter()
+                .filter(|(status, _, _)| *status == 200)
+                .map(|(_, window, used)| (window, used))
+                .collect::<Vec<_>>();
+                assert_eq!(
+                    windows
+                        .iter()
+                        .map(|w| (w.window.as_str(), w.used_percent))
+                        .collect::<Vec<_>>(),
+                    expected,
+                );
+                for window in &windows {
+                    assert_eq!(
+                        crate::supplier::quota_window_limits_supply(window),
+                        window.window == "weekly"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn coding_plan_refresh_shares_catalog_and_reuses_quota_without_inference() {
         use crate::source_driver::SourceDriverId;
         use std::sync::atomic::{AtomicUsize, Ordering};

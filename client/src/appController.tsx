@@ -30,6 +30,10 @@ import {
   siAnthropic,
   siBaidu,
   siClaudecode,
+  siCursor,
+  siGithubcopilot,
+  siMeta,
+  siPoe,
   siDeepseek,
   siHuggingface,
   siLmstudio,
@@ -257,7 +261,8 @@ import {
   writeThemePreference,
   type ThemePreference
 } from "./theme";
-import { TOOL_CATALOG, TOOL_CATALOG_ORDER, type ToolCatalogId } from "./toolCatalog";
+import { RETIRED_TOOL_IDS, TOOL_CATALOG, TOOL_CATALOG_ORDER, type ToolCatalogId } from "./toolCatalog";
+import { toolSupportsModelInjectionSelection, type ToolModelInjectionSettings, type ToolModelSyncResult } from "./toolModelInjection";
 import {
   DEFAULT_TOOL_PROTOCOLS,
   TOOL_PROTOCOLS_BY_TOOL,
@@ -774,7 +779,25 @@ export function sourceDriverCardPresentation(driver: SourceDriver): Pick<React.C
     case "claude":
       return { icon: null, customIcon: "claude", fallback: MessageSquareText, tone: "#b45309" };
     case "xai":
-      return { icon: null, fallback: Zap, tone: "var(--text)" };
+      return { icon: { title: "xAI", hex: "000000", path: "M6.469 8.776L16.512 23h-4.464L2.005 8.776H6.47zm-.004 7.9l2.233 3.164L6.467 23H2l4.465-6.324zM22 2.582V23h-3.659V7.764L22 2.582zM22 1l-9.952 14.095-2.233-3.163L17.533 1H22z" }, fallback: Zap, tone: "var(--text)" };
+    case "grok":
+      return { icon: null, customIcon: "grok", fallback: Bot, tone: "var(--text)" };
+    case "kiro":
+      return { icon: null, customIcon: "kiro", fallback: Code2, tone: "#9046ff" };
+    case "cursor":
+      return { icon: siCursor, fallback: Code2, tone: "var(--text)" };
+    case "copilot":
+      return { icon: siGithubcopilot, fallback: Code2, tone: "var(--text)" };
+    case "kilo":
+      return { icon: null, customIcon: "kilo", fallback: Code2, tone: "var(--text)" };
+    case "commandcode":
+      return { icon: null, customIcon: "commandcode", fallback: Code2, tone: "var(--text)" };
+    case "meta":
+      return { icon: siMeta, fallback: BrainCircuit, tone: "#0866ff" };
+    case "abacus":
+      return { icon: null, customIcon: "abacus", fallback: BrainCircuit, tone: "#4376fb" };
+    case "poe":
+      return { icon: siPoe, fallback: MessageSquareText, tone: "var(--text)" };
     case "mistral":
       return { icon: siMistralai, fallback: BrainCircuit, tone: "#f97316" };
     case "deepseek":
@@ -790,7 +813,7 @@ export function sourceDriverCardPresentation(driver: SourceDriver): Pick<React.C
     case "stepfun":
       return { icon: null, fallback: Footprints, tone: "#7c3aed" };
     case "groq":
-      return { icon: null, fallback: Zap, tone: "#f55036" };
+      return { icon: null, customIcon: "groq", fallback: Zap, tone: "#f43e01" };
     case "together":
       return { icon: null, fallback: Cable, tone: "#6366f1" };
     case "fireworks":
@@ -863,7 +886,7 @@ export function useAppController({
 
   const account = useAccountCenter({
       api: tauriAccountApi,
-      initialStatus: emptyAccountStatus(),
+      initialStatus: isTauriRuntime() ? undefined : emptyAccountStatus(),
       initialAuthMode: initialAccountAuthMode,
       notify: (notice) => showToast(notice.text, notice.tone, notice.tone === "error" ? 4200 : undefined),
       afterIdentityChange: async (next) => {
@@ -1083,6 +1106,8 @@ export function useAppController({
   const [autostartEnabled, setAutostartEnabled] = useState(false);
 
   const [autostartBusy, setAutostartBusy] = useState(false);
+
+  const [sleepPreventionBusy, setSleepPreventionBusy] = useState(false);
 
   const [developmentEndpointBusy, setDevelopmentEndpointBusy] = useState(false);
 
@@ -1494,8 +1519,8 @@ export function useAppController({
       "copilot-desktop": { icon: null, customIcon: "copilot", fallback: Code2, tone: "#171717" },
       vscode: { icon: null, customIcon: "vscode", fallback: Code2, tone: "#007acc" },
       cline: { icon: null, customIcon: "cline", fallback: Bot, tone: "#24292f" },
-      trae: { icon: null, customIcon: "trae", fallback: Code2, tone: "#32f08c" },
-      "trae-cn": { icon: null, customIcon: "trae", fallback: Code2, tone: "#32f08c" },
+      trae: { icon: null, customIcon: "trae", fallback: Code2, tone: "#171717" },
+      "trae-cn": { icon: null, customIcon: "trae", fallback: Code2, tone: "#171717" },
       "trae-work": { icon: null, customIcon: "trae-work", fallback: Code2, tone: "#171717" },
       opencode: { icon: null, customIcon: "opencode", fallback: Bot, tone: "#211e1e" },
       openclaw: { icon: null, customIcon: "openclaw", fallback: Zap, tone: "#dc2626" },
@@ -1508,6 +1533,7 @@ export function useAppController({
       mimocode: { icon: null, customIcon: "mimocode", fallback: Code2, tone: "#171717" },
       "minimax-code": { icon: null, customIcon: "minimax-code", fallback: Terminal, tone: "#171717" },
       "grok-build": { icon: null, customIcon: "grok", fallback: Terminal, tone: "#171717" },
+      "muse-code": { icon: siMeta, fallback: Terminal, tone: "#0866ff" },
       qwencode: { icon: null, customIcon: "qwen", fallback: BrainCircuit, tone: "#6d44e8" },
       "mistral-vibe": { icon: null, customIcon: "mistral-vibe", fallback: Terminal, tone: "#fa500f" },
       hermes: { icon: null, customIcon: "hermes", fallback: Cable, tone: "#475569" },
@@ -1516,18 +1542,21 @@ export function useAppController({
       openscience: { icon: null, customIcon: "openscience", fallback: Bot, tone: "#7874ff" },
       "open-design": { icon: null, customIcon: "open-design", fallback: Bot, tone: "#202020" },
       workbuddy: { icon: null, customIcon: "workbuddy", fallback: Bot, tone: "#0bc89f" },
+      "workbuddy-ai": { icon: null, customIcon: "workbuddy", fallback: Bot, tone: "#0bc89f" },
       "vibe-trading": { icon: null, customIcon: "vibe-trading", fallback: Bot, tone: "#ef5a46" },
       zcode: { icon: null, customIcon: "zcode", fallback: Code2, tone: "#111315" },
     };
-  const toolCards = TOOL_CATALOG_ORDER.map((tool) => ({
+  const toolCards = TOOL_CATALOG_ORDER.filter((tool) => !RETIRED_TOOL_IDS.has(tool)).map((tool) => ({
       ...TOOL_CATALOG[tool],
       ...toolCardPresentation[tool],
+      title: tr(`toolCatalog.${tool}.title`, { defaultValue: TOOL_CATALOG[tool].title }),
     }));
   const visibleToolCards = toolOrder
-    .filter((tool) => !hiddenToolIds.has(tool))
+    .filter((tool) => !RETIRED_TOOL_IDS.has(tool) && !hiddenToolIds.has(tool))
     .map((tool) => ({
       ...TOOL_CATALOG[tool],
       ...toolCardPresentation[tool],
+      title: tr(`toolCatalog.${tool}.title`, { defaultValue: TOOL_CATALOG[tool].title }),
     }));
   const hiddenToolCards = toolCards.filter((card) => hiddenToolIds.has(card.tool));
 
@@ -2070,6 +2099,8 @@ export function useAppController({
         startupConsoleInfo("[const-api][startup][ui] browser runtime, skip initialize");
         return;
       }
+      // Account restoration is independent of provider/configuration loading.
+      void account.actions.initializeStatus();
       const result = await reload();
       startupConsoleInfo("[const-api][startup][ui] reload finished in %dms", Math.round(performance.now() - startedAt));
       if (!result) {
@@ -2079,7 +2110,6 @@ export function useAppController({
       }
       void refreshReleaseSourceStatus();
       void ensureAutoStartup(result.cfg, result.st, result.supplierSt);
-      void account.actions.initializeStatus();
       if (!DEVELOPMENT_PROFILE) {
         void refreshAutostartStatus();
       }
@@ -2151,6 +2181,23 @@ export function useAppController({
         showToast(tr("about.autostartFailed", { error: localizedError(error) }), "error", 5200);
       } finally {
         setAutostartBusy(false);
+      }
+    }
+
+  async function changeSleepPrevention(enabled: boolean) {
+      if (!isTauriRuntime() || sleepPreventionBusy) return;
+      setSleepPreventionBusy(true);
+      try {
+        const actual = await invoke<boolean>("set_prevent_sleep_while_supplying", { enabled });
+        // Save only this preference; leave all access/channel drafts untouched.
+        configRef.current = { ...configRef.current, prevent_sleep_while_supplying: actual };
+        savedConfigRef.current = { ...savedConfigRef.current, prevent_sleep_while_supplying: actual };
+        setConfig((current) => ({ ...current, prevent_sleep_while_supplying: actual }));
+        setSavedConfig((current) => ({ ...current, prevent_sleep_while_supplying: actual }));
+      } catch (error) {
+        showToast(tr("about.sleepPreventionFailed", { error: localizedError(error) }), "error", 5200);
+      } finally {
+        setSleepPreventionBusy(false);
       }
     }
 
@@ -3205,7 +3252,7 @@ export function useAppController({
             ?? "";
           const reconciled = reconcileDetectedDefaultModel(configuredDefault, models);
           const upstreamModel = reconciled.defaultModel;
-          const publicModel = sourceDriverById(channel.source_driver).category === "subscription"
+          const publicModel = sourceDriverById(channel.source_driver).subscriptionProvider
             ? (patched.public_model || upstreamModel)
             : upstreamModel;
           return projectRendererChannel({
@@ -4344,6 +4391,7 @@ export function useAppController({
       title: string,
       result: ToolApplyResult,
       claudeSettings?: ClaudeModelSettings,
+      syncSelections = true,
     ) {
       // Apply results describe pre-write comparisons, not post-write readiness.
       // Retain evidence of a completed write while the independent check runs.
@@ -4358,7 +4406,7 @@ export function useAppController({
       setToolConfigStatuses((current) => ({ ...current, [tool]: appliedStatus }));
       try {
         return {
-          status: await refreshSingleToolConfigStatus(tool, claudeSettings),
+          status: await refreshSingleToolConfigStatus(tool, claudeSettings, syncSelections),
           warning: "",
         };
       } catch (error) {
@@ -4476,9 +4524,12 @@ export function useAppController({
       claudeSettings?: ClaudeModelSettings,
       removeMode?: ToolRemoveMode,
       closeRunningProcessConfirmed = false,
+      appliedSelections?: { protocol?: ToolProtocolId; codexModelSource: CodexModelSource },
     ): Promise<ToolApplyResult | null> {
       const backendAction = action === "remove" ? "remove" : "apply";
-      const protocol = toolProtocolSelections[tool] ?? DEFAULT_TOOL_PROTOCOLS[tool];
+      const protocol = appliedSelections
+        ? appliedSelections.protocol ?? DEFAULT_TOOL_PROTOCOLS[tool]
+        : toolProtocolSelections[tool] ?? DEFAULT_TOOL_PROTOCOLS[tool];
       const effectiveClaudeSettings = tool === "claude" && backendAction === "apply"
         ? claudeSettings ?? claudeModelSettings
         : undefined;
@@ -4518,7 +4569,8 @@ export function useAppController({
             action: backendAction,
             protocol: backendAction === "apply" ? protocol : undefined,
             claudeModelSettings: effectiveClaudeSettings,
-            codexModelSource: tool === "codex" && backendAction === "apply" ? codexModelSource : undefined,
+            codexModelSource: tool === "codex" && backendAction === "apply"
+              ? appliedSelections?.codexModelSource ?? codexModelSource : undefined,
             removeMode: backendAction === "remove" ? removeMode : undefined,
             confirmationToken: confirmationToken,
             restart: action === "launch",
@@ -4814,6 +4866,65 @@ export function useAppController({
 
   async function applyToolConfig(tool: string, title: string) {
       await configureTool(tool, title, false);
+    }
+
+  async function saveToolModelInjectionSettings(
+      settings: ToolModelInjectionSettings,
+      onProgress: (tool: string) => void,
+      syncTools = true,
+    ): Promise<ToolModelSyncResult> {
+      if (Object.values(toolOperationRunningRef.current).some(Boolean)) {
+        throw new Error("TOOL_MODEL_INJECTION_BUSY");
+      }
+      // This settings panel owns only injection preferences. Do not save other
+      // access/supplier drafts, restart the proxy, or refresh registration.
+      const wire = await invoke<ClientConfigV5Wire>("save_tool_model_injection_settings", { settings });
+      const authoritative = hydrateClientConfigV5(wire);
+      const draft = overlayAccessConfig(
+        overlaySupplierConfig(authoritative, configRef.current, savedConfigRef.current),
+        configRef.current,
+        savedConfigRef.current,
+      );
+      configRef.current = draft;
+      savedConfigRef.current = authoritative;
+      setConfig(draft);
+      setSavedConfig(authoritative);
+      const result: ToolModelSyncResult = { synced: 0, errors: [] };
+      if (!syncTools) return result;
+      // Sequential operations keep process-close confirmations unambiguous.
+      // Check hidden dock tools too, but never configure an unowned tool.
+      for (const card of toolCards.filter(toolSupportsModelInjectionSelection)) {
+        let started = false;
+        try {
+          const status = await refreshSingleToolConfigStatus(card.tool, undefined, false);
+          if (!toolHasManagedConfig(status)) continue;
+          if (card.tool === "codex" && codexModelSourceFromStatus(status) !== "const") continue;
+          onProgress(card.title);
+          started = beginToolOperation(card.tool);
+          if (!started) throw new Error("TOOL_MODEL_INJECTION_BUSY");
+          const applied = await executeToolConfigOperation(card.tool, card.title, "configure", undefined, undefined, false, {
+            protocol: toolProtocolId(status.details?.tool_protocol) ?? undefined,
+            codexModelSource: codexModelSourceFromStatus(status),
+          });
+          if (!applied) {
+            result.errors.push(tr("toolModelInjection.skipped", { tool: card.title }));
+            continue;
+          }
+          const checked = await refreshToolConfigStatusAfterSuccess(card.tool, card.title, applied, undefined, false);
+          if (checked.warning) throw new Error(checked.warning);
+          if (!checked.status.already_configured) throw new Error("TOOL_MODEL_INJECTION_INCOMPLETE");
+          const warning = toolConfigCapabilityWarning(checked.status) ?? toolConfigCapabilityWarning(applied);
+          if (warning) result.errors.push(`${card.title}: ${warning}`);
+          result.synced += 1;
+        } catch (error) {
+          result.errors.push(`${card.title}: ${localizedError(error)}`);
+          // Preserve partial ownership after a failed native write.
+          if (started) await refreshSingleToolConfigStatus(card.tool, undefined, false).catch(() => {});
+        } finally {
+          if (started) finishToolOperation(card.tool);
+        }
+      }
+      return result;
     }
 
   async function startToolProgram(
@@ -5361,6 +5472,10 @@ export function useAppController({
     }
 
   function addSubscriptionPreset(driver: SourceDriver) {
+      if (driver.executor.type === "http_surface") {
+        void addPresetChannelWithConnection(driver);
+        return;
+      }
       if (!driver.subscriptionProvider) return;
       openSubscriptionWizard(driver.subscriptionProvider);
     }
@@ -5508,6 +5623,7 @@ export function useAppController({
     setSelectedCallRecord,
     toolConfigStatuses,
     toolConfigChecking,
+    saveToolModelInjectionSettings,
     toolProtocolDraftTouchedRef,
     toolProtocolSelections,
     codexModelSource,
@@ -5590,6 +5706,8 @@ export function useAppController({
     autostartEnabled,
     autostartBusy,
     changeAutostart,
+    sleepPreventionBusy,
+    changeSleepPrevention,
     developmentEndpointBusy,
     changeDevelopmentEndpoint,
     themePreference,

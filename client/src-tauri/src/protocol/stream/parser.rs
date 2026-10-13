@@ -1263,21 +1263,20 @@ fn usage_from_responses(value: Option<&Value>) -> Usage {
 fn usage_from_anthropic(start: Option<&Value>, delta: Option<&Value>) -> Usage {
     let start = start.unwrap_or(&Value::Null);
     let delta = delta.unwrap_or(&Value::Null);
-    let input = start.get("input_tokens").and_then(Value::as_u64);
-    let output = delta
-        .get("output_tokens")
-        .or_else(|| start.get("output_tokens"))
-        .and_then(Value::as_u64);
-    let cache_creation = reported(
-        start
-            .get("cache_creation_input_tokens")
-            .and_then(Value::as_u64),
-    );
+    let counter = |key: &str| {
+        delta
+            .get(key)
+            .and_then(Value::as_u64)
+            .or_else(|| start.get(key).and_then(Value::as_u64))
+    };
+    let input = counter("input_tokens");
+    let output = counter("output_tokens");
+    let cache_creation = reported(counter("cache_creation_input_tokens"));
     Usage {
         input_tokens: reported(input),
         output_tokens: reported(output),
         total_tokens: reported(input.zip(output).map(|(a, b)| a + b)),
-        cache_read_tokens: reported(start.get("cache_read_input_tokens").and_then(Value::as_u64)),
+        cache_read_tokens: reported(counter("cache_read_input_tokens")),
         cache_write_tokens: cache_creation.clone(),
         cache_creation_tokens: cache_creation,
         reasoning_tokens: reported(

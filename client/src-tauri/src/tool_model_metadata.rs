@@ -1319,7 +1319,7 @@ mod tests {
             standard
                 .models
                 .iter()
-                .any(|model| model == "gpt-5.3-codex-spark")
+                .any(|model| model == "claude-sonnet-4-5")
         );
         assert!(
             standard
@@ -1342,8 +1342,20 @@ mod tests {
             !group
                 .models
                 .iter()
-                .any(|model| model == "codex-auto-review")
+                .any(|model| model == "codex-auto-review" || model == "gpt-5.3-codex-spark")
         }));
+        assert!(
+            reviewer
+                .models
+                .iter()
+                .any(|model| model == "claude-haiku-5-5")
+        );
+        assert!(
+            reviewer
+                .match_models
+                .iter()
+                .any(|model| model == "claude-haiku-5.5")
+        );
     }
 
     #[test]

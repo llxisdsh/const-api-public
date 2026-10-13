@@ -615,6 +615,10 @@ pre {
 }
 
 .guidance-notice-stack {
+  --guidance-notice-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.1),
+    0 1px 3px rgba(0, 0, 0, 0.06);
+
   position: fixed;
   right: 18px;
   bottom: 72px;
@@ -637,8 +641,8 @@ pre {
 }
 
 .guidance-notice-stack.is-scrollable {
-  width: min(406px, calc(100vw - 28px));
-  padding: 8px;
+  width: min(414px, calc(100vw - 28px));
+  padding: 12px;
   overflow-y: auto;
   scrollbar-gutter: stable;
 }
@@ -676,7 +680,7 @@ pre {
       var(--surface-floating) 68%
     );
   color: var(--text);
-  box-shadow: var(--surface-floating-shadow);
+  box-shadow: var(--guidance-notice-shadow);
   overflow-wrap: anywhere;
   pointer-events: auto;
   animation: guidance-notice-in 160ms ease-out;
@@ -720,14 +724,7 @@ pre {
   grid-area: icon;
   width: 34px;
   height: 34px;
-  border-radius: 9px;
   color: var(--guidance-notice-accent);
-  background: color-mix(in srgb, var(--guidance-notice-accent) 12%, var(--surface-floating));
-}
-
-.guidance-notice-tray.warning .onboarding-callout-icon {
-  color: var(--warning-text);
-  background: color-mix(in srgb, var(--warning-bg) 76%, var(--surface-floating));
 }
 
 .guidance-notice-tray .onboarding-callout-copy {
@@ -847,7 +844,7 @@ pre {
     var(--surface-floating) 72%
   );
   color: var(--guidance-notice-accent);
-  box-shadow: var(--surface-floating-shadow);
+  box-shadow: var(--guidance-notice-shadow);
   pointer-events: auto;
   transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
   animation: guidance-notice-in 160ms ease-out;

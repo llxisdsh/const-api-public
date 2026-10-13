@@ -1,7 +1,7 @@
 //! Trae Code's installed byteCrypto format (out-build/vs/base/common/byteCrypto.js).
 //! Read the existing sign-in only; never refresh, replace, or export its credentials.
 use super::*;
-use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
 use sha2::Sha512;
 
 // The installed Trae/Trae CN/TraeWork llm-client crypto format, verified against
@@ -117,7 +117,7 @@ fn decode_auth(encoded: &str) -> Result<Value> {
     let mut buffer = encrypted[38..].to_vec();
     let clear = cbc::Decryptor::<aes::Aes128>::new_from_slices(&material[..16], &material[16..32])
         .map_err(|_| login_error())?
-        .decrypt_padded_mut::<Pkcs7>(&mut buffer)
+        .decrypt_padded::<Pkcs7>(&mut buffer)
         .map_err(|_| login_error())?;
     if clear.len() < 64 || clear[..64] != Sha512::digest(&clear[64..])[..] {
         return Err(login_error());

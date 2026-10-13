@@ -39,12 +39,13 @@ impl PlatformModelRouteMode {
 
 #[derive(Clone)]
 struct PlatformResumableRequest {
-    client: Client,
+    client: crate::http_client::HttpClient,
     method: reqwest::Method,
     url: String,
     headers: reqwest::header::HeaderMap,
     body: bytes::Bytes,
     request_version: Option<reqwest::Version>,
+    network_changes: tokio::sync::watch::Receiver<u64>,
 }
 
 impl PlatformResumableRequest {
@@ -92,13 +93,14 @@ pub(crate) async fn forward_once(
         has_query,
         headers,
         body,
-        client,
+        &client.clone().into(),
         cfg,
         &endpoint.base_url,
         None,
         platform_api_key,
         PlatformModelRouteMode::Configured,
         MODEL_REQUEST_MAX_UPSTREAM_ATTEMPTS,
+        None,
     )
     .await
     .map(|(response, _)| response)
@@ -128,13 +130,14 @@ pub(crate) async fn forward_once_preferred(
             has_query,
             headers.clone(),
             body.clone(),
-            &http3_client,
+            &http3_client.into(),
             cfg,
             &http3_base_url,
             Some(reqwest::Version::HTTP_3),
             platform_api_key,
             model_route_mode,
             upstream_attempt_budget,
+            Some((transport.tcp_client(true), &endpoint.base_url)),
         )
         .await
         {
@@ -165,6 +168,7 @@ pub(crate) async fn forward_once_preferred(
         platform_api_key,
         model_route_mode,
         upstream_attempt_budget,
+        None,
     )
     .await;
     match result {
@@ -186,13 +190,14 @@ async fn forward_once_to_base(
     has_query: bool,
     headers: warp::http::HeaderMap,
     body: bytes::Bytes,
-    client: &Client,
+    client: &crate::http_client::HttpClient,
     cfg: &ClientConfig,
     base_url: &str,
     request_version: Option<reqwest::Version>,
     platform_api_key: &str,
     model_route_mode: PlatformModelRouteMode,
     upstream_attempt_budget: usize,
+    resume_target: Option<(&crate::http_client::HttpClient, &str)>,
 ) -> Result<(warp::reply::Response, reqwest::Version)> { anyhow::bail!("Hosted platform access is unavailable in the local edition") }
 
 fn platform_request_headers(
@@ -406,10 +411,13 @@ async fn response_from_platform_reqwest(
     if response_headers_are_event_stream(&headers) {
         if resume_accepted {
             if let Some(request) = resumable_request {
+                let stream = crate::network_recovery::watch_stream(
+                    resp.bytes_stream(), request.network_changes.clone(),
+                );
                 return response_from_resumable_platform_event_stream(
                     status,
                     &headers,
-                    resp.bytes_stream(),
+                    stream,
                     request,
                 );
             }
@@ -553,10 +561,10 @@ fn response_from_resumable_platform_event_stream<S>(
     request: PlatformResumableRequest,
 ) -> Result<warp::reply::Response>
 where
-    S: Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
+    S: Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send + 'static,
 {
     struct ResumeState {
-        stream: BoxStream<'static, Result<bytes::Bytes, reqwest::Error>>,
+        stream: BoxStream<'static, Result<bytes::Bytes, std::io::Error>>,
         request: PlatformResumableRequest,
         // Bytes handed to the local output buffer, not necessarily read by the
         // tool yet. The buffer must drain before any resumed suffix is emitted.
@@ -584,6 +592,7 @@ where
                     return Some((Ok::<bytes::Bytes, std::io::Error>(chunk), state));
                 }
                 Some(Err(error)) => {
+                    crate::http_client::connection_failed();
                     let deadline = *state.resume_deadline.get_or_insert_with(|| {
                         eprintln!(
                             "[const-api][platform] response stream interrupted after {} bytes; attempting exact resume for up to {} seconds: {error}",
@@ -602,6 +611,7 @@ where
                             );
                             return Some((Ok(platform_stream_interrupted_event()), state));
                         }
+                        let changes = crate::network_recovery::subscribe();
                         match tokio::time::timeout_at(
                             deadline,
                             state.request.send(Some(state.delivered)),
@@ -620,7 +630,9 @@ where
                                     "[const-api][platform] response stream resumed at byte {}",
                                     state.delivered
                                 );
-                                state.stream = Box::pin(response.bytes_stream());
+                                state.stream = crate::network_recovery::watch_stream(
+                                    response.bytes_stream(), changes,
+                                );
                                 state.resume_deadline = None;
                                 break;
                             }

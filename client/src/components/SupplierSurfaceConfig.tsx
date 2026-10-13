@@ -10,13 +10,14 @@ import type {
   ChannelSurfaceBinding,
   DebugProtocol,
 } from "../appTypes";
-import type { SourceDriverTarget } from "../sourceDrivers";
+import type { SourceDriver, SourceDriverTarget } from "../sourceDrivers";
 
 type SupplierSurfaceConfigProps = {
   bindings: ChannelSurfaceBinding[];
   rows?: ChannelSurfaceBinding[];
   defaultTarget?: SourceDriverTarget;
   mode: "custom-edit" | "readonly";
+  driver?: SourceDriver;
   placeholderBaseUrl?: string;
   onUpdateSurface?: (
     surface: ChannelSurfaceBinding["surface"],
@@ -35,6 +36,7 @@ export function SupplierSurfaceConfig({
   rows = bindings,
   defaultTarget,
   mode,
+  driver,
   placeholderBaseUrl,
   onUpdateSurface,
   onToggleProtocol,
@@ -47,6 +49,27 @@ export function SupplierSurfaceConfig({
     surface: binding.surface,
     protocol: protocol.protocol as DebugProtocol,
   })));
+
+  if (!editable && driver?.executor.type === "retained_subscription" && driver.subscriptionContract) {
+    return (
+      <div className="supplier-surface-config supplier-surface-config-readonly">
+        <div className="supplier-surface-card enabled">
+          <div className="supplier-surface-card-heading">
+            <strong>{t(`supplier.apiInterfaces.subscriptionTransports.${driver.executor.provider}`)}</strong>
+          </div>
+          <p className="section-hint">{t("supplier.apiInterfaces.subscriptionHint")}</p>
+          <div className="supplier-surface-readonly-url">
+            <span>{t("supplier.apiInterfaces.acceptedProtocols")}</span>
+          </div>
+          <div className="supplier-surface-protocols readonly">
+            {driver.subscriptionContract.acceptedIngressProtocols.map((protocol) => (
+              <span key={protocol}>{protocolLabel(protocol)}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!editable && visibleRows.length === 0) {
     return <p className="supplier-surface-empty">{t("supplier.advanced.notConfigured")}</p>;

@@ -106,11 +106,13 @@ include!("tool_config/production/codex.rs");
 include!("tool_config/production/codex_catalog.rs");
 include!("tool_config/production/tool_writers.rs");
 include!("tool_config/production/additional_tools.rs");
+include!("tool_config/production/zcode.rs");
 include!("tool_config/production/deepseek_harness_settings.rs");
 include!("tool_config/production/open_interpreter.rs");
 include!("tool_config/production/anythingllm.rs");
 include!("tool_config/production/grok_build.rs");
 include!("tool_config/production/minimax_code.rs");
+include!("tool_config/production/muse_code.rs");
 #[path = "tool_config/trae.rs"]
 mod trae;
 pub(crate) use trae::{check_trae_config, prepare_trae_config};
@@ -127,6 +129,7 @@ mod tests {
     include!("tool_config/tests/runtime_guard.rs");
     include!("tool_config/tests/operation_lifecycle.rs");
     include!("tool_config/tests/codex_sessions.rs");
+    include!("tool_config/tests/codex_remote_sessions.rs");
     include!("tool_config/tests/codex_indexed_sessions.rs");
     include!("tool_config/tests/codex_catalog.rs");
     include!("tool_config/tests/program_launch.rs");
@@ -137,4 +140,6 @@ mod tests {
     include!("tool_config/tests/model_capabilities.rs");
     include!("tool_config/tests/model_order.rs");
     include!("tool_config/tests/grok_minimax.rs");
+    include!("tool_config/tests/muse_code.rs");
+    include!("tool_config/tests/zcode.rs");
 }

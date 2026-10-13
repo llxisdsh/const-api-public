@@ -73,11 +73,7 @@ impl ProtocolAdapter for OpenAiResponsesAdapter {
                 .input_positions
                 .push(index);
             let path = format!("$.input[{index}].tools");
-            merge_additional_tools(
-                &mut request.tools,
-                decode_tools(item.get("tools"), &path)?,
-                &path,
-            )?;
+            merge_additional_tools(&mut request.tools, decode_tools(item.get("tools"), &path)?);
         }
         request.tool_choice = decode_tool_choice(body.get("tool_choice"))?;
         request.response_format = decode_response_format(body)?;
@@ -1114,14 +1110,10 @@ fn decode_custom_tool(tool: &Value, path: &str) -> Result<CustomTool, AdapterErr
     })
 }
 
-// Stable first-seen order keeps the tool prefix cacheable. Identical repeated
-// declarations are harmless; contradictory definitions cannot be flattened
-// without silently changing which tool the caller meant.
-fn merge_additional_tools(
-    tools: &mut Vec<ToolDefinition>,
-    additions: Vec<ToolDefinition>,
-    path: &str,
-) -> Result<(), AdapterError> {
+// Responses Lite declarations are incremental: later definitions replace earlier
+// ones, while unmentioned tools remain available. Preserve first-seen order so
+// unchanged prefixes stay cacheable when flattening into another protocol.
+fn merge_additional_tools(tools: &mut Vec<ToolDefinition>, additions: Vec<ToolDefinition>) {
     fn key(tool: &ToolDefinition) -> String {
         match tool {
             ToolDefinition::Function(tool) => format!("tool:{}", tool.name),
@@ -1139,7 +1131,7 @@ fn merge_additional_tools(
         .enumerate()
         .map(|(index, tool)| (key(tool), index))
         .collect();
-    for (index, addition) in additions.into_iter().enumerate() {
+    for addition in additions {
         let name = key(&addition);
         let Some(&existing_index) = indices.get(&name) else {
             indices.insert(name, tools.len());
@@ -1153,6 +1145,9 @@ fn merge_additional_tools(
         if let (ToolDefinition::Namespace(existing), ToolDefinition::Namespace(addition)) =
             (&mut *existing, &addition)
         {
+            if addition.description.is_some() {
+                existing.description.clone_from(&addition.description);
+            }
             let mut children: HashMap<String, usize> = existing
                 .tools
                 .iter()
@@ -1161,18 +1156,7 @@ fn merge_additional_tools(
                 .collect();
             for child in &addition.tools {
                 if let Some(&child_index) = children.get(child.name()) {
-                    let previous = &existing.tools[child_index];
-                    if previous != child {
-                        return Err(AdapterError::new(
-                            "tool_definition_conflict",
-                            format!("{path}[{index}]"),
-                            format!(
-                                "conflicting definition for {}.{}",
-                                existing.namespace,
-                                child.name()
-                            ),
-                        ));
-                    }
+                    existing.tools[child_index].clone_from(child);
                 } else {
                     children.insert(child.name().to_string(), existing.tools.len());
                     existing.tools.push(child.clone());
@@ -1180,13 +1164,8 @@ fn merge_additional_tools(
             }
             continue;
         }
-        return Err(AdapterError::new(
-            "tool_definition_conflict",
-            format!("{path}[{index}]"),
-            format!("conflicting definition for {name}"),
-        ));
+        *existing = addition;
     }
-    Ok(())
 }
 
 fn decode_function_tool(tool: &Value, path: &str) -> Result<FunctionTool, AdapterError> {

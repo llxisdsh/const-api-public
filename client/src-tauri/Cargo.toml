@@ -1,9 +1,10 @@
 [package]
 name = "const-api-local"
-version = "0.1.58"
+version = "0.1.59"
 description = "CONST API local-only source build"
 license = "MIT"
 edition = "2024"
+rust-version = "1.99"
 
 [features]
 # Raw request/response logging may contain prompts, credentials, and model output.
@@ -15,15 +16,18 @@ memory-diagnostics = ["windows-sys/Win32_System_ProcessStatus"]
 
 [build-dependencies]
 serde_json = "1"
-tauri-build = { version = "2.6", features = [] }
+tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
 anyhow = "1"
-aes = "0.8"
-cbc = "0.1"
+aes = "0.9"
+cbc = "0.2"
 async-trait = "0.1"
 bytes = "1"
-dirs = "6"
+crc32fast = "1"
+flate2 = "1"
+uuid = { version = "1", features = ["v4"] }
+dirs = "7"
 os_info = "3"
 reqwest = { version = "0.13", features = ["brotli", "deflate", "form", "gzip", "http3", "json", "stream", "zstd"] }
 ring = "0.17"
@@ -32,14 +36,14 @@ serde_json = { version = "1", features = ["raw_value"] }
 serde_yaml = "0.9"
 semver = "1"
 time = { version = "0.3", features = ["local-offset", "parsing"] }
-tauri = { version = "2.11", features = ["image-png", "tray-icon"] }
+tauri = { version = "2.12", features = ["image-png", "tray-icon"] }
 toml_edit = { version = "0.25", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net", "io-util", "time"] }
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 futures-util = "0.3"
 h3 = "0.0.8"
 http = "1"
-hyper-util = { version = "0.1.20", features = ["client-proxy", "client-proxy-system"] }
+hyper-util = { version = "0.1.21", features = ["client-proxy", "client-proxy-system"] }
 if-addrs = "0.15"
 multer = "3.1"
 http-body = "1"
@@ -57,11 +61,11 @@ ed25519-dalek = "3"
 base64 = "0.23"
 rand = "0.10"
 tempfile = "3"
-quinn = { version = "0.11.11", default-features = false, features = ["ring", "runtime-tokio", "rustls-ring"] }
-rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+quinn = { version = "0.11.12", default-features = false, features = ["ring", "runtime-tokio", "rustls-ring"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = "1.15.1"
 webpki-roots = "1.0.9"
-zstd = "0.13.3"
+zstd = "0.14.2"
 rfd = "0.17"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde_urlencoded = "0.7"
@@ -70,8 +74,8 @@ fs2 = "0.4"
 tauri-plugin-os = "2"
 sys-locale = "0.3.2"
 x509-parser = "0.18"
-rtc = "0.20"
-webrtc = "0.20"
+rtc = "0.21"
+webrtc = "0.21"
 
 [profile.release]
 lto = "fat"
@@ -87,6 +91,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security_Credentials",
     "Win32_Security_Cryptography",
     "Win32_System_JobObjects",
+    "Win32_System_Power",
     "Win32_System_Registry",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Threading",
@@ -103,7 +108,11 @@ security-framework-sys = "2.17"
 security-framework = "3.7"
 tempfile = "3"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "0.9"
+
 [dev-dependencies]
+hyper = { version = "1", features = ["http2", "server"] }
 h3-quinn = "0.0.10"
 proptest = "1"
 rcgen = "0.14"

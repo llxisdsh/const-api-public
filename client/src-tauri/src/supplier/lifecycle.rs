@@ -210,7 +210,9 @@ async fn finish_supplier_start(
         for endpoint_key in stale_endpoints {
             if let Some(handle) = runtime.channel_agents.remove(&endpoint_key) {
                 let _ = handle.agent_shutdown.send(());
-                let _ = handle.monitor_shutdown.send(());
+                if let Some(stop) = handle.monitor_shutdown {
+                    let _ = stop.send(());
+                }
                 clear_supplier_transport_nodes(&runtime.transport_state, &handle.node_ids);
                 runtime
                     .nodes
@@ -245,7 +247,9 @@ async fn finish_supplier_start(
                     endpoint_key
                 );
                 let _ = handle.agent_shutdown.send(());
-                let _ = handle.monitor_shutdown.send(());
+                if let Some(stop) = handle.monitor_shutdown {
+                    let _ = stop.send(());
+                }
                 clear_supplier_transport_nodes(&runtime.transport_state, &handle.node_ids);
                 runtime
                     .nodes
@@ -288,9 +292,9 @@ async fn finish_supplier_start(
         }
         if let Some(handle) = runtime.channel_agents.get_mut(&endpoint_key) {
             let (monitor_shutdown_tx, monitor_shutdown_rx) = oneshot::channel();
-            let old_monitor_shutdown =
-                std::mem::replace(&mut handle.monitor_shutdown, monitor_shutdown_tx);
-            let _ = old_monitor_shutdown.send(());
+            if let Some(stop) = handle.monitor_shutdown.replace(monitor_shutdown_tx) {
+                let _ = stop.send(());
+            }
             spawn_logged(
                 "supplier channel monitor",
                 monitor_supplier_channels(
@@ -354,7 +358,7 @@ async fn finish_supplier_start(
                     node_ids: group_node_ids.clone(),
                     suppliers: group.suppliers.clone(),
                     agent_shutdown: agent_shutdown_tx,
-                    monitor_shutdown: monitor_shutdown_tx,
+                    monitor_shutdown: Some(monitor_shutdown_tx),
                     register_update: register_update_tx,
                 },
             );
@@ -1185,6 +1189,9 @@ pub(crate) fn merge_channel_detection_result(
         existing.model_pattern.is_empty()
             || !refreshed_capability_protocols.contains(existing.protocol.as_str())
     });
+    // Cursor exposes several wire-level reasoning variants under one public ID.
+    // Keep each source route so refreshing cannot silently drop effort choices.
+    let preserve_catalog_routes = channel.source_driver() == SourceDriverId::CursorSubscription;
     for evidence in &detection.model_capability_evidence {
         if let Some(existing) = channel
             .capability_profiles
@@ -1193,6 +1200,9 @@ pub(crate) fn merge_channel_detection_result(
                 existing.protocol == evidence.protocol
                     && existing.model_pattern == evidence.model_pattern
                     && existing.catalog_metadata == evidence.catalog_metadata
+                    && (!preserve_catalog_routes
+                        || !evidence.catalog_metadata
+                        || existing.catalog_source_model == evidence.catalog_source_model)
             })
         {
             // A directory refresh can repeat a provider declaration, but it
@@ -2306,10 +2316,9 @@ pub(crate) fn clear_supplier_channel_health_state(
 pub(crate) fn stop_supplier_channel_agents(runtime: &mut SupplierRuntime, channel_ids: &[String]) {
     let mut removed_nodes = Vec::new();
     let channel_set: std::collections::HashSet<String> = channel_ids.iter().cloned().collect();
-    let mut remove_endpoints = Vec::new();
-    for (endpoint_key, handle) in runtime.channel_agents.iter_mut() {
+    for handle in runtime.channel_agents.values_mut() {
         let before_nodes = handle.node_ids.clone();
-        let mut removed_suppliers = handle
+        let removed_suppliers = handle
             .suppliers
             .iter()
             .filter(|supplier| channel_set.contains(&supplier.channel_id))
@@ -2335,18 +2344,16 @@ pub(crate) fn stop_supplier_channel_agents(runtime: &mut SupplierRuntime, channe
                 .into_iter()
                 .filter(|node_id| !handle.node_ids.contains(node_id)),
         );
-        if handle.suppliers.is_empty() {
-            remove_endpoints.push(endpoint_key.clone());
-        } else {
-            let mut update = handle.suppliers.clone();
-            update.append(&mut removed_suppliers);
-            send_register_update(&handle.register_update, update);
+        if !removed_suppliers.is_empty() {
+            // Withdraw admission immediately, but keep the shared return path alive.
+            // An empty agent closes itself only after its requests/output have drained;
+            // a quick restart can reuse it while it is still draining.
+            send_forced_register_update(&handle.register_update, removed_suppliers);
         }
-    }
-    for endpoint_key in remove_endpoints {
-        if let Some(handle) = runtime.channel_agents.remove(&endpoint_key) {
-            let _ = handle.agent_shutdown.send(());
-            let _ = handle.monitor_shutdown.send(());
+        if handle.suppliers.is_empty() {
+            if let Some(stop) = handle.monitor_shutdown.take() {
+                let _ = stop.send(());
+            }
         }
     }
     runtime
@@ -2364,7 +2371,11 @@ pub(crate) fn stop_supplier_channel_agents(runtime: &mut SupplierRuntime, channe
 }
 
 fn update_supplier_runtime_after_channel_stop(runtime: &mut SupplierRuntime, keep_starting: bool) {
-    if !runtime.channel_agents.is_empty() {
+    if runtime
+        .channel_agents
+        .values()
+        .any(|handle| !handle.suppliers.is_empty())
+    {
         return;
     }
     runtime.running = false;
@@ -2388,7 +2399,9 @@ pub(crate) async fn stop_supplier_inner(state: &AppState) -> Result<SupplierStat
     let mut runtime = state.supplier.lock().await;
     for (_, handle) in runtime.channel_agents.drain() {
         let _ = handle.agent_shutdown.send(());
-        let _ = handle.monitor_shutdown.send(());
+        if let Some(stop) = handle.monitor_shutdown {
+            let _ = stop.send(());
+        }
     }
     runtime.running = false;
     runtime.starting = false;

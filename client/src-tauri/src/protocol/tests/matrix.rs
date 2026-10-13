@@ -40,6 +40,334 @@ fn responses_function(name: &str) -> Value {
     }})
 }
 
+fn anthropic_function(name: &str) -> Value {
+    json!({"name":name,"input_schema":{"type":"object","properties":{}}})
+}
+
+#[test]
+fn anthropic_inline_tools_reach_all_targets_with_latest_active_definitions() {
+    let schema =
+        json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]});
+    let mut body = json!({
+        "model":"source-model", "max_tokens":100,
+        "tools":[anthropic_function("first"),
+            {"name":"deferred","defer_loading":true,"input_schema":{"type":"object"}},
+            {"name":"withheld","defer_loading":true,"input_schema":{"type":"object"}},
+            anthropic_function("removed")],
+        "messages":[
+            {"role":"user","content":"Use a tool."},
+            {"role":"system","content":[
+                {"type":"tool_removal","tool":{"type":"tool_reference","name":"removed"}},
+                {"type":"tool_addition","tool":{"type":"tool_reference","name":"deferred"}},
+                {"type":"tool_addition","tool":{"type":"tool_definition","definition":anthropic_function("search")}}
+            ]},
+            {"role":"assistant","content":[{"type":"tool_use","id":"call_search","name":"search","input":{}}]},
+            {"role":"user","content":[{"type":"tool_result","tool_use_id":"call_search","content":"Found it."}]},
+            {"role":"system","content":[
+                {"type":"tool_addition","tool":{"type":"tool_definition","definition":{"name":"search","input_schema":schema}}},
+                {"type":"tool_removal","tool":{"type":"tool_reference","name":"first"}},
+                {"type":"tool_addition","tool":{"type":"tool_reference","name":"first"}}
+            ]}
+        ]
+    });
+    for streaming in [false, true] {
+        body["stream"] = json!(streaming);
+        for target in PROTOCOLS {
+            let converted = converted_request_body(ProtocolKind::AnthropicMessages, target, &body);
+            if target == ProtocolKind::AnthropicMessages {
+                assert_eq!(
+                    converted, body,
+                    "native declarations and cache placement must not change"
+                );
+            }
+            let decoded = decode_request(
+                target,
+                &converted,
+                &target_context(ProtocolKind::AnthropicMessages, target),
+            )
+            .unwrap();
+            let functions = decoded
+                .tools
+                .iter()
+                .map(|tool| match tool {
+                    ToolDefinition::Function(tool) => tool,
+                    _ => panic!("function expected"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                functions
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["first", "deferred", "search"],
+                "{target}: {converted}"
+            );
+            assert_eq!(functions[2].input_schema, schema, "{target}");
+            assert_ne!(functions[1].defer_loading, Some(true));
+            assert_eq!(
+                decoded.turns.len(),
+                3,
+                "control-only messages must not create empty turns: {target}"
+            );
+            assert!(
+                matches!(&decoded.turns[2].blocks[0], ContentBlock::ToolResult(result) if result.call_id == "call_search")
+            );
+            if target != ProtocolKind::GeminiNative {
+                assert_eq!(decoded.stream, streaming);
+            }
+        }
+    }
+}
+
+#[test]
+fn anthropic_inline_tool_changes_do_not_disappear_on_invalid_or_foreign_references() {
+    for (role, change, expected) in [
+        (
+            "system",
+            json!({"type":"tool_addition","tool":{"type":"tool_reference","name":"missing"}}),
+            "tool_reference_unresolved",
+        ),
+        (
+            "user",
+            json!({"type":"tool_addition","tool":{"type":"tool_definition","definition":anthropic_function("search")}}),
+            "inline_tools_invalid",
+        ),
+        (
+            "system",
+            json!({"type":"tool_removal","tool":{"type":"tool_definition","definition":anthropic_function("search")}}),
+            "inline_tools_invalid",
+        ),
+        (
+            "system",
+            json!({"type":"tool_addition","tool":{"type":"mcp_toolset_reference","server_name":"calendar"}}),
+            "capability_mismatch",
+        ),
+        (
+            "system",
+            json!({"type":"tool_addition","tool":{"type":"tool_definition","definition":{"type":"mcp_toolset","mcp_server_name":"calendar"}}}),
+            "capability_mismatch",
+        ),
+    ] {
+        let body = json!({"model":"source-model","max_tokens":100,"messages":[
+            {"role":"user","content":"Use a tool."}, {"role":role,"content":[change]}
+        ]});
+        assert_eq!(
+            converted_request_body(
+                ProtocolKind::AnthropicMessages,
+                ProtocolKind::AnthropicMessages,
+                &body
+            ),
+            body
+        );
+        for target in PROTOCOLS
+            .into_iter()
+            .filter(|target| *target != ProtocolKind::AnthropicMessages)
+        {
+            let error = convert_non_stream(
+                ProtocolKind::AnthropicMessages,
+                target,
+                &body,
+                &context(
+                    ProtocolKind::AnthropicMessages,
+                    "source-model",
+                    "source-account",
+                ),
+                &target_context(ProtocolKind::AnthropicMessages, target),
+                &CapabilityProfile::default(),
+                ConversionPolicy::Production,
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), expected, "{target}: {error}");
+        }
+    }
+}
+
+#[test]
+fn anthropic_inline_tool_removal_can_leave_no_active_tools() {
+    let body = json!({"model":"source-model","max_tokens":100,"tools":[anthropic_function("search")],
+        "messages":[{"role":"user","content":"Answer without tools."},
+            {"role":"system","content":[{"type":"tool_removal","tool":{"type":"tool_reference","name":"search"}}]}]});
+    for target in PROTOCOLS {
+        let converted = converted_request_body(ProtocolKind::AnthropicMessages, target, &body);
+        let decoded = decode_request(
+            target,
+            &converted,
+            &target_context(ProtocolKind::AnthropicMessages, target),
+        )
+        .unwrap();
+        assert!(decoded.tools.is_empty(), "{target}");
+        assert_eq!(decoded.turns.len(), 1, "{target}");
+    }
+}
+
+#[test]
+fn anthropic_mid_conversation_effort_uses_the_latest_system_setting() {
+    let body = json!({"model":"source-model","max_tokens":100,"thinking":{"type":"adaptive"},
+    "output_config":{"effort":"low"}, "messages":[
+        {"role":"user","content":"Think about this."},
+        {"role":"system","content":[],"output_config":{"effort":"medium"}},
+        {"role":"system","content":[],"output_config":{"effort":"high"}}
+    ]});
+    for target in PROTOCOLS {
+        let converted = converted_request_body(ProtocolKind::AnthropicMessages, target, &body);
+        if target == ProtocolKind::AnthropicMessages {
+            assert_eq!(converted, body);
+        }
+        let decoded = decode_request(
+            target,
+            &converted,
+            &target_context(ProtocolKind::AnthropicMessages, target),
+        )
+        .unwrap();
+        assert_eq!(
+            decoded.reasoning.effort,
+            Some(ReasoningEffort::High),
+            "{target}: {converted}"
+        );
+        assert_eq!(decoded.turns.len(), 1, "{target}");
+    }
+}
+
+#[test]
+fn gemini_multimodal_tool_results_keep_media_across_protocols() {
+    let source = ProtocolKind::GeminiNative;
+    let body = json!({"model":"source-model", "contents":[
+        {"role":"user","parts":[{"text":"Show the image."}]},
+        {"role":"model","parts":[{"functionCall":{"id":"call_image","name":"get_image","args":{}}}]},
+        {"role":"user","parts":[{"functionResponse":{
+            "id":"call_image","name":"get_image","response":{"image_ref":{"$ref":"sample.png"}},
+            "parts":[{"inlineData":{"mimeType":"image/png","data":"aW1hZ2U=","displayName":"sample.png"}}]
+        }}]}
+    ]});
+    for target in PROTOCOLS {
+        let converted = converted_request_body(source, target, &body);
+        if target == source {
+            assert_eq!(
+                converted, body,
+                "native functionResponse.parts and $ref remain untouched"
+            );
+        }
+        let decoded = decode_request(target, &converted, &target_context(source, target)).unwrap();
+        let result = decoded
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.blocks)
+            .find_map(|block| match block {
+                ContentBlock::ToolResult(result) => Some(result),
+                _ => None,
+            })
+            .expect("tool result");
+        assert_eq!(result.call_id, "call_image");
+        let image_present = result
+            .content
+            .iter()
+            .chain(decoded.turns.iter().flat_map(|turn| &turn.blocks))
+            .any(|block| matches!(block, ContentBlock::Image(_)));
+        assert!(image_present, "{target}: {converted}");
+        assert!(result.content.iter().any(|block| matches!(block, ContentBlock::Text(text) if text.text.contains("Attachment: sample.png"))), "{target}");
+        if target != source {
+            let returned = converted_request_body(target, source, &converted);
+            let parts = returned["contents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|turn| turn["parts"].as_array().unwrap())
+                .collect::<Vec<_>>();
+            assert!(
+                parts
+                    .iter()
+                    .any(|part| part.pointer("/inlineData/data") == Some(&json!("aW1hZ2U="))),
+                "{target}: {returned}"
+            );
+            assert!(
+                parts
+                    .iter()
+                    .any(|part| part.pointer("/functionResponse/id") == Some(&json!("call_image"))),
+                "{target}: {returned}"
+            );
+        }
+    }
+}
+
+#[test]
+fn gemini_unsupported_tool_result_parts_are_not_silently_discarded() {
+    let body = json!({"model":"source-model", "contents":[
+        {"role":"model","parts":[{"functionCall":{"id":"c1","name":"get_file","args":{}}}]},
+        {"role":"user","parts":[{"functionResponse":{"id":"c1","name":"get_file","response":{},
+            "parts":[{"futureMedia":{"id":"private-file-id"}}]}}]}
+    ]});
+    assert_eq!(
+        converted_request_body(
+            ProtocolKind::GeminiNative,
+            ProtocolKind::GeminiNative,
+            &body
+        ),
+        body
+    );
+    let error = convert_non_stream(
+        ProtocolKind::GeminiNative,
+        ProtocolKind::AnthropicMessages,
+        &body,
+        &context(ProtocolKind::GeminiNative, "source-model", "source-account"),
+        &target_context(ProtocolKind::GeminiNative, ProtocolKind::AnthropicMessages),
+        &CapabilityProfile::default(),
+        ConversionPolicy::Production,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "capability_mismatch");
+}
+
+#[test]
+fn chat_moves_tool_result_images_after_all_parallel_results() {
+    let body = json!({"model":"source-model","max_tokens":100,"messages":[
+        {"role":"user","content":"Compare both images."},
+        {"role":"assistant","content":[
+            {"type":"tool_use","id":"c1","name":"read_image","input":{}},
+            {"type":"tool_use","id":"c2","name":"read_image","input":{}}
+        ]},
+        {"role":"user","content":[
+            {"type":"tool_result","tool_use_id":"c1","content":[
+                {"type":"image","source":{"type":"base64","media_type":"image/png","data":"Zmlyc3Q="}}
+            ]},
+            {"type":"tool_result","tool_use_id":"c2","content":[
+                {"type":"text","text":"Second image"},
+                {"type":"image","source":{"type":"base64","media_type":"image/png","data":"c2Vjb25k"}}
+            ]}
+        ]}
+    ]});
+    let converted = converted_request_body(
+        ProtocolKind::AnthropicMessages,
+        ProtocolKind::OpenAiChat,
+        &body,
+    );
+    let messages = converted["messages"].as_array().unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message["role"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["user", "assistant", "tool", "tool", "user"]
+    );
+    assert_eq!(messages[2]["tool_call_id"], "c1");
+    assert_eq!(messages[2]["content"], "");
+    assert_eq!(messages[3]["tool_call_id"], "c2");
+    assert!(
+        messages[3]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|part| part["type"] == "text")
+    );
+    assert_eq!(messages[4]["content"].as_array().unwrap().len(), 2);
+    assert!(
+        messages[4]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|part| part["type"] == "image_url")
+    );
+}
+
 #[test]
 fn responses_additional_tools_reach_all_conversion_targets_without_empty_messages() {
     let mut body = additional_tools_body(json!([responses_function("search")]));
@@ -133,7 +461,7 @@ fn responses_additional_tools_native_position_and_top_level_are_preserved() {
 }
 
 #[test]
-fn responses_additional_tools_invalid_and_conflicting_definitions_are_explicit_errors() {
+fn responses_additional_tools_invalid_declarations_are_explicit_errors() {
     let base = additional_tools_body(json!([responses_function("search")]));
     for (body, expected) in [
         (
@@ -152,14 +480,6 @@ fn responses_additional_tools_invalid_and_conflicting_definitions_are_explicit_e
             },
             "additional_tools_invalid",
         ),
-        (
-            {
-                let mut body = base.clone();
-                body["tools"] = json!([{"type":"custom","name":"search"}]);
-                body
-            },
-            "tool_definition_conflict",
-        ),
     ] {
         let error = convert_non_stream(
             ProtocolKind::OpenAiResponses,
@@ -176,6 +496,114 @@ fn responses_additional_tools_invalid_and_conflicting_definitions_are_explicit_e
         )
         .unwrap_err();
         assert_eq!(error.code(), expected);
+    }
+}
+
+#[test]
+fn responses_additional_tools_updates_replace_definitions_without_reordering() {
+    let mut body = additional_tools_body(json!([responses_function("search")]));
+    body["tools"] = json!([
+        responses_function("first"), {"type":"custom","name":"search"}
+    ]);
+    let schema =
+        json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]});
+    body["input"].as_array_mut().unwrap().insert(
+        1,
+        json!({
+            "type":"additional_tools", "role":"developer", "tools":[
+                {"type":"function","name":"search","parameters":schema},
+                responses_function("last")
+            ]
+        }),
+    );
+    for target in PROTOCOLS {
+        let converted = converted_request_body(ProtocolKind::OpenAiResponses, target, &body);
+        if target == ProtocolKind::OpenAiResponses {
+            assert_eq!(converted, body, "native declarations remain untouched");
+        }
+        let decoded = decode_request(
+            target,
+            &converted,
+            &target_context(ProtocolKind::OpenAiResponses, target),
+        )
+        .unwrap();
+        let functions = decoded
+            .tools
+            .iter()
+            .map(|tool| match tool {
+                ToolDefinition::Function(tool) => tool,
+                _ => panic!("latest declarations are functions"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            functions
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "search", "last"]
+        );
+        assert_eq!(functions[1].input_schema, schema, "{target}: {converted}");
+    }
+}
+
+#[test]
+fn responses_additional_tools_namespace_updates_preserve_unmentioned_members() {
+    let mut body = additional_tools_body(json!([{
+        "type":"namespace", "name":"functions", "description":"original", "tools":[
+            responses_function("keep"), {"type":"custom","name":"search"}
+        ]
+    }]));
+    let schema =
+        json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]});
+    body["input"].as_array_mut().unwrap().insert(1, json!({
+        "type":"additional_tools", "role":"developer", "tools":[{
+            "type":"namespace", "name":"functions", "description":"updated namespace instructions", "tools":[
+                {"type":"function","name":"search","parameters":schema}, responses_function("last")
+            ]
+        }]
+    }));
+    let decoded = decode_request(
+        ProtocolKind::OpenAiResponses,
+        &body,
+        &context(
+            ProtocolKind::OpenAiResponses,
+            "source-model",
+            "source-account",
+        ),
+    )
+    .unwrap();
+    let ToolDefinition::Namespace(namespace) = &decoded.tools[0] else {
+        panic!("namespace")
+    };
+    assert_eq!(
+        namespace.description.as_deref(),
+        Some("updated namespace instructions")
+    );
+    assert_eq!(
+        namespace
+            .tools
+            .iter()
+            .map(|tool| tool.name())
+            .collect::<Vec<_>>(),
+        ["keep", "search", "last"]
+    );
+    for target in PROTOCOLS {
+        let converted = converted_request_body(ProtocolKind::OpenAiResponses, target, &body);
+        if target == ProtocolKind::OpenAiResponses {
+            assert_eq!(converted, body);
+        } else {
+            let decoded = decode_request(
+                target,
+                &converted,
+                &target_context(ProtocolKind::OpenAiResponses, target),
+            )
+            .unwrap();
+            assert_eq!(decoded.tools.len(), 3, "{target}: {converted}");
+            let ToolDefinition::Function(search) = &decoded.tools[1] else {
+                panic!("function")
+            };
+            assert_eq!(search.input_schema, schema, "{target}: {converted}");
+        }
     }
 }
 

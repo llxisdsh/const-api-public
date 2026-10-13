@@ -110,8 +110,8 @@ pub(crate) fn supplier_register_payload(
     let supported_operations = supplier_supported_operations(config);
     let native_capabilities = supplier_native_capability_evidence(config, &native_protocols);
     let effective_capabilities =
-        supplier_effective_capability_evidence(&native_capabilities, &native_protocols);
-    let conversion_reachability = supplier_conversion_reachability(&native_protocols);
+        supplier_effective_capability_evidence(config.source_driver, &native_capabilities, &native_protocols);
+    let conversion_reachability = supplier_conversion_reachability(config.source_driver, &native_protocols);
     let mut models = config.models.clone();
     if config.source_driver == crate::source_driver::SourceDriverId::OpenAiSubscription
         && config.registration_health_status.as_deref() != Some("blocked")
@@ -594,6 +594,8 @@ fn supplier_capability_evidence_source(
     match profile.verification_state.trim() {
         "driver_contract" => "driver_contract",
         "verified" => "live_probe",
+        "declared" if profile.capability_layer == "driver"
+            && matches!(config.executor, crate::model::ChannelExecutorLocator::RetainedSubscription { .. }) => "driver_contract",
         "declared" if source_driver_owns_provider_metadata(config.source_driver) => {
             "provider_metadata"
         }
@@ -604,8 +606,10 @@ fn supplier_capability_evidence_source(
 }
 
 fn supplier_conversion_reachability(
+    source_driver: crate::source_driver::SourceDriverId,
     native_protocols: &[String],
 ) -> Vec<SupplierConversionReachability> {
+    let approximate_adapter = supplier_uses_approximate_subscription(source_driver);
     const INBOUND_PROTOCOLS: [&str; 4] = [
         "openai_responses",
         "openai_chat",
@@ -621,7 +625,7 @@ fn supplier_conversion_reachability(
             reachability.push(SupplierConversionReachability {
                 source_protocol: source.to_string(),
                 target_protocol: target.clone(),
-                state: if source == target {
+                state: if source == target && !approximate_adapter {
                     "native"
                 } else {
                     "convertible"
@@ -633,11 +637,27 @@ fn supplier_conversion_reachability(
     reachability
 }
 
+fn supplier_uses_approximate_subscription(
+    source_driver: crate::source_driver::SourceDriverId,
+) -> bool {
+    crate::source_driver::source_driver(source_driver)
+        .expect("configured source drivers come from the validated manifest")
+        .subscription_contract()
+        .is_some_and(|contract| {
+            let conversion = &contract.generation.conversion;
+            [conversion.request, conversion.response, conversion.stream]
+                .contains(&crate::source_driver::ConversionLevel::C2)
+        })
+}
+
 fn supplier_effective_capability_evidence(
+    source_driver: crate::source_driver::SourceDriverId,
     native: &[SupplierCapabilityEvidence],
     native_protocols: &[String],
 ) -> Vec<SupplierCapabilityEvidence> {
     use crate::protocol::kind::ProtocolKind;
+
+    let approximate_adapter = supplier_uses_approximate_subscription(source_driver);
 
     const INBOUND_PROTOCOLS: [&str; 4] = [
         "openai_responses",
@@ -682,7 +702,9 @@ fn supplier_effective_capability_evidence(
             projected.protocol = source_name.to_string();
             projected.target_protocol = Some(item.protocol.clone());
             projected.conversion_level = Some(
-                if source == target {
+                if approximate_adapter {
+                    "compatible"
+                } else if source == target {
                     "native"
                 } else {
                     "lossless"
@@ -780,6 +802,8 @@ fn supplier_provider_kind(config: &SupplierConfig) -> String {
         | crate::source_driver::SourceDriverId::GeminiSubscription => "google",
         crate::source_driver::SourceDriverId::XaiApi
         | crate::source_driver::SourceDriverId::GrokSubscription => "xai",
+        crate::source_driver::SourceDriverId::KiroSubscription => "kiro",
+        crate::source_driver::SourceDriverId::CursorSubscription => "cursor",
         crate::source_driver::SourceDriverId::MistralApi => "mistral",
         crate::source_driver::SourceDriverId::DeepseekApi => "deepseek",
         crate::source_driver::SourceDriverId::DashscopeApi => "dashscope",
@@ -809,6 +833,10 @@ fn supplier_provider_kind(config: &SupplierConfig) -> String {
         crate::source_driver::SourceDriverId::GlmCodingPlan => "zhipu",
         crate::source_driver::SourceDriverId::MinimaxTokenPlan => "minimax",
         crate::source_driver::SourceDriverId::OllamaCloud => "ollama",
+        crate::source_driver::SourceDriverId::MuseCode => "meta",
+        crate::source_driver::SourceDriverId::CopilotSubscription => "github_copilot",
+        crate::source_driver::SourceDriverId::AbacusRoutellm => "abacus",
+        crate::source_driver::SourceDriverId::PoeApi => "poe",
         crate::source_driver::SourceDriverId::Ollama
         | crate::source_driver::SourceDriverId::LmStudio
         | crate::source_driver::SourceDriverId::Vllm => "local",
@@ -824,7 +852,10 @@ fn supplier_endpoint_kind(config: &SupplierConfig) -> String {
         crate::source_driver::SourceDriverId::OpenAiSubscription
         | crate::source_driver::SourceDriverId::ClaudeSubscription
         | crate::source_driver::SourceDriverId::GeminiSubscription
-        | crate::source_driver::SourceDriverId::GrokSubscription => "subscription",
+        | crate::source_driver::SourceDriverId::GrokSubscription
+        | crate::source_driver::SourceDriverId::KiroSubscription
+        | crate::source_driver::SourceDriverId::CursorSubscription
+        | crate::source_driver::SourceDriverId::CopilotSubscription => "subscription",
         crate::source_driver::SourceDriverId::Ollama
         | crate::source_driver::SourceDriverId::LmStudio
         | crate::source_driver::SourceDriverId::Vllm => "local",
@@ -840,7 +871,10 @@ fn supplier_endpoint_kind(config: &SupplierConfig) -> String {
         | crate::source_driver::SourceDriverId::GlmCodingPlan
         | crate::source_driver::SourceDriverId::MinimaxTokenPlan
         | crate::source_driver::SourceDriverId::OllamaCloud
+        | crate::source_driver::SourceDriverId::MuseCode
         | crate::source_driver::SourceDriverId::Omniroute => "compatible_api",
+        crate::source_driver::SourceDriverId::AbacusRoutellm
+        | crate::source_driver::SourceDriverId::PoeApi => "compatible_api",
         crate::source_driver::SourceDriverId::AzureOpenAi
         | crate::source_driver::SourceDriverId::BedrockMantle
         | crate::source_driver::SourceDriverId::GroqApi
@@ -1099,16 +1133,86 @@ fn source_driver_owns_provider_metadata(
             | crate::source_driver::SourceDriverId::OpencodeZen
             | crate::source_driver::SourceDriverId::KiloGateway
             | crate::source_driver::SourceDriverId::ClineApi
+            | crate::source_driver::SourceDriverId::CopilotSubscription
+            | crate::source_driver::SourceDriverId::AbacusRoutellm
+            | crate::source_driver::SourceDriverId::PoeApi
             | crate::source_driver::SourceDriverId::OpenAiSubscription
             | crate::source_driver::SourceDriverId::ClaudeSubscription
             | crate::source_driver::SourceDriverId::GeminiSubscription
             | crate::source_driver::SourceDriverId::GrokSubscription
+            | crate::source_driver::SourceDriverId::KiroSubscription
+            | crate::source_driver::SourceDriverId::CursorSubscription
     )
 }
 
 #[cfg(test)]
 mod surface_operation_evidence_tests {
     use super::*;
+
+    #[test]
+    fn subscription_evidence_distinguishes_adapter_catalog_and_live_probes() {
+        use crate::source_driver::{ALL_SOURCE_DRIVER_IDS, source_driver};
+        for id in ALL_SOURCE_DRIVER_IDS {
+            let driver = source_driver(id).unwrap();
+            if driver.subscription_contract().is_none() { continue; }
+            let mut channel = crate::channel_from_supplier("evidence".into(), &crate::default_supplier_config());
+            channel.set_source_driver(id);
+            let config = crate::supplier_from_channel(&channel);
+            let mut profile = ChannelCapabilityProfile {
+                capability_layer: "driver".into(), verification_state: "declared".into(),
+                ..Default::default()
+            };
+            assert_eq!(supplier_capability_evidence_source(&config, &profile), "driver_contract", "{id:?}");
+            profile.capability_layer = "model_wire".into();
+            profile.catalog_metadata = true;
+            assert_eq!(supplier_capability_evidence_source(&config, &profile), "provider_metadata", "{id:?}");
+            profile.verification_state = "verified".into();
+            assert_eq!(supplier_capability_evidence_source(&config, &profile), "live_probe", "{id:?}");
+        }
+    }
+
+    #[test]
+    fn subscription_conversion_metadata_does_not_claim_private_bridges_are_native() {
+        use crate::source_driver::{ALL_SOURCE_DRIVER_IDS, SourceDriverId, source_driver};
+        for id in ALL_SOURCE_DRIVER_IDS {
+            let driver = source_driver(id).unwrap();
+            if driver.subscription_contract().is_none() { continue; }
+            let target = driver.preferred_protocol().unwrap().to_string();
+            let protocols = vec![target.clone()];
+            let bridge = matches!(id, SourceDriverId::KiroSubscription | SourceDriverId::CursorSubscription);
+            let reachability = supplier_conversion_reachability(id, &protocols);
+            assert_eq!(reachability.len(), 4, "{id:?}");
+            for route in reachability {
+                assert_eq!(route.state == "native", !bridge && route.source_protocol == target, "{id:?}");
+            }
+            let evidence = vec![SupplierCapabilityEvidence {
+                feature: "tool_calls".into(), state: "supported".into(), protocol: target.clone(),
+                capability_layer: "driver".into(), source: "driver_contract".into(),
+                token_limit: None, model_pattern: None, observed_at_unix: 0,
+                target_protocol: None, conversion_level: None, release_status: None,
+            }];
+            let effective = supplier_effective_capability_evidence(id, &evidence, &protocols);
+            assert_eq!(effective.len(), 4, "{id:?}");
+            for item in effective {
+                assert_eq!(item.target_protocol.as_deref(), Some(target.as_str()));
+                assert_eq!(item.conversion_level.as_deref(), Some(if bridge { "compatible" }
+                    else if item.protocol == target { "native" } else { "lossless" }), "{id:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn account_gateways_register_catalog_claims_as_metadata_not_live_probe() {
+        for driver in [crate::source_driver::SourceDriverId::CopilotSubscription,
+            crate::source_driver::SourceDriverId::AbacusRoutellm,
+            crate::source_driver::SourceDriverId::PoeApi] {
+            let channel = crate::coding_gateway::tests::channel(driver, "https://example.test/v1");
+            let config = crate::supplier_from_channel(&channel);
+            let profile = ChannelCapabilityProfile { verification_state:"declared".into(), catalog_metadata:true, ..Default::default() };
+            assert_eq!(supplier_capability_evidence_source(&config, &profile), "provider_metadata");
+            assert_ne!(supplier_provider_kind(&config), "custom");
+        }
+    }
 
     #[test]
     fn coding_gateways_register_model_scoped_dialects_and_conversion_evidence() {
@@ -1127,7 +1231,7 @@ mod surface_operation_evidence_tests {
             assert!(!operations.iter().any(|item| item == "gemini.live_websocket" || item == "gemini.files_create"));
             let protocols = supplier_native_protocols(&config);
             let evidence = supplier_native_capability_evidence(&config, &protocols);
-            let effective = supplier_effective_capability_evidence(&evidence, &protocols);
+            let effective = supplier_effective_capability_evidence(config.source_driver, &evidence, &protocols);
             for model in &channel.models {
                 let native = crate::coding_gateway::model_protocol(driver, model).unwrap();
                 for protocol in &protocols {

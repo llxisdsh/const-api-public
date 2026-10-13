@@ -10,7 +10,7 @@ export type ToolCatalogEntry = {
   tool: string;
   title: string;
   // Distinguish parallel editions, not every terminal-based tool.
-  badge?: "CLI" | "CN";
+  badge?: "AI" | "CLI" | "CN";
   description: string;
   officialLinks: readonly ToolCatalogLink[];
   fallbackLinks?: readonly ToolCatalogLink[];
@@ -135,8 +135,8 @@ export const TOOL_CATALOG = {
   },
   trae: {
     tool: "trae",
-    title: "TraeCode",
-    description: "Trae Code with automatic custom-model configuration; sign in to Trae first",
+    title: "TRAE",
+    description: "TRAE with Agent and IDE modes and automatic custom-model configuration; sign in first",
     protocols: ["openai_chat", "openai_responses", "anthropic_messages"],
     defaultProtocol: "openai_chat",
     protocolScope: "model",
@@ -145,9 +145,9 @@ export const TOOL_CATALOG = {
   },
   "trae-cn": {
     tool: "trae-cn",
-    title: "TraeCode CN",
+    title: "TRAE CN",
     badge: "CN",
-    description: "Trae Code China with automatic custom-model configuration; sign in to Trae first",
+    description: "TRAE China with Agent and IDE modes and automatic custom-model configuration; sign in first",
     protocols: ["openai_chat", "openai_responses", "anthropic_messages"],
     defaultProtocol: "openai_chat",
     protocolScope: "model",
@@ -157,7 +157,7 @@ export const TOOL_CATALOG = {
   "trae-work": {
     tool: "trae-work",
     title: "TraeWork",
-    description: "TraeWork desktop custom models for local tasks; sign in to TraeWork first",
+    description: "Merged into TRAE; service ends October 23, 2026. Upgrade in TraeWork",
     protocols: ["openai_chat", "openai_responses", "anthropic_messages"],
     defaultProtocol: "openai_chat",
     protocolScope: "model",
@@ -263,12 +263,24 @@ export const TOOL_CATALOG = {
   workbuddy: {
     tool: "workbuddy",
     title: "WorkBuddy",
-    description: "Professional desktop agent for office work, research, and multi-step tasks",
+    description: "WorkBuddy China desktop agent with configuration separate from WorkBuddy AI",
     protocols: ["openai_chat"],
     defaultProtocol: "openai_chat",
     modelSyncPolicy: "catalog",
     officialLinks: [
       { label: "Official website", url: "https://www.codebuddy.cn/work/" },
+    ],
+  },
+  "workbuddy-ai": {
+    tool: "workbuddy-ai",
+    title: "WorkBuddy AI",
+    badge: "AI",
+    description: "WorkBuddy international desktop agent with independent model configuration",
+    protocols: ["openai_chat"],
+    defaultProtocol: "openai_chat",
+    modelSyncPolicy: "catalog",
+    officialLinks: [
+      { label: "Official website", url: "https://www.workbuddy.ai/" },
     ],
   },
   kimicode: {
@@ -400,6 +412,17 @@ export const TOOL_CATALOG = {
       { label: "GitHub", url: "https://github.com/MiniMax-AI/minimax-code" },
     ],
   },
+  "muse-code": {
+    tool: "muse-code",
+    title: "Muse Code",
+    description: "Meta terminal coding agent with custom models, reasoning effort and context limits",
+    protocols: ["openai_responses"],
+    defaultProtocol: "openai_responses",
+    modelSyncPolicy: "catalog",
+    officialLinks: [
+      { label: "Official website", url: "https://dev.meta.ai/docs/muse-code" },
+    ],
+  },
   zcode: {
     tool: "zcode",
     title: "ZCode",
@@ -415,6 +438,9 @@ export const TOOL_CATALOG = {
 
 export type ToolCatalogId = keyof typeof TOOL_CATALOG;
 
+// Keep legacy IDs and adapters for persisted configuration, but no longer offer them in the UI.
+export const RETIRED_TOOL_IDS: ReadonlySet<ToolCatalogId> = new Set(["trae-work"]);
+
 // This is the canonical/default dock order. Users can move a tool to the end by
 // hiding and restoring it, while newly supported tools reconcile against this list.
 export const TOOL_CATALOG_ORDER = [
@@ -427,6 +453,7 @@ export const TOOL_CATALOG_ORDER = [
   "deepseek-harness",
   "workbuddy",
   "openclaw",
+  "workbuddy-ai",
   "gemini",
   "copilot",
   "copilot-desktop",
@@ -450,6 +477,7 @@ export const TOOL_CATALOG_ORDER = [
   "vibe-trading",
   "grok-build",
   "minimax-code",
+  "muse-code",
   "zcode",
 ] as const satisfies readonly ToolCatalogId[];
 

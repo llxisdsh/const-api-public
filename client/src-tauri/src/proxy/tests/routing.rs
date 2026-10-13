@@ -1320,11 +1320,7 @@
                     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
                     assert!(body.contains("local-capacity-final"));
                 }
-                let expected_platform = if allow_equivalence {
-                    "platform:exact-only"
-                } else {
-                    "platform:configured"
-                };
+                let expected_platform = "platform:exact-only";
                 let expected = if prefer_local {
                     vec!["local:model-a".to_string(), expected_platform.to_string()]
                 } else {
@@ -2692,22 +2688,372 @@
         // An OpenAI Chat binding exists, but unmatched Responses actually uses
         // the Anthropic default, so this is cross-surface conversion, not rank 1.
         assert_eq!(
-            local_channel_protocol_fidelity_rank(&channel, "openai_responses", None),
-            2
+            local_channel_protocol_fidelity_rank(&channel, "openai_responses", "shared-model"),
+            Some(2)
         );
-        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "openai_chat", None), 0);
+        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "openai_chat", "shared-model"), Some(0));
         channel.v2.default_target = crate::model::ChannelTarget {
             surface: crate::surface::ApiSurface::OpenAi,
             protocol: crate::protocol::kind::ProtocolKind::OpenAiChat,
         };
         assert_eq!(
-            local_channel_protocol_fidelity_rank(&channel, "openai_responses", None),
-            1
+            local_channel_protocol_fidelity_rank(&channel, "openai_responses", "shared-model"),
+            Some(1)
         );
         // A model-specific gateway dialect overrides the channel-wide default.
-        let native = Some(crate::protocol::kind::ProtocolKind::AnthropicMessages);
-        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "anthropic_messages", native), 0);
-        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "openai_chat", native), 2);
+        channel.set_source_driver(crate::source_driver::SourceDriverId::OpencodeZen);
+        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "anthropic_messages", "claude-test"), Some(0));
+        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "openai_chat", "claude-test"), Some(2));
+    }
+
+    #[test]
+    fn local_preflight_failures_retry_without_penalty_but_never_replay_started_or_owned_requests() {
+        use crate::channel_executor::surface_operation_not_supported_error;
+        let path = "/v1/chat/completions";
+        for error in [
+            surface_operation_not_supported_error("Responses binding rejected"),
+            crate::supplier::request_conversion_failure("unsupported required feature"),
+        ] {
+            assert_eq!(local_execution_error_retry_scope(&error, false, path), LocalRouteRetryScope::Preflight);
+            assert_eq!(local_execution_error_retry_scope(&error, true, path), LocalRouteRetryScope::None);
+        }
+        for error in [
+            crate::channel_executor::ambiguous_transport_error("outcome unknown"),
+            crate::channel_executor::response_conversion_error("invalid upstream body"),
+            crate::supplier::response_conversion_failure(false, false, "invalid upstream body"),
+            crate::supplier::upstream_stream_failure(true, true, "stream interrupted"),
+        ] {
+            assert_eq!(local_execution_error_retry_scope(&error, false, path), LocalRouteRetryScope::None);
+        }
+    }
+
+    #[test]
+    fn local_selection_skips_a_catalog_model_with_a_rejected_native_binding() {
+        use crate::source_driver::SourceDriverId;
+        for state in ["rejected", "failed", "unsupported", "missing"] {
+            let mut denied = crate::coding_gateway::tests::channel(SourceDriverId::CopilotSubscription, "http://127.0.0.1:9");
+            denied.id = "denied-first".into();
+            denied.enabled = true;
+            denied.models = vec!["gpt-6-luna".into()];
+            denied.capability_profiles = ["openai_chat", "openai_responses"].into_iter().map(|protocol| ChannelCapabilityProfile {
+                protocol: protocol.into(), model_pattern: "gpt-6-luna".into(), catalog_metadata: true,
+                catalog_protocol_supported: Some(protocol == "openai_responses"), ..Default::default()
+            }).collect();
+            for binding in &mut denied.surface_bindings {
+                if state == "missing" {
+                    binding.protocols.retain(|p| p.protocol != "openai_responses");
+                } else {
+                    for protocol in &mut binding.protocols {
+                        if protocol.protocol == "openai_responses" {
+                            protocol.verification.state = state.into();
+                        }
+                    }
+                }
+            }
+            let mut available = local_model_channel(&["gpt-6-luna"], "http://127.0.0.1:10/v1");
+            available.id = "available-second".into();
+            let mut config = default_config();
+            config.channels = vec![denied, available];
+            let selected = select_local_channel_route_where(&config, "/v1/chat/completions",
+                br#"{"model":"gpt-6-luna","messages":[]}"#, |_| true).unwrap();
+            assert_eq!(selected.channel.id, "available-second", "{state}");
+            // A rejected optional Responses binding must not exclude a model
+            // whose catalog also explicitly permits the still-usable Chat API.
+            config.channels[0].capability_profiles[0].catalog_protocol_supported = Some(true);
+            let selected = select_local_channel_route_where(&config, "/v1/chat/completions",
+                br#"{"model":"gpt-6-luna","messages":[]}"#, |_| true).unwrap();
+            assert_eq!(selected.channel.id, "denied-first", "Chat remains executable: {state}");
+        }
+    }
+
+    #[tokio::test]
+    async fn local_model_refusal_retries_another_channel_without_disabling_other_models() {
+        for (status, code, can_retry) in [
+            (StatusCode::BAD_REQUEST, "model_not_supported", true),
+            (StatusCode::NOT_FOUND, "model_not_found", true),
+            (StatusCode::BAD_REQUEST, "invalid_argument", false),
+        ] {
+            let calls = Arc::new(StdMutex::new(Vec::<String>::new()));
+            let recorded = calls.clone();
+            let upstream = warp::path::param::<String>()
+                .and(warp::body::json())
+                .map(move |channel: String, body: serde_json::Value| {
+                    let model = body["model"].as_str().unwrap().to_string();
+                    recorded.lock().unwrap().push(format!("{channel}:{model}"));
+                    if channel == "first" && model == "model-a" {
+                        return warp::reply::with_status(
+                            warp::reply::json(&serde_json::json!({"error": {
+                                "code": code, "message": "request rejected"
+                            }})),
+                            status,
+                        ).into_response();
+                    }
+                    warp::reply::json(&serde_json::json!({
+                        "id": "success", "source": channel, "choices": []
+                    })).into_response()
+                });
+            let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+            let server = tokio::spawn(server);
+            for (prefer_local, allow_equivalence) in [(true, true), (true, false), (false, true), (false, false)] {
+                calls.lock().unwrap().clear();
+                let mut config = default_config();
+                config.account_device_api_key.clear();
+                config.endpoints.clear();
+                config.prefer_local_supply = prefer_local;
+                config.allow_model_equivalence = allow_equivalence;
+                config.channels = ["first", "second"].into_iter().map(|id| {
+                    let mut channel = local_model_channel(
+                        &["model-a", "model-b"], &format!("http://{address}/{id}/v1"),
+                    );
+                    channel.id = id.into();
+                    channel
+                }).collect();
+                let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+                // Distinct cache identities ensure the second request is routed
+                // by health, not by the first request's successful-channel affinity.
+                for index in 0..2 {
+                    let response = forward_with_failover(
+                        warp::http::Method::POST, "/v1/chat/completions", "", HeaderMap::new(),
+                        bytes::Bytes::from(serde_json::json!({
+                            "model":"model-a", "messages":[], "prompt_cache_key":format!("request-{index}")
+                        }).to_string()), &shared,
+                    ).await.unwrap();
+                    assert_eq!(response.status(), if can_retry { StatusCode::OK } else { status },
+                        "{code}, prefer_local={prefer_local}");
+                    let _ = crate::test_body_bytes(response.into_body()).await.unwrap();
+                }
+                assert_eq!(forward_chat_json(&shared, "model-b", "other-model").await["source"], "first");
+                let expected = if can_retry {
+                    vec!["first:model-a", "second:model-a", "second:model-a", "first:model-b"]
+                } else {
+                    vec!["first:model-a", "first:model-a", "first:model-b"]
+                };
+                assert_eq!(*calls.lock().unwrap(), expected, "{code}, prefer_local={prefer_local}");
+                let health = shared.local_model_quota_routes.lock().unwrap();
+                let failed_key = crate::supplier::model_quota_route_key("first", "model-a");
+                assert_eq!(health.get(&failed_key).is_some_and(|state| state.has_runtime_failure()), can_retry);
+                assert!(!health.get(&crate::supplier::model_quota_route_key("first", "model-b"))
+                    .is_some_and(|state| state.has_runtime_failure()));
+                assert_eq!(shared.local_channel_readiness.lock().unwrap().get("first"), Some(&true));
+            }
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn local_explicitly_unsafe_failure_never_replays_on_another_channel() {
+        let calls = Arc::new(StdMutex::new(Vec::<String>::new()));
+        let recorded = calls.clone();
+        let upstream = warp::path::param::<String>().map(move |channel: String| {
+            recorded.lock().unwrap().push(channel);
+            warp::reply::with_status(
+                warp::reply::json(&serde_json::json!({"error": {
+                    "message": "captcha verification required"
+                }})),
+                StatusCode::FORBIDDEN,
+            )
+        });
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        for allow_equivalence in [false, true] {
+            for (path, body) in [
+                ("/v1/chat/completions", r#"{"model":"model-a","messages":[]}"#),
+                ("/gemini/v1beta/models/model-a:generateContent", r#"{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}"#),
+            ] {
+                calls.lock().unwrap().clear();
+                let mut config = default_config();
+                config.account_device_api_key.clear();
+                config.endpoints.clear();
+                config.allow_model_equivalence = allow_equivalence;
+                config.channels = ["first", "second"].into_iter().map(|id| {
+                    let mut channel = local_model_channel(&["model-a"], &format!("http://{address}/{id}/v1"));
+                    channel.id = id.into();
+                    channel
+                }).collect();
+                let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+                let response = forward_with_failover(
+                    warp::http::Method::POST, path, "", HeaderMap::new(),
+                    bytes::Bytes::from_static(body.as_bytes()), &shared,
+                ).await.unwrap();
+                assert_eq!(response.status(), StatusCode::FORBIDDEN);
+                assert!(response.extensions().get::<LocalRetryForbidden>().is_some());
+                assert_eq!(*calls.lock().unwrap(), ["first"], "{path}, equivalence={allow_equivalence}");
+            }
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn local_conversion_failure_falls_through_without_sending_or_disabling_the_channel() {
+        let calls = Arc::new(StdMutex::new(Vec::<String>::new()));
+        let recorded = calls.clone();
+        let upstream = warp::path::param::<String>().map(move |channel: String| {
+            recorded.lock().unwrap().push(channel.clone());
+            warp::reply::json(&serde_json::json!({
+                "id": "converted-success", "object": "response", "model": "model-a",
+                "status": "completed", "output": [{"type":"message", "role":"assistant",
+                    "content":[{"type":"output_text","text":"OK"}]}]
+            }))
+        });
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        let mut config = default_config();
+        config.account_device_api_key.clear();
+        config.endpoints.clear();
+        config.prefer_local_supply = true;
+        config.channels = [("text-only-0", false), ("text-only-1", false),
+            ("text-only-2", false), ("text-only-3", false), ("audio", true)]
+            .into_iter().map(|(id, audio_input)| {
+            let mut channel = openai_api_channel(id, "model-a", &format!("http://{address}/{id}/v1"));
+            channel.capability_profiles = vec![ChannelCapabilityProfile {
+                protocol: "openai_responses".into(), model_pattern: "model-a".into(),
+                verification_state: "verified".into(), input_modalities_authoritative: true,
+                verified_at_unix: now_unix(), non_stream_json: true, audio_input, ..Default::default()
+            }];
+            channel
+        }).collect();
+        let config = normalize_config(config);
+        // Responses audio is an evidence-gated extension: four channels cannot
+        // encode it. These preflight failures must not consume the three actual
+        // upstream attempts before the last channel's supported dialect.
+        let path = "/gemini/v1beta/models/model-a:generateContent";
+        let body = bytes::Bytes::from_static(br#"{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"audio/wav","data":"AAAA"}}]}]}"#);
+        for channel in &config.channels {
+            let conversion = upstream_request_for_api_format_with_profiles_report(
+                "openai_responses", path, std::str::from_utf8(&body).unwrap(), "model-a",
+                &channel.capability_profiles,
+            );
+            assert_eq!(conversion.is_ok(), channel.id == "audio", "{}", channel.id);
+        }
+        assert_eq!(select_local_channel(&config, path, &body).unwrap().id, "text-only-0");
+        let shared = Arc::new(ProxyShared::from_config(config, Client::new()));
+        let response = forward_with_failover(
+            warp::http::Method::POST, path, "", HeaderMap::new(), body, &shared,
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = crate::test_body_bytes(response.into_body()).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["candidates"][0]["content"]["parts"][0]["text"], "OK");
+        assert_eq!(*calls.lock().unwrap(), ["audio"]);
+        for index in 0..4 {
+            let id = format!("text-only-{index}");
+            assert_ne!(shared.local_channel_readiness.lock().unwrap().get(&id), Some(&false));
+            assert!(!shared.local_model_quota_routes.lock().unwrap()
+                .get(&crate::supplier::model_quota_route_key(&id, "model-a"))
+                .is_some_and(|state| state.has_runtime_failure()));
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn local_response_conversion_failure_never_dispatches_another_channel() {
+        let calls = Arc::new(StdMutex::new(Vec::<String>::new()));
+        let recorded = calls.clone();
+        let upstream = warp::path::param::<String>().map(move |channel: String| {
+            recorded.lock().unwrap().push(channel);
+            warp::reply::with_header("invalid upstream JSON", "content-type", "application/json")
+        });
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        let mut config = default_config();
+        config.account_device_api_key.clear();
+        config.endpoints.clear();
+        config.channels = ["first", "second"].into_iter().map(|id| {
+            let mut channel = local_model_channel(&["model-a"], &format!("http://{address}/{id}/v1"));
+            channel.id = id.into();
+            channel
+        }).collect();
+        let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+        let error = forward_with_failover(
+            warp::http::Method::POST, "/gemini/v1beta/models/model-a:generateContent", "", HeaderMap::new(),
+            bytes::Bytes::from_static(br#"{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}"#), &shared,
+        ).await.unwrap_err();
+        let evidence = crate::supplier::execution_evidence_for_error(&error);
+        assert!(evidence.upstream_attempted && evidence.upstream_response_received);
+        assert_eq!(evidence.error_code, "response_conversion_failed");
+        assert_eq!(*calls.lock().unwrap(), ["first"]);
+        assert_ne!(shared.local_channel_readiness.lock().unwrap().get("first"), Some(&false));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn local_owner_bound_model_refusal_is_returned_once_without_rebalancing() {
+        let calls = Arc::new(StdMutex::new(Vec::<String>::new()));
+        let recorded = calls.clone();
+        let upstream = warp::path::param::<String>().map(move |channel: String| {
+            recorded.lock().unwrap().push(channel);
+            warp::reply::with_status(
+                warp::reply::json(&serde_json::json!({"error":{"code":"model_not_supported"}})),
+                StatusCode::BAD_REQUEST,
+            )
+        });
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        let mut config = default_config();
+        config.account_device_api_key.clear();
+        config.endpoints.clear();
+        config.channels = ["first", "second"].into_iter().map(|id| {
+            openai_api_channel(id, "model-a", &format!("http://{address}/{id}/v1"))
+        }).collect();
+        let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+        shared.local_resource_owners.bind_many(vec![LocalResourceOwner {
+            key: LocalResourceOwnerKey {
+                surface: crate::surface::ApiSurface::OpenAi,
+                resource_type: "response".into(), resource_id: "resp_owned".into(),
+            },
+            channel_id: "first".into(), route_model: "model-a".into(), updated_at_unix: now_unix(),
+        }]).await.unwrap();
+        let response = forward_with_failover(
+            warp::http::Method::POST, "/v1/responses", "", HeaderMap::new(),
+            bytes::Bytes::from_static(br#"{"model":"model-a","previous_response_id":"resp_owned","input":"continue"}"#), &shared,
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(*calls.lock().unwrap(), ["first"]);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn local_rejected_bindings_do_not_consume_attempts_before_a_working_candidate() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = calls.clone();
+        let upstream = warp::any().map(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            warp::reply::json(&serde_json::json!({"id":"working-candidate", "choices":[]}))
+        });
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        for prefer_local in [true, false] {
+            let mut config = default_config();
+            config.account_device_api_key.clear();
+            config.endpoints.clear();
+            config.prefer_local_supply = prefer_local;
+            config.channels = (0..5).map(|index| {
+                let mut channel = crate::coding_gateway::tests::channel(
+                    crate::source_driver::SourceDriverId::OpencodeZen, &format!("http://{address}"),
+                );
+                channel.id = format!("rejected-{index}");
+                channel.enabled = true;
+                channel.models = vec!["gpt-test".into()];
+                for binding in &mut channel.surface_bindings {
+                    for protocol in &mut binding.protocols {
+                        if protocol.protocol == "openai_responses" {
+                            protocol.verification.state = "rejected".into();
+                        }
+                    }
+                }
+                channel
+            }).collect();
+            config.channels.push(local_model_channel(&["gpt-test"], &format!("http://{address}/v1")));
+            let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+            let response = forward_with_failover(warp::http::Method::POST, "/v1/chat/completions", "",
+                HeaderMap::new(), bytes::Bytes::from_static(br#"{"model":"gpt-test","messages":[]}"#), &shared,
+            ).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "prefer_local={prefer_local}");
+            let body = crate::test_body_bytes(response.into_body()).await.unwrap();
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["id"], "working-candidate");
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        server.abort();
     }
 
     #[test]

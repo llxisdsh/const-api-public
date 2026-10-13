@@ -41,6 +41,7 @@ async fn model_discovery_rules_survive_local_merge_on_all_surfaces() {
             let body = crate::test_body_bytes(response.into_body()).await.unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             let models = payload[key].as_array().unwrap();
+            assert_eq!(payload[crate::model_discovery::POLICY_SOURCE_FIELD], "platform");
             assert_eq!(
                 payload[crate::model_discovery::POLICY_FIELD]["rules"][0]["priority"],
                 2
@@ -63,6 +64,33 @@ async fn model_discovery_rules_survive_local_merge_on_all_surfaces() {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn local_model_sorting_does_not_invent_admin_recommendations() {
+    let config = default_config();
+    let response = local_models_response(&config, crate::surface::ApiSurface::OpenAi,
+        &[serde_json::json!({"id":"gpt-test"})], true).unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&crate::test_body_bytes(response.into_body()).await.unwrap()).unwrap();
+    assert!(crate::model_discovery::ModelPresentation::from_payload(&payload).is_some());
+    assert!(crate::model_discovery::ModelPresentation::recommendations_from_payload(&payload).unwrap().is_none());
+    assert_eq!(payload["data"][0]["id"], "gpt-test");
+    let legacy = warp::reply::json(&serde_json::json!({"data":[{"id":"gpt-test"}]})).into_response();
+    let response = merge_local_models_response(legacy, &config, crate::surface::ApiSurface::OpenAi, &[], false, true).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&crate::test_body_bytes(response.into_body()).await.unwrap()).unwrap();
+    assert!(crate::model_discovery::ModelPresentation::recommendations_from_payload(&payload).unwrap().is_none());
+    // A cached/remerged local fallback must not become a platform recommendation.
+    let response = merge_local_models_response(warp::reply::json(&payload).into_response(), &config, crate::surface::ApiSurface::OpenAi, &[], false, true).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&crate::test_body_bytes(response.into_body()).await.unwrap()).unwrap();
+    assert!(crate::model_discovery::ModelPresentation::recommendations_from_payload(&payload).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn malformed_recommendations_remain_distinct_from_missing_rules_after_merge() {
+    let payload = serde_json::json!({"data":[{"id":"gpt-test"}], "const_api_model_presentation":{"schema_version":99,"rules":[]}});
+    let response = merge_local_models_response(warp::reply::json(&payload).into_response(), &default_config(), crate::surface::ApiSurface::OpenAi, &[], false, true).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&crate::test_body_bytes(response.into_body()).await.unwrap()).unwrap();
+    assert_eq!(crate::model_discovery::ModelPresentation::recommendations_from_payload(&payload).unwrap_err(), "TOOL_MODEL_RECOMMENDATIONS_INVALID");
 }
 
 #[tokio::test]

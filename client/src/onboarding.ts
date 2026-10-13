@@ -18,6 +18,7 @@ export type OnboardingGuideState =
 export type OnboardingGuideContext = {
   page: OnboardingPage;
   signedIn: boolean;
+  accountStatusReady: boolean;
   localModeChosen: boolean;
   localModelReady: boolean;
   onboardingSeen: boolean;
@@ -129,6 +130,7 @@ export function pendingOnboardingStage(
 export function resolveOnboardingGuideState({
   page,
   signedIn,
+  accountStatusReady,
   localModeChosen,
   localModelReady,
   onboardingSeen,
@@ -137,6 +139,7 @@ export function resolveOnboardingGuideState({
   lowUsageBalance,
   supplierTotalCount,
 }: OnboardingGuideContext): OnboardingGuideState | null {
+  if (!accountStatusReady) return null;
   if (page === "access") {
     if (signedIn) {
       if (needsUsageBalance) return "needs_balance";

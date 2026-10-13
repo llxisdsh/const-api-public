@@ -107,6 +107,30 @@ describe("supplier route status notifications", () => {
     expect(detail).not.toContain("failure_scope");
   });
 
+  test("explains upstream interruptions and preserves close evidence", () => {
+    expect(supplierRouteStatusDetail(status({
+      state: "fallback", reason: "upstream_websocket_interrupted",
+    }))).toContain("供应客户端与上游之间");
+    const detail = supplierRouteStatusDetail(status({
+      state: "fallback", reason: "upstream_restart",
+      message: JSON.stringify({
+        error_kind: "upstream_websocket_interrupted", failure_scope: "channel",
+        upstream_close_reason: "upstream_close_frame", upstream_close_code: 1012,
+        error: { message: "service restart" },
+      }),
+    }));
+    expect(detail).toContain("上游发送了关闭帧");
+    expect(detail).toContain("1012");
+    expect(detail).toContain("service restart");
+  });
+
+  test("extracts upstream auth errors instead of hiding their actual message", () => {
+    expect(supplierRouteStatusDetail(status({
+      state: "fallback", reason: "auth_error",
+      message: JSON.stringify({ error_kind: "auth_error", error: { message: "token expired" } }),
+    }))).toContain("token expired");
+  });
+
   test("retains the reason when an unrelated JSON message has no transport schema", () => {
     const detail = supplierRouteStatusDetail(status({
       state: "fallback",

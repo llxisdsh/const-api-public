@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { sourceDriverById } from "../sourceDrivers";
+import { SOURCE_DRIVERS, sourceDriverById } from "../sourceDrivers";
 import { OperationCapabilityMatrix } from "./OperationCapabilityMatrix";
 
 function capabilityRow(name: string): HTMLElement {
@@ -11,15 +11,37 @@ function capabilityRow(name: string): HTMLElement {
 }
 
 describe("OperationCapabilityMatrix", () => {
+  it("keeps API capabilities independent of the Muse Code menu group", () => {
+    const driver = sourceDriverById("muse_code");
+    const view = render(<OperationCapabilityMatrix driver={{ ...driver, category: "compatible_gateway" }} />);
+    const apiCapabilities = view.container.textContent;
+    view.rerender(<OperationCapabilityMatrix driver={driver} />);
+    expect(view.container.textContent).toBe(apiCapabilities);
+  });
+
   it("shows only usable Antigravity subscription capabilities in user language", () => {
     render(<OperationCapabilityMatrix driver={sourceDriverById("gemini_subscription")} />);
 
-    expect(within(capabilityRow("模型列表")).getByText("支持")).toBeInTheDocument();
+    expect(screen.getAllByText("模型列表")).toHaveLength(3);
     expect(within(capabilityRow("内容生成、流式与令牌计数")).getByText("支持")).toBeInTheDocument();
     expect(screen.queryByText("嵌入向量")).not.toBeInTheDocument();
     expect(screen.queryByText("gemini.embed_content")).not.toBeInTheDocument();
     expect(screen.queryByText(/C2|A \/ S \/ P/)).not.toBeInTheDocument();
   });
+
+  it.each(SOURCE_DRIVERS.filter((driver) => driver.subscriptionContract))(
+    "$id presents the ingress contract rather than only the internal target",
+    (driver) => {
+      render(<OperationCapabilityMatrix driver={driver} />);
+      for (const name of ["OpenAI", "Anthropic", "Gemini"]) {
+        expect(screen.getByRole("heading", { name })).toBeInTheDocument();
+      }
+      expect(screen.getByText("Responses 与状态管理")).toBeInTheDocument();
+      expect(screen.getByText("Chat Completions 与已存储对话")).toBeInTheDocument();
+      expect(screen.queryByText("嵌入向量")).not.toBeInTheDocument();
+      expect(screen.queryByText("向量库与文件检索")).not.toBeInTheDocument();
+    },
+  );
 
   it("summarizes official API coverage as supported or limited", () => {
     render(<OperationCapabilityMatrix driver={sourceDriverById("openai_api")} />);

@@ -1147,6 +1147,9 @@ fn select_responses_websocket_local_route(
             )
         }
         crate::source_driver::ExecutionKind::HttpSurface => {
+            if selection.source_driver() == crate::source_driver::SourceDriverId::CopilotSubscription {
+                return ResponsesWebsocketLocalRoute::HttpBridge("local_websocket_unsupported");
+            }
             if crate::detection::responses_features::operation_support(&selection.detection_checks, "openai.responses_websocket") == Some(false) {
                 return ResponsesWebsocketLocalRoute::HttpBridge("local_websocket_unsupported");
             }
@@ -2607,7 +2610,7 @@ async fn run_responses_websocket_proxy(
                 }
             };
             let connection = match connect_responses_websocket_native_route(
-                &shared.client,
+                &shared.client.snapshot(),
                 &native_route,
                 &client_headers,
             )
@@ -2945,6 +2948,19 @@ async fn run_responses_websocket_proxy(
                             }
                             continue;
                         }
+                    }
+                    // A bound socket may outlive its channel's admission. Do this only
+                    // between turns: stopping the channel must not interrupt generation.
+                    if channel.as_ref().is_some_and(|channel| {
+                        !shared.local_channel_accepts_new_requests(&channel.id)
+                    }) {
+                        let _ = send_responses_websocket_status_error(
+                            &mut client_sender,
+                            503,
+                            "supplier_unavailable",
+                            "The bound channel has stopped accepting new requests. Reconnect to select another channel.",
+                        ).await;
+                        break;
                     }
                     let mut pending_subscription_request = match subscription_config.as_ref() {
                         Some(config) => match NativeSubscriptionWebsocketRequest::start_at(config, text, request_started_at) {
@@ -3386,7 +3402,7 @@ async fn run_openai_live_websocket_proxy(
         .is_ok_and(|execution| execution == crate::source_driver::ExecutionKind::OpenAiSubscription)
     {
         match connect_openai_subscription_live(
-            &shared.client,
+            &shared.client.snapshot(),
             &channel,
             reference
                 .as_ref()
@@ -5994,6 +6010,20 @@ mod responses_websocket_tests {
             ),
             ResponsesWebsocketRoute::Platform
         ));
+    }
+
+    #[test]
+    fn stopped_local_channel_rejects_new_turns_without_mutating_the_active_snapshot() {
+        let mut config = default_config();
+        config.channels[0].enabled = true;
+        let active_channel = config.channels[0].clone();
+        let shared = ProxyShared::from_config(config, Client::new());
+        assert!(shared.local_channel_accepts_new_requests(&active_channel.id));
+        shared.live_config.lock().unwrap().channels[0].enabled = false;
+        assert!(!shared.local_channel_accepts_new_requests(&active_channel.id));
+        assert!(active_channel.enabled, "an in-flight call keeps its admitted snapshot");
+        shared.live_config.lock().unwrap().channels[0].enabled = true;
+        assert!(shared.local_channel_accepts_new_requests(&active_channel.id));
     }
 
     #[test]

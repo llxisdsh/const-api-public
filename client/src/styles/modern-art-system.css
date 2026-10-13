@@ -221,6 +221,7 @@ button.primary:hover,
 
 button.danger:hover,
 button.stop:hover {
+  border-color: var(--red-hover);
   background: var(--red-hover);
   color: #ffffff;
 }

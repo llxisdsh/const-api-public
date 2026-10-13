@@ -1,6 +1,9 @@
 const CODEX_HTTP_CONTINUATION_CACHE_MAX_ENTRIES: usize = 128;
 const CODEX_HTTP_CONTINUATION_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
-const CODEX_HTTP_CONTINUATION_CACHE_MAX_ENTRY_BYTES: usize = 16 * 1024 * 1024;
+// Long coding/tool transcripts can exceed 16 MiB. A single transcript may use
+// the existing memory budget, but must not increase that global budget.
+const CODEX_HTTP_CONTINUATION_CACHE_MAX_ENTRY_BYTES: usize = CODEX_HTTP_CONTINUATION_CACHE_MAX_BYTES;
+const CODEX_HTTP_CONTINUATION_DISK_MAX_BYTES: usize = 256 * 1024 * 1024;
 const CODEX_HTTP_CONTINUATION_CACHE_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 #[cfg(not(test))]
 const CODEX_HTTP_CONTINUATION_DB_FILE: &str = "codex-http-continuations.sqlite3";
@@ -177,7 +180,7 @@ fn prune_codex_http_continuation_db(
     for (key, bytes) in rows {
         let bytes = usize::try_from(bytes).unwrap_or(usize::MAX);
         let fits = kept_entries < CODEX_HTTP_CONTINUATION_CACHE_MAX_ENTRIES
-            && kept_bytes.saturating_add(bytes) <= CODEX_HTTP_CONTINUATION_CACHE_MAX_BYTES;
+            && kept_bytes.saturating_add(bytes) <= CODEX_HTTP_CONTINUATION_DISK_MAX_BYTES;
         if fits {
             kept_entries += 1;
             kept_bytes = kept_bytes.saturating_add(bytes);
@@ -1300,8 +1303,8 @@ mod codex_http_continuation_collector_tests {
         let key = format!("disk-pin-{}", pin.0);
         codex_http_continuation_cache().lock().unwrap().websocket_pins.insert(pin.0, key.clone());
         connection.execute("INSERT INTO codex_http_continuations VALUES (?1, 1000, 8388608, X'5B5D')", [&key]).unwrap();
-        for i in 0..8 {
-            connection.execute("INSERT INTO codex_http_continuations VALUES (?1, ?2, 8388608, X'5B5D')", rusqlite::params![format!("new-{i}"), 1001 + i]).unwrap();
+        for i in 0..(CODEX_HTTP_CONTINUATION_DISK_MAX_BYTES / (8 * 1024 * 1024)) {
+            connection.execute("INSERT INTO codex_http_continuations VALUES (?1, ?2, 8388608, X'5B5D')", rusqlite::params![format!("new-{i}"), 1001 + i as i64]).unwrap();
         }
         prune_codex_http_continuation_db(&connection, 1100).unwrap();
         let contains = || connection.query_row("SELECT COUNT(*) FROM codex_http_continuations WHERE cache_key=?1", [&key], |row| row.get::<_, i64>(0)).unwrap();
@@ -1311,6 +1314,24 @@ mod codex_http_continuation_collector_tests {
         connection.execute("INSERT INTO codex_http_continuations VALUES ('newest', 1101, 8388608, X'5B5D')", []).unwrap();
         prune_codex_http_continuation_db(&connection, 1102).unwrap();
         assert_eq!(contains(), 0);
+    }
+
+    #[test]
+    fn long_continuation_above_old_limit_round_trips_without_truncation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.sqlite3");
+        let state = CodexHttpContinuationState {
+            history: Arc::new(vec![serde_json::json!({"type": "function_call_output", "call_id": "long", "output": "x".repeat(17 * 1024 * 1024)})]),
+            cache_identity: Some("stable-long-context".into()),
+        };
+        let bytes = state.serialized().unwrap();
+        assert!(bytes.len() > 16 * 1024 * 1024);
+        persist_codex_http_continuation_bytes_to_path(&path, "long", &bytes, 1000).unwrap();
+        assert_eq!(load_codex_http_continuation_from_path(&path, "long", 1001).unwrap(), Some(state.clone()));
+        let mut config = default_supplier_config();
+        config.channel_id = "long-continuation-regression".into();
+        assert!(insert_codex_http_continuation_history(&config, "long", Arc::unwrap_or_clone(state.history), state.cache_identity.as_deref()));
+        assert_eq!(codex_http_continuation_state(&config, "long").unwrap().serialized().unwrap(), bytes);
     }
 
     #[test]

@@ -988,9 +988,21 @@ pub(crate) fn test_request_for_channel(
     prompt: &str,
 ) -> Result<(String, serde_json::Value, &'static str)> {
     let model = crate::openrouter::upstream_model(channel, model);
-    let protocol = crate::protocol::kind::ProtocolKind::parse(&channel.api_format).ok()
-        .filter(|protocol| crate::coding_gateway::model_supports_protocol(channel.source_driver(), &model, *protocol))
-        .or_else(|| crate::coding_gateway::model_protocol(channel.source_driver(), &model));
+    let configured_protocol = crate::protocol::kind::ProtocolKind::parse(&channel.api_format).ok();
+    let protocol = configured_protocol
+        .filter(|protocol| crate::coding_gateway::catalog_protocol_support(&channel.capability_profiles, &model, *protocol)
+            .unwrap_or_else(|| crate::coding_gateway::model_supports_protocol(channel.source_driver(), &model, *protocol)))
+        .or_else(|| crate::coding_gateway::channel_model_protocol(channel, &model))
+        .or(configured_protocol);
+    if let Some(protocol) = protocol {
+        if crate::coding_gateway::catalog_protocol_support(
+            &channel.capability_profiles, &model, protocol,
+        ) == Some(false) {
+            return Err(anyhow!(
+                "model catalog rejects {protocol} for {model}; refresh channel information to restore its supported endpoints"
+            ));
+        }
+    }
     match protocol.map(|protocol| protocol.as_str()).unwrap_or(channel.api_format.trim()) {
         "anthropic_messages" => Ok((
             join_upstream_url(

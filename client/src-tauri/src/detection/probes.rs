@@ -91,11 +91,11 @@ pub(crate) async fn probe_openai_responses(
         channel,
         &channel.upstream_api_key,
         &channel.upstream_base_url,
-    )
+    ).await?
     .json(&body)
     .send_adaptive()
     .await?;
-    ensure_probe_success(resp, "OpenAI Responses").await
+    ensure_probe_success(resp, "OpenAI Responses", model).await
 }
 
 pub(crate) async fn probe_openai_responses_stream(
@@ -115,7 +115,7 @@ pub(crate) async fn probe_openai_responses_stream(
         channel,
         &channel.upstream_api_key,
         &channel.upstream_base_url,
-    )
+    ).await?
     .json(&body)
     .send_adaptive()
     .await?;
@@ -152,7 +152,7 @@ pub(crate) async fn probe_openai_responses_json_schema(
         channel,
         &channel.upstream_api_key,
         &channel.upstream_base_url,
-    )
+    ).await?
     .json(&body)
     .send_adaptive()
     .await?;
@@ -212,10 +212,11 @@ pub(crate) async fn probe_openai_chat_with_base(
         "max_tokens": 4
     });
     let resp = openai_request_with_base(client.post(url), channel, api_key, base_url)
+        .await?
         .json(&body)
         .send_adaptive()
         .await?;
-    ensure_probe_success(resp, "OpenAI Chat Completions").await
+    ensure_probe_success(resp, "OpenAI Chat Completions", model).await
 }
 
 pub(crate) async fn probe_openai_chat_stream(
@@ -235,7 +236,7 @@ pub(crate) async fn probe_openai_chat_stream(
         channel,
         &channel.upstream_api_key,
         &channel.upstream_base_url,
-    )
+    ).await?
     .json(&body)
     .send_adaptive()
     .await?;
@@ -286,6 +287,7 @@ pub(crate) async fn probe_openai_chat_json_schema(
         "max_tokens": 32
     });
     let resp = openai_request_with_base(client.post(url), channel, api_key, base_url)
+        .await?
         .json(&body)
         .send_adaptive()
         .await?;
@@ -321,9 +323,10 @@ pub(crate) async fn probe_anthropic_messages(
         "messages": [{"role": "user", "content": "ping"}]
     });
     let resp = anthropic_messages_request(client, channel, &body)
+        .await?
         .send_adaptive()
         .await?;
-    ensure_probe_success(resp, "Anthropic Messages").await
+    ensure_probe_success(resp, "Anthropic Messages", model).await
 }
 
 pub(crate) async fn probe_anthropic_messages_stream(
@@ -338,6 +341,7 @@ pub(crate) async fn probe_anthropic_messages_stream(
         "messages": [{"role": "user", "content": "ping"}]
     });
     let resp = anthropic_messages_request(client, channel, &body)
+        .await?
         .send_adaptive()
         .await?;
     ensure_sse_probe_success(resp, "Anthropic Messages stream").await
@@ -360,6 +364,7 @@ pub(crate) async fn probe_anthropic_messages_cache_control(
         "messages": [{"role": "user", "content": "ping"}]
     });
     let resp = anthropic_messages_request(client, channel, &body)
+        .await?
         .send_adaptive()
         .await?;
     let status = resp.status();
@@ -377,11 +382,11 @@ pub(crate) async fn probe_anthropic_messages_cache_control(
     Ok(())
 }
 
-fn anthropic_messages_request(
+async fn anthropic_messages_request(
     client: &Client,
     channel: &ChannelConfig,
     body: &serde_json::Value,
-) -> reqwest::RequestBuilder {
+) -> Result<reqwest::RequestBuilder> {
     let base_url = if channel.kind.trim().eq_ignore_ascii_case("aws_bedrock") {
         bedrock_anthropic_base(&channel.upstream_base_url)
     } else {
@@ -401,7 +406,7 @@ fn anthropic_messages_request(
                 format!("Bearer {}", channel.upstream_api_key.trim()),
             );
     }
-    crate::channel_user_agent::apply_to_request(channel, req)
+    crate::copilot::prepare_request(channel, crate::channel_user_agent::apply_to_request(channel, req)).await
 }
 
 fn anthropic_has_cache_usage_fields(value: &serde_json::Value) -> bool {
@@ -442,7 +447,7 @@ pub(crate) async fn probe_gemini_native(
     }
     req = crate::channel_user_agent::apply_to_request(channel, req);
     let resp = req.send_adaptive().await?;
-    ensure_probe_success(resp, "Gemini native").await
+    ensure_probe_success(resp, "Gemini native", model).await
 }
 
 pub(crate) async fn probe_gemini_native_stream(
@@ -554,24 +559,36 @@ pub(crate) async fn ensure_sse_probe_success(resp: reqwest::Response, label: &st
     Ok(())
 }
 
-pub(crate) async fn ensure_probe_success(resp: reqwest::Response, label: &str) -> Result<()> {
+pub(crate) async fn ensure_probe_success(
+    resp: reqwest::Response,
+    label: &str,
+    model: &str,
+) -> Result<()> {
     let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
-    if status.is_success() {
-        return Ok(());
+    let text = resp.text().await?;
+    if let Some(failure) = crate::upstream_failure::observe(status.as_u16(), &text, &[], Some(model)) {
+        // Keep the typed scope through protocol-probe context. A model refusal
+        // must not become a rejection of every model on this API dialect.
+        return Err(anyhow::Error::new(failure).context(format!("{label} probe failed")));
     }
-    Err(anyhow!("{label} returned {status}: {text}"))
+    if !status.is_success() {
+        return Err(anyhow!(
+            "{label} returned {status}: {}",
+            crate::upstream_failure::safe_excerpt(&text),
+        ));
+    }
+    Ok(())
 }
 
-pub(crate) fn openai_request_with_base(
+pub(crate) async fn openai_request_with_base(
     req: reqwest::RequestBuilder,
     channel: &ChannelConfig,
     api_key: &str,
     base_url: &str,
-) -> reqwest::RequestBuilder {
+) -> Result<reqwest::RequestBuilder> {
     let req = crate::channel_user_agent::apply_to_request(channel, req)
         .header("Content-Type", "application/json");
-    if api_key.trim().is_empty() {
+    let req = if api_key.trim().is_empty() {
         req
     } else {
         let req = req
@@ -582,7 +599,8 @@ pub(crate) fn openai_request_with_base(
         } else {
             req
         }
-    }
+    };
+    crate::copilot::prepare_request(channel, req).await
 }
 
 #[cfg(test)]
@@ -623,7 +641,7 @@ pub(crate) fn channel_provider_hint(channel: &ChannelConfig) -> String {
     use crate::source_driver::SourceDriverId;
     match channel.source_driver() {
         SourceDriverId::OpenAiApi => return "openai".to_string(),
-        SourceDriverId::AnthropicApi | SourceDriverId::ClaudeSubscription => {
+        SourceDriverId::AnthropicApi | SourceDriverId::ClaudeSubscription | SourceDriverId::KiroSubscription | SourceDriverId::CursorSubscription => {
             return "anthropic".to_string()
         }
         SourceDriverId::GeminiApi | SourceDriverId::GeminiSubscription => {
@@ -672,6 +690,10 @@ pub(crate) fn channel_provider_hint(channel: &ChannelConfig) -> String {
         | SourceDriverId::GlmCodingPlan
         | SourceDriverId::MinimaxTokenPlan
         | SourceDriverId::OllamaCloud
+        | SourceDriverId::MuseCode
+        | SourceDriverId::CopilotSubscription
+        | SourceDriverId::AbacusRoutellm
+        | SourceDriverId::PoeApi
         | SourceDriverId::Openrouter => {
             return match channel
                 .surface_bindings
@@ -824,7 +846,7 @@ pub(crate) fn subscription_supported_protocols(platform: &str) -> Vec<String> {
         "openai" | "codex" | "chatgpt" => vec!["openai_responses".to_string()],
         "grok" => vec!["openai_responses".to_string()],
         "antigravity" => vec!["gemini_native".to_string()],
-        "claude" | "anthropic" => vec!["anthropic_messages".to_string()],
+        "claude" | "anthropic" | "kiro" | "cursor" => vec!["anthropic_messages".to_string()],
         _ => Vec::new(),
     }
 }

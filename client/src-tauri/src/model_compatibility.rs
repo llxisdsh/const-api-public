@@ -1787,9 +1787,7 @@ mod tests {
             vec![
                 "kimi-k3",
                 "gpt-5.6-terra",
-                "gpt-5.5",
                 "muse-spark-1.3",
-                "claude-mythos-5",
                 "claude-fable-5",
                 "gpt-6.1-sol",
                 "claude-sonnet-5-5",
@@ -1797,7 +1795,6 @@ mod tests {
                 "gpt-5.6-sol",
                 "claude-opus-5",
                 "grok-4.7",
-                "grok-4.6",
                 "claude-mythos-5-1",
                 "claude-fable-5-1",
                 "claude-opus-5-5",
@@ -1936,11 +1933,6 @@ mod tests {
         for (model, expected_group) in [
             ("muse-spark-1.3", "elite"),
             ("gemini-3.8-flash", "advanced"),
-            ("gemini-3.7-flash", "advanced"),
-            ("gemini-3.6-flash", "capable"),
-            ("gemini-3.5-flash", "capable"),
-            ("gemini-3-flash-preview", "standard"),
-            ("gemini-2.5-flash", "basic"),
         ] {
             let actual = profile
                 .model_groups
@@ -1950,6 +1942,11 @@ mod tests {
             assert_eq!(actual, Some(expected_group), "{model}");
         }
         for model in [
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3-flash-preview",
+            "gemini-2.5-flash",
             "gemini-3.5-flash-lite",
             "gemini-3.1-flash-lite",
             "gemini-2.5-flash-lite",
@@ -1959,7 +1956,7 @@ mod tests {
                     .model_groups
                     .iter()
                     .any(|group| group.models.iter().any(|candidate| candidate == model)),
-                "{model} must remain opt-in"
+                "{model} must not become a default substitution target"
             );
             assert!(
                 profile
@@ -1969,6 +1966,183 @@ mod tests {
                 "{model} must remain selectable"
             );
         }
+    }
+
+    #[test]
+    fn embedded_default_routes_tool_requests_without_restoring_old_candidates() {
+        let mut config = crate::default_config();
+        config.account_platform_id.clear();
+        config.account_user_id.clear();
+        config.model_compatibility_profiles.clear();
+        config.allow_model_equivalence = true;
+        let profile = client_default_model_compatibility_profile();
+
+        for (model, first) in [
+            ("claude-mythos-5", "claude-fable-5"),
+            ("gpt-5.5", "kimi-k3"),
+            ("codex-auto-review", "claude-sonnet-5"),
+            ("gpt-5.4", "claude-sonnet-5"),
+            ("claude-opus-4-7", "claude-sonnet-5"),
+            ("claude-opus-4-7[1m]", "claude-sonnet-5"),
+            ("gpt-5.3-codex", "gemini-3.8-flash"),
+            ("gemini-3-pro-preview", "gemini-3.8-flash"),
+            ("gemini-3.1-pro-preview", "gemini-3.8-flash"),
+            ("gemini-3.1-pro-preview-customtools", "gemini-3.8-flash"),
+            (
+                "google/gemini-3.1-pro-preview-customtools",
+                "gemini-3.8-flash",
+            ),
+            ("gemini-3.7-flash", "gemini-3.8-flash"),
+            ("gpt-5.2", "claude-sonnet-4-6"),
+            ("gpt-5.2-codex", "claude-sonnet-4-6"),
+            ("gpt-5.4-mini", "claude-sonnet-4-6"),
+            ("claude-opus-4-5", "claude-sonnet-4-6"),
+            ("anthropic/claude-opus-4.5", "claude-sonnet-4-6"),
+            ("gemini-3.6-flash", "claude-sonnet-4-6"),
+            ("gemini-3.5-flash", "claude-sonnet-4-6"),
+            ("gpt-5.3-codex-spark", "claude-sonnet-4-5"),
+            ("gpt-5.4-nano", "claude-sonnet-4-5"),
+            ("gemini-3-flash", "claude-sonnet-4-5"),
+            ("gemini-3-flash-preview", "claude-sonnet-4-5"),
+            ("gemini-2.5-pro", "claude-haiku-4-5"),
+            ("gemini-2.5-flash", "claude-haiku-4-5"),
+            ("gemini-3.5-flash-lite", "claude-haiku-4-5"),
+            ("gemini-3.1-flash-lite", "claude-haiku-4-5"),
+            ("gemini-2.5-flash-lite", "claude-haiku-4-5"),
+            ("gemini-3.8-flash", "deepseek-v4.1-flash"),
+            ("gemma-4-31b-it", "claude-haiku-4-5"),
+            ("gemma-4-26b-a4b-it", "claude-haiku-4-5"),
+        ] {
+            let candidates = model_compatibility_candidates(&config, model);
+            assert_eq!(
+                candidates.first().map(String::as_str),
+                Some(first),
+                "{model}"
+            );
+            assert!(candidates.iter().any(|id| id == "gpt-6-astra"), "{model}");
+            if model != "gemini-3.8-flash" {
+                assert!(
+                    !profile
+                        .model_groups
+                        .iter()
+                        .any(|group| group.models.iter().any(|id| id == model)),
+                    "{model} is a request match, not a default substitution target"
+                );
+            }
+            config.allow_model_equivalence = false;
+            assert!(model_compatibility_candidates(&config, model).is_empty());
+            config.allow_model_equivalence = true;
+        }
+        for model in [
+            "grok-4.6",
+            "grok-4.5",
+            "grok-4.3",
+            "grok-build-0.1",
+            "gpt-daybreak-blue-latest",
+        ] {
+            assert!(model_compatibility_candidates(&config, model).is_empty());
+        }
+    }
+
+    #[test]
+    fn online_tool_compatibility_replaces_packaged_matches() {
+        // Installing a release changes process-global metadata. Exercise the real
+        // activation path in a child so parallel tests keep their packaged data.
+        const CHILD_ENV: &str = "CONST_API_TEST_ONLINE_TOOL_COMPATIBILITY";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "model_compatibility::tests::online_tool_compatibility_replaces_packaged_matches",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "{}\n{}",
+                stdout,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let mut config = crate::default_config();
+        config.account_platform_id.clear();
+        config.account_user_id.clear();
+        config.model_compatibility_profiles.clear();
+        config.allow_model_equivalence = true;
+        let removed = [
+            "gpt-5.4",
+            "claude-opus-4-7[1m]",
+            "gemini-3.1-pro-preview-customtools",
+            "gemini-2.5-flash-lite",
+            "gemini-3-flash",
+        ];
+        for model in removed {
+            assert!(!model_compatibility_candidates(&config, model).is_empty());
+        }
+        // A saved account/local template must not resurrect deleted matches.
+        let mut stale_profile = client_default_model_compatibility_profile();
+        stale_profile.customized = true;
+        let mut document: Value =
+            serde_json::from_slice(include_bytes!("../resources/tool-model-metadata.json"))
+                .unwrap();
+        document["compatibility_version_id"] = json!("compat-online-test");
+        for group in document["compatibility_groups"].as_array_mut().unwrap() {
+            group["match_models"] = json!([]);
+            group["aliases"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|alias| alias != "gemini-3-pro-preview" && alias != "gemini-3-flash");
+            if group["id"] == "frontier" {
+                group["match_models"] = json!(["gpt-5.4-mini"]);
+            }
+            if group["id"] == "basic" {
+                group["aliases"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!("gemini-3-pro-preview"));
+            }
+        }
+        let mut version = crate::tool_model_metadata::active_model_catalog_version();
+        version.release_id = "catalog-online-test".to_string();
+        version.compatibility_version_id = "compat-online-test".to_string();
+        version.sequence = Some(version.sequence.unwrap() + 1);
+        version.source = "public".to_string();
+        version.delivery_source = "network".to_string();
+        version.delivery_sources = vec!["network".to_string()];
+        crate::tool_model_metadata::install_tool_model_metadata(
+            &serde_json::to_vec(&document).unwrap(),
+            "compat-online-test",
+            version,
+        )
+        .unwrap();
+
+        for model in removed {
+            assert!(
+                model_compatibility_candidates(&config, model).is_empty(),
+                "packaged match {model} leaked into online rules"
+            );
+        }
+        for (model, first) in [
+            ("gpt-5.4-mini", "claude-fable-5"),
+            ("gemini-3-pro-preview", "claude-haiku-4-5"),
+        ] {
+            let candidates = model_compatibility_candidates(&config, model);
+            assert_eq!(candidates.first().map(String::as_str), Some(first));
+        }
+        let rebased = rebase_profile_onto_active_defaults(stale_profile);
+        assert_eq!(
+            rebased.model_groups,
+            client_default_model_compatibility_profile().model_groups
+        );
+        assert_eq!(
+            crate::tool_model_metadata::model_identity("gemini-3.1-pro-preview-customtools"),
+            "gemini-3.1-pro-preview"
+        );
     }
 
     #[test]
@@ -2222,7 +2396,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_spark_is_a_candidate_while_auto_review_is_match_only() {
+    fn codex_legacy_and_internal_models_stay_request_only() {
         let mut config = crate::default_config();
         config.model_compatibility_profiles.clear();
         let profile = client_default_model_compatibility_profile();
@@ -2231,12 +2405,18 @@ mod tests {
             .iter()
             .find(|group| group.id == "standard")
             .expect("T6 group");
-        assert_eq!(standard.aliases, ["standard", "t6"]);
-        assert!(
-            standard
+        assert_eq!(standard.aliases, ["standard", "t6", "gemini-3-flash"]);
+        assert!(profile.model_groups.iter().all(|group| {
+            !group
                 .models
                 .iter()
                 .any(|model| model == "gpt-5.3-codex-spark")
+        }));
+        assert!(
+            profile
+                .catalog_models
+                .iter()
+                .any(|model| model.id == "gpt-5.3-codex-spark")
         );
         assert!(
             standard
@@ -2259,31 +2439,25 @@ mod tests {
 
         let spark_candidates = model_compatibility_candidates(&config, "gpt-5.3-codex-spark");
         assert_eq!(
-            &spark_candidates[..4],
-            [
-                "claude-sonnet-4-5",
-                "grok-build-0.1",
-                "gpt-5.4-nano",
-                "grok-4.3",
-            ]
+            spark_candidates.first().map(String::as_str),
+            Some("claude-sonnet-4-5")
         );
         assert!(
             !spark_candidates
                 .iter()
-                .any(|model| model == "gpt-5.3-codex-spark")
+                .any(|id| id == "gpt-5.3-codex-spark")
         );
 
         // Guardian is a specialized request identity, never a general fallback
         // candidate. Its Luna-level fallback floor excludes weaker Flash/Spark.
         let review_candidates = model_compatibility_candidates(&config, "codex-auto-review");
         assert_eq!(
-            &review_candidates[..5],
+            &review_candidates[..4],
             [
-                "grok-4.5",
-                "gpt-5.4",
-                "claude-opus-4-7",
                 "claude-sonnet-5",
+                "claude-haiku-5-5",
                 "gpt-6-luna",
+                "gpt-5.6-luna",
             ]
         );
         assert!(
@@ -2320,16 +2494,14 @@ mod tests {
         assert_eq!(
             routes.iter().map(String::as_str).collect::<Vec<_>>(),
             vec![
-                "claude-mythos-5",
                 "claude-fable-5",
                 "claude-sonnet-5-5",
                 "claude-opus-5",
                 "claude-opus-4-8",
-                "claude-opus-4-7",
                 "claude-sonnet-5",
+                "claude-haiku-5-5",
                 "claude-opus-4-6",
                 "claude-sonnet-4-6",
-                "claude-opus-4-5",
                 "claude-sonnet-4-5",
                 "claude-haiku-4-5",
             ]
@@ -2345,16 +2517,14 @@ mod tests {
         assert_eq!(
             routes,
             vec![
-                "claude-mythos-5",
                 "claude-fable-5",
                 "claude-sonnet-5-5",
                 "claude-opus-5",
                 "claude-opus-4-8",
-                "claude-opus-4-7",
                 "claude-sonnet-5",
+                "claude-haiku-5-5",
                 "claude-opus-4-6",
                 "claude-sonnet-4-6",
-                "claude-opus-4-5",
                 "claude-sonnet-4-5",
                 "claude-haiku-4-5",
             ]

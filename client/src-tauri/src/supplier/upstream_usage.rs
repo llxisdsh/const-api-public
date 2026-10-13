@@ -35,6 +35,10 @@ struct AnthropicUsageState {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub(crate) struct SupplierUpstreamUsage {
     source_protocol: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    service_tier: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    speed: String,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     cache_read_tokens: Option<u64>,
@@ -52,23 +56,66 @@ pub(crate) struct SupplierUpstreamUsage {
     anthropic_usage: AnthropicUsageState,
     #[serde(skip)]
     terminal_error: Option<serde_json::Value>,
+    #[serde(skip)]
+    openrouter_service_tier: bool,
 }
 
 impl SupplierUpstreamUsage {
-    fn from_json(protocol: &str, value: &serde_json::Value) -> Self {
-        let mut usage = Self {
+    pub(super) fn cursor_service_mode(fast: bool) -> Self {
+        // Cursor exposes speed through the executed SKU, not an echoed API
+        // service_tier. Missing counters must not become reported zeroes.
+        Self {
+            source_protocol: "cursor_agent".into(),
+            speed: if fast { "fast" } else { "standard" }.into(),
+            ..Default::default()
+        }
+    }
+    fn cursor_reported_usage(fast: bool, usage: &crate::protocol::ir::Usage) -> Self {
+        use crate::protocol::ir::{UsageProvenance, UsageValue};
+        let reported = |value: &UsageValue| {
+            (value.source == UsageProvenance::Reported)
+                .then_some(value.value)
+                .flatten()
+        };
+        Self {
+            input_tokens: reported(&usage.input_tokens),
+            output_tokens: reported(&usage.output_tokens),
+            cache_read_tokens: reported(&usage.cache_read_tokens),
+            cache_write_tokens: reported(&usage.cache_write_tokens),
+            // AgentService input includes both caches (unlike Dashboard usage).
+            input_tokens_include_cache_read: true,
+            input_tokens_include_cache_write: true,
+            ..Self::cursor_service_mode(fast)
+        }
+    }
+    fn new(protocol: &str) -> Self {
+        let openrouter_service_tier = protocol == "openrouter_messages";
+        let protocol = if openrouter_service_tier {
+            "anthropic_messages"
+        } else {
+            protocol
+        };
+        Self {
             source_protocol: protocol.trim().to_string(),
             input_tokens_include_cache_read: protocol != "anthropic_messages",
             input_tokens_include_cache_write: protocol != "anthropic_messages",
+            openrouter_service_tier,
             ..Default::default()
-        };
+        }
+    }
+
+    fn from_json(protocol: &str, value: &serde_json::Value) -> Self {
+        let mut usage = Self::new(protocol);
         usage.absorb_json(value);
         usage
     }
 
     fn absorb_json(&mut self, value: &serde_json::Value) {
-        if self.terminal_error.is_none() && crate::upstream_failure::error_object(value).is_some()
-            && serde_json::to_vec(value).is_ok_and(|raw| raw.len() <= crate::upstream_failure::MAX_OBSERVATION_BYTES) {
+        if self.terminal_error.is_none()
+            && crate::upstream_failure::error_object(value).is_some()
+            && serde_json::to_vec(value)
+                .is_ok_and(|raw| raw.len() <= crate::upstream_failure::MAX_OBSERVATION_BYTES)
+        {
             self.terminal_error = Some(value.clone());
         }
         let protocol = self.source_protocol.clone();
@@ -93,6 +140,44 @@ impl SupplierUpstreamUsage {
                 .unwrap_or(value),
             _ => value,
         };
+        if usage_value
+            .get("const_api_usage_source")
+            .and_then(serde_json::Value::as_str)
+            == Some("estimated")
+        {
+            // Bridge-generated counts are useful to tools but are not upstream evidence.
+            return;
+        }
+        // Capture only provider response evidence, before conversion can drop
+        // fields or translate them into a different provider's vocabulary.
+        let service_tier = value
+            .pointer("/response/service_tier")
+            .or_else(|| value.pointer("/interaction/service_tier"))
+            .or_else(|| value.get("service_tier"))
+            .or_else(|| usage_value.get("service_tier"))
+            .or_else(|| usage_value.get("serviceTier"));
+        if let Some(tier) = service_tier
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            self.service_tier = tier.to_string();
+            if self.openrouter_service_tier {
+                self.speed = match tier {
+                    "priority" | "fast" => "fast",
+                    "default" | "standard" => "standard",
+                    _ => "",
+                }
+                .into();
+            }
+        }
+        if protocol == "anthropic_messages"
+            && let Some(speed) = usage_value
+                .get("speed")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+        {
+            self.speed = speed.to_string();
+        }
         match protocol.as_str() {
             "openai_chat" => {
                 replace(&mut self.input_tokens, usage_value.get("prompt_tokens"));
@@ -155,17 +240,11 @@ impl SupplierUpstreamUsage {
                 let compaction = self.anthropic_usage.compaction;
                 let iterations = self.anthropic_usage.iterations;
                 self.input_tokens = optional_max([
-                    optional_saturating_sum([
-                        top_level.input_tokens,
-                        compaction.input_tokens,
-                    ]),
+                    optional_saturating_sum([top_level.input_tokens, compaction.input_tokens]),
                     iterations.input_tokens,
                 ]);
                 self.output_tokens = optional_max([
-                    optional_saturating_sum([
-                        top_level.output_tokens,
-                        compaction.output_tokens,
-                    ]),
+                    optional_saturating_sum([top_level.output_tokens, compaction.output_tokens]),
                     iterations.output_tokens,
                 ]);
                 let top_level_thinking = if compaction.output_tokens.unwrap_or(0) > 0 {
@@ -223,10 +302,7 @@ impl SupplierUpstreamUsage {
                     iterations.cache_write_1h_tokens,
                 ]);
                 if let Some(quantity) = optional_max([
-                    optional_saturating_sum([
-                        top_level.search_queries,
-                        compaction.search_queries,
-                    ]),
+                    optional_saturating_sum([top_level.search_queries, compaction.search_queries]),
                     iterations.search_queries,
                 ]) {
                     self.replace_meter("search_query", "per_1k_queries", quantity, 1, false);
@@ -497,7 +573,13 @@ impl SupplierUpstreamUsage {
         if usage.get("type").and_then(serde_json::Value::as_str) == Some("duration") {
             if let Some(seconds) = usage.get("seconds").and_then(serde_json::Value::as_f64) {
                 if seconds.is_finite() && seconds > 0.0 && seconds < u64::MAX as f64 / 1000.0 {
-                    self.replace_meter("audio_input_second", "per_second", (seconds * 1000.0).ceil() as u64, 1000, false);
+                    self.replace_meter(
+                        "audio_input_second",
+                        "per_second",
+                        (seconds * 1000.0).ceil() as u64,
+                        1000,
+                        false,
+                    );
                 }
             }
         }
@@ -596,14 +678,14 @@ impl SupplierUpstreamUsage {
             || self.cache_write_5m_tokens.is_some()
             || self.cache_write_1h_tokens.is_some()
             || !self.usage_meters.is_empty()
+            || !self.service_tier.is_empty()
+            || !self.speed.is_empty()
     }
 
     pub(crate) fn lan_share_token_counts(&self) -> UsageTokenCounts {
         let cache_write_tokens = self.cache_write_tokens.or_else(|| {
             match (self.cache_write_5m_tokens, self.cache_write_1h_tokens) {
-                (Some(five_minutes), Some(one_hour)) => {
-                    Some(five_minutes.saturating_add(one_hour))
-                }
+                (Some(five_minutes), Some(one_hour)) => Some(five_minutes.saturating_add(one_hour)),
                 (Some(value), None) | (None, Some(value)) => Some(value),
                 (None, None) => None,
             }
@@ -625,10 +707,7 @@ impl SupplierUpstreamUsage {
             .reduce(u64::saturating_add);
         UsageTokenCounts {
             input_tokens,
-            output_tokens: optional_saturating_sum([
-                self.output_tokens,
-                extra_output_tokens,
-            ]),
+            output_tokens: optional_saturating_sum([self.output_tokens, extra_output_tokens]),
         }
     }
 }
@@ -843,24 +922,26 @@ pub(crate) struct SupplierUpstreamUsageAccumulator {
 impl SupplierUpstreamUsageAccumulator {
     pub(crate) fn new(protocol: &str) -> Self {
         Self {
-            usage: SupplierUpstreamUsage {
-                source_protocol: protocol.trim().to_string(),
-                input_tokens_include_cache_read: protocol != "anthropic_messages",
-                input_tokens_include_cache_write: protocol != "anthropic_messages",
-                ..Default::default()
-            },
+            usage: SupplierUpstreamUsage::new(protocol),
             line: Vec::new(),
             multiline_data: Vec::new(),
         }
     }
 
     pub(crate) fn push(&mut self, chunk: &[u8]) {
+        // The retained partial line has already been scanned for newlines.
+        let mut scan_from = self.line.len();
         self.line.extend_from_slice(chunk);
         let mut consumed = 0;
-        while let Some(relative) = self.line[consumed..].iter().position(|byte| *byte == b'\n') {
-            let end = consumed + relative;
-            absorb_upstream_usage_event_line(&mut self.usage, &mut self.multiline_data, &self.line[consumed..end]);
+        while let Some(relative) = self.line[scan_from..].iter().position(|byte| *byte == b'\n') {
+            let end = scan_from + relative;
+            absorb_upstream_usage_event_line(
+                &mut self.usage,
+                &mut self.multiline_data,
+                &self.line[consumed..end],
+            );
             consumed = end + 1;
+            scan_from = consumed;
         }
         if consumed > 0 {
             self.line.drain(..consumed);
@@ -875,22 +956,78 @@ impl SupplierUpstreamUsageAccumulator {
         self.finish_observed(None).0
     }
 
-    pub(crate) fn finish_observed(mut self, model: Option<&str>) -> (Option<SupplierUpstreamUsage>, Option<crate::upstream_failure::Failure>) {
+    pub(crate) fn finish_observed(
+        mut self,
+        model: Option<&str>,
+    ) -> (
+        Option<SupplierUpstreamUsage>,
+        Option<crate::upstream_failure::Failure>,
+    ) {
         if !self.line.is_empty() {
             let line = std::mem::take(&mut self.line);
             absorb_upstream_usage_event_line(&mut self.usage, &mut self.multiline_data, &line);
         }
         absorb_upstream_usage_event_line(&mut self.usage, &mut self.multiline_data, b"");
-        let failure = self.usage.terminal_error.as_ref().and_then(|value| crate::upstream_failure::observe_value(200, value, model));
+        let failure = self
+            .usage
+            .terminal_error
+            .as_ref()
+            .and_then(|value| crate::upstream_failure::observe_value(200, value, model));
         (self.usage.observed().then_some(self.usage), failure)
     }
 }
 
-fn absorb_upstream_usage_event_line(usage: &mut SupplierUpstreamUsage, pending: &mut Vec<u8>, line: &[u8]) {
+#[cfg(test)]
+mod fast_mode_tests {
+    use super::*;
+
+    #[test]
+    fn cursor_mode_evidence_does_not_claim_estimated_tokens_as_upstream() {
+        for fast in [false, true] {
+            let mut payload = serde_json::Map::new();
+            attach_upstream_usage(
+                &mut payload,
+                Some(&SupplierUpstreamUsage::cursor_service_mode(fast)),
+            );
+            let usage = &payload["upstream_usage"];
+            assert_eq!(usage["speed"], if fast { "fast" } else { "standard" });
+            assert!(usage["input_tokens"].is_null() && usage["output_tokens"].is_null());
+        }
+    }
+
+    #[test]
+    fn openrouter_messages_tier_is_not_confused_with_anthropic_capacity() {
+        for (protocol, expected) in [("openrouter_messages", "fast"), ("anthropic_messages", "")] {
+            let body =
+                br#"{"usage":{"input_tokens":12,"output_tokens":3,"service_tier":"priority"}}"#;
+            let usage = upstream_usage_from_body(protocol, body).unwrap();
+            assert_eq!(usage.source_protocol, "anthropic_messages");
+            assert_eq!(usage.speed, expected);
+            assert_eq!(usage.input_tokens, Some(12));
+            assert!(!usage.input_tokens_include_cache_read);
+            let mut acc = SupplierUpstreamUsageAccumulator::new(protocol);
+            acc.push(b"data: ");
+            acc.push(body);
+            acc.push(b"\n\n");
+            assert_eq!(acc.finish().unwrap().speed, expected);
+        }
+    }
+}
+
+fn absorb_upstream_usage_event_line(
+    usage: &mut SupplierUpstreamUsage,
+    pending: &mut Vec<u8>,
+    line: &[u8],
+) {
     let line = trim_ascii(line);
-    if line.len() > MAX_UPSTREAM_USAGE_LINE_BYTES { pending.clear(); return; }
+    if line.len() > MAX_UPSTREAM_USAGE_LINE_BYTES {
+        pending.clear();
+        return;
+    }
     if line.is_empty() {
-        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(pending) { usage.absorb_json(&value); }
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(pending) {
+            usage.absorb_json(&value);
+        }
         pending.clear();
     } else if let Some(data) = line.strip_prefix(b"data:") {
         let data = trim_ascii(data);
@@ -903,7 +1040,9 @@ fn absorb_upstream_usage_event_line(usage: &mut SupplierUpstreamUsage, pending: 
         if pending.len() + data.len() < MAX_UPSTREAM_USAGE_LINE_BYTES {
             pending.extend_from_slice(data);
             pending.push(b'\n');
-        } else { pending.clear(); }
+        } else {
+            pending.clear();
+        }
     } else {
         absorb_upstream_usage_line(usage, line);
     }
@@ -937,13 +1076,57 @@ mod upstream_usage_tests {
     use super::*;
 
     #[test]
+    fn actual_service_mode_survives_fragmented_streams_and_missing_later_fields() {
+        for (protocol, body, field, expected) in [
+            (
+                "anthropic_messages",
+                "data: {\"message\":{\"usage\":{\"input_tokens\":10,\"speed\":\"fast\"}}}\n\ndata: {\"usage\":{\"output_tokens\":2}}\n\n",
+                "speed",
+                "fast",
+            ),
+            (
+                "openai_responses",
+                "data: {\"response\":{\"service_tier\":\"ultrafast\"}}\n\ndata: {\"response\":{\"service_tier\":\"default\",\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n\n",
+                "service_tier",
+                "default",
+            ),
+            (
+                "openai_chat",
+                "data: {\"service_tier\":\"priority\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\n",
+                "service_tier",
+                "priority",
+            ),
+        ] {
+            let mut accumulator = SupplierUpstreamUsageAccumulator::new(protocol);
+            for chunk in body.as_bytes().chunks(3) {
+                accumulator.push(chunk);
+            }
+            let value = serde_json::to_value(accumulator.finish().unwrap()).unwrap();
+            assert_eq!(value[field], expected);
+            assert_eq!(value["input_tokens"], 10);
+            assert_eq!(value["output_tokens"], 2);
+        }
+        let legacy = upstream_usage_from_body(
+            "anthropic_messages",
+            br#"{"usage":{"input_tokens":10,"output_tokens":2}}"#,
+        )
+        .unwrap();
+        let value = serde_json::to_value(legacy).unwrap();
+        assert!(value.get("speed").is_none());
+        assert!(value.get("service_tier").is_none());
+    }
+
+    #[test]
     fn multiline_terminal_error_preserves_usage_and_reports_semantic_failure() {
         let raw = b"data: {\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":3}}\r\n\r\ndata: {\"error\":\r\ndata: {\"code\":\"rate_limit_exceeded\",\"message\":\"slow down\"}}\r\n\r\n";
         let mut accumulator = SupplierUpstreamUsageAccumulator::new("openai_chat");
-        for chunk in raw.chunks(3) { accumulator.push(chunk); }
+        for chunk in raw.chunks(3) {
+            accumulator.push(chunk);
+        }
         let (usage, failure) = accumulator.finish_observed(Some("model-a"));
         let usage = usage.unwrap();
-        assert_eq!(usage.input_tokens, Some(17)); assert_eq!(usage.output_tokens, Some(3));
+        assert_eq!(usage.input_tokens, Some(17));
+        assert_eq!(usage.output_tokens, Some(3));
         assert_eq!(failure.unwrap().cause, "rate_limited");
     }
 
@@ -1017,10 +1200,12 @@ mod upstream_usage_tests {
             assert!(meter.included_in_total);
         }
         let usage = upstream_usage_from_body("anthropic_messages", br#"{"usage":{"input_tokens":32,"output_tokens":103},"content":[{"type":"thinking","thinking":"A visible summary is not the billable reasoning."}]}"#).unwrap();
-        assert!(usage
-            .usage_meters
-            .iter()
-            .all(|m| m.meter_kind != "reasoning_tokens"));
+        assert!(
+            usage
+                .usage_meters
+                .iter()
+                .all(|m| m.meter_kind != "reasoning_tokens")
+        );
     }
 
     #[test]
@@ -1119,10 +1304,12 @@ mod upstream_usage_tests {
 data: {"type":"message_start","message":{"usage":{"input_tokens":500,"output_tokens":1,"cache_read_input_tokens":4,"cache_creation_input_tokens":3,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":0},"iterations":[{"type":"compaction","input_tokens":60000,"output_tokens":1000,"cache_read_input_tokens":100,"cache_creation_input_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":7,"ephemeral_1h_input_tokens":5}},{"type":"message","input_tokens":500,"output_tokens":1,"cache_read_input_tokens":4,"cache_creation_input_tokens":3,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":0},"server_tool_use":{"web_search_requests":2}}]}}}
 
 "#);
-        accumulator.push(br#"event: message_delta
+        accumulator.push(
+            br#"event: message_delta
 data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":20}}
 
-"#);
+"#,
+        );
 
         let usage = accumulator.finish().expect("stream usage");
         assert_eq!(usage.input_tokens, Some(60_500));
@@ -1164,6 +1351,25 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
         assert_eq!(usage.output_tokens, Some(3));
         assert_eq!(usage.cache_read_tokens, Some(8));
         assert_eq!(usage.cache_write_tokens, Some(4));
+    }
+
+    #[test]
+    fn fragmented_long_event_keeps_terminal_usage_without_final_newline() {
+        let body = format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{}\"}}}}]}}\r\n\r\ndata: {{\"usage\":{{\"prompt_tokens\":20,\"completion_tokens\":3,\"prompt_tokens_details\":{{\"cached_tokens\":8,\"cache_write_tokens\":4}}}}}}",
+            "x".repeat(512 * 1024)
+        );
+        for chunk_size in [127, 1024, body.len()] {
+            let mut accumulator = SupplierUpstreamUsageAccumulator::new("openai_chat");
+            for chunk in body.as_bytes().chunks(chunk_size) {
+                accumulator.push(chunk);
+            }
+            let usage = accumulator.finish().unwrap();
+            assert_eq!(usage.input_tokens, Some(20));
+            assert_eq!(usage.output_tokens, Some(3));
+            assert_eq!(usage.cache_read_tokens, Some(8));
+            assert_eq!(usage.cache_write_tokens, Some(4));
+        }
     }
 
     #[test]
@@ -1297,7 +1503,19 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
         let Some(provider) = std::env::var("CONST_API_LIVE_CACHE_PROVIDER")
             .ok()
             .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| matches!(value.as_str(), "openai" | "antigravity" | "claude"))
+            .filter(|value| {
+                matches!(
+                    value.as_str(),
+                    "openai"
+                        | "antigravity"
+                        | "claude"
+                        | "grok"
+                        | "cursor"
+                        | "kiro"
+                        | "copilot"
+                        | "openrouter"
+                )
+            })
         else {
             eprintln!("live cache test skipped: CONST_API_LIVE_CACHE_PROVIDER is not set");
             return Ok(());
@@ -1310,15 +1528,19 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
             .channels
             .iter()
             .find(|channel| {
-                channel.enabled
-                    && matches!(
-                        &channel.v2.executor,
-                        ChannelExecutorLocator::RetainedSubscription {
-                            provider: candidate
-                        } if candidate.trim().eq_ignore_ascii_case(&provider)
-                    )
+                matches!(
+                    &channel.v2.executor,
+                    ChannelExecutorLocator::RetainedSubscription {
+                        provider: candidate
+                    } if candidate.trim().eq_ignore_ascii_case(&provider)
+                ) || (provider == "copilot"
+                    && channel.source_driver()
+                        == crate::source_driver::SourceDriverId::CopilotSubscription)
+                    || (provider == "openrouter"
+                        && channel.source_driver()
+                            == crate::source_driver::SourceDriverId::Openrouter)
             })
-            .with_context(|| format!("no enabled retained {provider} channel"))?;
+            .with_context(|| format!("no configured {provider} channel"))?;
         let model = std::env::var("CONST_API_LIVE_CACHE_MODEL")
             .ok()
             .map(|value| value.trim().to_string())
@@ -1332,7 +1554,7 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
         if !channel.models.iter().any(|candidate| candidate == &model) {
             anyhow::bail!("model {model} is not declared by the selected {provider} channel");
         }
-        let minimum_attempts = if provider == "antigravity" { 3 } else { 2 };
+        let minimum_attempts = 2;
         let attempt_budget = match std::env::var("CONST_API_LIVE_CACHE_ATTEMPTS") {
             Ok(value) => {
                 let parsed = value
@@ -1400,10 +1622,18 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
              Routing identity, provider account, actual model, and target protocol must remain stable. "
         )
         .repeat(repetitions);
-        let prompt = format!("{stable_prefix}\nReply with exactly: OK");
         let identity_digest = hex::encode(Sha256::digest(
             format!("const-api-live-cache:{case_id}").as_bytes(),
         ));
+        let history_marker = &identity_digest[..8];
+        let system_marker = &identity_digest[8..16];
+        let prompt = if provider == "cursor" {
+            format!(
+                "{stable_prefix}\nThe synthetic history marker is {history_marker}. Remember it for later. Reply with exactly: OK"
+            )
+        } else {
+            format!("{stable_prefix}\nReply with exactly: OK")
+        };
         let cache_session_id = format!(
             "{}-{}-{}-{}-{}",
             &identity_digest[0..8],
@@ -1434,7 +1664,7 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
             })
         };
         let (path, bodies) = match provider.as_str() {
-            "openai" => {
+            "openai" | "grok" => {
                 let mut input = vec![serde_json::json!({
                     // Exercise implicit-message ID normalization on the real
                     // endpoint while retaining the same prefix in later turns.
@@ -1457,15 +1687,18 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
                             }]
                         }));
                     }
-                    bodies.push(serde_json::json!({
+                    let mut body = serde_json::json!({
                         "model": model,
                         "input": input,
                         "max_output_tokens": 16,
                         "prompt_cache_key": cache_session_id,
-                        "client_metadata": openai_client_metadata,
                         "store": false,
                         "stream": false
-                    }).to_string());
+                    });
+                    if provider == "openai" {
+                        body["client_metadata"] = openai_client_metadata.clone();
+                    }
+                    bodies.push(body.to_string());
                 }
                 ("/v1/responses", bodies)
             }
@@ -1508,15 +1741,22 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
                         messages.push(serde_json::json!({"role": "assistant", "content": "OK"}));
                         messages.push(serde_json::json!({
                             "role": "user",
-                            "content": format!("cache follow-up {attempt}; reply exactly OK")
+                            "content": if provider == "cursor" {
+                                "Return only the synthetic history marker and the rule marker from the supplied context, separated by a space. Do not guess if either is unavailable.".to_string()
+                            } else {
+                                format!("cache follow-up {attempt}; reply exactly OK")
+                            }
                         }));
                     }
-                    bodies.push(serde_json::json!({
-                        "model": model,
-                        "messages": messages,
-                        "max_tokens": 16,
-                        "stream": false
-                    }).to_string());
+                    bodies.push(
+                        serde_json::json!({
+                            "model": model,
+                            "messages": messages,
+                            "max_tokens": if provider == "cursor" { 64 } else { 16 },
+                            "stream": false
+                        })
+                        .to_string(),
+                    );
                 }
                 ("/v1/chat/completions", bodies)
             }
@@ -1532,8 +1772,24 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
                 None
             };
         let mut reports = Vec::with_capacity(attempt_budget);
+        let mut cursor_replies = Vec::<String>::new();
         for attempt in 1..=attempt_budget {
-            let body = &bodies[attempt - 1];
+            let body = if provider == "cursor" {
+                let mut value: serde_json::Value = serde_json::from_str(&bodies[attempt - 1])?;
+                let messages = value["messages"].as_array_mut().unwrap();
+                for (message, reply) in messages
+                    .iter_mut()
+                    .filter(|m| m["role"] == "assistant")
+                    .zip(&cursor_replies)
+                {
+                    message["content"] = serde_json::json!(reply);
+                }
+                messages.insert(0, serde_json::json!({"role":"system", "content":format!("The rule marker is {system_marker}. When asked for it, return that exact value.")}));
+                value.to_string()
+            } else {
+                bodies[attempt - 1].clone()
+            };
+            let body = &body;
             let body_sha256 = hex::encode(Sha256::digest(body.as_bytes()));
             let started = std::time::Instant::now();
             if let Some((token, credential)) = legacy_openai_auth.as_ref() {
@@ -1553,8 +1809,7 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
                     credential,
                     prepared.body,
                     None,
-                )
-                ?
+                )?
                 .build()?;
                 for name in ["session-id", "thread-id", "x-client-request-id"] {
                     request.headers_mut().remove(name);
@@ -1584,9 +1839,50 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
                 reports.push(usage);
                 continue;
             }
-            let payload =
-                forward_subscription_supplier_request(&client, &supplier, path, body, false, None)
-                    .await;
+            let payload = if matches!(provider.as_str(), "copilot" | "openrouter") {
+                use crate::channel_executor::{ChannelRequest, execute_channel_request};
+                let execution = execute_channel_request(
+                    &client,
+                    channel,
+                    ChannelRequest {
+                        method: reqwest::Method::POST,
+                        path: path.into(),
+                        raw_query: String::new(),
+                        has_query: false,
+                        headers: reqwest::header::HeaderMap::new(),
+                        body: body.clone().into(),
+                        stream_requested: Some(false),
+                        selected_upstream_model: Some(model.clone()),
+                        selected_target_protocol: None,
+                        cache_identity: Some(cache_session_id.clone()),
+                        safety_identifier: None,
+                    },
+                )
+                .await?;
+                let status = execution.response.status().as_u16();
+                let content_type = response_content_type(&execution.response);
+                let raw = execution.response.text().await?;
+                let usage =
+                    upstream_usage_from_response(&execution.target_protocol, raw.as_bytes());
+                let mut payload = http_response_payload(status, &content_type, raw);
+                attach_upstream_usage(&mut payload, usage.as_ref());
+                payload
+            } else {
+                // Exercise the same stable ingress identity as local/platform
+                // requests, including native Cursor/Kiro tool conversation IDs.
+                forward_subscription_supplier_request_with_capacity(
+                    &client,
+                    &supplier,
+                    path,
+                    body,
+                    false,
+                    None,
+                    None,
+                    Some(&cache_session_id),
+                    None,
+                )
+                .await
+            };
             let wire = crate::surface_wire::SurfaceEnvelope::from_payload(&payload)?;
             let status = wire.status.unwrap_or_default();
             if !(200..300).contains(&status) {
@@ -1605,12 +1901,45 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
                     "{provider} live cache attempt {attempt} failed: status={status} kind={kind} body={response_excerpt}"
                 );
             }
-            let usage: SupplierUpstreamUsage = serde_json::from_value(
-                payload
-                    .get(SUPPLIER_UPSTREAM_USAGE_FIELD)
-                    .cloned()
-                    .context("provider response did not expose upstream usage")?,
-            )?;
+            if provider == "cursor" {
+                let response: serde_json::Value = serde_json::from_str(wire.body.utf8()?)?;
+                let text = response["choices"][0]["message"]["content"]
+                    .as_str()
+                    .unwrap_or("");
+                let history_verified = attempt == 1 || text.contains(history_marker);
+                let rules_verified = attempt == 1 || text.contains(system_marker);
+                println!(
+                    "provider=cursor attempt={attempt} history_verified={history_verified} rules_verified={rules_verified} response_chars={}",
+                    text.len()
+                );
+                if !history_verified || !rules_verified {
+                    // This opt-in test sends only the synthetic cache fixture.
+                    println!(
+                        "Cursor synthetic history reply: {}",
+                        text.chars().take(240).collect::<String>()
+                    );
+                    anyhow::bail!(
+                        "Cursor did not retain the synthetic history/rule markers on attempt {attempt}"
+                    );
+                }
+                cursor_replies.push(text.to_string());
+            }
+            if provider == "openrouter" {
+                let response: serde_json::Value = serde_json::from_str(wire.body.utf8()?)?;
+                println!(
+                    "OpenRouter route: attempt={attempt} provider={} model={} response_id={}",
+                    response["provider"].as_str().unwrap_or("not_reported"),
+                    response["model"].as_str().unwrap_or("not_reported"),
+                    response["id"].as_str().unwrap_or("not_reported")
+                );
+            }
+            let usage: SupplierUpstreamUsage = match payload.get(SUPPLIER_UPSTREAM_USAGE_FIELD) {
+                Some(value) => serde_json::from_value(value.clone())?,
+                // Kiro reports credits rather than token counters. Do not read
+                // the public response's estimates as real cache measurements.
+                None if provider == "kiro" => SupplierUpstreamUsage::new("kiro"),
+                None => anyhow::bail!("provider response did not expose upstream usage"),
+            };
             let fault_codes = payload
                 .get(IMPROVEMENT_FAULTS_FIELD)
                 .and_then(serde_json::Value::as_array)
@@ -1619,14 +1948,24 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
                 .filter_map(|fault| fault.get("code").and_then(serde_json::Value::as_str))
                 .collect::<Vec<_>>();
             println!(
-                "provider={provider} model={model} identity={openai_identity_profile} case={case_id} attempt={attempt} body_sha256={body_sha256} input_tokens={:?} output_tokens={:?} cache_read_tokens={:?} cache_write_tokens={:?} elapsed_ms={} fault_codes={fault_codes:?}",
+                "provider={provider} model={model} identity={openai_identity_profile} case={case_id} attempt={attempt} body_sha256={body_sha256} input_tokens={:?} output_tokens={:?} cache_read_tokens={:?} cache_write_tokens={:?} credits={:?} elapsed_ms={} fault_codes={fault_codes:?}",
                 usage.input_tokens,
                 usage.output_tokens,
                 usage.cache_read_tokens,
                 usage.cache_write_tokens,
+                payload.get("kiro_usage_credits"),
                 started.elapsed().as_millis(),
             );
             reports.push(usage);
+        }
+        if reports
+            .iter()
+            .all(|usage| usage.cache_read_tokens.is_none())
+        {
+            println!(
+                "provider={provider} model={model} cache_read_tokens=not_reported; cache hit rate cannot be measured from these responses"
+            );
+            return Ok(());
         }
         if reports
             .iter()

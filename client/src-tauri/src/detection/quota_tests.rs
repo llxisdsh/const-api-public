@@ -54,6 +54,48 @@ fn grok_billing_percentages_keep_units_and_ignore_invalid_numbers() {
 }
 
 #[test]
+fn grok_billing_reset_times_do_not_cross_weekly_and_monthly_windows() {
+    let weekly_end = "2030-01-07T00:00:00Z";
+    let monthly_end = "2030-02-01T00:00:00Z";
+    for nested in [false, true] {
+        for (weekly, monthly) in [
+            (Some(weekly_end), Some(monthly_end)),
+            (None, Some(monthly_end)),
+            (Some(weekly_end), None),
+            (None, None),
+        ] {
+            let config = serde_json::json!({
+                "creditUsagePercent": 100,
+                "used": 100, "monthlyLimit": 100,
+                "currentPeriod": {"type": "weekly", "end": weekly},
+                "billingPeriodEnd": monthly,
+            });
+            let value = if nested {
+                serde_json::json!({"config": config})
+            } else {
+                config
+            };
+            let mut windows = Vec::new();
+            append_grok_billing_window(&mut windows, &value, "weekly", 1000, true);
+            append_grok_billing_window(&mut windows, &value, "monthly", 1000, false);
+            assert_eq!(windows.len(), 2);
+            assert_eq!(
+                windows[0].reset_at_unix,
+                weekly.and_then(parse_token_expiry_text).unwrap_or_default()
+            );
+            assert_eq!(
+                windows[1].reset_at_unix,
+                monthly
+                    .and_then(parse_token_expiry_text)
+                    .unwrap_or_default()
+            );
+            assert!(crate::supplier::quota_window_limits_supply(&windows[0]));
+            assert!(!crate::supplier::quota_window_limits_supply(&windows[1]));
+        }
+    }
+}
+
+#[test]
 fn oauth_usage_keeps_overage_for_diagnostics_with_zero_remaining() {
     let claude = claude_quota_windows_from_usage(&serde_json::json!({
         "five_hour": {"utilization":120}

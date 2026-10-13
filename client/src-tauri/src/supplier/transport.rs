@@ -373,6 +373,35 @@ async fn close_supplier_transport_writer(
     }
 }
 
+async fn drain_supplier_transport_writer(
+    outbound: SupplierOutbound,
+    mut writer: tokio::task::JoinHandle<()>,
+) {
+    drop(outbound);
+    // Legacy peers do not ACK response frames. Let their queued final bytes finish
+    // writing instead of applying the short force-close timeout.
+    if tokio::time::timeout(SUPPLIER_TRANSPORT_IDLE_TIMEOUT, &mut writer)
+        .await
+        .is_err()
+    {
+        log::warn!("[const-api][supplier] stopped channel response drain timed out");
+        writer.abort();
+        let _ = writer.await;
+    }
+}
+
+fn supplier_agent_drained(
+    config: &SupplierAgentConfig,
+    requests: &SupplierRequestTasks,
+    queued: &mpsc::Receiver<SupplierMessage>,
+    replay: &SupplierReplayState,
+) -> bool {
+    config.suppliers.is_empty()
+        && requests.is_empty()
+        && queued.is_empty()
+        && replay.unacknowledged.is_empty()
+}
+
 pub(crate) fn supplier_heartbeat_interval() -> Duration {
     SUPPLIER_HEARTBEAT_INTERVAL
 }
@@ -476,12 +505,6 @@ impl SupplierAgentConfig {
         .expect("single supplier agent")
     }
 
-    pub(crate) fn primary(&self) -> &SupplierConfig {
-        self.suppliers
-            .first()
-            .expect("supplier agent must have at least one supplier")
-    }
-
     pub(crate) fn channel_ids(&self) -> Vec<String> {
         self.suppliers
             .iter()
@@ -504,18 +527,22 @@ impl SupplierAgentConfig {
         &self,
         channel_id: &str,
         supplier_unit_id_value: &str,
-    ) -> &SupplierConfig {
+    ) -> Option<&SupplierConfig> {
         let channel_id = channel_id.trim();
         let supplier_unit_id_value = supplier_unit_id_value.trim();
+        // Only legacy requests without an explicit target may use the primary channel.
+        // A late request for a stopped channel must never execute on a sibling.
+        if channel_id.is_empty() && supplier_unit_id_value.is_empty() {
+            return self.suppliers.first();
+        }
         self.suppliers
             .iter()
             .find(|supplier| {
-                (!channel_id.is_empty() && supplier.channel_id == channel_id)
-                    || (!supplier_unit_id_value.is_empty()
-                        && supplier_unit_id(&self.client_id, &supplier.channel_id)
+                (channel_id.is_empty() || supplier.channel_id == channel_id)
+                    && (supplier_unit_id_value.is_empty()
+                        || supplier_unit_id(&self.client_id, &supplier.channel_id)
                             == supplier_unit_id_value)
             })
-            .unwrap_or_else(|| self.primary())
     }
 }
 
@@ -1294,6 +1321,7 @@ pub(crate) async fn send_supplier_message(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SupplierRunOutcome {
     Shutdown,
+    Idle,
     Disconnected,
 }
 
@@ -1460,6 +1488,9 @@ pub(crate) fn handle_supplier_inbound_outcome(
                 }
             }
             for result in channel_results {
+                if config.supplier_for_target(&result.channel_id, &result.supplier_unit_id).is_none() {
+                    continue;
+                }
                 let supplier_unit_id_value = if result.supplier_unit_id.trim().is_empty() {
                     supplier_unit_id(&config.client_id, &result.channel_id)
                 } else {
@@ -1551,6 +1582,9 @@ pub(crate) fn handle_supplier_inbound_outcome(
             );
         }
         SupplierInboundOutcome::NodeStatusUpdate(mut status) => {
+            if config.supplier_for_target(&status.channel_id, &status.supplier_unit_id).is_none() {
+                return;
+            }
             // Older servers reported catalog admission as an operational fallback. A channel can
             // be registered while the active catalog currently accepts none of its models, so
             // keep that condition in the non-blocking admission-status domain.
@@ -1670,7 +1704,7 @@ pub(crate) async fn run_supplier_websocket_connection(
     let mut replay = SupplierReplayState::default();
     let mut disconnected_since = None;
     run_supplier_websocket_connection_with_runtime(
-        client,
+        &client.clone().into(),
         config,
         ws_url,
         shutdown,
@@ -1686,7 +1720,7 @@ pub(crate) async fn run_supplier_websocket_connection(
 }
 
 async fn run_supplier_websocket_connection_with_runtime(
-    client: &Client,
+    client: &crate::http_client::HttpClient,
     config: &mut SupplierAgentConfig,
     ws_url: &str,
     shutdown: &mut oneshot::Receiver<()>,
@@ -1714,7 +1748,7 @@ pub(crate) async fn run_supplier_quic_connection(
     let mut replay = SupplierReplayState::default();
     let mut disconnected_since = None;
     run_supplier_quic_connection_with_runtime(
-        client,
+        &client.clone().into(),
         config,
         quic_url,
         shutdown,
@@ -1730,7 +1764,7 @@ pub(crate) async fn run_supplier_quic_connection(
 }
 
 async fn run_supplier_quic_connection_with_runtime(
-    client: &Client,
+    client: &crate::http_client::HttpClient,
     config: &mut SupplierAgentConfig,
     quic_url: &str,
     shutdown: &mut oneshot::Receiver<()>,
@@ -1784,7 +1818,7 @@ pub(crate) async fn connect_supplier_quic_endpoint(
 ) -> Result<(quinn::Endpoint, quinn::Connection)> { anyhow::bail!("Hosted supply is unavailable in the local edition") }
 
 pub(crate) async fn handle_supplier_inbound_text_guarded(
-    client: &Client,
+    client: &crate::http_client::HttpClient,
     config: &SupplierAgentConfig,
     outbound: &SupplierOutbound,
     request_outbound: &SupplierOutbound,
@@ -1817,11 +1851,14 @@ pub(crate) async fn handle_supplier_inbound_text(
     outbound: &SupplierOutbound,
     text: &str,
 ) -> SupplierInboundOutcome {
-    handle_supplier_inbound_text_with_tasks(client, config, outbound, outbound, None, text).await
+    handle_supplier_inbound_text_with_tasks(
+        &client.clone().into(), config, outbound, outbound, None, text,
+    )
+    .await
 }
 
 async fn handle_supplier_inbound_text_with_tasks(
-    client: &Client,
+    client: &crate::http_client::HttpClient,
     config: &SupplierAgentConfig,
     outbound: &SupplierOutbound,
     request_outbound: &SupplierOutbound,
@@ -1960,7 +1997,7 @@ async fn handle_supplier_inbound_text_with_tasks(
             }
             return SupplierInboundOutcome::None;
         }
-        if message.kind == "duplex_open" {
+        if message.kind == "duplex_open" || message.kind == "http_request" {
             let target_channel_id = message
                 .payload
                 .get("target_channel_id")
@@ -1971,33 +2008,35 @@ async fn handle_supplier_inbound_text_with_tasks(
                 .get("target_supplier_unit_id")
                 .and_then(|value| value.as_str())
                 .unwrap_or_default();
-            let supplier = config
-                .supplier_for_target(target_channel_id, target_supplier_unit_id)
-                .clone();
+            let Some(supplier) = config.supplier_for_target(target_channel_id, target_supplier_unit_id) else {
+                let response = SupplierMessage {
+                    id: message.id,
+                    kind: if message.kind == "duplex_open" { "duplex_error" } else { "error" }.into(),
+                    payload: serde_json::json!({
+                        "status": 503,
+                        "error_kind": "supplier_unavailable",
+                        "failure_scope": "request",
+                        "request_sent": false,
+                        "error": {
+                            "type": "supplier_unavailable",
+                            "message": "The requested supplier channel has stopped accepting new requests."
+                        }
+                    }).as_object().unwrap().clone(),
+                };
+                let _ = send_supplier_message(request_outbound, response).await;
+                return SupplierInboundOutcome::None;
+            };
             if let Some(tasks) = request_tasks {
-                tasks.spawn_duplex(client.clone(), supplier, message, request_outbound.clone());
-            }
-            return SupplierInboundOutcome::None;
-        }
-        if message.kind == "http_request" {
-            let target_channel_id = message
-                .payload
-                .get("target_channel_id")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            let target_supplier_unit_id = message
-                .payload
-                .get("target_supplier_unit_id")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            let supplier = config
-                .supplier_for_target(target_channel_id, target_supplier_unit_id)
-                .clone();
-            if let Some(tasks) = request_tasks {
-                tasks.spawn(client.clone(), supplier, message, request_outbound.clone());
-            } else {
-                execute_supplier_request_and_report(client, &supplier, message, request_outbound)
-                    .await;
+                if message.kind == "duplex_open" {
+                    tasks.spawn_duplex(client.snapshot(), supplier.clone(), message, request_outbound.clone());
+                } else {
+                    tasks.spawn(client.snapshot(), supplier.clone(), message, request_outbound.clone());
+                }
+            } else if message.kind == "http_request" {
+                execute_supplier_request_and_report(
+                    &client.snapshot(), supplier, message, request_outbound,
+                )
+                .await;
             }
         }
     }

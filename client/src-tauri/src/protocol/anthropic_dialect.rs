@@ -38,6 +38,8 @@ pub(crate) fn anthropic_model_dialect(model: &str) -> AnthropicModelDialect {
         return AnthropicModelDialect {
             adaptive_thinking_only: true,
             thinking_always_on: true,
+            forced_tool_choice_unsupported: model_family_matches(&model, "claude-fable-5-1")
+                || model_family_matches(&model, "claude-mythos-5-1"),
             ..Default::default()
         };
     }
@@ -45,7 +47,10 @@ pub(crate) fn anthropic_model_dialect(model: &str) -> AnthropicModelDialect {
     let adaptive_thinking_only = ["claude-opus-", "claude-sonnet-"]
         .into_iter()
         .find_map(|prefix| anthropic_numbered_generation(&model, prefix))
-        .is_some_and(|(major, minor)| major > 4 || (major == 4 && minor >= 7));
+        .is_some_and(|(major, minor)| major > 4 || (major == 4 && minor >= 7))
+        // Haiku 5.5 allows disabled thinking, but no longer accepts a fixed
+        // budget or sampling controls. Do not inherit the always-on dialect.
+        || model_family_matches(&model, "claude-haiku-5-5");
     AnthropicModelDialect {
         adaptive_thinking_only,
         thinking_always_on: false,
@@ -169,6 +174,37 @@ mod tests {
             assert!(dialect.adaptive_thinking_only, "model={model}");
             assert!(dialect.thinking_always_on, "model={model}");
         }
+    }
+
+    #[test]
+    fn new_claude_dialects_do_not_inherit_unrelated_restrictions() {
+        for model in [
+            "claude-haiku-5-5",
+            "anthropic/claude-haiku-5.5",
+            "claude-haiku-5-5-20261007",
+        ] {
+            let dialect = anthropic_model_dialect(model);
+            assert!(dialect.adaptive_thinking_only, "{model}");
+            assert!(
+                !dialect.thinking_always_on && !dialect.thinking_between_tools,
+                "{model}"
+            );
+            assert!(!dialect.forced_tool_choice_unsupported, "{model}");
+        }
+        for model in ["claude-fable-5-1", "anthropic/claude-mythos-5.1"] {
+            assert!(
+                anthropic_model_dialect(model).forced_tool_choice_unsupported,
+                "{model}"
+            );
+        }
+        for model in ["claude-haiku-4-5", "claude-haiku-5-50", "custom-claude"] {
+            assert_eq!(
+                anthropic_model_dialect(model),
+                AnthropicModelDialect::default(),
+                "{model}"
+            );
+        }
+        assert!(!anthropic_model_dialect("claude-fable-5").forced_tool_choice_unsupported);
     }
 
     #[test]

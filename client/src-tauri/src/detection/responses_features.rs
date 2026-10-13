@@ -147,7 +147,8 @@ pub(super) async fn enrich(
                 &target,
                 path,
                 &json!({"model":null,"input":null}),
-            )?;
+            )
+            .await?;
             read_response(request.send_adaptive().await?).await
         })
         .await;
@@ -167,6 +168,14 @@ pub(super) async fn enrich(
         observation
             .detection_checks
             .push(evidence(operation, status, message));
+    }
+    if channel.source_driver() == crate::source_driver::SourceDriverId::CopilotSubscription {
+        observation.detection_checks.push(evidence(
+            "openai.responses_websocket",
+            "unsupported",
+            "Copilot subscription uses the HTTP/SSE bridge; native WebSocket is not enabled".into(),
+        ));
+        return;
     }
     let request =
         crate::proxy::responses_websocket_upstream_request(channel, &target, &HeaderMap::new());
@@ -265,7 +274,7 @@ fn websocket_probe_status(code: u16) -> &'static str {
     }
 }
 
-fn post(
+async fn post(
     client: &Client,
     channel: &ChannelConfig,
     target: &ChannelSurfaceTarget,
@@ -288,16 +297,22 @@ fn post(
     )?;
     let mut headers = HeaderMap::new();
     crate::channel_user_agent::apply_to_headers(channel, &mut headers);
-    crate::channel_executor::apply_upstream_auth(&mut headers, channel, target, true)?;
+    if channel.source_driver() != crate::source_driver::SourceDriverId::CopilotSubscription {
+        crate::channel_executor::apply_upstream_auth(&mut headers, channel, target, true)?;
+    }
     headers.insert(
         reqwest::header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
     let text = serde_json::to_string(body)?;
-    Ok(client
-        .post(url)
-        .headers(headers)
-        .body(crate::openrouter::request_body(Some(channel), &text).into_owned()))
+    crate::copilot::prepare_request(
+        channel,
+        client
+            .post(url)
+            .headers(headers)
+            .body(crate::openrouter::request_body(Some(channel), &text).into_owned()),
+    )
+    .await
 }
 
 async fn read_response(response: reqwest::Response) -> Result<(u16, Vec<u8>)> {
@@ -360,7 +375,8 @@ async fn custom_tool_roundtrip(
         "tools": [{"type":"custom","name":"const_probe","description":"A capability check. Input must be ok.","format":{"type":"grammar","syntax":"lark","definition":"start: \"ok\""}}],
         "tool_choice": {"type":"custom","name":"const_probe"}, "max_output_tokens": 256
     });
-    let first = completed_response(post(client, channel, target, "/v1/responses", &body)?).await?;
+    let first =
+        completed_response(post(client, channel, target, "/v1/responses", &body).await?).await?;
     let output = first
         .get("output")
         .and_then(Value::as_array)
@@ -388,7 +404,8 @@ async fn custom_tool_roundtrip(
     input.extend(output.iter().cloned()); // Includes opaque reasoning/encrypted items.
     input.push(json!({"type":"custom_tool_call_output","call_id":call_id,"output":"ok"}));
     body["tool_choice"] = json!("none");
-    let second = completed_response(post(client, channel, target, "/v1/responses", &body)?).await?;
+    let second =
+        completed_response(post(client, channel, target, "/v1/responses", &body).await?).await?;
     let finished = second
         .get("output")
         .and_then(Value::as_array)
@@ -551,7 +568,7 @@ mod tests {
         result.capability_profiles.push(saved);
         check_deadline::scope(
             Duration::ZERO,
-            enrich(short_http_client(), &channel, &mut result),
+            enrich(&short_http_client(), &channel, &mut result),
         )
         .await;
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -800,7 +817,7 @@ mod tests {
             .unwrap();
         let mut result = observation();
         result.models = vec!["qwen/qwen3.8-27b".into()];
-        enrich(short_http_client(), &channel, &mut result).await;
+        enrich(&short_http_client(), &channel, &mut result).await;
         for check in result.detection_checks {
             println!("{}: {} ({})", check.capability, check.status, check.message);
         }

@@ -165,6 +165,12 @@ pub(crate) async fn forward_subscription_supplier_request_with_capacity(
                 )
                 .await
             }
+            "kiro" => Ok(forward_kiro_subscription_request(config, path, body,
+                None, upstream_override, capacity, cache_identity).await?
+                .expect("buffered Kiro execution always returns a payload")),
+            "cursor" => Ok(forward_cursor_subscription_request(config, path, body,
+                None, upstream_override, capacity, cache_identity).await?
+                .expect("buffered Cursor execution always returns a payload")),
             _ => Ok(subscription_wire_error_response(
                 400,
                 "subscription_provider_unknown",
@@ -1166,7 +1172,13 @@ pub(crate) fn looks_like_sse_body(raw: &str) -> bool {
 
 include!("subscription/claude.rs");
 
+#[cfg(test)]
+#[path = "subscription/claude_fast_tests.rs"]
+mod claude_fast_tests;
+
 include!("subscription/antigravity.rs");
+include!("subscription/kiro.rs");
+include!("subscription/cursor.rs");
 
 pub(crate) fn subscription_provider_from_config(config: &SupplierConfig) -> String {
     crate::channel_executor::execution_kind_for_source(config.source_driver)
@@ -3145,6 +3157,30 @@ mod buffered_response_tests {
             request.headers().get("user-agent").unwrap(),
             GROK_CLI_USER_AGENT
         );
+    }
+
+    #[test]
+    fn grok_cache_routing_preserves_the_caller_key_and_native_fields() {
+        let client = Client::new();
+        for key in [serde_json::json!("caller-key"), serde_json::json!(" caller-key "), serde_json::json!("bad\nkey"), serde_json::json!(123)] {
+            let body = serde_json::json!({"model":"grok-4.5", "input":[
+                {"type":"reasoning","encrypted_content":"opaque-state"},
+                {"type":"function_call_output","call_id":"call_one","output":"ok"}],
+                "previous_response_id":"resp_one", "prompt_cache_key":key,
+                "store":true, "temperature":0.3, "future_option":{"keep":true}});
+            let sent = openai_subscription_body_with_cache_identity(&body.to_string(), Some("scoped-default")).unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&sent).unwrap(), body);
+            let request = grok_subscription_response_request(&client,
+                "https://cli-chat-proxy.grok.com/v1/responses", "synthetic-token", sent)
+                .unwrap().build().unwrap();
+            if key == "caller-key" {
+                assert_eq!(request.headers()["x-grok-conv-id"], "caller-key");
+            } else {
+                // Keep invalid body fields for the upstream to reject, but
+                // never copy them into headers or silently replace caller data.
+                assert!(!request.headers().contains_key("x-grok-conv-id"));
+            }
+        }
     }
 
     #[test]

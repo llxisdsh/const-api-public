@@ -288,6 +288,12 @@ pub(crate) fn rewrite_retained_subscription_body_model(
     selected_model: Option<&str>,
 ) -> Option<String> {
     let mut selected_model = selected_model?.to_string();
+    if provider == "cursor" && requested_model_from_body_or_path(body, path)
+        .is_some_and(|model| crate::cursor::models::same_family(&model, &selected_model)) {
+        // Preserve legacy -fast/effort intent when selection only changed the
+        // public spelling. Cursor's adapter still resolves the real wire ID.
+        return None;
+    }
     if provider == "claude" && requested_model_from_body_or_path(body, path)
         .is_some_and(|model| crate::config::without_context_hint(&model) != model.trim()) {
         selected_model = format!("{}[1m]", crate::config::without_context_hint(&selected_model));
@@ -342,7 +348,7 @@ pub(crate) async fn forward_supplier_request(
             "openai" | "codex" => "openai_responses",
             "grok" => "openai_responses",
             "antigravity" => "gemini_native",
-            "claude" => "anthropic_messages",
+            "claude" | "kiro" | "cursor" => "anthropic_messages",
             _ => "",
         };
         if selected_target_protocol.is_some_and(|selected| selected != retained_target) {
@@ -378,6 +384,16 @@ pub(crate) async fn forward_supplier_request(
             stream_requested && !force_buffered,
         )?;
         if stream_requested && !force_buffered {
+            if provider == "cursor" {
+                return forward_cursor_subscription_request(config, &resolved.request_target, body,
+                    Some((outbound, msg.id.as_str())), upstream_override.as_deref(),
+                    Some(request_capacity), wire.cache_identity.as_deref()).await;
+            }
+            if provider == "kiro" {
+                return forward_kiro_subscription_request(config, &resolved.request_target, body,
+                    Some((outbound, msg.id.as_str())), upstream_override.as_deref(),
+                    Some(request_capacity), wire.cache_identity.as_deref()).await;
+            }
             if provider == "openai" || provider == "codex" || provider == "grok" {
                 return forward_openai_subscription_stream_request_with_capacity(
                     client,
@@ -472,6 +488,7 @@ pub(crate) async fn forward_supplier_request(
     let diagnostics = crate::openrouter::response_diagnostics(&execution.response);
     let upstream_model = execution.upstream_model;
     let target_protocol = execution.target_protocol;
+    let usage_protocol = crate::openrouter::usage_protocol(&channel, &target_protocol);
     let inbound_protocol = execution
         .inbound_protocol
         .unwrap_or_else(|| target_protocol.clone());
@@ -492,7 +509,7 @@ pub(crate) async fn forward_supplier_request(
         .is_some_and(|value| value.contains("event-stream"));
     if !(200..300).contains(&status) {
         let body = resp.bytes().await?;
-        let upstream_usage = upstream_usage_from_body(&target_protocol, &body);
+        let upstream_usage = upstream_usage_from_body(usage_protocol, &body);
         let cross_protocol_json_error = !native_passthrough
             && inbound_protocol != target_protocol
             && !is_event_stream
@@ -560,7 +577,7 @@ pub(crate) async fn forward_supplier_request(
     }
     if native_passthrough && stream_requested && is_event_stream {
         let mut stream = SupplierByteStreamBatcher::new(resp.bytes_stream());
-        let mut upstream_usage = SupplierUpstreamUsageAccumulator::new(&target_protocol);
+        let mut upstream_usage = SupplierUpstreamUsageAccumulator::new(usage_protocol);
         let mut started = false;
         loop {
             let chunk = match stream.next().await? {
@@ -631,7 +648,7 @@ pub(crate) async fn forward_supplier_request(
     }
     if native_passthrough && !is_event_stream {
         let body = resp.bytes().await?;
-        let upstream_usage = upstream_usage_from_body(&target_protocol, &body);
+        let upstream_usage = upstream_usage_from_body(usage_protocol, &body);
         return Ok(Some(channel_http_response_payload(
             status,
             &response_headers,
@@ -645,7 +662,7 @@ pub(crate) async fn forward_supplier_request(
     }
     if !stream_requested && is_event_stream {
         let raw = crate::sse_buffer::read_sse_body_with_limits(resp).await?;
-        let mut upstream_usage = SupplierUpstreamUsageAccumulator::new(&target_protocol);
+        let mut upstream_usage = SupplierUpstreamUsageAccumulator::new(usage_protocol);
         upstream_usage.push(raw.as_bytes());
         let upstream_usage = upstream_usage.finish();
         let converted = sse_body_from_target_as_inbound_with_report_with_tools(
@@ -675,7 +692,7 @@ pub(crate) async fn forward_supplier_request(
     }
     if stream_requested && !is_event_stream {
         let raw = resp.text().await?;
-        let upstream_usage = upstream_usage_from_body(&target_protocol, raw.as_bytes());
+        let upstream_usage = upstream_usage_from_body(usage_protocol, raw.as_bytes());
         let converted = sse_body_from_target_body_as_inbound_with_report_with_tools(
             &raw,
             &inbound_protocol,
@@ -725,7 +742,7 @@ pub(crate) async fn forward_supplier_request(
         let mut stream = SupplierByteStreamBatcher::new(resp.bytes_stream());
         let mut converter =
             inbound_sse_stream_converter(&inbound_protocol, &target_protocol, &upstream_model)?.with_tool_mapping(tool_mapping);
-        let mut upstream_usage = SupplierUpstreamUsageAccumulator::new(&target_protocol);
+        let mut upstream_usage = SupplierUpstreamUsageAccumulator::new(usage_protocol);
         let mut utf8 = crate::protocol::stream::Utf8ChunkDecoder::new();
         let mut started = false;
         loop {
@@ -889,7 +906,7 @@ pub(crate) async fn forward_supplier_request(
         return Ok(None);
     }
     let body = resp.text().await?;
-    let upstream_usage = upstream_usage_from_body(&target_protocol, body.as_bytes());
+    let upstream_usage = upstream_usage_from_body(usage_protocol, body.as_bytes());
     let converted = response_body_from_target_as_inbound_with_report_with_tools(
         &body,
         &inbound_protocol,
@@ -1014,6 +1031,17 @@ mod opaque_subscription_tests {
             assert_eq!(routed, body.replacen("claude-sonnet-4-6[1m]", "claude-opus-4-6[1m]", 1));
             let unrelated = rewrite_retained_subscription_body_model("openai", "/v1/responses", &body, Some("gpt-test")).unwrap();
             assert_eq!(unrelated, body.replacen("claude-sonnet-4-6[1m]", "gpt-test", 1));
+        }
+    }
+
+    #[test]
+    fn cursor_fast_legacy_intent_survives_platform_and_local_model_selection() {
+        for stream in [false, true] {
+            let body = format!(r#"{{"model":"gpt-5.5-fast","stream":{stream},"input":"test","future_field":true}}"#);
+            assert!(rewrite_retained_subscription_body_model("cursor", "/v1/responses", &body, Some("gpt-5.5")).is_none());
+            let substituted = rewrite_retained_subscription_body_model("cursor", "/v1/responses", &body, Some("gpt-6.1-sol")).unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&substituted).unwrap()["model"], "gpt-6.1-sol");
+            assert!(rewrite_retained_subscription_body_model("openai", "/v1/responses", &body, Some("gpt-5.5")).is_some());
         }
     }
 

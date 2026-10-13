@@ -20,7 +20,8 @@ fn apply_order_test_catalog(tool: &str, models: &[ToolModelInfo]) {
             models,
             protocol,
         ),
-        "workbuddy" => apply_workbuddy_config_with_model_info_for_protocol(
+        "workbuddy" | "workbuddy-ai" => apply_workbuddy_config_with_model_info_for_protocol(
+            tool,
             TOOL_CONFIG_ROOT_URL,
             "mock",
             models,
@@ -35,6 +36,44 @@ fn apply_order_test_catalog(tool: &str, models: &[ToolModelInfo]) {
         ),
     }
     .unwrap_or_else(|error| panic!("{tool}: {error:#}"));
+}
+
+#[test]
+fn injection_selection_replaces_managed_catalogs_without_leaving_excluded_models() {
+    with_temp_home(|_| {
+        let all = admin_order_models(&["keep-injection-model", "drop-injection-model", "extra-injection-model"]);
+        let settings = crate::tool_model_injection::ToolModelInjectionSettings {
+            all_models: false, extra_models: vec!["extra-injection-model".into(), "keep-injection-model".into()],
+        };
+        for (tool, path) in [
+            ("opencode", opencode_config_path().unwrap()),
+            ("mimocode", mimocode_config_path().unwrap()),
+            ("openscience", openscience_config_path().unwrap()),
+            ("zcode", zcode_config_path()),
+            ("cline", cline_provider_paths().unwrap().1),
+            ("raven", raven_config_path()),
+            ("pi", pi_models_path()),
+            ("qwencode", qwencode_config_path()),
+            ("goose", goose_config_paths().0),
+            ("reasonix", reasonix_config_paths().0),
+            ("kimicode", kimicode_config_path()),
+            ("grok-build", grok_build_config_path()),
+            ("mistral-vibe", mistral_vibe_config_paths().0),
+            ("minimax-code", minimax_code_config_path()),
+            ("workbuddy", workbuddy_models_path("workbuddy")),
+            ("workbuddy-ai", workbuddy_models_path("workbuddy-ai")),
+        ] {
+            apply_order_test_catalog(tool, &all);
+            assert!(fs::read_to_string(&path).unwrap().contains("drop-injection-model"), "{tool}");
+            let selected = settings.select(tool, all.clone(), None).unwrap();
+            apply_order_test_catalog(tool, &selected);
+            let content = fs::read_to_string(&path).unwrap();
+            assert!(!content.contains("drop-injection-model"), "{tool} left an excluded model");
+            assert!(content.contains("extra-injection-model") && content.contains("keep-injection-model"), "{tool}");
+            apply_order_test_catalog(tool, &selected);
+            assert_eq!(fs::read_to_string(&path).unwrap(), content, "{tool} repeated sync");
+        }
+    });
 }
 
 #[test]
@@ -120,6 +159,7 @@ fn array_and_toml_catalogs_write_admin_order_including_reconfiguration() {
                 "mistral-vibe",
                 "minimax-code",
                 "workbuddy",
+                "workbuddy-ai",
             ] {
                 apply_order_test_catalog(tool, &models);
             }
@@ -133,7 +173,8 @@ fn array_and_toml_catalogs_write_admin_order_including_reconfiguration() {
                     "id",
                 ),
                 ("goose", goose_config_paths().0, "/models", "name"),
-                ("workbuddy", workbuddy_models_path(), "", "id"),
+                ("workbuddy", workbuddy_models_path("workbuddy"), "", "id"),
+                ("workbuddy-ai", workbuddy_models_path("workbuddy-ai"), "", "id"),
             ] {
                 let root: serde_json::Value =
                     serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
@@ -546,7 +587,7 @@ fn legacy_leaf_ownership_promotes_only_the_complete_new_entry() {
 #[test]
 fn workbuddy_legacy_cancel_prunes_removed_models_from_available_list() {
     with_temp_home(|_| {
-        let path = workbuddy_models_path();
+        let path = workbuddy_models_path("workbuddy");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let endpoint =
             workbuddy_endpoint_url(TOOL_CONFIG_ROOT_URL, ToolProtocol::OpenAiChat).unwrap();
@@ -560,7 +601,7 @@ fn workbuddy_legacy_cancel_prunes_removed_models_from_available_list() {
         let personal =
             serde_json::json!({"id":"user-model","name":"User","baseUrl":"https://example.test"});
         fs::write(&path, serde_json::to_vec(&serde_json::json!({"models":[managed,personal],"availableModels":["z-order","user-model"]})).unwrap()).unwrap();
-        remove_workbuddy_config(TOOL_CONFIG_ROOT_URL, "mock").unwrap();
+        remove_workbuddy_config("workbuddy", TOOL_CONFIG_ROOT_URL, "mock").unwrap();
         let after: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(after["models"], serde_json::json!([personal]));
         assert_eq!(after["availableModels"], serde_json::json!(["user-model"]));

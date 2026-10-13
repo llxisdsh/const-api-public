@@ -3,6 +3,36 @@ import { describe, expect, it } from "vitest";
 import { QuotaVisual, quotaDetailLabel } from "./supplierQuota";
 
 describe("QuotaVisual", () => {
+  it.each(["unknown", "not_applicable"])("does not turn %s quota into a zero balance", (quota_status) => {
+    const channel = { kind: "subscription_adapter", subscription: { daily_request_limit: 0 } };
+    const { container, rerender } = render(<QuotaVisual health={{ quota_status, remaining_ratio: 0 }}
+      channel={channel} formatCountdown={() => ""} />);
+    expect(container.querySelector(".quota-window-row")).toBeNull();
+    expect(screen.getByText("暂未检测到可展示的额度窗口。")).toBeVisible();
+    rerender(<QuotaVisual health={{ quota_status: "exhausted", remaining_ratio: 0 }}
+      channel={channel} formatCountdown={() => ""} />);
+    expect(screen.getByText("0%")).toBeVisible();
+  });
+
+  it("shows Cursor model pools, preserves small percentages and keeps on-demand separate", () => {
+    const channel = { kind: "subscription_adapter", subscription: { daily_request_limit: 0 } };
+    const health = { quota_status: "unknown", quota_windows: [
+      { source: "cursor_billing", window: "monthly", token_type: "cursor_models",
+        remaining_ratio: 0.9999777777777777, used_percent: 0.0022222222222222222, reset_at_unix: 1794316925 },
+      { source: "cursor_billing", window: "monthly", token_type: "other_models",
+        remaining_ratio: 0.9915555555555555, used_percent: 0.8444444444444443, reset_at_unix: 1794316925 },
+      { source: "cursor_billing", window: "monthly", token_type: "on_demand", remaining_ratio: 0, used_percent: 100 },
+    ] };
+    const { container } = render(<QuotaVisual health={health} channel={channel} formatCountdown={() => "10d"} />);
+    expect(container.querySelectorAll(".quota-visual > .quota-window-list > .quota-window-row")).toHaveLength(2);
+    expect(screen.getByText("Cursor 模型（月）")).toBeVisible();
+    expect(screen.getByText("其他模型（月）")).toBeVisible();
+    expect(screen.getByText("99.16%")).toBeVisible();
+    expect(screen.getByText("已用 <0.01% · 10 天后重置")).toBeVisible();
+    expect(container.querySelector(".quota-extra")).toHaveTextContent("额外付费（月）");
+    expect(quotaDetailLabel(health, channel)).toBe("其他模型（月） 99.16% · 2 窗口");
+  });
+
   it("shows official windows for API-key plans without changing ordinary API channels", () => {
     const channel = { kind: "openai_compatible", discovery: { quota: true }, subscription: { daily_request_limit: 0 } };
     const health = { quota_windows: [{ source: "kimi_coding_usage", window: "5h", remaining_ratio: 0.8, used_percent: 20 }] };

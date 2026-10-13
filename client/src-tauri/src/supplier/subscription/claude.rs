@@ -203,14 +203,15 @@ pub(crate) fn grok_subscription_response_request(
     token: &str,
     body: String,
 ) -> Result<reqwest::RequestBuilder> {
-    let model = serde_json::from_str::<serde_json::Value>(&body)
-        .context("parse Grok Responses request body")?
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .context("parse Grok Responses request body")?;
+    let model = value
         .get("model")
         .and_then(serde_json::Value::as_str)
         .filter(|model| !model.trim().is_empty())
         .ok_or_else(|| anyhow!("Grok Responses request is missing a model"))?
         .to_string();
-    Ok(client
+    let mut request = client
         .post(url)
         .header("Accept", "text/event-stream, application/json")
         .header("Content-Type", "application/json")
@@ -219,8 +220,18 @@ pub(crate) fn grok_subscription_response_request(
         .header("x-grok-client-version", GROK_CLI_VERSION)
         .header("X-Grok-Client-Mode", "interactive")
         .header("x-grok-model-override", model)
-        .header("User-Agent", GROK_CLI_USER_AGENT)
-        .body(body))
+        .header("User-Agent", GROK_CLI_USER_AGENT);
+    // xAI accepts both forms for sticky cache routing. Derive the header from
+    // the effective body key so an explicit caller key cannot disagree with it.
+    if let Some(key) = value
+        .get("prompt_cache_key")
+        .and_then(serde_json::Value::as_str)
+        .filter(|key| normalized_subscription_cache_identity(Some(key)) == Some(*key))
+        .and_then(|key| reqwest::header::HeaderValue::from_str(key).ok())
+    {
+        request = request.header("x-grok-conv-id", key);
+    }
+    Ok(request.body(body))
 }
 
 fn codex_response_identity_headers(
@@ -458,40 +469,112 @@ async fn send_claude_subscription_body_with_headers(
     token_url: &str,
     request_headers: Option<&reqwest::header::HeaderMap>,
 ) -> Result<(u16, String, String, Vec<(String, String)>)> {
-    let resp = crate::upstream_transport::send(claude_subscription_request_with_headers(
-        client,
-        url,
-        &token,
-        body.clone(),
-        request_headers,
-    ))
+    let response = send_claude_subscription_response(
+        client, channel, url, token, body, token_url, request_headers,
+    )
     .await?;
-    if resp.status() != reqwest::StatusCode::UNAUTHORIZED {
-        crate::detection::observe_claude_subscription_response_headers(channel, resp.headers());
-        let status = resp.status().as_u16();
-        let content_type = response_content_type(&resp);
-        let headers = response_header_pairs(resp.headers());
-        let raw = resp.text().await?;
-        return Ok((status, content_type, raw, headers));
-    }
-    let _ = resp.text().await;
-    let (fresh_token, _, _) =
-        ensure_claude_subscription_access_token_with_options(client, channel, true, token_url)
-            .await?;
-    let retry = crate::upstream_transport::send(claude_subscription_request_with_headers(
-        client,
-        url,
-        &fresh_token,
-        body,
-        request_headers,
-    ))
-    .await?;
-    crate::detection::observe_claude_subscription_response_headers(channel, retry.headers());
-    let status = retry.status().as_u16();
-    let content_type = response_content_type(&retry);
-    let headers = response_header_pairs(retry.headers());
-    let raw = retry.text().await?;
+    let resp = match response {
+        ClaudeSubscriptionResponse::Response(response) => response,
+        ClaudeSubscriptionResponse::Rejected(failure) => {
+            return Ok((
+                failure.status,
+                failure.content_type,
+                failure.raw,
+                response_header_pairs(&failure.headers),
+            ));
+        }
+    };
+    let status = resp.status().as_u16();
+    let content_type = response_content_type(&resp);
+    let headers = response_header_pairs(resp.headers());
+    let raw = resp.text().await?;
     Ok((status, content_type, raw, headers))
+}
+
+enum ClaudeSubscriptionResponse {
+    Response(reqwest::Response),
+    Rejected(BufferedUpstreamFailure),
+}
+
+fn claude_subscription_fast_policy(body: String, enabled: bool) -> Result<String> {
+    if enabled
+        || !top_level_json_string(body.as_bytes(), "speed")
+            .is_some_and(|speed| speed.eq_ignore_ascii_case("fast"))
+    {
+        return Ok(body);
+    }
+    rewrite_top_level_json_field(&body, "speed", "\"standard\"", false)
+}
+
+fn claude_fast_explicitly_unsupported(raw: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return false;
+    };
+    let error = &value["error"];
+    if error["type"].as_str() != Some("invalid_request_error") {
+        return false;
+    }
+    // Do not classify generic 400s, quota failures or ambiguous network errors
+    // as permission to replay inference. Only an explicit feature rejection.
+    (error["param"].as_str() == Some("speed")
+        && matches!(
+            error["code"].as_str(),
+            Some("unsupported_value" | "unsupported_parameter")
+        ))
+        || error["message"].as_str().is_some_and(|message| {
+            let message = message.to_ascii_lowercase();
+            message.contains("does not support fast mode")
+                || message.contains("fast mode is not supported")
+        })
+}
+
+async fn send_claude_subscription_response(
+    client: &Client,
+    channel: &ChannelConfig,
+    url: &str,
+    mut token: String,
+    body: String,
+    token_url: &str,
+    request_headers: Option<&reqwest::header::HeaderMap>,
+) -> Result<ClaudeSubscriptionResponse> {
+    let mut body = claude_subscription_fast_policy(body, channel.subscription.claude_fast_enabled)?;
+    let mut refreshed = false;
+    loop {
+        let response = crate::upstream_transport::send(claude_subscription_request_with_headers(
+            client, url, &token, body.clone(), request_headers,
+        ))
+        .await?;
+        crate::detection::observe_claude_subscription_response_headers(channel, response.headers());
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED && !refreshed {
+            let _ = response.text().await;
+            (token, _, _) = ensure_claude_subscription_access_token_with_options(
+                client, channel, true, token_url,
+            )
+            .await?;
+            refreshed = true;
+            continue;
+        }
+        if response.status() == reqwest::StatusCode::BAD_REQUEST {
+            let failure = BufferedUpstreamFailure {
+                status: response.status().as_u16(),
+                content_type: response_content_type(&response),
+                headers: response.headers().clone(),
+                raw: response.text().await?,
+            };
+            if top_level_json_string(body.as_bytes(), "speed")
+                .is_some_and(|speed| speed.eq_ignore_ascii_case("fast"))
+                && claude_fast_explicitly_unsupported(&failure.raw)
+            {
+                // Once switched to standard this branch cannot replay again.
+                // No stream bytes have been delivered on an HTTP 400.
+                body = claude_subscription_fast_policy(body, false)?;
+                log::info!("[const-api][subscription] provider=claude channel_id={} fast_downgrade=unsupported", channel.id);
+                continue;
+            }
+            return Ok(ClaudeSubscriptionResponse::Rejected(failure));
+        }
+        return Ok(ClaudeSubscriptionResponse::Response(response));
+    }
 }
 
 #[cfg(test)]
@@ -582,66 +665,47 @@ pub(crate) async fn forward_claude_subscription_stream_request_with_capacity(
     )?;
     let upstream_body = json_body_with_stream(&oauth_body, true)?;
     let (token, _, _) = ensure_claude_subscription_access_token(client, &channel).await?;
-    let mut active_token = token;
     let url = upstream_override
         .map(str::to_string)
         .unwrap_or_else(|| CLAUDE_MESSAGES_URL.to_string());
     let upstream_send_started = std::time::Instant::now();
-    let mut resp = crate::upstream_transport::send(claude_subscription_request_with_headers(
+    let response = send_claude_subscription_response(
         client,
+        &channel,
         &url,
-        &active_token,
+        token,
         upstream_body.clone(),
+        CLAUDE_OAUTH_TOKEN_URL,
         request_headers,
-    ))
+    )
     .await?;
-    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-        let _ = resp.text().await;
-        let (fresh_token, _, _) = ensure_claude_subscription_access_token_with_options(
-            client,
-            &channel,
-            true,
-            CLAUDE_OAUTH_TOKEN_URL,
-        )
-        .await?;
-        active_token = fresh_token;
-        resp = crate::upstream_transport::send(claude_subscription_request_with_headers(
-            client,
-            &url,
-            &active_token,
-            upstream_body.clone(),
-            request_headers,
-        ))
-        .await?;
-    }
     let upstream_send_ms = elapsed_millis_u64(upstream_send_started);
-    crate::detection::observe_claude_subscription_response_headers(&channel, resp.headers());
-    if resp.status() == reqwest::StatusCode::BAD_REQUEST {
-        let original_headers = resp.headers().clone();
-        let original_content_type = response_content_type(&resp);
-        let original_raw = resp.text().await?;
-        if let Some(fault) = ImprovementFault::unrecovered_provider_rejection(
-            "claude",
-            &url,
-            &inbound_protocol,
-            &target_protocol,
-            &model,
-            400,
-            &original_raw,
-        ) {
-            improvement_faults.push(fault);
+    let resp = match response {
+        ClaudeSubscriptionResponse::Response(response) => response,
+        ClaudeSubscriptionResponse::Rejected(failure) => {
+            if let Some(fault) = ImprovementFault::unrecovered_provider_rejection(
+                "claude",
+                &url,
+                &inbound_protocol,
+                &target_protocol,
+                &model,
+                failure.status,
+                &failure.raw,
+            ) {
+                improvement_faults.push(fault);
+            }
+            let mut payload = subscription_wire_response_payload_with_header_map(
+                failure.status,
+                &failure.content_type,
+                failure.raw,
+                &failure.headers,
+                false,
+            );
+            attach_improvement_faults(&mut payload, &improvement_faults);
+            let _ = append_subscription_wire_audit(config, path, body, &payload, started_at.elapsed());
+            return Ok(Some(payload));
         }
-        let mut payload = subscription_wire_response_payload_with_header_map(
-            400,
-            &original_content_type,
-            original_raw,
-            &original_headers,
-            false,
-        );
-        attach_improvement_faults(&mut payload, &improvement_faults);
-        let _ = append_subscription_wire_audit(config, path, body, &payload, started_at.elapsed());
-        return Ok(Some(payload));
-    }
+    };
     let status = resp.status().as_u16();
     let content_type = response_content_type(&resp);
     if !(200..300).contains(&status) {

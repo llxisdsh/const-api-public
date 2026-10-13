@@ -70,6 +70,9 @@ enum LocalDeclaredFailureScope {
     Request,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct LocalRetryForbidden;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalAdmissionFailure {
     ConcurrencyFull,
@@ -104,7 +107,7 @@ pub(crate) struct ProxyShared {
     pub(crate) local_channel_readiness: Arc<StdMutex<HashMap<String, bool>>>,
     pub(crate) local_model_quota_routes:
         Arc<StdMutex<HashMap<String, crate::supplier::LocalModelQuotaRouteState>>>,
-    pub(crate) client: Client,
+    pub(crate) client: crate::http_client::HttpClient,
     pub(crate) platform_transport: Arc<crate::platform_transport::PlatformHttpTransport>,
     pub(crate) platform_duplex_pool: crate::supplier::PlatformDuplexPool,
     pub(crate) platform_access_token: Arc<StdMutex<String>>,
@@ -196,7 +199,7 @@ impl ProxyShared {
 
     pub(crate) fn with_platform_api_key_and_transport(
         config: ClientConfig,
-        client: Client,
+        client: impl Into<crate::http_client::HttpClient>,
         platform_api_key: Arc<StdMutex<String>>,
         platform_access_token: Arc<StdMutex<String>>,
         account_refresh_notify: Arc<tokio::sync::Notify>,
@@ -218,7 +221,7 @@ impl ProxyShared {
             live_config,
             local_channel_readiness,
             local_model_quota_routes,
-            client,
+            client: client.into(),
             platform_transport,
             platform_duplex_pool: crate::supplier::PlatformDuplexPool::default(),
             platform_access_token,
@@ -251,6 +254,12 @@ impl ProxyShared {
             .lock()
             .map(|config| config.clone())
             .unwrap_or_else(|_| self.config.clone())
+    }
+
+    fn local_channel_accepts_new_requests(&self, channel_id: &str) -> bool {
+        self.live_config.lock().is_ok_and(|config| {
+            config.channels.iter().any(|channel| channel.id == channel_id && channel.enabled)
+        })
     }
 
     fn ready_local_channel_ids(&self) -> HashSet<String> {
@@ -695,7 +704,7 @@ pub(crate) async fn proxy_request(
         LocalProxyRequestIdentity::Owner { .. } => None,
         LocalProxyRequestIdentity::LanShareMember { member, .. } => Some(member.clone()),
     };
-    let mut request_config = config.clone();
+    let request_config;
     if let Some(member) = member.as_ref() {
         if path_str.starts_with("/api/") {
             return Ok(lan_share_error_response(
@@ -777,6 +786,8 @@ pub(crate) async fn proxy_request(
                 "lan_share_model_not_shared",
             ));
         }
+    } else {
+        request_config = config;
     }
     let Some(update_activity_guard) = crate::update_activity::try_begin_proxy_request() else {
         let mut response = error_response(
@@ -1179,10 +1190,9 @@ async fn forward_with_failover_with_query_presence(
         }
     }
 
-    if local_request_allowed
-        && config.allow_model_equivalence
-        && model_request_uses_fidelity_stages(&method, path, &body)
-    {
+    // Same-model channel failover is independent of optional cross-model
+    // substitution. The staged router gates only its compatibility stage.
+    if local_request_allowed && model_request_uses_fidelity_stages(&method, path, &body) {
         return forward_model_request_by_fidelity(
             method,
             path,
@@ -1446,6 +1456,7 @@ enum ModelRouteAttempt {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LocalRouteRetryScope {
     None,
+    Preflight,
     Request,
     Model,
     Channel,
@@ -1687,6 +1698,11 @@ fn attach_local_model_failure_evidence(
     response: &mut warp::reply::Response,
     payload: &serde_json::Map<String, serde_json::Value>,
 ) {
+    if payload.get("safe_to_retry_other_channel").and_then(serde_json::Value::as_bool)
+        == Some(false)
+    {
+        response.extensions_mut().insert(LocalRetryForbidden);
+    }
     if payload
         .get("error_kind")
         .and_then(serde_json::Value::as_str)
@@ -1767,6 +1783,9 @@ async fn forward_model_request_by_fidelity(
     let mut preferred_local_route_attempted = false;
 
     for match_mode in [ModelMatchMode::ExactOnly, ModelMatchMode::CompatibleOnly] {
+        if match_mode == ModelMatchMode::CompatibleOnly && !config.allow_model_equivalence {
+            break;
+        }
 		for scope in scopes {
 			if matches!(scope, ModelSupplyScope::Platform) && platform_routes_blocked {
 				continue;
@@ -1950,7 +1969,11 @@ async fn attempt_local_model_route(
                 Err(error) => ModelRouteAttempt::CompleteError(error),
             };
         }
-        budget.consume(1);
+        // A proven pre-dispatch failure did not spend an upstream attempt.
+        // Still exclude that route below so each configured route is tried once.
+        if execution.retry_scope != LocalRouteRetryScope::Preflight {
+            budget.consume(1);
+        }
         attempted_route_keys.insert(execution.route_key.clone());
         if execution.retry_scope == LocalRouteRetryScope::Capacity {
             if let Some(channel_id) = execution.channel_id.as_ref() {
@@ -2328,7 +2351,7 @@ async fn forward_ready_local_channel_with_match(
         has_query,
         headers.clone(),
         body.clone(),
-        &shared.client,
+        &shared.client.snapshot(),
         config,
         channel,
         selected_upstream_model.as_deref(),
@@ -2423,11 +2446,11 @@ async fn forward_ready_local_channel_with_match(
             {
                 shared.set_local_channel_ready(&channel_id, ready);
             }
-            let retry_scope = if status.is_success() {
-                LocalRouteRetryScope::None
-            } else if capacity_scoped && resource_owned {
-                // Resource lifecycle requests cannot move to another account.
-                // Return the owner's capacity failure without replaying it.
+            let retry_scope = if status.is_success() || resource_owned
+                || response.extensions().get::<LocalRetryForbidden>().is_some()
+            {
+                // Explicit terminal failures and owner-bound requests cannot
+                // be replayed, even if their health scope is model/channel.
                 LocalRouteRetryScope::None
             } else if capacity_scoped {
                 LocalRouteRetryScope::Capacity
@@ -2465,29 +2488,20 @@ async fn forward_ready_local_channel_with_match(
             }
             let route_mismatch =
                 crate::supplier::structured_capability_mismatch(&err.to_string()).is_some();
-            let retryable = openai_subscription_image_operation(path).is_none()
-                && local_execution_error_marks_channel_unready(&err);
-            if retryable {
+            let retry_scope = local_execution_error_retry_scope(&err, resource_owned, path);
+            if retry_scope == LocalRouteRetryScope::Channel {
                 shared.set_local_channel_ready(&channel_id, false);
             }
             let result = if route_mismatch {
                 Err(err)
             } else {
-                Err(anyhow!("local channel {channel_name} failed: {err}"))
+                let message = format!("local channel {channel_name} failed: {err}");
+                Err(err.context(message))
             };
             LocalChannelExecution {
                 channel_id: Some(channel_id),
                 route_key,
-                retry_scope: if retryable {
-                    LocalRouteRetryScope::Channel
-                } else if route_mismatch {
-                    // Conversion/state incompatibility says nothing about channel or model
-                    // health. It may, however, be resolved by the next eligible route (normally
-                    // the sticky origin), within the shared three-attempt budget.
-                    LocalRouteRetryScope::Request
-                } else {
-                    LocalRouteRetryScope::None
-                },
+                retry_scope,
                 result,
             }
         }
@@ -2954,7 +2968,7 @@ struct LocalModelCapability {
 impl LocalModelCapability {
     fn from_channel(channel: &ChannelConfig, model: &str) -> Self {
         let mut capability = Self::default();
-        let native = crate::coding_gateway::model_protocol(channel.source_driver(), model);
+        let native = crate::coding_gateway::channel_model_protocol(channel, model);
         (capability.context_tokens, capability.output_tokens) = crate::tool_model_metadata::channel_token_limits(channel, model);
         for protocol in &channel.supported_protocols {
             if native.is_none_or(|native| native.as_str() == protocol) {
@@ -3092,6 +3106,7 @@ fn local_models_response(
     crate::model_discovery::ModelPresentation::packaged().apply(&mut rendered);
     let mut payload = models_payload_for_surface(surface, rendered);
     payload[crate::model_discovery::POLICY_FIELD] = serde_json::to_value(crate::model_discovery::ModelPresentation::packaged())?;
+    payload[crate::model_discovery::POLICY_SOURCE_FIELD] = serde_json::json!("fallback");
     let body = serde_json::to_vec(&payload)?;
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
@@ -3250,6 +3265,14 @@ async fn merge_local_models_response(
         return rebuild_response(parts, original_body);
     };
     let presentation = crate::model_discovery::ModelPresentation::from_payload(&payload);
+    let presentation_source = match payload.get(crate::model_discovery::POLICY_SOURCE_FIELD).and_then(serde_json::Value::as_str) {
+        Some("fallback") => "fallback",
+        Some("invalid") => "invalid",
+        _ if presentation.is_some() => "platform",
+        _ if payload.get(crate::model_discovery::POLICY_FIELD).is_some() => "invalid",
+        _ => "fallback",
+    };
+    payload[crate::model_discovery::POLICY_SOURCE_FIELD] = serde_json::json!(presentation_source);
     let presentation = presentation.as_ref().unwrap_or_else(|| crate::model_discovery::ModelPresentation::packaged());
     let collection_key = match surface {
         crate::surface::ApiSurface::OpenAi | crate::surface::ApiSurface::Anthropic => "data",
@@ -4096,7 +4119,9 @@ fn select_local_channel_route_where_with_model_and_match<'a>(
                     return None;
                 }
                 let upstream_model = channel_upstream_model_for_request(channel, Some(&route_model));
-                let native = crate::coding_gateway::model_protocol(channel.source_driver(), &upstream_model);
+                let native = crate::coding_gateway::channel_model_protocol(channel, &upstream_model);
+                let protocol_rank =
+                    local_channel_protocol_fidelity_rank(channel, &protocol, &upstream_model)?;
                 channel_profiles_required_request_features_rank(
                     native.map(|protocol| protocol.as_str()).unwrap_or(&channel.api_format),
                     &upstream_model,
@@ -4107,7 +4132,7 @@ fn select_local_channel_route_where_with_model_and_match<'a>(
                     (
                         channel,
                         rank,
-                        local_channel_protocol_fidelity_rank(channel, &protocol, native),
+                        protocol_rank,
                     )
                 })
             })
@@ -4308,6 +4333,38 @@ fn local_execution_error_marks_channel_unready(error: &anyhow::Error) -> bool {
         )
 }
 
+fn local_execution_error_retry_scope(
+    error: &anyhow::Error,
+    resource_owned: bool,
+    path: &str,
+) -> LocalRouteRetryScope {
+    let evidence = crate::supplier::execution_evidence_for_error(error);
+    if resource_owned
+        || evidence.upstream_response_received
+        || evidence.response_started
+        || evidence.usable_output_produced
+        || crate::upstream_transport::is_ambiguous_transport_error(error)
+    {
+        return LocalRouteRetryScope::None;
+    }
+    // Match the platform's pre-upstream retry contract, independently of channel
+    // health. Failed conversion/binding resolution must not disable the account.
+    if (!evidence.upstream_attempted
+        && evidence.recommendation.retry == "other_channel"
+        && evidence.recommendation.supplier_penalty == "ineligible")
+        || crate::supplier::structured_capability_mismatch(&error.to_string()).is_some()
+    {
+        return LocalRouteRetryScope::Preflight;
+    }
+    if openai_subscription_image_operation(path).is_none()
+        && local_execution_error_marks_channel_unready(error)
+    {
+        LocalRouteRetryScope::Channel
+    } else {
+        LocalRouteRetryScope::None
+    }
+}
+
 fn platform_response_allows_local_fallback(status: StatusCode) -> bool {
     local_response_marks_channel_unready(status)
 }
@@ -4334,9 +4391,11 @@ fn channel_points_to_current_proxy(channel: &ChannelConfig, listen: &str) -> boo
 }
 
 pub(crate) fn channel_supports_model(channel: &ChannelConfig, requested: &str) -> bool {
-    visible_channel_models(channel)
-        .iter()
-        .any(|model| model_name_matches(model, requested))
+    let models = visible_channel_models(channel);
+    if models.iter().any(|model| model_name_matches(model, requested)) { return true; }
+    if channel.source_driver() != crate::source_driver::SourceDriverId::CursorSubscription { return false; }
+    let public = crate::cursor::models::public_id_in_catalog(requested, &models);
+    models.iter().any(|model| model_name_matches(model, &public))
 }
 
 pub(crate) fn channel_can_execute_protocol(channel: &ChannelConfig, protocol: &str) -> bool {
@@ -4346,10 +4405,12 @@ pub(crate) fn channel_can_execute_protocol(channel: &ChannelConfig, protocol: &s
     channel_target_protocol(channel).is_some()
 }
 
-fn local_channel_protocol_fidelity_rank(channel: &ChannelConfig, protocol: &str, native: Option<crate::protocol::kind::ProtocolKind>) -> u8 {
-    let Ok(protocol) = crate::protocol::kind::ProtocolKind::parse(protocol) else {
-        return 2;
-    };
+fn local_channel_protocol_fidelity_rank(
+    channel: &ChannelConfig,
+    protocol: &str,
+    model: &str,
+) -> Option<u8> {
+    let protocol = crate::protocol::kind::ProtocolKind::parse(protocol).ok()?;
     let surface = match protocol {
         crate::protocol::kind::ProtocolKind::OpenAiResponses
         | crate::protocol::kind::ProtocolKind::OpenAiChat => crate::surface::ApiSurface::OpenAi,
@@ -4358,15 +4419,17 @@ fn local_channel_protocol_fidelity_rank(channel: &ChannelConfig, protocol: &str,
         }
         crate::protocol::kind::ProtocolKind::GeminiNative => crate::surface::ApiSurface::Gemini,
     };
-    let target = match native {
-        Some(native) => crate::channel_surface::channel_protocol_target(channel, native),
-        None => crate::channel_surface::channel_surface_target(channel, surface, Some(protocol), false),
-    };
-    match target {
-        Some(target) if target.protocol == protocol => 0,
-        Some(target) if target.surface == surface => 1,
-        _ => 2,
-    }
+    let target =
+        crate::channel_surface::channel_surface_target(channel, surface, Some(protocol), false)?;
+    let target =
+        crate::channel_executor::resolve_model_protocol_target(channel, model, target, false).ok()?;
+    Some(if target.protocol == protocol {
+        0
+    } else if target.surface == surface {
+        1
+    } else {
+        2
+    })
 }
 
 fn channel_target_protocol(channel: &ChannelConfig) -> Option<crate::protocol::kind::ProtocolKind> {
@@ -4640,7 +4703,8 @@ async fn forward_local_channel_once_with_query_presence(
             relay_as_stream,
             Some(&execution.upstream_model),
         )
-        .await;
+        .await
+        .map_err(crate::channel_executor::response_conversion_error);
     }
     response_from_target_as_inbound(
         execution.response,

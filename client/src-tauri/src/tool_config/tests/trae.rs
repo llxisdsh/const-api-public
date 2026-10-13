@@ -822,6 +822,67 @@ async fn same_account_editions_share_models_and_remove_only_their_reference() {
 }
 
 #[tokio::test]
+async fn injection_selection_prunes_only_owned_models_and_keeps_ids_on_repeat() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("owned.json");
+    let vendor = Vendor::start().await;
+    let models = ["keep", "drop", "extra"].map(|id| ToolModelInfo {
+        id: id.into(),
+        ..model()
+    });
+    vendor.seed(
+        7,
+        &desired(
+            &[ToolModelInfo {
+                id: "personal".into(),
+                ..model()
+            }],
+            "mock-key",
+        )[0],
+    );
+    prepared(
+        &path,
+        &vendor,
+        Manifest::default(),
+        desired(&models, "mock-key"),
+    )
+    .commit(|_, _| {})
+    .await
+    .unwrap();
+    let keep_id = vendor
+        .remote()
+        .iter()
+        .find(|m| m.name == "keep")
+        .unwrap()
+        .id;
+    let settings = crate::tool_model_injection::ToolModelInjectionSettings {
+        all_models: false,
+        extra_models: vec!["extra".into(), "keep".into()],
+    };
+    let selected = settings.select("trae-cn", models.to_vec(), None).unwrap();
+    prepared(&path, &vendor, load(&path), desired(&selected, "mock-key"))
+        .commit(|_, _| {})
+        .await
+        .unwrap();
+    let remote = vendor.remote();
+    assert!(
+        remote.iter().any(|m| m.id == 7),
+        "unowned model must survive"
+    );
+    assert!(!remote.iter().any(|m| m.name == "drop"));
+    assert_eq!(
+        remote.iter().find(|m| m.name == "keep").unwrap().id,
+        keep_id
+    );
+    let writes = vendor.state.lock().unwrap().writes;
+    prepared(&path, &vendor, load(&path), desired(&selected, "mock-key"))
+        .commit(|_, _| {})
+        .await
+        .unwrap();
+    assert_eq!(vendor.state.lock().unwrap().writes, writes);
+}
+
+#[tokio::test]
 async fn large_catalog_has_exact_priority_write_order_one_list_and_noop_reconfiguration() {
     let count = 468;
     let dir = tempfile::tempdir().unwrap();
@@ -922,7 +983,7 @@ async fn failed_add_preserves_uncertainty_and_never_retries_or_echoes_secrets() 
 }
 
 #[tokio::test]
-async fn failed_update_batch_drains_inflight_but_starts_no_next_batch() {
+async fn failed_update_drains_inflight_but_schedules_no_more_writes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("owned.json");
     let vendor = Vendor::start().await;
@@ -962,6 +1023,127 @@ async fn failed_update_batch_drains_inflight_but_starts_no_next_batch() {
                 )))
             .count(),
         MODEL_WRITE_CONCURRENCY - 1
+    );
+}
+
+#[tokio::test]
+async fn updates_and_deletions_refill_slots_without_waiting_for_slow_requests() {
+    for action in ["update", "delete"] {
+        let vendor = Vendor::start().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut session = vendor.session();
+        session.host = format!("http://{}", listener.local_addr().unwrap());
+        let (received, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            for _ in 0..5 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let received = received.clone();
+                tokio::spawn(async move {
+                    let (_, body) = read_request(&mut socket).await;
+                    let (release, wait) = tokio::sync::oneshot::channel::<()>();
+                    received.send((body, release)).unwrap();
+                    wait.await.unwrap();
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"code\":0}").await.unwrap();
+                });
+            }
+        });
+        let bodies = (0..5)
+            .map(|id| json!({"action": action, "id": id}))
+            .collect::<Vec<_>>();
+        let write = tokio::spawn(async move {
+            let mut confirmed = Vec::new();
+            session
+                .write_updates(&bodies, |index| {
+                    confirmed.push(index);
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            confirmed
+        });
+        let mut blocked = Vec::new();
+        for _ in 0..MODEL_WRITE_CONCURRENCY {
+            blocked.push(
+                tokio::time::timeout(Duration::from_secs(2), requests.recv())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+        assert!(requests.try_recv().is_err(), "concurrency stays bounded");
+        let (first, release) = blocked.pop().unwrap();
+        release.send(()).unwrap();
+        let (next, release) = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            .await
+            .expect("a free slot must refill while earlier writes remain blocked")
+            .unwrap();
+        assert_eq!(next, json!({"action": action, "id": 4}));
+        release.send(()).unwrap();
+        for (_, release) in blocked {
+            release.send(()).unwrap();
+        }
+        let confirmed = write.await.unwrap();
+        assert_eq!(confirmed[0], first["id"].as_u64().unwrap() as usize);
+        assert_eq!(
+            confirmed.into_iter().collect::<BTreeSet<_>>(),
+            (0..5).collect()
+        );
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn failed_removal_records_confirmed_deletions_and_preserves_other_models() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("owned.json");
+    let vendor = Vendor::start().await;
+    let models = (0..8)
+        .map(|index| ToolModelInfo {
+            id: format!("model-{index}"),
+            ..model()
+        })
+        .collect::<Vec<_>>();
+    let entries = desired(&models, "mock");
+    let mut manifest = Manifest::default();
+    for (index, entry) in entries.iter().enumerate() {
+        let id = index as u64 + 1;
+        vendor.seed(id, entry);
+        manifest
+            .accounts
+            .entry("mock-account".into())
+            .or_default()
+            .insert(entry.key.clone(), owned(id, entry));
+    }
+    vendor.seed(999, &entries[0]); // Same-name model outside CONST ownership.
+    vendor.state.lock().unwrap().reject_write = Some(1);
+    let mut config = prepared(&path, &vendor, manifest, Vec::new());
+    config.remove = true;
+    assert!(config.commit(|_, _| {}).await.is_err());
+    assert_eq!(vendor.state.lock().unwrap().writes, MODEL_WRITE_CONCURRENCY);
+    let saved = load(&path);
+    assert_eq!(
+        saved.accounts["mock-account"].len(),
+        8 - (MODEL_WRITE_CONCURRENCY - 1)
+    );
+    for entry in saved.accounts["mock-account"].values() {
+        assert!(
+            vendor
+                .remote()
+                .iter()
+                .any(|remote| remote_matches(entry, remote))
+        );
+    }
+    let mut retry = prepared(&path, &vendor, saved, Vec::new());
+    retry.remove = true;
+    retry.commit(|_, _| {}).await.unwrap();
+    assert!(load(&path).accounts["mock-account"].is_empty());
+    assert_eq!(
+        vendor
+            .remote()
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        vec![999]
     );
 }
 

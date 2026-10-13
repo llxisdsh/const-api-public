@@ -54,6 +54,7 @@ impl ProtocolAdapter for AnthropicMessagesAdapter {
             .and_then(Value::as_str)
             .map(str::to_string);
         request.instructions = decode_system(body.get("system"), context, model)?;
+        request.tools = decode_request_tools(body)?;
         let mut call_names = HashMap::new();
         let mut compatibility_extensions = Vec::new();
         let mut pending_tool_call_ids = Vec::new();
@@ -65,7 +66,7 @@ impl ProtocolAdapter for AnthropicMessagesAdapter {
             }
             let content_path = format!("$.messages[{index}].content");
             let content = message.get("content").unwrap_or(&Value::Null);
-            let blocks = match disposition {
+            let mut blocks = match disposition {
                 MessageDisposition::ToolResult => decode_compat_tool_result(
                     message,
                     content,
@@ -76,6 +77,17 @@ impl ProtocolAdapter for AnthropicMessagesAdapter {
                 )?,
                 _ => decode_blocks(content, context, model, &content_path, &mut call_names)?,
             };
+            if disposition == MessageDisposition::SystemReminder {
+                // Availability changes have already been folded into request.tools.
+                // They are not user content, and must not leave an empty turn.
+                blocks.retain(|block| {
+                    !matches!(block, ContentBlock::ProviderArtifact(artifact)
+                    if is_tool_change(&artifact.payload))
+                });
+                if blocks.is_empty() {
+                    continue;
+                }
+            }
             let message_id = message
                 .get("id")
                 .and_then(Value::as_str)
@@ -139,7 +151,6 @@ impl ProtocolAdapter for AnthropicMessagesAdapter {
             request.turns.push(turn);
         }
         request.turns.append(&mut pending_system_reminders);
-        request.tools = decode_tools(body.get("tools"))?;
         request.tool_choice = decode_tool_choice(body.get("tool_choice"))?;
         request.reasoning = decode_thinking(body);
         request.response_format = decode_response_format(body)?;
@@ -1001,67 +1012,207 @@ fn decode_document(item: &Value, metadata: BlockMetadata) -> Result<FileBlock, A
     })
 }
 
-fn decode_tools(value: Option<&Value>) -> Result<Vec<ToolDefinition>, AdapterError> {
-    value
+fn is_tool_change(block: &Value) -> bool {
+    matches!(
+        block.get("type").and_then(Value::as_str),
+        Some("tool_addition" | "tool_removal")
+    )
+}
+
+fn decode_request_tools(body: &Value) -> Result<Vec<ToolDefinition>, AdapterError> {
+    let mut changes = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .flat_map(|(message_index, message)| {
+            message
+                .get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .filter(|(_, block)| is_tool_change(block))
+                .map(move |(block_index, block)| (message_index, message, block_index, block))
+        })
+        .peekable();
+    if changes.peek().is_none() {
+        return decode_tools(body.get("tools"), "$.tools");
+    }
+
+    // Foreign protocols expose a flat tool list for the next response. Keep the
+    // latest active definitions in first-declaration order; native traffic uses
+    // the raw passthrough path and retains the original cache-stable placement.
+    let mut declarations = body
+        .get("tools")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .enumerate()
         .map(|(index, tool)| {
-            if tool
-                .get("type")
+            (
+                tool,
+                format!("$.tools[{index}]"),
+                tool.get("defer_loading").and_then(Value::as_bool) != Some(true),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut positions = declarations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (tool, _, _))| {
+            tool.get("name")
                 .and_then(Value::as_str)
-                .is_some_and(|kind| !matches!(kind, "custom" | "function"))
-            {
-                let kind = tool
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .map(anthropic_hosted_tool_kind)
-                    .unwrap_or(HostedToolKind::ProviderSpecific);
-                return Ok(ToolDefinition::Hosted(HostedTool {
-                    kind,
-                    provider: Some("anthropic".to_string()),
-                    name: tool.get("name").and_then(Value::as_str).map(str::to_string),
-                    config: tool.clone(),
-                }));
-            }
-            let empty = Value::Object(Map::new());
-            let schema = canonicalize_tool_schema(tool.get("input_schema").unwrap_or(&empty))
-                .map_err(|error| {
+                .map(|name| (name.to_string(), index))
+        })
+        .collect::<HashMap<_, _>>();
+    for (message_index, message, block_index, block) in changes {
+        let path = format!("$.messages[{message_index}].content[{block_index}]");
+        if message.get("role").and_then(Value::as_str) != Some("system") {
+            return Err(AdapterError::new(
+                "inline_tools_invalid",
+                path,
+                "tool additions and removals require role=system",
+            ));
+        }
+        let addition = block.get("type").and_then(Value::as_str) == Some("tool_addition");
+        let tool = &block["tool"];
+        match tool.get("type").and_then(Value::as_str) {
+            Some("tool_reference") => {
+                let name = required_string(
+                    tool.get("name"),
+                    &format!("{path}.tool.name"),
+                    "tool_name_missing",
+                )?;
+                let index = positions.get(name).ok_or_else(|| {
                     AdapterError::new(
-                        error.code(),
-                        format!("$.tools[{index}].input_schema"),
-                        error.to_string(),
+                        "tool_reference_unresolved",
+                        &path,
+                        format!("tool reference {name} has no definition"),
                     )
                 })?;
-            Ok(ToolDefinition::Function(FunctionTool {
-                name: required_string(tool.get("name"), "$.tools.name", "tool_name_missing")?
-                    .to_string(),
-                description: tool
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                input_schema: schema,
-                strict: tool.get("strict").and_then(Value::as_bool),
-                cache_policy: decode_cache_policy(tool.get("cache_control")),
-                defer_loading: tool.get("defer_loading").and_then(Value::as_bool),
-                allowed_callers: tool
-                    .get("allowed_callers")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect(),
-                input_examples: tool
-                    .get("input_examples")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default(),
-                eager_input_streaming: tool.get("eager_input_streaming").and_then(Value::as_bool),
-            }))
+                declarations[*index].2 = addition;
+            }
+            Some("tool_definition") if addition => {
+                let definition = &tool["definition"];
+                if definition.get("type").and_then(Value::as_str) == Some("mcp_toolset") {
+                    return Err(AdapterError::new(
+                        "capability_mismatch",
+                        path,
+                        "inline MCP toolsets require the native Anthropic connector",
+                    ));
+                }
+                let path = format!("{path}.tool.definition");
+                let name = required_string(
+                    definition.get("name"),
+                    &format!("{path}.name"),
+                    "tool_name_missing",
+                )?;
+                if let Some(index) = positions.get(name) {
+                    declarations[*index] = (definition, path, true);
+                } else {
+                    positions.insert(name.to_string(), declarations.len());
+                    declarations.push((definition, path, true));
+                }
+            }
+            Some("mcp_tool_reference" | "mcp_toolset_reference") => {
+                return Err(AdapterError::new(
+                    "capability_mismatch",
+                    path,
+                    "inline MCP tool changes require the native Anthropic connector",
+                ));
+            }
+            _ => {
+                return Err(AdapterError::new(
+                    "inline_tools_invalid",
+                    path,
+                    "tool addition requires a reference or definition; removal requires a reference",
+                ));
+            }
+        }
+    }
+    declarations
+        .into_iter()
+        .filter(|(_, _, active)| *active)
+        .map(|(tool, path, _)| {
+            let mut tool = decode_tool(tool, &path)?;
+            if let ToolDefinition::Function(tool) = &mut tool {
+                // A deferred tool surfaced by tool_addition is now callable.
+                tool.defer_loading = None;
+            }
+            Ok(tool)
         })
         .collect()
+}
+
+fn decode_tools(value: Option<&Value>, path: &str) -> Result<Vec<ToolDefinition>, AdapterError> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .map(|(index, tool)| decode_tool(tool, &format!("{path}[{index}]")))
+        .collect()
+}
+
+fn decode_tool(tool: &Value, path: &str) -> Result<ToolDefinition, AdapterError> {
+    if tool
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| !matches!(kind, "custom" | "function"))
+    {
+        let kind = tool
+            .get("type")
+            .and_then(Value::as_str)
+            .map(anthropic_hosted_tool_kind)
+            .unwrap_or(HostedToolKind::ProviderSpecific);
+        return Ok(ToolDefinition::Hosted(HostedTool {
+            kind,
+            provider: Some("anthropic".to_string()),
+            name: tool.get("name").and_then(Value::as_str).map(str::to_string),
+            config: tool.clone(),
+        }));
+    }
+    let empty = Value::Object(Map::new());
+    let schema =
+        canonicalize_tool_schema(tool.get("input_schema").unwrap_or(&empty)).map_err(|error| {
+            AdapterError::new(
+                error.code(),
+                format!("{path}.input_schema"),
+                error.to_string(),
+            )
+        })?;
+    Ok(ToolDefinition::Function(FunctionTool {
+        name: required_string(
+            tool.get("name"),
+            &format!("{path}.name"),
+            "tool_name_missing",
+        )?
+        .to_string(),
+        description: tool
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        input_schema: schema,
+        strict: tool.get("strict").and_then(Value::as_bool),
+        cache_policy: decode_cache_policy(tool.get("cache_control")),
+        defer_loading: tool.get("defer_loading").and_then(Value::as_bool),
+        allowed_callers: tool
+            .get("allowed_callers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        input_examples: tool
+            .get("input_examples")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        eager_input_streaming: tool.get("eager_input_streaming").and_then(Value::as_bool),
+    }))
 }
 
 fn anthropic_hosted_tool_kind(kind: &str) -> HostedToolKind {
@@ -1120,7 +1271,14 @@ fn decode_thinking(body: &Value) -> ReasoningConfig {
         _ => ReasoningMode::Disabled,
     };
     let effort = body
-        .pointer("/output_config/effort")
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .rev()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+        .find_map(|message| message.pointer("/output_config/effort"))
+        .or_else(|| body.pointer("/output_config/effort"))
         .and_then(Value::as_str)
         .and_then(ReasoningEffort::parse)
         .or_else(|| (thinking_type == Some("disabled")).then_some(ReasoningEffort::None));
@@ -1363,8 +1521,17 @@ fn decode_nested_extensions(
             &mut extensions,
             "anthropic_messages",
             Some(message),
-            &["id", "role", "content"],
+            &["id", "role", "content", "output_config"],
             &message_path,
+            context,
+            model,
+        );
+        collect_nested_unknown_fields(
+            &mut extensions,
+            "anthropic_messages",
+            message.get("output_config"),
+            &["effort"],
+            &format!("{message_path}.output_config"),
             context,
             model,
         );
@@ -1537,6 +1704,7 @@ fn scan_anthropic_blocks(
                 "cache_control",
             ],
             Some("compaction") => &["type", "content", "encrypted_content", "cache_control"],
+            Some("tool_addition" | "tool_removal") => &["type", "tool", "cache_control"],
             Some(_) => &["type"],
         };
         collect_nested_unknown_fields(
@@ -2335,21 +2503,36 @@ mod tests {
 
     #[test]
     fn adaptive_only_models_do_not_receive_fixed_thinking_budget() {
-        let mut body = serde_json::json!({});
-        super::encode_thinking(
-            &mut body,
-            &ReasoningConfig {
-                mode: ReasoningMode::Enabled,
-                effort: Some(ReasoningEffort::High),
-                token_budget: Some(4096),
-                summary: ReasoningSummaryMode::None,
-                provider_extensions: Vec::new(),
-            },
+        for model in [
             "claude-opus-5",
-        );
-        assert_eq!(body["thinking"], serde_json::json!({"type":"adaptive"}));
-        assert_eq!(body["output_config"]["effort"], "high");
-        assert!(body.pointer("/thinking/budget_tokens").is_none());
+            "claude-haiku-5-5",
+            "anthropic/claude-haiku-5.5",
+        ] {
+            let mut body = serde_json::json!({});
+            super::encode_thinking(
+                &mut body,
+                &ReasoningConfig {
+                    mode: ReasoningMode::Enabled,
+                    effort: Some(ReasoningEffort::High),
+                    token_budget: Some(4096),
+                    summary: ReasoningSummaryMode::None,
+                    provider_extensions: Vec::new(),
+                },
+                model,
+            );
+            assert_eq!(body["thinking"], serde_json::json!({"type":"adaptive"}));
+            assert_eq!(body["output_config"]["effort"], "high");
+            assert!(body.pointer("/thinking/budget_tokens").is_none());
+        }
+    }
+
+    #[test]
+    fn haiku_55_keeps_explicitly_disabled_thinking() {
+        let reasoning =
+            super::decode_thinking(&serde_json::json!({"thinking":{"type":"disabled"}}));
+        let mut body = serde_json::json!({});
+        super::encode_thinking(&mut body, &reasoning, "claude-haiku-5-5");
+        assert_eq!(body["thinking"], serde_json::json!({"type":"disabled"}));
     }
 
     #[test]
@@ -2391,20 +2574,22 @@ mod tests {
 
     #[test]
     fn adaptive_only_models_omit_removed_sampling_controls() {
-        let mut body = serde_json::json!({});
-        super::encode_generation(
-            &mut body,
-            &crate::protocol::ir::GenerationConfig {
-                temperature: Some(0.2),
-                top_p: Some(0.8),
-                top_k: Some(20),
-                ..Default::default()
-            },
-            "claude-sonnet-5",
-        );
-        assert!(body.get("temperature").is_none());
-        assert!(body.get("top_p").is_none());
-        assert!(body.get("top_k").is_none());
+        for model in ["claude-sonnet-5", "claude-haiku-5-5"] {
+            let mut body = serde_json::json!({});
+            super::encode_generation(
+                &mut body,
+                &crate::protocol::ir::GenerationConfig {
+                    temperature: Some(0.2),
+                    top_p: Some(0.8),
+                    top_k: Some(20),
+                    ..Default::default()
+                },
+                model,
+            );
+            assert!(body.get("temperature").is_none());
+            assert!(body.get("top_p").is_none());
+            assert!(body.get("top_k").is_none());
+        }
     }
 
     #[test]

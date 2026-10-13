@@ -32,6 +32,7 @@ pub(crate) struct StreamRenderer {
     wire_indices: HashMap<u32, u32>,
     next_wire_index: u32,
     usage: Usage,
+    estimated_token_usage: bool,
 }
 
 impl StreamRenderer {
@@ -54,7 +55,26 @@ impl StreamRenderer {
             wire_indices: HashMap::new(),
             next_wire_index: 0,
             usage: Usage::default(),
+            estimated_token_usage: false,
         }
+    }
+
+    /// Dedicated credit-metered bridges supply derived counts for SDK compatibility.
+    /// Keep their provenance explicit; ordinary conversions remain unchanged.
+    pub(crate) fn with_estimated_token_usage(mut self) -> Self {
+        self.estimated_token_usage = true;
+        self
+    }
+
+    pub(crate) fn set_estimated_token_usage(&mut self, estimated: bool) {
+        self.estimated_token_usage = estimated;
+    }
+
+    fn wire_usage(&self, mut value: Value) -> Value {
+        if self.estimated_token_usage {
+            value["const_api_usage_source"] = json!("estimated");
+        }
+        value
     }
 
     pub(crate) fn push(&mut self, event: &CanonicalStreamEvent) -> Result<Bytes, StreamError> {
@@ -163,7 +183,11 @@ impl StreamRenderer {
                         "id":anthropic_id(&self.response_id),"type":"message","role":"assistant",
                         "model":self.model,"content":[],"stop_reason":Value::Null,
                         "stop_sequence":Value::Null,
-                        "usage":{"input_tokens":usage_value(&self.usage.input_tokens),"output_tokens":0}
+                        "usage":self.wire_usage(json!({
+                            "input_tokens":usage_value(&self.usage.input_tokens),"output_tokens":0,
+                            "cache_read_input_tokens":self.usage.cache_read_tokens.value,
+                            "cache_creation_input_tokens":self.usage.cache_write_tokens.value.or(self.usage.cache_creation_tokens.value)
+                        }))
                     }
                 }),
             ),
@@ -1016,7 +1040,7 @@ impl StreamRenderer {
                     json!({
                         "id":chat_id(&self.response_id),"object":"chat.completion.chunk","model":self.model,
                         "choices":[{"index":0,"delta":{},"finish_reason":chat_finish(finish.reason)}],
-                        "usage":chat_usage(&self.usage)
+                        "usage":self.wire_usage(chat_usage(&self.usage))
                     }),
                 );
                 output.extend_from_slice(b"data: [DONE]\n\n");
@@ -1040,10 +1064,13 @@ impl StreamRenderer {
                     "message_delta",
                     json!({
                         "type":"message_delta","delta":{"stop_reason":anthropic_finish(finish.reason),"stop_sequence":Value::Null},
-                        "usage":{
+                        "usage":self.wire_usage(json!({
+                            "input_tokens":self.usage.input_tokens.value,
                             "output_tokens":usage_value(&self.usage.output_tokens),
+                            "cache_read_input_tokens":self.usage.cache_read_tokens.value,
+                            "cache_creation_input_tokens":self.usage.cache_write_tokens.value.or(self.usage.cache_creation_tokens.value),
                             "output_tokens_details":{"thinking_tokens":self.usage.reasoning_tokens.value}
-                        }
+                        }))
                     }),
                 );
                 named_event(output, "message_stop", json!({"type":"message_stop"}));
@@ -1053,7 +1080,7 @@ impl StreamRenderer {
                 json!({
                     "modelVersion":self.model,
                     "candidates":[{"finishReason":gemini_finish(finish.reason)}],
-                    "usageMetadata":gemini_usage(&self.usage)
+                    "usageMetadata":self.wire_usage(gemini_usage(&self.usage))
                 }),
             ),
         }
@@ -1064,7 +1091,7 @@ impl StreamRenderer {
         let output = self.response_output.values().cloned().collect::<Vec<_>>();
         json!({
             "id":responses_id(&self.response_id),"object":"response","created_at":0,
-            "status":status,"model":self.model,"output":output,"usage":responses_usage(&self.usage)
+            "status":status,"model":self.model,"output":output,"usage":self.wire_usage(responses_usage(&self.usage))
         })
     }
 }
@@ -1132,6 +1159,10 @@ fn chat_usage(usage: &Usage) -> Value {
         "prompt_tokens":usage_value(&usage.input_tokens),
         "completion_tokens":usage_value(&usage.output_tokens),
         "total_tokens":usage_value(&usage.total_tokens),
+        "prompt_tokens_details":{
+            "cached_tokens":usage.cache_read_tokens.value,
+            "cache_write_tokens":usage.cache_write_tokens.value.or(usage.cache_creation_tokens.value)
+        },
         "completion_tokens_details":{"reasoning_tokens":usage.reasoning_tokens.value}
     })
 }
@@ -1154,6 +1185,7 @@ fn gemini_usage(usage: &Usage) -> Value {
         "promptTokenCount":usage_value(&usage.input_tokens),
         "candidatesTokenCount":usage_value(&usage.non_reasoning_output()),
         "totalTokenCount":usage_value(&usage.total_tokens),
+        "cachedContentTokenCount":usage.cache_read_tokens.value,
         "thoughtsTokenCount":usage.reasoning_tokens.value
     })
 }

@@ -247,7 +247,7 @@ where
     }
     let channel_id = channel.id.clone();
     let result = crate::channel_executor::execute_native_streaming_channel_request(
-        &shared.client,
+        &shared.client.snapshot(),
         &channel,
         reqwest_method,
         path,

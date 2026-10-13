@@ -7,6 +7,8 @@ import { emptyAccountStatus } from "./account/accountTypes";
 import { sourceDriverById, sourceDriverInitialChannelV5 } from "./sourceDrivers";
 import type { ToolApplyResult } from "./appTypes";
 import { toolHasManagedConfig } from "./toolMenuPresentation";
+import { TOOL_ORDER_STORAGE_KEY, TOOL_VISIBILITY_STORAGE_KEY } from "./toolVisibility";
+import { i18n } from "./i18n";
 
 function configStatus(tool: string, ready: boolean, details: Record<string, string> = {}): ToolApplyResult {
   return { tool, already_configured: ready, files: [], file_statuses: [], backups: [], details };
@@ -63,6 +65,50 @@ describe("shared tool program selection", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each([
+    ["zh-CN", "WorkBuddy", "WorkBuddy AI"],
+    ["en-US", "WorkBuddy", "WorkBuddy AI"],
+  ])("keeps concise WorkBuddy names in the %s dock and picker", async (language, chinaTitle, internationalTitle) => {
+    const previousLanguage = i18n.language;
+    await i18n.changeLanguage(language);
+    const { result, unmount } = renderHook(() => useAppController());
+    try {
+      await waitFor(() => expect(result.current.selectedChannel.id).toBe("program-fixture"));
+      for (const cards of [result.current.toolCards, [...result.current.visibleToolCards, ...result.current.hiddenToolCards]]) {
+        expect(cards.find(({ tool }) => tool === "workbuddy")?.title).toBe(chinaTitle);
+        expect(cards.find(({ tool }) => tool === "workbuddy-ai")?.title).toBe(internationalTitle);
+      }
+    } finally {
+      unmount();
+      await i18n.changeLanguage(previousLanguage);
+    }
+  });
+
+  it.each([null, "[]"])("excludes retired tools from the dock and picker with stored visibility %s", async (hidden) => {
+    const previousHidden = localStorage.getItem(TOOL_VISIBILITY_STORAGE_KEY);
+    const previousOrder = localStorage.getItem(TOOL_ORDER_STORAGE_KEY);
+    const restore = (key: string, value: string | null) => {
+      if (value === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, value);
+    };
+    restore(TOOL_VISIBILITY_STORAGE_KEY, hidden);
+    localStorage.setItem(TOOL_ORDER_STORAGE_KEY, JSON.stringify(["trae-work", "trae", "trae-cn"]));
+    const { result, unmount } = renderHook(() => useAppController());
+    try {
+      await waitFor(() => expect(result.current.selectedChannel.id).toBe("program-fixture"));
+      expect(result.current.visibleToolCards.some(({ tool }) => tool === "trae-work")).toBe(false);
+      expect(result.current.hiddenToolCards.some(({ tool }) => tool === "trae-work")).toBe(false);
+      const offered = [...result.current.visibleToolCards, ...result.current.hiddenToolCards].map(({ tool }) => tool);
+      expect(offered).toContain("trae");
+      expect(offered).toContain("trae-cn");
+      expect(invoke).not.toHaveBeenCalledWith("check_tool_config", expect.objectContaining({ tool: "trae-work" }));
+    } finally {
+      unmount();
+      restore(TOOL_VISIBILITY_STORAGE_KEY, previousHidden);
+      restore(TOOL_ORDER_STORAGE_KEY, previousOrder);
+    }
+  });
+
   it("asks then resumes opening, even after rescan, without configuring", async () => {
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.selectedChannel.id).toBe("program-fixture"));
@@ -74,6 +120,99 @@ describe("shared tool program selection", () => {
     expect(result.current.toolLocator).toBeNull();
     expect(invoke).toHaveBeenLastCalledWith("start_tool_program", { tool: "mimocode", useConfiguredEnvironment: false });
     expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "execute_tool_config_operation")).toBe(false);
+  });
+
+  it("saves injection preferences alone and syncs owned catalogs using applied, not draft, selections", async () => {
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    const settings = { all_models: false, extra_models: ["extra-model"] };
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "save_tool_model_injection_settings") {
+        const config = await base("get_config", undefined) as object;
+        return { ...config, tool_model_injection: settings };
+      }
+      if (command === "check_tool_config") {
+        const tool = (args as { tool: string }).tool;
+        return configStatus(tool, tool === "opencode", {
+          has_managed_config: String(["opencode", "workbuddy-ai", "codex", "claude", "claude-desktop", "gemini", "hermes", "copilot"].includes(tool)),
+          tool_protocol: "openai_chat", codex_model_source: "codex",
+        });
+      }
+      if (command === "execute_tool_config_operation") {
+        if ((args as { tool: string }).tool === "workbuddy-ai") throw new Error("fixture sync failure");
+        return { result: configStatus("opencode", true, { has_managed_config: "true" }) };
+      }
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("program-fixture"));
+    await act(() => {
+      result.current.setConfig((config) => ({ ...config, api_key: "unsaved-local-key" }));
+      result.current.toolProtocolDraftTouchedRef.current.opencode = true;
+      result.current.setToolProtocolSelections((current) => ({ ...current, opencode: "anthropic_messages" }));
+    });
+    vi.mocked(invoke).mockClear();
+    let syncResult;
+    await act(async () => { syncResult = await result.current.saveToolModelInjectionSettings(settings, vi.fn()); });
+    expect(syncResult).toEqual({ synced: 1, errors: ["WorkBuddy AI: fixture sync failure"] });
+    expect(result.current.config.api_key).toBe("unsaved-local-key");
+    expect(result.current.config.tool_model_injection).toEqual(settings);
+    expect(result.current.toolProtocolSelections.opencode).toBe("anthropic_messages");
+    expect(invoke).toHaveBeenCalledWith("save_tool_model_injection_settings", { settings });
+    const executions = vi.mocked(invoke).mock.calls.filter(([command]) => command === "execute_tool_config_operation").map(([, args]) => args);
+    expect(executions).toHaveLength(2);
+    expect(executions[0]).toMatchObject({ tool: "opencode", action: "apply", restart: false, protocol: "openai_chat" });
+    expect(executions[1]).toMatchObject({ tool: "workbuddy-ai", action: "apply", restart: false });
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => ["save_config", "start_proxy", "stop_proxy", "refresh_supplier_registration", "start_tool_program"].includes(command))).toBe(false);
+  });
+
+  it("can persist the injection switch without discovering or rewriting tools", async () => {
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    const settings = { all_models: false, extra_models: [] };
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "save_tool_model_injection_settings") {
+        return { ...await base("get_config", undefined) as object, tool_model_injection: settings };
+      }
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("program-fixture"));
+    await waitFor(() => expect(result.current.toolConfigChecking).toBe(false));
+    vi.mocked(invoke).mockClear();
+    await act(async () => {
+      expect(await result.current.saveToolModelInjectionSettings(settings, vi.fn(), false)).toEqual({ synced: 0, errors: [] });
+    });
+    expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual(["save_tool_model_injection_settings"]);
+    expect(result.current.config.tool_model_injection).toEqual(settings);
+  });
+
+  it("reports incomplete injection readback instead of counting it as synced", async () => {
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    const settings = { all_models: false, extra_models: ["extra-model"] };
+    let applied = false;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "save_tool_model_injection_settings") {
+        return { ...await base("get_config", undefined) as object, tool_model_injection: settings };
+      }
+      if (command === "check_tool_config") {
+        const tool = (args as { tool: string }).tool;
+        return configStatus(tool, tool === "opencode" && !applied, {
+          has_managed_config: String(tool === "opencode"),
+        });
+      }
+      if (command === "execute_tool_config_operation") {
+        applied = true;
+        return { result: configStatus("opencode", true, { has_managed_config: "true" }) };
+      }
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("program-fixture"));
+    let syncResult;
+    await act(async () => { syncResult = await result.current.saveToolModelInjectionSettings(settings, vi.fn()); });
+    expect(syncResult).toMatchObject({ synced: 0, errors: [expect.stringContaining("配置仍不完整")] });
+    expect(result.current.toolConfigStatuses.opencode?.already_configured).toBe(false);
+    expect(toolHasManagedConfig(result.current.toolConfigStatuses.opencode)).toBe(true);
+    expect(result.current.config.tool_model_injection).toEqual(settings);
   });
 
   it("asks before configuration, resumes configure-and-launch, then remembers the choice", async () => {

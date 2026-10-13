@@ -263,15 +263,19 @@ describe("QuickCard", () => {
     expect(container.querySelector(".brand-badge img")?.getAttribute("src")).toBe(assetUrl);
   });
 
-  test("shows an edition badge separately from the original logo", () => {
+  test.each([
+    ["trae-cn", "TRAE CN", "trae", "CN"],
+    ["workbuddy-ai", "WorkBuddy AI", "workbuddy", "AI"],
+  ] as const)("shows the %s edition badge separately from the original logo", (id, title, customIcon, badge) => {
     const { container } = render(<ToolDockMenuProvider><QuickCard
-      id="trae-cn" title="TraeCode CN" icon={null} customIcon="trae"
-      badge="CN" fallback={Circle} tone="#32f08c" actionLabel="配置"
+      id={id} title={title} icon={null} customIcon={customIcon}
+      badge={badge} fallback={Circle} tone="#171717" actionLabel="配置"
       onAction={vi.fn()}
     /></ToolDockMenuProvider>);
-    expect(container.querySelector(".tool-edition-badge")).toHaveTextContent("CN");
+    expect(container.querySelector(".tool-edition-badge")).toHaveTextContent(badge);
     expect(container.querySelector(".brand-badge .tool-edition-badge")).toBeNull();
-    expect(container.querySelector(".brand-badge img")?.getAttribute("src")).toBe(customBrandIconUrl("trae"));
+    expect(container.querySelector(".brand-badge img")?.getAttribute("src")).toBe(customBrandIconUrl(customIcon));
+    expect(customBrandIconUrl("trae-work")).toBe(customBrandIconUrl("trae"));
   });
 
   test("hides cancel configuration when the caller provides no removal action", () => {

@@ -25,6 +25,21 @@ pub(crate) struct Failure {
     pub(crate) message: String,
 }
 
+impl std::fmt::Display for Failure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "upstream returned HTTP {}: {} [cause={}, rule={}]",
+            self.effective_status(),
+            self.message,
+            self.cause,
+            self.rule_id
+        )
+    }
+}
+
+impl std::error::Error for Failure {}
+
 impl Failure {
     pub(crate) fn effective_status(&self) -> u16 {
         if self.status >= 400 {
@@ -293,6 +308,16 @@ pub(crate) fn observe_value(status: u16, value: &Value, model: Option<&str>) -> 
             failure.retry_source = "structured_body".into();
         }
     }
+    // Responses SSE/WS failures carry HTTP retry advice inside the error event.
+    // Inspect only the recognized error envelope, never generated model content.
+    if let Some(delay) = [error.get("headers"), envelope.get("headers")]
+        .into_iter()
+        .flatten()
+        .find_map(|headers| json_retry_after(headers, crate::now_unix()))
+    {
+        failure.retry_after_seconds = Some(delay);
+        failure.retry_source = "structured_body".into();
+    }
     // Canonical skin types are more precise than lossy native codes. Specific detail codes win.
     let kind = if !detail_code.is_empty() {
         detail_code.as_str()
@@ -548,24 +573,40 @@ fn duration_seconds(value: &str) -> Option<i64> {
 }
 
 pub(crate) fn retry_after(headers: &[(&str, &str)], now: i64) -> Option<i64> {
-    headers.iter().find_map(|(name, value)| {
-        if !name.eq_ignore_ascii_case("retry-after") {
-            return None;
-        }
-        if let Ok(seconds) = value.trim().parse::<i64>() {
-            return (0..=31_536_000).contains(&seconds).then_some(seconds);
-        }
-        let date = time::OffsetDateTime::parse(
-            value.trim(),
-            &time::format_description::well_known::Rfc2822,
-        )
-        .ok()?;
-        Some(
-            date.unix_timestamp()
-                .saturating_sub(now)
-                .clamp(0, 31_536_000),
-        )
-    })
+    headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
+        .filter_map(|(_, value)| retry_after_value(value, now))
+        .max()
+}
+
+fn json_retry_after(headers: &Value, now: i64) -> Option<i64> {
+    headers
+        .as_object()?
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
+        .filter_map(|(_, value)| match value {
+            Value::String(value) => retry_after_value(value, now),
+            Value::Number(value) => retry_after_value(&value.to_string(), now),
+            _ => None,
+        })
+        .max()
+}
+
+fn retry_after_value(value: &str, now: i64) -> Option<i64> {
+    // JSON values must obey the same header validation as real HTTP responses.
+    reqwest::header::HeaderValue::from_str(value).ok()?;
+    if let Ok(seconds) = value.trim().parse::<i64>() {
+        return (0..=31_536_000).contains(&seconds).then_some(seconds);
+    }
+    let date =
+        time::OffsetDateTime::parse(value.trim(), &time::format_description::well_known::Rfc2822)
+            .ok()?;
+    Some(
+        date.unix_timestamp()
+            .saturating_sub(now)
+            .clamp(0, 31_536_000),
+    )
 }
 
 #[cfg(test)]
@@ -634,6 +675,52 @@ mod tests {
             Some(10)
         );
         assert_eq!(retry_after(&[("x-ratelimit-reset-tokens", "30")], 1), None);
+        assert_eq!(
+            retry_after(&[("Retry-After", "5"), ("retry-after", "30")], 1),
+            Some(30)
+        );
+        assert_eq!(retry_after(&[("Retry-After", "\n5\n")], 1), None);
+    }
+
+    #[test]
+    fn responses_event_retry_headers_are_validated_and_scoped_to_errors() {
+        use serde_json::json;
+        for (headers, expected) in [
+            (json!({"Retry-After":"17"}), 17),
+            (json!({"retry-after":0}), 0),
+            (json!({"retry-after":9}), 9),
+            (json!({"Retry-After":"5","retry-after":"30"}), 30),
+            (json!({"retry-after":"\t5\t"}), 5),
+            (json!({"retry-after":"\n5\n"}), 12),
+            (json!({"retry-after":-1}), 12),
+            (json!({"retry-after":true}), 12),
+            (json!({"retry-after":["5"]}), 12),
+            (json!("invalid"), 12),
+        ] {
+            let body = json!({"type":"error","status":429,
+                "headers":{"retry-after":"12"},
+                "error":{"code":"rate_limit_exceeded","headers":headers}
+            })
+            .to_string();
+            let observed = observe(200, &body, &[], None).unwrap();
+            assert_eq!(observed.retry_after_seconds, Some(expected), "{body}");
+            assert_eq!(observed.retry_source, "structured_body");
+            let observed = observe(429, &body, &[("Retry-After", "2")], None).unwrap();
+            assert_eq!(observed.retry_after_seconds, Some(2));
+            assert_eq!(observed.retry_source, "header");
+        }
+        let body = json!({"type":"response.failed","response":{"error":{
+            "code":"server_is_overloaded", "headers":{"Retry-After":"21"}
+        }}})
+        .to_string();
+        assert_eq!(
+            observe(200, &body, &[], None).unwrap().retry_after_seconds,
+            Some(21)
+        );
+        let ordinary = json!({"type":"response.output_text.delta","delta":"retry-after: 42",
+            "headers":{"Retry-After":"42"}})
+        .to_string();
+        assert!(observe(200, &ordinary, &[], None).is_none());
     }
 
     #[test]

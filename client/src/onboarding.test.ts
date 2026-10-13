@@ -78,6 +78,7 @@ describe("new-user onboarding state", () => {
   it("keeps task guides on the page where their copy is relevant", () => {
     const base = {
       signedIn: false,
+      accountStatusReady: true,
       localModeChosen: false,
       localModelReady: false,
       onboardingSeen: false,
@@ -92,11 +93,14 @@ describe("new-user onboarding state", () => {
     expect(resolveOnboardingGuideState({ ...base, page: "supplier" })).toBe("supplier_intro");
     expect(resolveOnboardingGuideState({ ...base, page: "account" })).toBeNull();
     expect(resolveOnboardingGuideState({ ...base, page: "about" })).toBeNull();
+    expect(resolveOnboardingGuideState({ ...base, page: "access", accountStatusReady: false })).toBeNull();
+    expect(resolveOnboardingGuideState({ ...base, page: "supplier", accountStatusReady: false })).toBeNull();
   });
 
   it("guides a local-only user through Models and back to Use", () => {
     const localSetup = {
       page: "supplier" as const,
+      accountStatusReady: true,
       signedIn: false,
       localModeChosen: true,
       localModelReady: false,
@@ -135,6 +139,7 @@ describe("new-user onboarding state", () => {
   it("shows balance and tool guidance only on Use", () => {
     const signedIn = {
       page: "access" as const,
+      accountStatusReady: true,
       signedIn: true,
       localModeChosen: false,
       localModelReady: false,
@@ -157,6 +162,7 @@ describe("new-user onboarding state", () => {
   it("does not add a supplier introduction over an existing channel list", () => {
     expect(resolveOnboardingGuideState({
       page: "supplier",
+      accountStatusReady: true,
       signedIn: true,
       localModeChosen: false,
       localModelReady: false,

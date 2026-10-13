@@ -16,10 +16,12 @@ export type SourceDriverExecutionKind =
   | "open_ai_subscription"
   | "claude_subscription"
   | "gemini_subscription"
-  | "grok_subscription";
+  | "grok_subscription"
+  | "kiro_subscription"
+  | "cursor_subscription";
 export type SourceDriverExecutorLocator =
   | { readonly type: "http_surface" }
-  | { readonly type: "retained_subscription"; readonly provider: "openai" | "claude" | "antigravity" | "grok" };
+  | { readonly type: "retained_subscription"; readonly provider: "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor" };
 export type SourceDriverTarget = {
   readonly surface: SourceDriverSurface;
   readonly protocol: SourceDriverProtocol;
@@ -59,6 +61,7 @@ export type SourceDriverDiscovery = {
   readonly metadata: boolean;
 };
 export type SourceDriverIconKey =
+  | "grok" | "kiro" | "cursor" | "copilot" | "kilo" | "commandcode" | "meta" | "abacus" | "poe"
   | "openai"
   | "anthropic"
   | "gemini"
@@ -98,6 +101,8 @@ export type SourceDriverId =
   | "gemini_subscription"
   | "claude_subscription"
   | "grok_subscription"
+  | "kiro_subscription"
+  | "cursor_subscription"
   | "openai_api"
   | "anthropic_api"
   | "gemini_api"
@@ -135,6 +140,10 @@ export type SourceDriverId =
   | "glm_coding_plan"
   | "minimax_token_plan"
   | "ollama_cloud"
+  | "muse_code"
+  | "copilot_subscription"
+  | "abacus_routellm"
+  | "poe_api"
   | "omniroute"
   | "custom_endpoint";
 
@@ -176,7 +185,7 @@ export type SourceDriver = {
   readonly discovery: SourceDriverDiscovery;
   readonly protocolBindings: ReadonlyArray<{ readonly protocol: SourceDriverProtocol; readonly preferred: boolean }>;
   readonly surfaceBindings: readonly SourceDriverSurfaceBinding[];
-  readonly subscriptionProvider?: "openai" | "claude" | "antigravity" | "grok";
+  readonly subscriptionProvider?: "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor";
   readonly subscriptionContract?: SubscriptionDriverContract;
   readonly detection: DetectionPolicy;
   // Temporary renderer compatibility projections. V2 fields above remain authoritative.
@@ -215,7 +224,7 @@ export type SourceDriverInitialDefaults = {
   defaultTarget: SourceDriverTarget;
   discovery: SourceDriverDiscovery;
   models: string[];
-  subscription?: { platform: "openai" | "claude" | "antigravity" | "grok" };
+  subscription?: { platform: "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor" };
   // Temporary renderer compatibility projections derived from the V2 fields above.
   kind: string;
   baseUrl: string;
@@ -274,7 +283,8 @@ export type ChannelDetectionEvidenceV5 = {
 };
 
 export type ChannelSubscriptionV5 = {
-  platform: "openai" | "claude" | "antigravity" | "grok";
+  claude_fast_enabled: boolean;
+  platform: "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor";
   account_label: string;
   max_concurrency: number;
   responses_ws_pool_enabled: boolean;
@@ -434,7 +444,7 @@ type RawSubscriptionOperationCapability = {
 };
 
 const DRIVER_IDS = new Set<SourceDriverId>([
-  "openai_subscription", "gemini_subscription", "claude_subscription", "grok_subscription", "openai_api",
+  "openai_subscription", "gemini_subscription", "claude_subscription", "grok_subscription", "kiro_subscription", "cursor_subscription", "openai_api",
   "anthropic_api", "gemini_api", "xai_api", "mistral_api", "deepseek_api",
   "dashscope_api", "moonshot_api", "zhipu_api", "minimax_api", "stepfun_api",
   "azure_openai", "bedrock_mantle", "groq_api", "together_api", "fireworks_api",
@@ -442,7 +452,9 @@ const DRIVER_IDS = new Set<SourceDriverId>([
   "volcengine_ark_api", "baidu_qianfan_api", "tencent_hunyuan_api", "ollama",
   "lm_studio", "vllm", "lan_share", "openrouter", "omniroute", "custom_endpoint",
   "opencode_go", "opencode_zen", "kilo_gateway", "cline_api",
-  "command_code", "kimi_code", "glm_coding_plan", "minimax_token_plan", "ollama_cloud",
+  "command_code", "kimi_code", "glm_coding_plan", "minimax_token_plan", "ollama_cloud", "muse_code",
+  "copilot_subscription",
+  "abacus_routellm", "poe_api",
 ]);
 const CATEGORIES = new Set<SourceDriverCategory>([
   "subscription",
@@ -467,6 +479,7 @@ const API_ACCESS_CATEGORY_ORDER: Record<Exclude<SourceDriverCategory, "subscript
 const PROTOCOLS = new Set<SourceDriverProtocol>(["openai_responses", "openai_chat", "anthropic_messages", "gemini_native"]);
 const SURFACES = new Set<SourceDriverSurface>(["open_ai", "anthropic", "gemini"]);
 const ICONS = new Set<SourceDriverIconKey>([
+  "grok", "kiro", "cursor", "copilot", "kilo", "commandcode", "meta", "abacus", "poe",
   "openai", "anthropic", "gemini", "azure", "bedrock", "ollama", "lmstudio",
   "vllm", "openrouter", "opencode", "cline", "omniroute", "custom", "network", "claude", "xai", "mistral",
   "deepseek", "dashscope", "moonshot", "zhipu", "minimax", "stepfun", "groq",
@@ -508,7 +521,8 @@ export function sourceDriverById(id: SourceDriverId): SourceDriver {
 }
 
 export function sourceDriversForCategory(category: SourceDriverCategory): readonly SourceDriver[] {
-  return SOURCE_DRIVERS.filter((driver) => driver.category === category);
+  return SOURCE_DRIVERS.filter((driver) => driver.category === category
+    && driver.subscriptionContract?.generation.defaultEnabled !== false);
 }
 
 export function sourceDriversForApiAccess(): readonly SourceDriver[] {
@@ -596,6 +610,7 @@ export function sourceDriverInitialChannelV5(
     ...(defaults.subscription ? {
       subscription: {
         platform: defaults.subscription.platform,
+        claude_fast_enabled: false,
         account_label: "",
         max_concurrency: DEFAULT_SUPPLIER_MAX_CONCURRENCY,
         responses_ws_pool_enabled: true,
@@ -634,6 +649,8 @@ export function normalizeChannelV5<T extends ChannelConfigV5>(channel: T): T {
     ? Math.min(100, Math.max(0, Math.trunc(rawQuotaReservePercent)))
     : 0;
   if (normalized.subscription) {
+    normalized.subscription.claude_fast_enabled =
+      normalized.subscription.claude_fast_enabled ?? false;
     // Keep the former subscription fields as a compatibility mirror for clients
     // that predate the channel-wide capacity fields.
     normalized.subscription.max_concurrency = normalized.max_concurrency;
@@ -836,7 +853,7 @@ export function serializeChannelV5(channel: ChannelConfigV5): ChannelConfigV5 {
     server_quic_url: normalized.server_quic_url,
     max_concurrency: normalized.max_concurrency,
     quota_reserve_percent: normalized.quota_reserve_percent,
-    ...(driver.category === "subscription" && normalized.subscription
+    ...(driver.subscriptionProvider && normalized.subscription
       ? { subscription: structuredClone(normalized.subscription) }
       : {}),
     model_capability_evidence: structuredClone(normalized.model_capability_evidence),
@@ -1059,7 +1076,7 @@ function validateSubscriptionContract(
     !contract.accepted_ingress_protocols.includes(binding.protocol))) {
     throw new Error(`Source driver ${driver.id} subscription contract omits a native protocol`);
   }
-  validateSubscriptionCapability(driver.id, "generation", contract.generation, true);
+  validateSubscriptionCapability(driver.id, "generation", contract.generation);
   if (!contract.generation.modes.includes("buffered") || !contract.generation.modes.includes("sse")) {
     throw new Error(`Source driver ${driver.id} generation contract must support buffered and SSE modes`);
   }
@@ -1077,7 +1094,7 @@ function validateSubscriptionContract(
       throw new Error(`Source driver ${driver.id} has a duplicate subscription special operation`);
     }
     seen.add(key);
-    validateSubscriptionCapability(driver.id, operation, special.capability, false);
+    validateSubscriptionCapability(driver.id, operation, special.capability);
   }
 }
 
@@ -1085,7 +1102,6 @@ function validateSubscriptionCapability(
   driverId: string,
   operation: string,
   capability: RawSubscriptionOperationCapability,
-  requireEnabled: boolean,
 ): void {
   if (!capability
     || !Array.isArray(capability.modes)
@@ -1112,14 +1128,7 @@ function validateSubscriptionCapability(
     || typeof capability.default_enabled !== "boolean") {
     throw new Error(`Source driver ${driverId} operation ${operation} has invalid evidence or usage policy`);
   }
-  if (requireEnabled && !capability.default_enabled) {
-    throw new Error(`Source driver ${driverId} generation contract must be enabled`);
-  }
-  if (capability.default_enabled
-    && ([conversion.request, conversion.response, conversion.error].some((level) => level === "c2")
-      || (hasSse && conversion.stream === "c2"))) {
-    throw new Error(`Source driver ${driverId} operation ${operation} cannot default-enable c2/c3 conversion`);
-  }
+  // Admission is explicit in the manifest; approximate conversion is not unsupported.
 }
 
 function subscriptionOperationBelongsToSurface(surface: string, operation: string): boolean {
@@ -1218,6 +1227,8 @@ function expectedExecutionKind(id: SourceDriverId): SourceDriverExecutionKind {
   if (id === "claude_subscription") return "claude_subscription";
   if (id === "gemini_subscription") return "gemini_subscription";
   if (id === "grok_subscription") return "grok_subscription";
+  if (id === "kiro_subscription") return "kiro_subscription";
+  if (id === "cursor_subscription") return "cursor_subscription";
   return "http_surface";
 }
 
@@ -1231,7 +1242,9 @@ function validExecutor(driver: RawDriver, executionKind: SourceDriverExecutionKi
     ? "openai"
     : executionKind === "claude_subscription"
       ? "claude"
-      : executionKind === "gemini_subscription" ? "antigravity" : "grok";
+      : executionKind === "gemini_subscription" ? "antigravity"
+        : executionKind === "kiro_subscription" ? "kiro"
+        : executionKind === "cursor_subscription" ? "cursor" : "grok";
   return driver.executor?.type === "retained_subscription"
     && driver.executor.provider === provider
     && driver.subscription_provider === provider;

@@ -106,6 +106,7 @@ pub(crate) fn default_config() -> ClientConfig { let mut exported_config = (|| {
         lan_share: LanShareConfig::default(),
         proxy_auto_start: true,
         automatic_updates: true,
+        prevent_sleep_while_supplying: true,
         supplier_auto_start: false,
         api_key: generate_local_api_key(),
         registry_sources: default_endpoint_registry_sources(),
@@ -115,6 +116,7 @@ pub(crate) fn default_config() -> ClientConfig { let mut exported_config = (|| {
         development_endpoint: default_development_endpoint(),
         allow_model_equivalence: default_allow_model_equivalence(),
         prefer_local_supply: true,
+        tool_model_injection: Default::default(),
         allow_unverified_platform_routes: true,
         model_aliases: default_model_aliases(),
         model_compatibility_profiles: default_model_compatibility_profiles(),
@@ -243,6 +245,7 @@ pub(crate) fn default_subscription_daily_request_limit() -> u32 {
 
 pub(crate) fn default_subscription_adapter_config() -> SubscriptionAdapterConfig {
     SubscriptionAdapterConfig {
+        claude_fast_enabled: false,
         platform: default_subscription_platform(),
         account_label: String::new(),
         credential_ref: String::new(),
@@ -558,6 +561,7 @@ fn migrate_client_config_v4(value: ClientConfigV4Read) -> ClientConfig {
         lan_share: value.lan_share,
         proxy_auto_start: value.proxy_auto_start,
         automatic_updates: value.automatic_updates,
+        prevent_sleep_while_supplying: true,
         supplier_auto_start: value.supplier_auto_start,
         api_key: value.api_key,
         registry_sources: value.registry_sources,
@@ -567,6 +571,7 @@ fn migrate_client_config_v4(value: ClientConfigV4Read) -> ClientConfig {
         development_endpoint: default_development_endpoint(),
         allow_model_equivalence: value.allow_model_equivalence,
         prefer_local_supply: value.prefer_local_supply,
+        tool_model_injection: Default::default(),
         allow_unverified_platform_routes: value.allow_unverified_platform_routes,
         model_aliases: value.model_aliases,
         model_compatibility_profiles: default_model_compatibility_profiles(),
@@ -1281,6 +1286,7 @@ pub(crate) fn normalize_channel(
     crate::coding_gateway::upgrade_legacy_zen_surfaces(&mut channel);
     crate::channel_surface::repair_channel_surface_contract(&mut channel);
     crate::openrouter::normalize_channel(&mut channel);
+    crate::cursor::models::normalize_channel(&mut channel);
     // `enabled` remains canonical. `share_enabled` is a compatibility mirror,
     // except for the dedicated LAN-share driver which is always local-only.
     channel.share_enabled =
@@ -1299,6 +1305,8 @@ pub(crate) fn normalize_channel(
             | crate::source_driver::SourceDriverId::ClaudeSubscription
             | crate::source_driver::SourceDriverId::GeminiSubscription
             | crate::source_driver::SourceDriverId::GrokSubscription
+            | crate::source_driver::SourceDriverId::KiroSubscription
+            | crate::source_driver::SourceDriverId::CursorSubscription
     );
     if subscription_driver {
         if source_driver == crate::source_driver::SourceDriverId::OpenAiSubscription {
@@ -1407,6 +1415,7 @@ pub(crate) fn normalize_channel(
 
 pub(crate) fn project_channel_legacy_fields(mut channel: ChannelConfig) -> ChannelConfig {
     crate::openrouter::normalize_channel(&mut channel);
+    crate::cursor::models::normalize_channel(&mut channel);
     channel.models = dedupe_models(std::mem::take(&mut channel.models));
     let default_model = channel.default_model_from(&channel.models);
     sort_models_by_short_name(&mut channel.models);
@@ -1446,6 +1455,8 @@ pub(crate) fn infer_source_driver_at_load_boundary(
             "openai" | "codex" | "chatgpt" => SourceDriverId::OpenAiSubscription,
             "gemini" | "google" | "antigravity" => SourceDriverId::GeminiSubscription,
             "grok" | "xai" => SourceDriverId::GrokSubscription,
+            "kiro" => SourceDriverId::KiroSubscription,
+            "cursor" => SourceDriverId::CursorSubscription,
             _ => SourceDriverId::ClaudeSubscription,
         };
     }
@@ -2823,6 +2834,34 @@ mod tests {
         assert_eq!(decoded.quota_reserve_percent(), 12);
         assert_eq!(decoded.subscription.max_concurrency, 6);
         assert_eq!(decoded.subscription.quota_reserve_percent, 12);
+    }
+
+    #[test]
+    fn claude_fast_setting_is_opt_in_and_survives_config_round_trip() {
+        let mut channel = default_config().channels.remove(0);
+        channel.set_source_driver(crate::source_driver::SourceDriverId::ClaudeSubscription);
+        channel.surface_bindings = source_driver_surface_bindings(
+            crate::source_driver::SourceDriverId::ClaudeSubscription,
+            "",
+        );
+        channel.kind = "subscription_adapter".to_string();
+        channel.subscription.platform = "claude".to_string();
+        assert!(!channel.subscription.claude_fast_enabled);
+        channel.subscription.claude_fast_enabled = true;
+        let mut value = serde_json::to_value(&channel).unwrap();
+        let decoded: ChannelConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(decoded.subscription.claude_fast_enabled);
+        assert!(
+            supplier_from_channel(&decoded)
+                .subscription
+                .claude_fast_enabled
+        );
+        value["subscription"]
+            .as_object_mut()
+            .unwrap()
+            .remove("claude_fast_enabled");
+        let legacy: ChannelConfig = serde_json::from_value(value).unwrap();
+        assert!(!legacy.subscription.claude_fast_enabled);
     }
 
     #[test]

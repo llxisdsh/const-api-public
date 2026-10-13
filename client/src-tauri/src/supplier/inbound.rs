@@ -294,6 +294,10 @@ impl SupplierRequestTasks {
             .map(|active| active.len())
             .unwrap_or_default()
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.active.lock().expect("supplier request tasks poisoned").is_empty()
+    }
 }
 
 struct SupplierRequestTaskEntryGuard {
@@ -1050,7 +1054,7 @@ mod request_task_tests {
 
         let slow = serde_json::to_string(&request_message("slow", "slow=1", false)).unwrap();
         handle_supplier_inbound_text_with_tasks(
-            &Client::new(),
+            &Client::new().into(),
             &agent,
             &outbound,
             &outbound,
@@ -1063,7 +1067,7 @@ mod request_task_tests {
 
         let fast = serde_json::to_string(&request_message("fast", "fast=1", false)).unwrap();
         handle_supplier_inbound_text_with_tasks(
-            &Client::new(),
+            &Client::new().into(),
             &agent,
             &outbound,
             &outbound,
@@ -1084,7 +1088,7 @@ mod request_task_tests {
         wait_for_task_count(&tasks, 1).await;
 
         handle_supplier_inbound_text_with_tasks(
-            &Client::new(),
+            &Client::new().into(),
             &agent,
             &outbound,
             &outbound,
@@ -1135,7 +1139,7 @@ mod request_task_tests {
         let (outbound, mut outbound_rx) = mpsc::channel(8);
         let request = serde_json::to_string(&request_message("stream", "", true)).unwrap();
         handle_supplier_inbound_text_with_tasks(
-            &Client::new(),
+            &Client::new().into(),
             &agent,
             &outbound,
             &outbound,
@@ -1155,7 +1159,7 @@ mod request_task_tests {
         assert_eq!(chunk.kind, "stream_chunk");
 
         handle_supplier_inbound_text_with_tasks(
-            &Client::new(),
+            &Client::new().into(),
             &agent,
             &outbound,
             &outbound,

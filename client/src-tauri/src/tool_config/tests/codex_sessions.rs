@@ -315,7 +315,7 @@
             let catalog_path = sqlite_dir.join("codex-dev.db");
             let conn = Connection::open(&catalog_path).expect("catalog open");
             conn.execute(
-                "CREATE TABLE local_thread_catalog (thread_id TEXT, model_provider TEXT)",
+                "CREATE TABLE local_thread_catalog (host_id TEXT NOT NULL DEFAULT 'local', thread_id TEXT, model_provider TEXT, PRIMARY KEY (host_id, thread_id))",
                 [],
             )
             .expect("create nullable catalog");
@@ -376,7 +376,7 @@
             let catalog_path = sqlite_dir.join("codex-dev.db");
             let conn = Connection::open(&catalog_path).expect("catalog open");
             conn.execute(
-                "CREATE TABLE local_thread_catalog (thread_id TEXT, model_provider TEXT)",
+                "CREATE TABLE local_thread_catalog (host_id TEXT NOT NULL DEFAULT 'local', thread_id TEXT, model_provider TEXT, PRIMARY KEY (host_id, thread_id))",
                 [],
             )
             .expect("create nullable catalog");

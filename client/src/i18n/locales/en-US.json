@@ -2,6 +2,62 @@
   "app": {
     "name": "CONST API"
   },
+  "cursor": {
+    "login": "Sign in to Cursor",
+    "starting": "Creating sign-in link…",
+    "hint": "Sign in with your Cursor account. Authorization does not run models or purchase a plan. Available models and usage depend on this account's subscription.",
+    "code": "Sign-in code:",
+    "openLogin": "Open Cursor sign-in",
+    "waiting": "Confirm in your browser. Authorization will return here automatically.",
+    "retrying": "Connection unavailable or rate limited. Waiting to retry; you can cancel anytime.",
+    "success": "Authorized. Click Save to import the account. Model tests consume upstream quota.",
+    "errors": {
+      "network": "Could not connect to Cursor. Check your network and retry.",
+      "invalid_response": "Cursor returned unrecognized authorization details. No credentials were imported.",
+      "denied": "Cursor authorization was denied. You can start again.",
+      "expired": "The sign-in link expired. Start sign-in again.",
+      "slow_down": "Too many sign-in attempts. Wait a few minutes and try again.",
+      "upstream_error": "Cursor authorization failed. Try again later."
+    }
+  },
+  "copilot": {
+    "login": "Sign in to GitHub Copilot",
+    "starting": "Creating sign-in code…",
+    "hint": "Sign in with a GitHub account that has Copilot access. Models depend on your plan, organization and region. Sign-in runs no model requests or payments. This adapter uses client endpoints; verify the channel and your account's usage permissions before supplying requests.",
+    "code": "Sign-in code:",
+    "openLogin": "Open GitHub sign-in",
+    "waiting": "Enter the code and authorize on GitHub. Credentials will be filled in automatically.",
+    "retrying": "Connection unavailable or rate limited. Waiting to retry; you can cancel anytime.",
+    "success": "Authorized. Refresh reads the account model list; Validate and save calls models and consumes quota.",
+    "errors": {
+      "network": "Could not connect to GitHub. Check your network and retry.",
+      "invalid_response": "GitHub returned unrecognized authorization details. No credentials were imported.",
+      "denied": "GitHub sign-in was denied. You can start again.",
+      "expired": "The sign-in code expired. Start sign-in again.",
+      "upstream_error": "GitHub authorization failed. Try again later."
+    }
+  },
+  "museCode": {
+    "login": "Sign in for a subscription key",
+    "starting": "Creating sign-in code…",
+    "hint": "Sign in to Meta for the dedicated Muse Code subscription key, not a regular pay-as-you-go key. Meta limits subscriptions to Muse Code CLI; subscription billing through CONST still needs account verification. Sign-in runs no model requests and makes no payments.",
+    "code": "Sign-in code:",
+    "openLogin": "Open Meta sign-in",
+    "waiting": "Confirm sign-in in your browser. The key will be filled in automatically.",
+    "retrying": "Connection unavailable or rate limited. Waiting to retry; you can cancel anytime.",
+    "success": "Subscription key filled in. Click Validate and save to check the channel; checks consume upstream quota.",
+    "errors": {
+      "network": "Could not connect to Meta. Check your network and retry.",
+      "invalid_response": "Meta returned unrecognized authorization or subscription details. No key was imported.",
+      "unexpected_endpoint": "Meta returned an unexpected endpoint. Authorization stopped.",
+      "region_restricted": "Meta reports this service is unavailable in your region. Check account and subscription eligibility.",
+      "denied": "Meta sign-in was denied. You can start again.",
+      "expired": "The sign-in code expired. Start sign-in again.",
+      "subscription_inactive": "This account has no active Muse Code subscription. No key was imported.",
+      "payment_required": "Meta requires subscription payment first. CONST will not pay or switch to a pay-as-you-go key.",
+      "upstream_error": "Meta authorization failed. Try signing in again; no pay-as-you-go fallback was enabled."
+    }
+  },
   "windowControls": {
     "minimize": "Minimize",
     "maximize": "Maximize",
@@ -94,8 +150,8 @@
     "title": "Model Pricing Reference",
     "subtitle": "Reference unit prices come from the active catalog. Estimates reflect available channels, capacity, service performance, and quotes.",
     "routingPolicy": "How requests are assigned",
-    "withinBest": "Lower prices favored within each priority tier",
-    "routingPolicyHint": "For the same model, use available official channels first, then try custom channels. Within each priority tier, consider service performance and price, favoring lower quotes. Active sessions usually keep their channel until idle.",
+    "withinBest": "Official first, custom fallback; inverse-square price weighting within each tier",
+    "routingPolicyHint": "For the same model, select available channels; free offers take priority within the tier. Paid offers are weighted by service performance and 1/price²: half the price gives 4× the price weight. Active sessions usually keep their channel; idle sessions are rebalanced.",
     "updatedAt": "Snapshot time",
     "catalogPrice": "Catalog {{price}}",
     "noPriceComponents": "The current price catalog has no displayable billing items.",
@@ -746,7 +802,17 @@
       "defaultTarget": "If no matching interface exists, convert to",
       "defaultTargetHint": "This is a fallback setting and usually does not need to be changed.",
       "sharedCredentialHint": "The enabled interfaces below share this API key. Create another channel for interfaces that use a different key.",
-      "managedConnection": "Managed by the subscription connection"
+      "managedConnection": "Managed by the subscription connection",
+      "acceptedProtocols": "Protocols available to tools",
+      "subscriptionHint": "The subscription adapter manages the upstream connection. CONST adapts tool requests; protocol names do not identify the model vendor.",
+      "subscriptionTransports": {
+        "openai": "Codex Responses · SSE / WebSocket",
+        "claude": "Anthropic Messages · HTTP / SSE",
+        "antigravity": "Antigravity generateContent · HTTP / SSE",
+        "grok": "Grok Responses · HTTP / SSE",
+        "kiro": "Kiro GenerateAssistantResponse · AWS EventStream",
+        "cursor": "Cursor AgentService · Connect / HTTP2"
+      }
     },
     "defaultModelHint": "Model names currently pass through unchanged.",
     "bedrockModelHint": "Prefer an OpenAI-compatible model name from bedrock-mantle. Actual capabilities follow online validation.",
@@ -765,6 +831,7 @@
       "userAgentProfileDefault": "Do not override (follow request)",
       "userAgentProfileHint": "Use this only when the upstream restricts or requires a specific client. Channel refreshes, checks, and tool requests will use the selected client's User-Agent; leave it off for normal channels.",
       "surfaceTitle": "Upstream API interfaces",
+      "subscriptionInterfaceTitle": "Subscription interface and tool protocols",
       "notConfigured": "Not configured",
       "collapse": "Collapse",
       "expand": "Expand",
@@ -806,6 +873,8 @@
       "rpmLowWarning": "A low per-minute limit may reduce trades. Set it only when the upstream enforces this quota.",
       "rpmConfigured": "Limit this only when the upstream enforces a per-minute quota; 0 adds no extra limit.",
       "subscriptionPlatform": "Subscription platform",
+      "claudeFast": "Allow Claude Fast",
+      "claudeFastHint": "Off by default: Fast requests run at standard speed. When enabled, Fast is attempted only when requested and uses Claude extra-usage credits, not included subscription usage. This does not enable upstream paid overages. Billing uses the actual upstream tier.",
       "legacyGemini": "Legacy Gemini Code Assist",
       "credentialReference": "Credential file",
       "credentialReferenceHint": "Stored locally only: {{path}}",
@@ -822,11 +891,16 @@
       "empty": "This channel has no additional capabilities to display.",
       "primaryTitle": "Core capabilities",
       "primaryHint": "The main model-request capabilities available through this channel.",
+      "subscriptionPrimaryHint": "Summarized from the subscription adapter, model catalog, and existing checks. Group checks verify representative models, not every individual capability.",
       "clientHostTitle": "Available in agent tools",
       "clientHostHint": "Completed locally by Codex or another agent tool; this is separate from standard API capability.",
       "clientHostFileInput": "Codex / Agent can read local files",
       "apiTitle": "API requests this channel can handle",
       "apiHint": "The local API requests below can use this channel. Unlisted requests will not be routed to it.",
+      "subscriptionApiHint": "These are API requests CONST can accept through its adapter, not native upstream endpoints. Capabilities depend on the model and adapter.",
+      "coreOperationsOnly": "Core requests are supported; some extended operations are unavailable",
+      "adapterConversion": "Converted by the subscription adapter; some advanced parameters are limited",
+      "modelDependent": "Availability depends on the selected model and upstream",
       "supported": "Supported",
       "experimental": "Experimental",
       "limited": "Limited",
@@ -882,8 +956,8 @@
       "localValidatedSignInLater": "{{channel}} passed local validation and will connect to the platform after sign-in.",
       "platformConnectionIncomplete": "{{channel}} passed local validation, but the platform connection is incomplete: {{error}}",
       "platformNotConfirmed": "{{channel}} passed local validation; the platform has not confirmed it online yet.",
-      "channelDisabled": "{{channel}} is disabled.",
-      "channelDisabledOthersContinue": "{{channel}} is disabled; other channels continue supplying.",
+      "channelDisabled": "{{channel}} has stopped accepting new requests. In-flight requests will finish.",
+      "channelDisabledOthersContinue": "{{channel}} has stopped accepting new requests. In-flight requests and other channels are unaffected.",
       "saveBeforeReorder": "Save or cancel the current channel changes before changing local priority.",
       "reorderFailed": "Could not save local priority: {{error}}",
       "saveBeforeRefresh": "Save or cancel the current changes before refreshing channel information.",
@@ -913,6 +987,8 @@
   },
   "account": {
     "title": "Account",
+    "restoring": "Restoring account status…",
+    "refreshRetained": "{{error}}. Previously loaded content is still shown.",
     "signedOutSubtitle": "You are signed out. The client is currently running in local mode.",
     "tabs": {
       "overview": "Overview",
@@ -1417,6 +1493,10 @@
     "catalogVersion": "Model catalog version",
     "catalogSource": "Catalog sources",
     "startupAndUpdates": "Startup",
+    "preventSleepWhileSupplying": "Stay awake while supplying",
+    "sleepPreventionHint": "Prevents automatic sleep only while supply is available or requests are unfinished. Normal sleep settings resume when idle; the display can turn off, and you can still lock or sleep manually.",
+    "sleepPreventionFailed": "Could not change sleep prevention: {{error}}",
+    "releasePreferencesDevHint": "Dev builds do not update automatically or launch at login. These settings work in release builds.",
     "interfaceSettings": "Interface",
     "autoRestartUpdate": "Restart automatically for updates",
     "launchAtLogin": "Launch at login",
@@ -1582,6 +1662,8 @@
       "antigravity": "Antigravity account subscription",
       "claude": "Claude account subscription",
       "grok": "Grok account subscription",
+      "kiro": "Kiro account subscription",
+      "cursor": "Cursor account subscription",
       "connect": "Connect {{provider}}"
     },
     "capability": {
@@ -1843,13 +1925,13 @@
       "description": "Cline desktop and terminal agent with shared model configuration"
     },
     "trae": {
-      "description": "TraeCode with automatic custom-model configuration; sign in to Trae first"
+      "description": "TRAE with Agent and IDE modes and automatic custom-model configuration; sign in first"
     },
     "trae-cn": {
-      "description": "TraeCode China with automatic custom-model configuration; sign in to Trae first"
+      "description": "TRAE China with Agent and IDE modes and automatic custom-model configuration; sign in first"
     },
     "trae-work": {
-      "description": "Configure models for local tasks in TraeWork desktop; sign in to TraeWork first"
+      "description": "Merged into TRAE; service ends October 23, 2026. Upgrade in TraeWork"
     },
     "opencode": {
       "description": "An open-source AI coding agent for terminals, desktops, and IDEs"
@@ -1887,6 +1969,9 @@
     "grok-build": {
       "description": "xAI's terminal coding agent; syncs models and selects the matching API protocol for each model"
     },
+    "muse-code": {
+      "description": "Meta terminal coding agent with custom models, reasoning effort and context limits"
+    },
     "minimax-code": {
       "description": "MiniMax desktop and terminal agent with shared model configuration; prefers desktop by default and uses the protocol selected in the tool menu"
     },
@@ -1897,7 +1982,12 @@
       "description": "Use CONST API in VS Code Chat and Agent with model-specific protocols"
     },
     "workbuddy": {
-      "description": "A professional desktop agent for office work, research, and multi-step tasks"
+      "title": "WorkBuddy",
+      "description": "WorkBuddy China desktop agent with configuration separate from WorkBuddy AI"
+    },
+    "workbuddy-ai": {
+      "title": "WorkBuddy AI",
+      "description": "WorkBuddy international desktop agent with independent model configuration"
     },
     "kimicode": {
       "description": "Kimi Code desktop and terminal agent with shared model configuration"
@@ -1922,6 +2012,31 @@
       "website": "Official website",
       "github": "GitHub"
     }
+  },
+  "toolModelInjection": {
+    "allModels": "Inject all models",
+    "hint": "Turn off to inject only models from the recommended list and reduce clutter. Claude, Codex using its native model list, and tools that discover models themselves are unaffected.",
+    "editList": "Recommended list",
+    "title": "Recommended tool models",
+    "editorHint": "Admin recommendations come first, followed by your additions. Use a model name or a prefix ending in *.",
+    "recommended": "Admin recommendations",
+    "fixed": "Managed by the admin; read-only here",
+    "noRecommendations": "No recommendation rules. Add your own below.",
+    "additions": "My additions",
+    "modelInput": "Model or prefix to append",
+    "placeholder": "For example, glm-5.3 or glm-*",
+    "add": "Append",
+    "remove": "Remove addition {{model}}",
+    "invalid": "Enter a unique short model name or a prefix ending in *.",
+    "allModelsNote": "All models are currently injected. Turn off “Inject all models” to use this list.",
+    "saveAndSync": "Save and sync",
+    "syncHint": "Syncs configured tools only. Restore defaults clears your additions.",
+    "loadFailed": "Could not load recommendations: {{error}}",
+    "syncing": "Syncing {{tool}}…",
+    "saved": "Saved. Tools synced: {{count}}.",
+    "partial": "Saved. These tools still need syncing: {{errors}}",
+    "skipped": "{{tool}}: sync cancelled",
+    "restoreDefaults": "Restore defaults"
   },
   "modelCompatibility": {
     "title": "Customize compatible models",
@@ -2040,6 +2155,20 @@
     "listSeparator": "; ",
     "remainingModels": "; {{count}} more",
     "routeDetailTitle": "Server route details",
+    "updatedAt": "Status updated: {{time}}",
+    "reasonCode": "Reason code: {{code}}",
+    "cooldownUntil": "Cooldown until {{time}}; recovery is determined by the server.",
+    "cooldownElapsed": "Cooldown ended at {{time}}; awaiting a server status update.",
+    "diagnostics": {
+      "upstreamConnect": "Failed while connecting to upstream",
+      "tlsError": "TLS handshake failed",
+      "connectionReset": "Connection reset",
+      "connectionRefused": "Connection refused",
+      "upstreamCloseFrame": "Upstream sent a close frame",
+      "upstreamEof": "Upstream connection ended without a close frame",
+      "upstreamPongFailed": "Failed to reply to upstream heartbeat",
+      "closeCode": "Close code {{code}}"
+    },
     "durationSeconds": "{{value}}s",
     "durationMilliseconds": "{{value}}ms",
     "transportTimeoutWithLimit": "{{transport}} {{phase}} timed out ({{timeout}}; low-level: {{message}})",
@@ -2059,6 +2188,16 @@
       "cooldown": "Cooldown",
       "timeout": "Timed out",
       "networkError": "Network error",
+      "transportTimeout": "Platform-to-supplier connection timed out",
+      "transportInterrupted": "Platform-to-supplier connection interrupted",
+      "upstreamInterrupted": "Supplier-to-upstream WebSocket interrupted",
+      "upstreamConnectTimeout": "Upstream connection timed out",
+      "upstreamConnectError": "Upstream connection failed",
+      "upstreamReadError": "Failed to read upstream response",
+      "upstreamSendError": "Failed to send data upstream",
+      "upstreamRestart": "Upstream reported a service restart",
+      "upstreamOverloaded": "Upstream service overloaded",
+      "upstreamBackpressure": "Upstream response queue is full",
       "channelFailure": "Channel error",
       "temporaryFailure": "Temporary failure",
       "clientOffline": "Client offline",
@@ -2091,6 +2230,12 @@
     "summary": "Combined quota",
     "periodUnknown": "Period not specified",
     "upstreamSummary": "Upstream total",
+    "includedUsage": "Plan usage",
+    "includedMonthly": "Monthly plan quota",
+    "cursorModels": "Cursor Models (monthly)",
+    "cursorOtherModels": "Other Models (monthly)",
+    "onDemandMonthly": "On-demand (monthly)",
+    "cursorHint": "Each bar shows the remaining share of its pool. Plan and on-demand usage are separate; exhausting one pool does not disable the entire channel.",
     "official": "Official",
     "sevenDays": "7 days",
     "fiveHours": "5 hours",
@@ -2103,6 +2248,8 @@
       "openai": "OpenAI official quota",
       "claude": "Claude official quota",
       "grok": "Grok official quota",
+      "kiro": "Kiro credit quota",
+      "cursor": "Cursor official quota",
       "gemini": "Gemini official quota",
       "official": "Official quota",
       "upstream": "Upstream quota"
@@ -2462,6 +2609,14 @@
       "title": "Grok account subscription",
       "description": "Connect an individual Grok or SuperGrok account and use its subscription quota"
     },
+    "cursor_subscription": {
+      "title": "Cursor account subscription",
+      "description": "Sign in to Cursor to use your account's models and subscription quota with external tools"
+    },
+    "kiro_subscription": {
+      "title": "Kiro account subscription",
+      "description": "Sign in to Kiro with Google or GitHub; available models and credits follow your account"
+    },
     "openai_api": {
       "title": "OpenAI official API",
       "description": "Connect with an OpenAI API key"
@@ -2568,7 +2723,11 @@
     },
     "kilo_gateway": {
       "title": "Kilo AI Gateway",
-      "description": "Connect aggregated models with a Kilo API key"
+      "description": "Use a Kilo API key with your balance or Kilo Pass bonus credits"
+    },
+    "copilot_subscription": {
+      "title": "GitHub Copilot subscription",
+      "description": "Sign in to GitHub for your account's models, billed against your Copilot plan"
     },
     "cline_api": {
       "title": "Cline API",
@@ -2593,6 +2752,18 @@
     "ollama_cloud": {
       "title": "Ollama Cloud",
       "description": "Use an Ollama Cloud API key, not the local Ollama runtime"
+    },
+    "muse_code": {
+      "title": "Meta Muse Code Subscription",
+      "description": "Sign in to Meta for a dedicated subscription key; standard API, subscription billing unverified"
+    },
+    "abacus_routellm": {
+      "title": "Abacus RouteLLM",
+      "description": "Use a RouteLLM API key with your ChatLLM plan credits"
+    },
+    "poe_api": {
+      "title": "Poe Claude API",
+      "description": "Use a Poe API key for Anthropic's official Claude models, charged in account points"
     },
     "omniroute": {
       "title": "OmniRoute local gateway",
@@ -2653,6 +2824,11 @@
       "top_k": "Top K"
     },
     "codes": {
+      "tool_model_injection_empty": "No models to inject. Add models in Use page settings or turn on “Inject all models”. Existing configuration was not changed.",
+      "tool_model_injection_invalid": "Add up to 128 unique short model names or prefixes ending in *.",
+      "tool_model_injection_busy": "Tool configuration is in progress. Wait for it to finish before saving and syncing.",
+      "tool_model_injection_incomplete": "Configuration is still incomplete after syncing. Check the tool settings and retry.",
+      "tool_model_recommendations_invalid": "Recommended model rules are invalid or unsupported. Existing configuration was not changed. Update the client or check the admin rules, then retry.",
       "unauthorized": "Authentication failed. Sign in again.",
       "forbidden": "You do not have permission to perform this action.",
       "not_found": "The requested resource was not found.",
@@ -2679,6 +2855,7 @@
       "account_endpoint_unavailable": "No platform account-service address is available. Check the client configuration and try again.",
       "account_platform_unavailable": "The current sign-in platform is temporarily unavailable. Try again later.",
       "account_invalid_request": "Some account information is invalid. Check it and try again.",
+      "account_invalid_response": "The platform returned unrecognized account data. Try again later or contact support.",
       "account_authentication_failed": "Authentication failed. Check the account information or sign in again.",
       "account_forbidden": "This account does not have permission to perform the operation.",
       "account_endpoint_not_found": "The platform account endpoint was not found. Check the server address or version.",

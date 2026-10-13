@@ -628,6 +628,7 @@ mod tests {
             SourceDriverId::GlmCodingPlan,
             SourceDriverId::MinimaxTokenPlan,
             SourceDriverId::OllamaCloud,
+            SourceDriverId::MuseCode,
         ] {
             let driver = crate::source_driver::source_driver(id).unwrap();
             let mut channel = crate::coding_gateway::tests::channel(

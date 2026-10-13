@@ -275,6 +275,20 @@ pub(crate) fn plan_conversion(
     let mut lossy = false;
     let mut compatible = false;
 
+    if request.generation.service_tier.is_some() && !super::service_tier_is_portable(source, target)
+    {
+        lossy = true;
+        issues.push(ConversionIssue {
+            code: "service_tier_not_portable".into(),
+            severity: IssueSeverity::Warning,
+            path: "$.service_tier".into(),
+            feature: Some(Feature::ProviderExtension),
+            target_limitation: "Service tiers have provider-specific capacity and pricing semantics".into(),
+            action: IssueAction::Filter,
+            summary: "Provider-specific service tier omitted during cross-protocol conversion; target default applies.".into(),
+        });
+    }
+
     for usage in extract_required_features(request) {
         if usage.feature == Feature::DeveloperInstruction
             && !protocol_wire_supports(target, Feature::DeveloperInstruction)
@@ -676,8 +690,8 @@ fn response_content_issues(
                         &mut issues,
                         "response_tool_result_content_approximated",
                         &format!("{path}.content"),
-                        "Gemini tool-result output can retain only the normalized JSON/text body",
-                        "Non-text tool results normalized to JSON/text.",
+                        "Gemini tool-result content uses normalized JSON/text and sibling media parts",
+                        "Tool-result media is emitted as sibling Gemini parts; other non-text content has no equivalent.",
                     );
                 }
             }
@@ -839,6 +853,42 @@ mod tests {
             status: None,
         });
         request
+    }
+
+    #[test]
+    fn fast_service_tier_is_kept_only_within_the_same_contract() {
+        use crate::protocol::adapters::AdapterContext;
+        let identity = issuer("test", "endpoint", "account");
+        let context = AdapterContext::runtime("test", "endpoint", None, "test-model");
+        let kinds = [
+            ProtocolKind::OpenAiChat,
+            ProtocolKind::OpenAiResponses,
+            ProtocolKind::AnthropicMessages,
+            ProtocolKind::GeminiNative,
+        ];
+        for source in kinds {
+            for target in kinds {
+                let mut request = text_request();
+                request.metadata.source_protocol = Some(source);
+                request.generation.service_tier = Some("priority".into());
+                let plan = plan_conversion(
+                    &request,
+                    source,
+                    target,
+                    &identity,
+                    &identity,
+                    &CapabilityProfile::default(),
+                    ConversionPolicy::Production,
+                )
+                .unwrap();
+                assert!(plan.is_executable(), "{source:?} -> {target:?}");
+                let body =
+                    crate::protocol::encode_request(target, &request, &plan, &context).unwrap();
+                let portable = super::super::service_tier_is_portable(source, target);
+                let tier = body.get("service_tier").or_else(|| body.get("serviceTier"));
+                assert_eq!(tier.is_some(), portable, "{source:?} -> {target:?}: {body}");
+            }
+        }
     }
 
     #[test]

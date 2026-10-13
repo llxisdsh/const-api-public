@@ -319,6 +319,446 @@ exports[`source drivers > encodes the complete V2 defaults used to create every 
     ],
   },
   {
+    "apiFormat": "anthropic_messages",
+    "baseUrl": "",
+    "credentialRef": "",
+    "defaultTarget": {
+      "protocol": "anthropic_messages",
+      "surface": "anthropic",
+    },
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": true,
+      "strategy": "subscription_catalog",
+    },
+    "executionKind": "kiro_subscription",
+    "executor": {
+      "provider": "kiro",
+      "type": "retained_subscription",
+    },
+    "kind": "subscription_adapter",
+    "models": [],
+    "sourceDriver": "kiro_subscription",
+    "subscription": {
+      "platform": "kiro",
+    },
+    "supportedProtocols": [
+      "anthropic_messages",
+    ],
+    "surfaceBindings": [
+      {
+        "auth_scheme": "subscription",
+        "base_url": "",
+        "endpoint_profile": "subscription_kiro",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+    "surfaces": [
+      {
+        "auth_scheme": "subscription",
+        "base_url": "",
+        "endpoint_profile": "subscription_kiro",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "apiFormat": "anthropic_messages",
+    "baseUrl": "",
+    "credentialRef": "",
+    "defaultTarget": {
+      "protocol": "anthropic_messages",
+      "surface": "anthropic",
+    },
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": true,
+      "strategy": "subscription_catalog",
+    },
+    "executionKind": "cursor_subscription",
+    "executor": {
+      "provider": "cursor",
+      "type": "retained_subscription",
+    },
+    "kind": "subscription_adapter",
+    "models": [],
+    "sourceDriver": "cursor_subscription",
+    "subscription": {
+      "platform": "cursor",
+    },
+    "supportedProtocols": [
+      "anthropic_messages",
+    ],
+    "surfaceBindings": [
+      {
+        "auth_scheme": "subscription",
+        "base_url": "",
+        "endpoint_profile": "subscription_cursor",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+    "surfaces": [
+      {
+        "auth_scheme": "subscription",
+        "base_url": "",
+        "endpoint_profile": "subscription_cursor",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "apiFormat": "openai_chat",
+    "baseUrl": "https://api.githubcopilot.com",
+    "credentialRef": "",
+    "defaultTarget": {
+      "protocol": "openai_chat",
+      "surface": "open_ai",
+    },
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": true,
+      "strategy": "copilot_models",
+    },
+    "executionKind": "http_surface",
+    "executor": {
+      "type": "http_surface",
+    },
+    "kind": "openai_compatible",
+    "models": [],
+    "sourceDriver": "copilot_subscription",
+    "supportedProtocols": [
+      "openai_chat",
+      "openai_responses",
+      "anthropic_messages",
+    ],
+    "surfaceBindings": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.githubcopilot.com",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.githubcopilot.com",
+        "endpoint_profile": "anthropic",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.githubcopilot.com",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.githubcopilot.com",
+        "endpoint_profile": "anthropic",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "apiFormat": "openai_responses",
+    "baseUrl": "https://api.meta.ai/v1",
+    "credentialRef": "",
+    "defaultTarget": {
+      "protocol": "openai_responses",
+      "surface": "open_ai",
+    },
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": false,
+      "strategy": "openai_models",
+    },
+    "executionKind": "http_surface",
+    "executor": {
+      "type": "http_surface",
+    },
+    "kind": "openai_compatible",
+    "models": [],
+    "sourceDriver": "muse_code",
+    "supportedProtocols": [
+      "openai_responses",
+      "openai_chat",
+      "anthropic_messages",
+    ],
+    "surfaceBindings": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.meta.ai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.meta.ai",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.meta.ai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.meta.ai",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
     "apiFormat": "openai_responses",
     "baseUrl": "https://api.openai.com/v1",
     "credentialRef": "",
@@ -4151,6 +4591,288 @@ exports[`source drivers > encodes the complete V2 defaults used to create every 
   },
   {
     "apiFormat": "openai_chat",
+    "baseUrl": "https://routellm.abacus.ai/v1",
+    "credentialRef": "",
+    "defaultTarget": {
+      "protocol": "openai_chat",
+      "surface": "open_ai",
+    },
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": false,
+      "strategy": "openai_models",
+    },
+    "executionKind": "http_surface",
+    "executor": {
+      "type": "http_surface",
+    },
+    "kind": "openai_compatible",
+    "models": [],
+    "sourceDriver": "abacus_routellm",
+    "supportedProtocols": [
+      "openai_chat",
+      "openai_responses",
+      "anthropic_messages",
+    ],
+    "surfaceBindings": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://routellm.abacus.ai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://routellm.abacus.ai/v1",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://routellm.abacus.ai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://routellm.abacus.ai/v1",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "apiFormat": "openai_chat",
+    "baseUrl": "https://api.poe.com/v1",
+    "credentialRef": "",
+    "defaultTarget": {
+      "protocol": "openai_chat",
+      "surface": "open_ai",
+    },
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": false,
+      "strategy": "openai_models",
+    },
+    "executionKind": "http_surface",
+    "executor": {
+      "type": "http_surface",
+    },
+    "kind": "openai_compatible",
+    "models": [],
+    "sourceDriver": "poe_api",
+    "supportedProtocols": [
+      "openai_chat",
+      "openai_responses",
+      "anthropic_messages",
+    ],
+    "surfaceBindings": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.poe.com/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.poe.com/v1",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.poe.com/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.poe.com/v1",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "apiFormat": "openai_chat",
     "baseUrl": "http://192.168.1.10:38787/v1",
     "credentialRef": "",
     "defaultTarget": {
@@ -4452,6 +5174,7 @@ exports[`source drivers > round-trips every source driver through the V5-only ch
     "subscription": {
       "account_label": "",
       "audit_enabled": false,
+      "claude_fast_enabled": false,
       "cooldown_until_unix": 0,
       "daily_request_limit": 0,
       "max_concurrency": 20,
@@ -4523,6 +5246,7 @@ exports[`source drivers > round-trips every source driver through the V5-only ch
     "subscription": {
       "account_label": "",
       "audit_enabled": false,
+      "claude_fast_enabled": false,
       "cooldown_until_unix": 0,
       "daily_request_limit": 0,
       "max_concurrency": 20,
@@ -4594,6 +5318,7 @@ exports[`source drivers > round-trips every source driver through the V5-only ch
     "subscription": {
       "account_label": "",
       "audit_enabled": false,
+      "claude_fast_enabled": false,
       "cooldown_until_unix": 0,
       "daily_request_limit": 0,
       "max_concurrency": 20,
@@ -4665,6 +5390,7 @@ exports[`source drivers > round-trips every source driver through the V5-only ch
     "subscription": {
       "account_label": "",
       "audit_enabled": false,
+      "claude_fast_enabled": false,
       "cooldown_until_unix": 0,
       "daily_request_limit": 0,
       "max_concurrency": 20,
@@ -4693,6 +5419,328 @@ exports[`source drivers > round-trips every source driver through the V5-only ch
           },
         ],
         "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "created_at_unix_ms": 0,
+    "credential_ref": "credential://kiro_subscription",
+    "default_model": "",
+    "default_target": {
+      "protocol": "anthropic_messages",
+      "surface": "anthropic",
+    },
+    "detection_evidence": [],
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": true,
+      "strategy": "subscription_catalog",
+    },
+    "enabled": false,
+    "executor": {
+      "provider": "kiro",
+      "type": "retained_subscription",
+    },
+    "id": "channel-kiro_subscription",
+    "max_concurrency": 20,
+    "model_capability_evidence": [],
+    "models": [],
+    "name": "Kiro 账号订阅",
+    "node_id": "node-kiro_subscription",
+    "price_ratio": 1,
+    "quota_reserve_percent": 0,
+    "server_quic_url": "platform.example.test:443",
+    "server_ws_url": "wss://platform.example.test/supplier/ws",
+    "share_enabled": false,
+    "source_driver": "kiro_subscription",
+    "subscription": {
+      "account_label": "",
+      "audit_enabled": false,
+      "claude_fast_enabled": false,
+      "cooldown_until_unix": 0,
+      "daily_request_limit": 0,
+      "max_concurrency": 20,
+      "platform": "kiro",
+      "quota_reserve_percent": 0,
+      "responses_ws_pool_enabled": true,
+      "responses_ws_subscription_multiplex_probe_enabled": false,
+      "risk_note": "",
+      "rpm_limit": 0,
+    },
+    "surfaces": [
+      {
+        "auth_scheme": "subscription",
+        "base_url": "",
+        "endpoint_profile": "subscription_kiro",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "created_at_unix_ms": 0,
+    "credential_ref": "credential://cursor_subscription",
+    "default_model": "",
+    "default_target": {
+      "protocol": "anthropic_messages",
+      "surface": "anthropic",
+    },
+    "detection_evidence": [],
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": true,
+      "strategy": "subscription_catalog",
+    },
+    "enabled": false,
+    "executor": {
+      "provider": "cursor",
+      "type": "retained_subscription",
+    },
+    "id": "channel-cursor_subscription",
+    "max_concurrency": 20,
+    "model_capability_evidence": [],
+    "models": [],
+    "name": "Cursor 账号订阅",
+    "node_id": "node-cursor_subscription",
+    "price_ratio": 1,
+    "quota_reserve_percent": 0,
+    "server_quic_url": "platform.example.test:443",
+    "server_ws_url": "wss://platform.example.test/supplier/ws",
+    "share_enabled": false,
+    "source_driver": "cursor_subscription",
+    "subscription": {
+      "account_label": "",
+      "audit_enabled": false,
+      "claude_fast_enabled": false,
+      "cooldown_until_unix": 0,
+      "daily_request_limit": 0,
+      "max_concurrency": 20,
+      "platform": "cursor",
+      "quota_reserve_percent": 0,
+      "responses_ws_pool_enabled": true,
+      "responses_ws_subscription_multiplex_probe_enabled": false,
+      "risk_note": "",
+      "rpm_limit": 0,
+    },
+    "surfaces": [
+      {
+        "auth_scheme": "subscription",
+        "base_url": "",
+        "endpoint_profile": "subscription_cursor",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "created_at_unix_ms": 0,
+    "credential_ref": "credential://copilot_subscription",
+    "default_model": "",
+    "default_target": {
+      "protocol": "openai_chat",
+      "surface": "open_ai",
+    },
+    "detection_evidence": [],
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": true,
+      "strategy": "copilot_models",
+    },
+    "enabled": false,
+    "executor": {
+      "type": "http_surface",
+    },
+    "id": "channel-copilot_subscription",
+    "max_concurrency": 20,
+    "model_capability_evidence": [],
+    "models": [],
+    "name": "GitHub Copilot 账号订阅",
+    "node_id": "node-copilot_subscription",
+    "price_ratio": 1,
+    "quota_reserve_percent": 0,
+    "server_quic_url": "platform.example.test:443",
+    "server_ws_url": "wss://platform.example.test/supplier/ws",
+    "share_enabled": false,
+    "source_driver": "copilot_subscription",
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.githubcopilot.com",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.githubcopilot.com",
+        "endpoint_profile": "anthropic",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "created_at_unix_ms": 0,
+    "credential_ref": "credential://muse_code",
+    "default_model": "",
+    "default_target": {
+      "protocol": "openai_responses",
+      "surface": "open_ai",
+    },
+    "detection_evidence": [],
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": false,
+      "strategy": "openai_models",
+    },
+    "enabled": false,
+    "executor": {
+      "type": "http_surface",
+    },
+    "id": "channel-muse_code",
+    "max_concurrency": 20,
+    "model_capability_evidence": [],
+    "models": [],
+    "name": "Meta Muse Code 订阅",
+    "node_id": "node-muse_code",
+    "price_ratio": 1,
+    "quota_reserve_percent": 0,
+    "server_quic_url": "platform.example.test:443",
+    "server_ws_url": "wss://platform.example.test/supplier/ws",
+    "share_enabled": false,
+    "source_driver": "muse_code",
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.meta.ai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.meta.ai",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
         "verification": {
           "checked_at_unix": 0,
           "state": "declared",
@@ -7314,6 +8362,184 @@ exports[`source drivers > round-trips every source driver through the V5-only ch
           },
         ],
         "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "created_at_unix_ms": 0,
+    "credential_ref": "credential://abacus_routellm",
+    "default_model": "",
+    "default_target": {
+      "protocol": "openai_chat",
+      "surface": "open_ai",
+    },
+    "detection_evidence": [],
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": false,
+      "strategy": "openai_models",
+    },
+    "enabled": false,
+    "executor": {
+      "type": "http_surface",
+    },
+    "id": "channel-abacus_routellm",
+    "max_concurrency": 20,
+    "model_capability_evidence": [],
+    "models": [],
+    "name": "Abacus RouteLLM",
+    "node_id": "node-abacus_routellm",
+    "price_ratio": 1,
+    "quota_reserve_percent": 0,
+    "server_quic_url": "platform.example.test:443",
+    "server_ws_url": "wss://platform.example.test/supplier/ws",
+    "share_enabled": false,
+    "source_driver": "abacus_routellm",
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://routellm.abacus.ai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://routellm.abacus.ai/v1",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "created_at_unix_ms": 0,
+    "credential_ref": "credential://poe_api",
+    "default_model": "",
+    "default_target": {
+      "protocol": "openai_chat",
+      "surface": "open_ai",
+    },
+    "detection_evidence": [],
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": false,
+      "strategy": "openai_models",
+    },
+    "enabled": false,
+    "executor": {
+      "type": "http_surface",
+    },
+    "id": "channel-poe_api",
+    "max_concurrency": 20,
+    "model_capability_evidence": [],
+    "models": [],
+    "name": "Poe Claude API",
+    "node_id": "node-poe_api",
+    "price_ratio": 1,
+    "quota_reserve_percent": 0,
+    "server_quic_url": "platform.example.test:443",
+    "server_ws_url": "wss://platform.example.test/supplier/ws",
+    "share_enabled": false,
+    "source_driver": "poe_api",
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.poe.com/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://api.poe.com/v1",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
         "verification": {
           "checked_at_unix": 0,
           "state": "declared",

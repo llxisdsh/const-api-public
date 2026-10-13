@@ -95,6 +95,8 @@ export function QuotaVisual({ health, channel, formatCountdown }: QuotaVisualPro
             ? t("quota.updatedAt", { time: new Date(lastChecked * 1000).toLocaleString(i18n.resolvedLanguage) })
             : t("quota.hint")}</p>
           {hasStaleQuota && <p className="section-hint">{t("quota.staleHint")}</p>}
+          {health?.quota_windows?.some((window) => window.source === "cursor_billing")
+            && <p className="section-hint">{t("quota.cursorHint")}</p>}
         </div>
       </div>
 
@@ -184,11 +186,11 @@ function quotaWindowItems(
       const model = (window.model || "").trim();
       return {
         key: `official-${window.source || "unknown"}-${window.window || index}-${index}`,
-        label: model
+        label: cursorQuotaLabel(window) || (model
           ? model
           : bucket
             ? `${quotaWindowLabel(window.window)} \u00b7 ${bucket}`
-            : quotaWindowLabel(window.window),
+            : quotaWindowLabel(window.window)),
         detail: tr("quota.used", { percent: formatQuotaUsedPercent(usedPercent), reset }),
         remainingRatio,
         source: quotaSourceLabel(window.source),
@@ -205,6 +207,9 @@ function isPrimaryQuotaWindowBucket(window: QuotaWindowLike) {
   // Main rows need a declared period, not a primary/secondary slot or a plan
   // name. Unknown-period limits remain in extras; supply gating is unchanged.
   const period = quotaWindowNormalizedName(window.window);
+  if (window.source === "cursor_billing") {
+    return period === "monthly" && ["cursor_models", "other_models", "included"].includes(window.token_type || "");
+  }
   if (window.source === "grok_billing" && period === "monthly") return false;
   return (Number.isFinite(quotaWindowPeriodSeconds(window.window))
     || period === "monthly") && isStandardQuotaBucket(window);
@@ -288,6 +293,8 @@ function quotaVisualItems(
   } else if (
     items.length === 0
     && (health.quota_windows ?? []).length === 0
+    && health.quota_status !== "unknown"
+    && health.quota_status !== "not_applicable"
     && typeof health.remaining_ratio === "number"
     && Number.isFinite(health.remaining_ratio)
   ) {
@@ -364,6 +371,10 @@ function quotaSourceLabel(source?: string) {
     case "grok_billing":
     case "grok_header":
       return tr("quota.sources.grok");
+    case "kiro_billing":
+      return tr("quota.sources.kiro");
+    case "cursor_billing":
+      return tr("quota.sources.cursor");
     case "gemini_retrieve_user_quota":
       return tr("quota.sources.gemini");
     case "official_header":
@@ -375,6 +386,17 @@ function quotaSourceLabel(source?: string) {
       return tr("quota.sources.upstream");
     default:
       return source || tr("quota.sources.upstream");
+  }
+}
+
+function cursorQuotaLabel(window: QuotaWindowLike) {
+  if (window.source !== "cursor_billing") return "";
+  switch (window.token_type) {
+    case "cursor_models": return tr("quota.cursorModels");
+    case "other_models": return tr("quota.cursorOtherModels");
+    case "included": return tr("quota.includedMonthly");
+    case "on_demand": return tr("quota.onDemandMonthly");
+    default: return "";
   }
 }
 

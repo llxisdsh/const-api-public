@@ -49,19 +49,16 @@
   height: 42px;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 13%, var(--panel));
+  background: transparent;
 }
 
 .onboarding-callout.warning .onboarding-callout-icon {
   color: var(--warning-text);
-  background: color-mix(in srgb, var(--warning-bg) 72%, var(--panel));
 }
 
 .onboarding-callout.success .onboarding-callout-icon {
   color: var(--success-text);
-  background: color-mix(in srgb, var(--success-bg) 72%, var(--panel));
 }
 
 .onboarding-callout-eyebrow {

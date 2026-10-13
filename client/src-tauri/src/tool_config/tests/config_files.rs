@@ -271,7 +271,7 @@
     fn workbuddy_sync_removes_stale_const_models_but_preserves_other_connections_and_restore() {
         for legacy_object in [false, true] {
             with_temp_home(|_| {
-                let path = workbuddy_models_path();
+                let path = workbuddy_models_path("workbuddy");
                 fs::create_dir_all(path.parent().unwrap()).unwrap();
                 let endpoint = "http://127.0.0.1:38787/v1/chat/completions";
                 let entries = serde_json::json!([
@@ -288,6 +288,7 @@
                 fs::write(&path, serde_json::to_vec_pretty(&original).unwrap()).unwrap();
                 let live = workbuddy_test_models();
                 apply_workbuddy_config_with_model_info_for_protocol(
+                    "workbuddy",
                     TOOL_CONFIG_OPENAI_BASE_URL,
                     "sk-test",
                     &live,
@@ -321,6 +322,7 @@
                 }
                 assert!(
                     apply_workbuddy_config_with_model_info_for_protocol(
+                        "workbuddy",
                         TOOL_CONFIG_OPENAI_BASE_URL,
                         "sk-test",
                         &live,
@@ -331,6 +333,7 @@
                 );
                 assert!(
                     apply_workbuddy_config_with_model_info_for_protocol(
+                        "workbuddy",
                         TOOL_CONFIG_OPENAI_BASE_URL,
                         "sk-test",
                         &[],
@@ -343,7 +346,7 @@
                     current,
                     "failed/empty refresh must not clear a working configuration"
                 );
-                remove_workbuddy_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").unwrap();
+                remove_workbuddy_config("workbuddy", TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").unwrap();
                 assert_eq!(
                     read_json_or_default(&path, serde_json::json!([])).unwrap(),
                     original
@@ -355,7 +358,7 @@
     #[test]
     fn workbuddy_switches_const_profiles_without_mixing_their_models() {
         with_temp_home(|_| {
-            let path = workbuddy_models_path();
+            let path = workbuddy_models_path("workbuddy");
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             let prod_endpoint = "http://127.0.0.1:38787/v1/chat/completions";
             let dev_endpoint = "http://127.0.0.1:38788/v1/chat/completions";
@@ -371,6 +374,7 @@
 
             let live = workbuddy_test_models();
             apply_workbuddy_config_with_model_info_for_protocol(
+                "workbuddy",
                 "http://127.0.0.1:38788/v1",
                 "dev-key",
                 &live,
@@ -407,6 +411,7 @@
 
             let prod_models = tool_models_from_ids(&["claude-sonnet-4-6".to_string()]);
             apply_workbuddy_config_with_model_info_for_protocol(
+                "workbuddy",
                 "http://127.0.0.1:38787/v1",
                 "new-prod-key",
                 &prod_models,
@@ -431,7 +436,7 @@
                 .filter(|entry| entry["url"] == prod_endpoint)
                 .all(|entry| entry["constApiManaged"] == true));
 
-            remove_workbuddy_config("http://127.0.0.1:38787/v1", "new-prod-key").unwrap();
+            remove_workbuddy_config("workbuddy", "http://127.0.0.1:38787/v1", "new-prod-key").unwrap();
             assert_eq!(
                 read_json_or_default(&path, serde_json::json!([])).unwrap(),
                 original
@@ -442,27 +447,119 @@
     #[test]
     fn workbuddy_models_path_matches_runtime_directory_precedence() {
         let home = Path::new("home");
+        for (tool, folder) in [
+            ("workbuddy", ".workbuddy"),
+            ("workbuddy-ai", ".workbuddy-ai"),
+        ] {
+            assert_eq!(
+                workbuddy_models_path_from_config_dirs(tool, home, None, None),
+                home.join(folder).join("models.json")
+            );
+            assert_eq!(
+                workbuddy_models_path_from_config_dirs(
+                    tool,
+                    home,
+                    Some("  workbuddy-config  "),
+                    Some("codebuddy-config"),
+                ),
+                PathBuf::from("workbuddy-config").join("models.json")
+            );
+            assert_eq!(
+                workbuddy_models_path_from_config_dirs(
+                    tool,
+                    home,
+                    Some("  "),
+                    Some("  codebuddy-config  "),
+                ),
+                PathBuf::from("codebuddy-config").join("models.json")
+            );
+        }
+    }
 
-        assert_eq!(
-            workbuddy_models_path_from_config_dirs(home, None, None),
-            home.join(".workbuddy").join("models.json")
-        );
-        assert_eq!(
-            workbuddy_models_path_from_config_dirs(
-                home,
-                Some("  workbuddy-config  "),
-                Some("codebuddy-config"),
-            ),
-            PathBuf::from("workbuddy-config").join("models.json")
-        );
-        assert_eq!(
-            workbuddy_models_path_from_config_dirs(
-                home,
-                Some("  "),
-                Some("  codebuddy-config  "),
-            ),
-            PathBuf::from("codebuddy-config").join("models.json")
-        );
+    #[test]
+    fn workbuddy_editions_configure_and_restore_independently() {
+        for (first_removed, second_removed) in
+            [("workbuddy", "workbuddy-ai"), ("workbuddy-ai", "workbuddy")]
+        {
+            with_temp_home(|_| {
+                let original = |tool: &str| {
+                    serde_json::json!({
+                        "models": [{
+                            "id": "gpt-5.6-sol", "name": "gpt-5.6-sol", "vendor": "Custom",
+                            "url": format!("https://{tool}.example/v1/chat/completions"),
+                            "apiKey": format!("user-{tool}"), "userField": tool
+                        }],
+                        "availableModels": ["gpt-5.6-sol"], "customSetting": tool
+                    })
+                };
+                for tool in ["workbuddy", "workbuddy-ai"] {
+                    let path = workbuddy_models_path(tool);
+                    fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    fs::write(path, serde_json::to_vec_pretty(&original(tool)).unwrap()).unwrap();
+                }
+                let apply = |tool| {
+                    apply_workbuddy_config_with_model_info_for_protocol(
+                        tool,
+                        TOOL_CONFIG_OPENAI_BASE_URL,
+                        "test-key",
+                        &workbuddy_test_models(),
+                        ToolProtocol::OpenAiChat,
+                    )
+                    .unwrap()
+                };
+                let check = |tool| {
+                    check_tool_config_by_name(
+                        tool,
+                        TOOL_CONFIG_OPENAI_BASE_URL,
+                        TOOL_CONFIG_ROOT_URL,
+                        "test-key",
+                    )
+                    .unwrap()
+                };
+                let cn_path = workbuddy_models_path("workbuddy");
+                let ai_path = workbuddy_models_path("workbuddy-ai");
+                let cn_before = fs::read(&cn_path).unwrap();
+                assert_eq!(apply("workbuddy-ai").tool, "workbuddy-ai");
+                assert_eq!(fs::read(&cn_path).unwrap(), cn_before);
+                assert!(!check("workbuddy").already_configured);
+                let ai_configured = fs::read(&ai_path).unwrap();
+                assert_eq!(apply("workbuddy").tool, "workbuddy");
+                assert_eq!(fs::read(&ai_path).unwrap(), ai_configured);
+                for tool in ["workbuddy", "workbuddy-ai"] {
+                    assert!(check(tool).already_configured);
+                    let before_repeat = fs::read(workbuddy_models_path(tool)).unwrap();
+                    assert!(apply(tool).already_configured);
+                    assert_eq!(
+                        fs::read(workbuddy_models_path(tool)).unwrap(),
+                        before_repeat
+                    );
+                }
+                let still_active = fs::read(workbuddy_models_path(second_removed)).unwrap();
+                for tool in [first_removed, second_removed] {
+                    let removed = remove_tool_config_by_name(
+                        tool,
+                        TOOL_CONFIG_OPENAI_BASE_URL,
+                        TOOL_CONFIG_ROOT_URL,
+                        "test-key",
+                    )
+                    .unwrap();
+                    assert_eq!(removed.tool, tool);
+                    assert_eq!(
+                        read_json_or_default(&workbuddy_models_path(tool), serde_json::json!({}))
+                            .unwrap(),
+                        original(tool)
+                    );
+                    assert!(!check(tool).already_configured);
+                    if tool == first_removed {
+                        assert!(check(second_removed).already_configured);
+                        assert_eq!(
+                            fs::read(workbuddy_models_path(second_removed)).unwrap(),
+                            still_active
+                        );
+                    }
+                }
+            });
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -754,7 +851,7 @@
     #[test]
     fn workbuddy_current_array_config_is_managed_checked_and_restored() {
         with_temp_home(|_| {
-            let path = workbuddy_models_path();
+            let path = workbuddy_models_path("workbuddy");
             fs::create_dir_all(path.parent().expect("WorkBuddy config parent")).expect("mkdir");
             let original = serde_json::json!([
                 {
@@ -782,6 +879,7 @@
             .expect("seed WorkBuddy config");
 
             let applied = apply_workbuddy_config_with_model_info_for_protocol(
+                "workbuddy",
                 TOOL_CONFIG_OPENAI_BASE_URL,
                 "sk-test",
                 &workbuddy_test_models(),
@@ -826,17 +924,17 @@
             assert_eq!(sol["userField"], "preserve");
 
             assert!(
-                check_workbuddy_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
+                check_workbuddy_config("workbuddy", TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
                     .expect("check WorkBuddy")
                     .already_configured
             );
             assert!(
-                !check_workbuddy_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-other")
+                !check_workbuddy_config("workbuddy", TOOL_CONFIG_OPENAI_BASE_URL, "sk-other")
                     .expect("check WorkBuddy with changed key")
                     .already_configured
             );
 
-            remove_workbuddy_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
+            remove_workbuddy_config("workbuddy", TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
                 .expect("remove WorkBuddy");
             let restored =
                 read_json_or_default(&path, serde_json::json!([])).expect("read restored config");
@@ -847,7 +945,7 @@
     #[test]
     fn workbuddy_migrates_managed_paths_and_duplicates_without_touching_other_connections() {
         with_temp_home(|_| {
-            let path = workbuddy_models_path();
+            let path = workbuddy_models_path("workbuddy");
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             let endpoint = "http://127.0.0.1:38787/v1/chat/completions";
             let original = serde_json::json!({"availableModels": ["Vendor/Zulu", "First/MiXeD:free", "mixed:free", "Keep/Manual"], "models": [
@@ -862,6 +960,7 @@
                 "First/MiXeD:free".into(),
             ]);
             apply_workbuddy_config_with_model_info_for_protocol(
+                "workbuddy",
                 TOOL_CONFIG_OPENAI_BASE_URL,
                 "sk-test",
                 &models,
@@ -889,6 +988,7 @@
             );
             assert!(
                 apply_workbuddy_config_with_model_info_for_protocol(
+                    "workbuddy",
                     TOOL_CONFIG_OPENAI_BASE_URL,
                     "sk-test",
                     &models,
@@ -897,7 +997,7 @@
                 .unwrap()
                 .already_configured
             );
-            remove_workbuddy_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").unwrap();
+            remove_workbuddy_config("workbuddy", TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").unwrap();
             assert_eq!(
                 read_json_or_default(&path, serde_json::json!({})).unwrap(),
                 original
@@ -908,7 +1008,7 @@
     #[test]
     fn workbuddy_legacy_object_config_is_supported_and_restored() {
         with_temp_home(|_| {
-            let path = workbuddy_models_path();
+            let path = workbuddy_models_path("workbuddy");
             fs::create_dir_all(path.parent().expect("WorkBuddy config parent")).expect("mkdir");
             let original = serde_json::json!({
                 "schemaVersion": 1,
@@ -929,6 +1029,7 @@
             .expect("seed legacy WorkBuddy config");
 
             apply_workbuddy_config_with_model_info_for_protocol(
+                "workbuddy",
                 TOOL_CONFIG_OPENAI_BASE_URL,
                 "sk-test",
                 &workbuddy_test_models()[..1],
@@ -944,12 +1045,12 @@
                 serde_json::json!(["existing", "gpt-5.6-sol"])
             );
             assert!(
-                check_workbuddy_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
+                check_workbuddy_config("workbuddy", TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
                     .expect("check legacy WorkBuddy config")
                     .already_configured
             );
 
-            remove_workbuddy_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
+            remove_workbuddy_config("workbuddy", TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
                 .expect("remove legacy WorkBuddy config");
             assert_eq!(
                 read_json_or_default(&path, serde_json::json!({}))
@@ -962,7 +1063,7 @@
     #[test]
     fn workbuddy_cancel_removes_only_matching_unmanaged_local_models() {
         with_temp_home(|_| {
-            let path = workbuddy_models_path();
+            let path = workbuddy_models_path("workbuddy");
             fs::create_dir_all(path.parent().expect("WorkBuddy config parent")).expect("mkdir");
             fs::write(
                 &path,
@@ -991,7 +1092,7 @@
             )
             .expect("seed unmanaged WorkBuddy config");
 
-            let removed = remove_workbuddy_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
+            let removed = remove_workbuddy_config("workbuddy", TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
                 .expect("remove unmanaged WorkBuddy config");
             assert_eq!(
                 removed.details.get("manifest_entries_restored").map(String::as_str),
@@ -1419,8 +1520,15 @@
                 .cloned()
                 .expect("initial inference models");
 
-            apply_claude_desktop_config_with_models(TOOL_CONFIG_ANTHROPIC_BASE_URL, "sk-test", &[])
-                .expect("reapply Claude Desktop with an empty model catalog");
+            let mut config = crate::default_config();
+            config.tool_model_injection.all_models = false;
+            apply_claude_desktop_config_with_models_and_config(
+                TOOL_CONFIG_ANTHROPIC_BASE_URL,
+                "sk-test",
+                &[],
+                &config,
+            )
+            .expect("reapply Claude Desktop with an empty model catalog");
             let after = read_json_or_default(&profile_path, serde_json::json!({}))
                 .expect("read reapplied Claude Desktop profile");
 
@@ -1521,6 +1629,7 @@
                         ToolProtocol::OpenAiResponses,
                     ),
                     "workbuddy" => apply_workbuddy_config_with_model_info_for_protocol(
+                        "workbuddy",
                         TOOL_CONFIG_OPENAI_BASE_URL,
                         "sk-test",
                         &model_info,
@@ -1559,6 +1668,7 @@
                             ToolProtocol::OpenAiResponses,
                         ),
                         "workbuddy" => apply_workbuddy_config_with_model_info_for_protocol(
+                            "workbuddy",
                             TOOL_CONFIG_OPENAI_BASE_URL,
                             "sk-test",
                             &model_info,
@@ -3030,6 +3140,7 @@
                 apply_openclaw_config(supplied_root, "sk-test").expect("apply OpenClaw config");
                 apply_hermes_config(supplied_root, "sk-test").expect("apply Hermes config");
                 apply_workbuddy_config_with_model_info_for_protocol(
+                    "workbuddy",
                     supplied_root,
                     "sk-test",
                     &workbuddy_test_models()[..1],
@@ -4112,6 +4223,7 @@
             "mistral-vibe",
             "grok-build",
             "minimax-code",
+            "muse-code",
             "openclaw",
             "opencode",
             "openscience",
@@ -4141,7 +4253,7 @@
     #[test]
     fn tool_profiles_are_unique_and_self_consistent() {
         let mut ids = std::collections::BTreeSet::new();
-        assert_eq!(TOOL_PROFILES.len(), 33);
+        assert_eq!(TOOL_PROFILES.len(), 35);
         for profile in TOOL_PROFILES {
             assert!(ids.insert(profile.id), "duplicate tool={}", profile.id);
             assert!(

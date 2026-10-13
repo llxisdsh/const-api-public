@@ -16,7 +16,7 @@ vi.mock("./runtimeProfile", async (importOriginal) => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 
-describe("application update edition boundary", () => {
+describe("application runtime preferences", () => {
   beforeEach(() => {
     edition.updates = false;
     vi.stubGlobal("__TAURI_INTERNALS__", {});
@@ -24,6 +24,7 @@ describe("application update edition boundary", () => {
     vi.mocked(invoke).mockReset().mockImplementation(async (command) => {
       if (command === "get_config") return {
         ...emptyConfig, config_version: 5, proxy_auto_start: false, supplier_auto_start: false,
+        prevent_sleep_while_supplying: false,
         channels: [sourceDriverInitialChannelV5(sourceDriverById("openrouter"), {
           id: "update-boundary", name: "Fixture", credentialRef: "fixture",
         })],
@@ -67,5 +68,38 @@ describe("application update edition boundary", () => {
     renderHook(() => useAppController());
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("native_update_status"));
     expect(listen).toHaveBeenCalledWith("const-api://update-state", expect.any(Function));
+  });
+
+  it("saves sleep prevention locally without changing drafts or restarting services", async () => {
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "set_prevent_sleep_while_supplying") return (args as { enabled: boolean }).enabled;
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("update-boundary"));
+    act(() => result.current.setConfig((current) => ({ ...current, listen: "127.0.0.1:39999" })));
+    vi.mocked(invoke).mockClear();
+    await act(() => result.current.changeSleepPrevention(true));
+    expect(result.current.config.prevent_sleep_while_supplying).toBe(true);
+    expect(result.current.config.listen).toBe("127.0.0.1:39999");
+    expect(invoke).toHaveBeenCalledWith("set_prevent_sleep_while_supplying", { enabled: true });
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => ["save_config", "save_supplier_config", "start_supplier", "stop_supplier", "start_proxy", "stop_proxy"].includes(command))).toBe(false);
+    await act(() => result.current.changeSleepPrevention(false));
+    expect(result.current.config.prevent_sleep_while_supplying).toBe(false);
+  });
+
+  it("keeps the switch unchanged and reports a failed sleep-prevention save", async () => {
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "set_prevent_sleep_while_supplying") throw new Error("PowerCreateRequest failed");
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("update-boundary"));
+    await act(() => result.current.changeSleepPrevention(true));
+    expect(result.current.config.prevent_sleep_while_supplying).not.toBe(true);
+    expect(result.current.sleepPreventionBusy).toBe(false);
+    expect(result.current.toast?.text).toContain("PowerCreateRequest failed");
   });
 });

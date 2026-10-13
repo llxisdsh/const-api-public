@@ -854,6 +854,16 @@ impl CodexStateProviderTable {
             Self::LocalThreadCatalog => "thread_id",
         }
     }
+
+    fn local_scope(self) -> &'static str {
+        match self {
+            // The app-server state database belongs to this CODEX_HOME. The
+            // desktop catalog also caches SSH, WSL, remote-control and cloud
+            // threads; its identity is (host_id, thread_id), not thread_id.
+            Self::Threads => "1",
+            Self::LocalThreadCatalog => "host_id = 'local'",
+        }
+    }
 }
 
 fn load_codex_session_sync_manifest() -> Result<CodexSessionSyncManifest> {
@@ -905,6 +915,11 @@ fn plan_codex_state_db_provider_updates(
         conn.busy_timeout(Duration::from_millis(1500))?;
         for table in codex_state_provider_tables(&conn)? {
             let columns = codex_state_table_columns(&conn, table.name())?;
+            if table == CodexStateProviderTable::LocalThreadCatalog && !columns.contains("host_id") {
+                return Err(anyhow!(
+                    "CODEX_SESSION_INDEX_UNAVAILABLE: Codex desktop catalog has no host_id; cannot safely distinguish local and remote sessions. Open or update Codex, then retry."
+                ));
+            }
             let cwd_column = if columns.contains("cwd") { "cwd" } else { "NULL" };
             let user_event_column = if table == CodexStateProviderTable::Threads
                 && columns.contains("has_user_event")
@@ -914,9 +929,10 @@ fn plan_codex_state_db_provider_updates(
                 "NULL"
             };
             let query = format!(
-                "SELECT {}, model_provider, {cwd_column}, {user_event_column} FROM {}",
+                "SELECT {}, model_provider, {cwd_column}, {user_event_column} FROM {} WHERE {}",
                 table.id_column(),
-                table.name()
+                table.name(),
+                table.local_scope()
             );
             let mut stmt = conn
                 .prepare(&query)
@@ -1006,9 +1022,10 @@ fn apply_codex_state_db_provider_updates(planned: &[CodexStateProviderUpdate]) -
             if row.provider.as_deref() != Some(row.target_provider.as_str()) {
                 let changed = if let Some(provider) = row.provider.as_deref() {
                     let update_provider = format!(
-                        "UPDATE {} SET model_provider = ?1 WHERE {} = ?2 AND model_provider = ?3",
+                        "UPDATE {} SET model_provider = ?1 WHERE {} = ?2 AND model_provider = ?3 AND {}",
                         row.table.name(),
-                        row.table.id_column()
+                        row.table.id_column(),
+                        row.table.local_scope()
                     );
                     tx.execute(
                         &update_provider,
@@ -1020,9 +1037,10 @@ fn apply_codex_state_db_provider_updates(planned: &[CodexStateProviderUpdate]) -
                     )
                 } else {
                     let update_provider = format!(
-                        "UPDATE {} SET model_provider = ?1 WHERE {} = ?2 AND model_provider IS NULL",
+                        "UPDATE {} SET model_provider = ?1 WHERE {} = ?2 AND model_provider IS NULL AND {}",
                         row.table.name(),
-                        row.table.id_column()
+                        row.table.id_column(),
+                        row.table.local_scope()
                     );
                     tx.execute(
                         &update_provider,
@@ -1048,9 +1066,10 @@ fn apply_codex_state_db_provider_updates(planned: &[CodexStateProviderUpdate]) -
             if let Some(cwd) = row.cwd.as_ref().filter(|value| !value.trim().is_empty()) {
                 if columns.contains("cwd") {
                     let update_cwd = format!(
-                        "UPDATE {} SET cwd = ?1 WHERE {} = ?2 AND COALESCE(cwd, '') <> ?1",
+                        "UPDATE {} SET cwd = ?1 WHERE {} = ?2 AND COALESCE(cwd, '') <> ?1 AND {}",
                         row.table.name(),
-                        row.table.id_column()
+                        row.table.id_column(),
+                        row.table.local_scope()
                     );
                     let changed = tx
                         .execute(&update_cwd, (cwd.as_str(), row.thread_id.as_str()))

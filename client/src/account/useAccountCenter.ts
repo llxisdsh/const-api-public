@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 
 import { localizedError, stableErrorCode, tr } from "../i18n";
 import type { AccountApi } from "./accountApi";
+import { emptyAccountStatus } from "./accountTypes";
 import type {
   AccountAuthMode,
   AccountChallenge,
@@ -45,7 +46,7 @@ export type AccountActionFeedback = AccountNotice & {
 
 type AccountCenterOptions = {
   api: AccountApi;
-  initialStatus: AccountStatus;
+  initialStatus?: AccountStatus;
   initialAuthMode?: AccountAuthMode;
   notify: (notice: AccountNotice) => void;
   afterIdentityChange: (status: AccountStatus) => void | Promise<void>;
@@ -53,6 +54,8 @@ type AccountCenterOptions = {
 
 export type AccountCenterController = {
   status: AccountStatus;
+  statusReady: boolean;
+  statusError: string;
   registrationPolicy?: AccountRegistrationPolicy;
   busy: boolean;
   actionFeedback: AccountActionFeedback | null;
@@ -139,8 +142,10 @@ export function useAccountCenter({
   notify,
   afterIdentityChange,
 }: AccountCenterOptions): AccountCenterController {
-  const [status, setStatus] = useState(initialStatus);
-  const statusRef = useRef(initialStatus);
+  const [status, setStatus] = useState(initialStatus ?? emptyAccountStatus);
+  const statusRef = useRef(status);
+  const [statusReady, setStatusReady] = useState(initialStatus !== undefined);
+  const [statusReadError, setStatusReadError] = useState("");
   const [registrationPolicy, setRegistrationPolicy] = useState<AccountRegistrationPolicy>({
     registration_enabled: true,
     password_login_enabled: true,
@@ -152,7 +157,7 @@ export function useAccountCenter({
   });
   const [busy, setBusy] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<AccountActionFeedback | null>(null);
-  const [email, setEmail] = useState(initialStatus.email || "");
+  const [email, setEmail] = useState(status.email || "");
   const [authMode, setAuthMode] = useState<AccountAuthMode>(initialAuthMode);
   const [password, setPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -276,6 +281,8 @@ export function useAccountCenter({
   }
 
   function applyStatus(next: AccountStatus) {
+    setStatusReady(true);
+    setStatusReadError("");
     const previous = statusRef.current;
     const settled = keepPreviousIfStructurallyEqual(previous, next);
     if (settled === previous) return;
@@ -287,7 +294,8 @@ export function useAccountCenter({
       setPasswordCode("");
       setPasswordChallenge(null);
     }
-    if (previous.state === "signed_in" && settled.state !== "signed_in") clearBillingState();
+    if (previous.user_id !== settled.user_id || previous.platform_id !== settled.platform_id
+      || (previous.state === "signed_in" && settled.state !== "signed_in")) clearBillingState();
   }
 
   async function finishLogin(next: AccountStatus) {
@@ -319,15 +327,25 @@ export function useAccountCenter({
   }
 
   async function readStatus() {
-    const next = await api.status();
-    applyStatus(next);
-    return next;
+    try {
+      const next = await api.status();
+      applyStatus(next);
+      return next;
+    } catch (error) {
+      setStatusReadError(accountActionError(error));
+      throw error;
+    }
   }
 
   async function refreshStatus() {
-    const next = await api.refresh();
-    applyStatus(next);
-    return next;
+    try {
+      const next = await api.refresh();
+      applyStatus(next);
+      return next;
+    } catch (error) {
+      setStatusReadError(accountActionError(error));
+      throw error;
+    }
   }
 
   async function refreshRegistrationPolicy() {
@@ -341,6 +359,9 @@ export function useAccountCenter({
 
   async function initializeStatus() {
     const policyRequest = refreshRegistrationPolicy();
+    // The native runtime restores saved identity without network access. Show
+    // it before waiting for refresh; an IPC failure must not block recovery.
+    await readStatus().catch(() => undefined);
     try {
       const next = await refreshStatus();
       await policyRequest;
@@ -397,9 +418,12 @@ export function useAccountCenter({
     if (!accountRefreshGate.begin(options)) return;
     let succeeded = false;
     await runAccountAction("account", async () => {
-      await refreshStatus();
-      succeeded = true;
-      showActionFeedback("account", tr("account.notices.accountRefreshed"), "success");
+      try {
+        await refreshStatus();
+        succeeded = true;
+      } catch {
+        // The page owns the persistent refresh error; never send it to a toast.
+      }
     });
     if (!succeeded) accountRefreshGate.reset();
   }
@@ -742,6 +766,8 @@ export function useAccountCenter({
 
   return {
     status,
+    statusReady,
+    statusError: statusReadError || (status.last_error ? accountActionError(status.last_error) : ""),
     registrationPolicy,
     busy,
     actionFeedback,

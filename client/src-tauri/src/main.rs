@@ -85,11 +85,15 @@ mod coding_gateway;
 mod coding_plan;
 mod conditional_document;
 mod config;
+mod copilot;
+mod cursor;
 mod debug_console;
 mod detection;
 mod endpoint;
+mod http_client;
 
 mod instance;
+mod kiro;
 mod lan_share;
 mod launch;
 mod legal_notice;
@@ -100,12 +104,15 @@ mod model;
 mod model_catalog;
 mod model_compatibility;
 mod model_discovery;
+mod muse_code_auth;
 mod native_i18n;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod network_recovery;
 mod openrouter;
 mod output_buffer;
 mod platform_transport;
+mod power_management;
 mod protocol;
 mod proxy;
 mod realtime_media;
@@ -119,6 +126,7 @@ mod supplier;
 mod surface;
 mod surface_wire;
 mod tool_config;
+mod tool_model_injection;
 mod tool_model_metadata;
 mod update_activity;
 mod update_relaunch;
@@ -252,10 +260,10 @@ const GROK_MODELS_URL: &str = "https://cli-chat-proxy.grok.com/v1/models";
 const GROK_RESPONSES_URL: &str = "https://cli-chat-proxy.grok.com/v1/responses";
 const GROK_BILLING_WEEKLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const GROK_BILLING_MONTHLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing";
-// Official https://x.ai/cli/stable, checked 2026-09-30.
-const GROK_CLI_VERSION: &str = "1.0.44";
-const GROK_CLI_USER_AGENT: &str = "xai-grok-workspace/1.0.44";
-const GROK_BILLING_USER_AGENT: &str = "grok-pager/1.0.44 grok-shell/1.0.44 (macos; aarch64)";
+// Official https://x.ai/cli/stable, checked 2026-10-11.
+const GROK_CLI_VERSION: &str = "1.0.50";
+const GROK_CLI_USER_AGENT: &str = "xai-grok-workspace/1.0.50";
+const GROK_BILLING_USER_AGENT: &str = "grok-pager/1.0.50 grok-shell/1.0.50 (macos; aarch64)";
 const ANTIGRAVITY_OAUTH_CLIENT_ID: &str = match option_env!("CONST_LOCAL_ANTIGRAVITY_CLIENT_ID") { Some(value) => value, None => "" };
 const ANTIGRAVITY_OAUTH_CLIENT_SECRET: &str = match option_env!("CONST_LOCAL_ANTIGRAVITY_CLIENT_SECRET") { Some(value) => value, None => "" };
 const ANTIGRAVITY_OAUTH_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -265,8 +273,8 @@ const ANTIGRAVITY_API_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_DAILY_API_BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_REDIRECT_URI: &str = "http://localhost:51121/oauth-callback";
 const ANTIGRAVITY_SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs";
-// Official Antigravity Hub updater manifest, checked 2026-09-30.
-const ANTIGRAVITY_DEFAULT_USER_AGENT_VERSION: &str = "2.18.1";
+// Official Antigravity Hub updater manifest, checked 2026-10-11.
+const ANTIGRAVITY_DEFAULT_USER_AGENT_VERSION: &str = "2.22.0";
 const ANTIGRAVITY_GOOG_API_CLIENT: &str = "gl-node/22.21.1";
 const SKIP_LOCAL_SHORT_CIRCUIT_HEADER: &str = "x-const-api-skip-local";
 const USE_LOCAL_SHORT_CIRCUIT_HEADER: &str = "x-const-api-use-local";
@@ -275,7 +283,9 @@ const ALLOW_UNVERIFIED_PLATFORM_ROUTES_HEADER: &str = "x-const-api-allow-unverif
 const SUPPLIER_TRANSPORT_FRAME_COMPRESSION_FEATURE: &str = "zstd_frame_v2";
 const SUPPLIER_TRANSPORT_STREAM_RESUME_FEATURE: &str = "stream_resume_v1";
 const SUPPLIER_TRANSPORT_STREAM_PROGRESS_FEATURE: &str = "stream_progress_v1";
-const SUPPLIER_TRANSPORT_COMPRESSION_MIN_BYTES: usize = 1 << 10;
+// Compress small stream frames too; retain the existing size-win check and
+// leave tiny control messages uncompressed. The negotiated wire format is unchanged.
+const SUPPLIER_TRANSPORT_COMPRESSION_MIN_BYTES: usize = 256;
 const SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN: usize = 64 << 20;
 const SUPPLIER_TRANSPORT_FRAME_HEADER_BYTES: usize = 12;
 const SUPPLIER_TRANSPORT_FRAME_MAGIC: [u8; 4] = [0, b'C', b'Z', b'2'];
@@ -287,8 +297,8 @@ const LOCAL_DATA_RESET_MARKER_SUFFIX: &str = ".reset-pending";
 const LOCAL_DATA_RESET_DELETE_TIMEOUT: Duration = Duration::from_secs(10);
 const SUPPLIER_QUIC_ALPN: &[u8] = b"const-api-supplier/1";
 pub(crate) const MODEL_REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-static SHORT_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
-static LONG_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+static SHORT_HTTP_CLIENT: OnceLock<http_client::HttpClient> = OnceLock::new();
+static LONG_HTTP_CLIENT: OnceLock<http_client::HttpClient> = OnceLock::new();
 
 pub(crate) fn antigravity_user_agent_version() -> String {
     std::env::var("ANTIGRAVITY_USER_AGENT_VERSION")
@@ -358,25 +368,31 @@ fn startup_elapsed_ms() -> u128 {
     zero.elapsed().as_millis()
 }
 
-pub(crate) fn short_http_client() -> &'static Client {
-    SHORT_HTTP_CLIENT.get_or_init(|| {
+pub(crate) fn short_http_client() -> Client {
+    http_client::cached_client(&SHORT_HTTP_CLIENT, || {
         Client::builder()
             .timeout(Duration::from_secs(30))
             .retry(reqwest::retry::never())
-            .build()
-            .expect("short http client")
     })
+    .expect("short http client")
 }
 
-pub(crate) fn long_http_client() -> &'static Client {
-    LONG_HTTP_CLIENT.get_or_init(|| {
-        Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(MODEL_REQUEST_TIMEOUT)
-            .retry(reqwest::retry::never())
-            .build()
+pub(crate) fn long_http_client_source() -> http_client::HttpClient {
+    LONG_HTTP_CLIENT
+        .get_or_init(|| {
+            http_client::HttpClient::new(|| {
+                Client::builder()
+                    .connect_timeout(Duration::from_secs(10))
+                    .timeout(MODEL_REQUEST_TIMEOUT)
+                    .retry(reqwest::retry::never())
+            })
             .expect("long http client")
-    })
+        })
+        .clone()
+}
+
+pub(crate) fn long_http_client() -> Client {
+    long_http_client_source().snapshot()
 }
 
 #[cfg(debug_assertions)]
@@ -893,7 +909,7 @@ async fn run_desktop_host(
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--tray"]),
+            Some(vec![autostart::TRAY_ARGUMENT]),
         ));
     #[cfg(target_os = "macos")]
     let builder = builder.menu(|app| native_menu::build(app));
@@ -1012,6 +1028,9 @@ async fn run_desktop_host(
             save_supplier_config,
             get_lan_share_status,
             model_discovery::get_model_presentation,
+            tool_model_injection::get_tool_model_recommendations,
+            tool_model_injection::save_tool_model_injection_settings,
+            power_management::set_prevent_sleep_while_supplying,
             set_lan_share_connect_address,
             set_lan_share_models,
             create_lan_share_member,
@@ -1091,6 +1110,13 @@ async fn run_desktop_host(
             scan_subscription_credentials,
             import_subscription_credential,
             create_subscription_oauth_session,
+            muse_code_auth::create_muse_code_auth_session,
+            muse_code_auth::poll_muse_code_auth_session,
+            copilot::create_copilot_auth_session,
+            copilot::poll_copilot_auth_session,
+            cursor::auth::create_cursor_auth_session,
+            cursor::auth::poll_cursor_auth_session,
+            cursor::auth::cancel_cursor_auth_session,
             wait_subscription_oauth_callback,
             cancel_subscription_oauth_callback,
             exchange_subscription_oauth_code,
@@ -1689,6 +1715,10 @@ fn config_for_renderer(config: &ClientConfig) -> Result<serde_json::Value, Strin
     if let Some(object) = value.as_object_mut() {
         object.remove("account_device_api_key");
         object.remove("model_compatibility_profiles");
+        object.insert(
+            "sleep_prevention_supported".into(),
+            power_management::SUPPORTED.into(),
+        );
     }
     Ok(value)
 }
@@ -1957,7 +1987,7 @@ async fn start_proxy_inner(state: &AppState) -> Result<ProxyStatus, String> {
     // transport and its connection pools.
     let shared = Arc::new(ProxyShared::with_platform_api_key_and_transport(
         cfg.clone(),
-        long_http_client().clone(),
+        long_http_client_source(),
         state.platform_api_key.clone(),
         platform_access_token,
         state.account_refresh_notify.clone(),
@@ -2378,6 +2408,7 @@ async fn test_local_proxy(
     let resp = request
         .send()
         .await
+        .inspect_err(crate::http_client::observe_error)
         .map_err(|err| format!("request local proxy failed: {err}"))?;
     let status = resp.status().as_u16();
     let raw = resp.text().await.map_err(|err| err.to_string())?;
@@ -2635,9 +2666,7 @@ fn apply_new_install_autostart_default(
         .is_enabled()
         .context("read login startup before applying default")?
     {
-        manager
-            .enable()
-            .context("enable login startup for new installation")?;
+        autostart::enable(app).context("enable login startup for new installation")?;
     }
     if !manager
         .is_enabled()
@@ -2669,9 +2698,7 @@ fn set_autostart(
         .map_err(|err| err.to_string())?;
     let manager = app.autolaunch();
     if enabled {
-        manager.enable().map_err(|err| err.to_string())?;
-        #[cfg(target_os = "macos")]
-        autostart::associate_macos_launch_agent(&app).map_err(|err| err.to_string())?;
+        autostart::enable(&app).map_err(|err| format!("{err:#}"))?;
     } else {
         manager.disable().map_err(|err| err.to_string())?;
     }
@@ -3271,7 +3298,7 @@ async fn execute_tool_config_operation_inner(
             },
             |launch_context| launch_tool_program_for_atomic_operation(tool, launch_context),
         )
-    } else if tool == "workbuddy" {
+    } else if matches!(tool, "workbuddy" | "workbuddy-ai") {
         let models =
             require_tool_model_snapshot_for_operation(&cfg, operation, tool, "WorkBuddy").await?;
         let context_digest = tool_config_operation_context_digest(
@@ -3288,6 +3315,7 @@ async fn execute_tool_config_operation_inner(
             confirmation_token.as_deref(),
             || {
                 apply_workbuddy_config_with_model_info_for_protocol(
+                    tool,
                     &urls.openai,
                     &api_key,
                     &models,
@@ -3310,6 +3338,7 @@ async fn execute_tool_config_operation_inner(
             | "goose"
             | "mistral-vibe"
             | "grok-build"
+            | "muse-code"
             | "minimax-code"
             | "open-design"
             | "kimicode"
@@ -3332,6 +3361,7 @@ async fn execute_tool_config_operation_inner(
             "goose" => "Goose",
             "mistral-vibe" => "Mistral Vibe",
             "grok-build" => "Grok Build",
+            "muse-code" => "Muse Code",
             "minimax-code" => "MiniMax Code",
             "open-design" => "Open Design",
             "kimicode" => "Kimi Code",
@@ -3374,6 +3404,8 @@ async fn execute_tool_config_operation_inner(
                     )
                 } else if tool == "goose" {
                     launch_goose_program_for_atomic_operation(&api_key, launch_context)
+                } else if tool == "muse-code" {
+                    launch_muse_code_program_for_atomic_operation(&api_key, launch_context)
                 } else {
                     launch_tool_program_for_atomic_operation(tool, launch_context)
                 }
@@ -3517,7 +3549,7 @@ async fn start_tool_program(
     let credentials = if use_configured_environment
         && matches!(
             tool.as_str(),
-            "claude" | "claude-science" | "gemini" | "copilot" | "goose"
+            "claude" | "claude-science" | "gemini" | "copilot" | "goose" | "muse-code"
         ) {
         let cfg = load_config_from_path(&state.config_path).map_err(|err| err.to_string())?;
         Some((tool_config_urls(&cfg)?, require_config_api_key(&cfg)?))
@@ -3535,6 +3567,7 @@ async fn start_tool_program(
                 launch_copilot_cli_program(&urls.openai, &api_key)
             }
             ("goose", Some((_urls, api_key))) => launch_goose_program(&api_key),
+            ("muse-code", Some((_urls, api_key))) => launch_muse_code_program(&api_key),
             _ => tool_config::launch_tool_program(&tool),
         };
         launched
@@ -3654,7 +3687,8 @@ async fn fetch_local_platform_models_for_operation(
     };
     let response = match response {
         Ok(response) => response,
-        Err(_) => {
+        Err(error) => {
+            crate::http_client::observe_error(&error);
             ensure_tool_config_operation_active(operation, "model refresh response")
                 .map_err(|err| err.to_string())?;
             return Ok(Vec::new());
@@ -3681,7 +3715,7 @@ async fn fetch_local_platform_models_for_operation(
     };
     ensure_tool_config_operation_active(operation, "model refresh completion")
         .map_err(|err| err.to_string())?;
-    Ok(tool_models_from_response(&value))
+    cfg.tool_model_injection.select_from_payload(tool, &value)
 }
 
 async fn require_tool_model_snapshot_for_operation(
@@ -3718,7 +3752,14 @@ async fn openclaw_tool_model_snapshot_for_operation(
     // not depend on a transient /v1/models refresh. The signed/embedded active
     // catalog carries the same ToolModelInfo projection and is a safe offline
     // fallback; live data still wins whenever it is available.
-    let fallback_models = active_tool_models();
+    if !cfg.tool_model_injection.all_models {
+        return Err(model_refresh_unavailable_error(
+            cfg, operation, "openclaw", "OpenClaw",
+        ));
+    }
+    let fallback_models =
+        cfg.tool_model_injection
+            .select("openclaw", active_tool_models(), None)?;
     if fallback_models.is_empty() {
         Err("OpenClaw requires a model list, but both online discovery and the bundled catalog are unavailable.".to_string())
     } else {
@@ -3745,7 +3786,14 @@ async fn additional_tool_model_snapshot_for_operation(
     // These tools require an explicit model catalog. A transient local model
     // refresh must not make configuration unavailable when the signed/embedded
     // active catalog already contains the same normalized metadata.
-    let fallback_models = active_tool_models();
+    if !cfg.tool_model_injection.all_models && tool_model_injection::applies_to(tool) {
+        return Err(model_refresh_unavailable_error(
+            cfg, operation, tool, tool_label,
+        ));
+    }
+    let fallback_models = cfg
+        .tool_model_injection
+        .select(tool, active_tool_models(), None)?;
     if fallback_models.is_empty() {
         Err(format!("TOOL_CONFIG_MODELS_UNAVAILABLE: {tool_label}"))
     } else {
@@ -3889,6 +3937,7 @@ async fn fetch_local_json(
         .header("Authorization", local_proxy_auth_header(&cfg))
         .send()
         .await
+        .inspect_err(crate::http_client::observe_error)
         .map_err(|err| err.to_string())?;
     let status = resp.status();
     let body = resp.text().await.map_err(|err| err.to_string())?;
@@ -3929,6 +3978,7 @@ async fn fetch_supplier_route_plan_inner(
         }))
         .send()
         .await
+        .inspect_err(crate::http_client::observe_error)
         .map_err(|err| {
             format!("Local entry is not running or the local API key is invalid: request local proxy failed: {err}")
         })?;

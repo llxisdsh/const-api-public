@@ -472,12 +472,53 @@ fn decode_parts(
             let call_id = tracker.resolve(&name, result.get("id").and_then(Value::as_str));
             let response = result.get("response").cloned().unwrap_or_else(|| json!({}));
             let is_error = response.get("error").is_some();
+            let mut content = vec![ContentBlock::Text(TextBlock::new(response.to_string()))];
+            if let Some(media) = result.get("parts") {
+                let media = media.as_array().ok_or_else(|| {
+                    AdapterError::new(
+                        "content_invalid",
+                        format!("{path}.functionResponse.parts"),
+                        "function response parts must be an array",
+                    )
+                })?;
+                for (index, part) in media.iter().enumerate() {
+                    let media_path = format!("{path}.functionResponse.parts[{index}]");
+                    let data = part
+                        .get("inlineData")
+                        .or_else(|| part.get("inline_data"))
+                        .ok_or_else(|| {
+                            AdapterError::new(
+                                "capability_mismatch",
+                                &media_path,
+                                "function response media requires inlineData",
+                            )
+                        })?;
+                    // Other protocols have no Gemini $ref/displayName binding.
+                    // Keep the name adjacent to its media, without interpreting
+                    // a provider reference as a URL or discarding the attachment.
+                    if let Some(name) = data
+                        .get("displayName")
+                        .or_else(|| data.get("display_name"))
+                        .and_then(Value::as_str)
+                    {
+                        content.push(ContentBlock::Text(TextBlock::new(format!(
+                            "Attachment: {name}"
+                        ))));
+                    }
+                    content.extend(decode_parts(
+                        std::slice::from_ref(part),
+                        TurnRole::User,
+                        tracker,
+                        context,
+                        model,
+                        &media_path,
+                    )?);
+                }
+            }
             blocks.push(ContentBlock::ToolResult(ToolResult {
                 call_id,
                 name: Some(name),
-                content: vec![ContentBlock::Text(TextBlock::new(
-                    serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string()),
-                ))],
+                content,
                 status: if is_error {
                     ItemStatus::Failed
                 } else {
@@ -792,12 +833,16 @@ fn decode_tools(value: Option<&Value>) -> Result<Vec<ToolDefinition>, AdapterErr
                     ),
                     "tool_name_missing",
                 )?;
-                let schema = declaration
+                let json_schema = declaration
                     .get("parametersJsonSchema")
-                    .or_else(|| declaration.get("parameters_json_schema"))
+                    .or_else(|| declaration.get("parameters_json_schema"));
+                let mut schema = json_schema
                     .or_else(|| declaration.get("parameters"))
                     .cloned()
                     .unwrap_or_else(|| json!({"type":"object"}));
+                if json_schema.is_none() {
+                    normalize_gemini_schema_types(&mut schema);
+                }
                 let schema = canonicalize_tool_schema(&schema).map_err(|error| {
                     AdapterError::new(
                         error.code(),
@@ -880,23 +925,60 @@ fn decode_tool_choice(value: Option<&Value>) -> Result<ToolChoice, AdapterError>
     })
 }
 
+// Gemini's protobuf Schema uses enum names (OBJECT/STRING/...), whereas its
+// *JsonSchema fields already use JSON Schema. Only visit actual schema nodes;
+// enum/default data and property names must remain untouched.
+fn normalize_gemini_schema_types(schema: &mut Value) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+    if let Some(Value::String(kind)) = object.get_mut("type")
+        && matches!(
+            kind.as_str(),
+            "OBJECT" | "ARRAY" | "STRING" | "NUMBER" | "INTEGER" | "BOOLEAN" | "NULL"
+        )
+    {
+        kind.make_ascii_lowercase();
+    }
+    if let Some(Value::Object(properties)) = object.get_mut("properties") {
+        for child in properties.values_mut() {
+            normalize_gemini_schema_types(child);
+        }
+    }
+    for key in ["items", "additionalProperties"] {
+        if let Some(child) = object.get_mut(key) {
+            normalize_gemini_schema_types(child);
+        }
+    }
+    if let Some(Value::Array(alternatives)) = object.get_mut("anyOf") {
+        for child in alternatives {
+            normalize_gemini_schema_types(child);
+        }
+    }
+}
+
 fn decode_response_format(body: &Value) -> Result<ResponseFormat, AdapterError> {
     let config = body.get("generationConfig").unwrap_or(&Value::Null);
     let mime = config
         .get("responseMimeType")
         .or_else(|| config.get("response_mime_type"))
         .and_then(Value::as_str);
-    let schema = config
+    let json_schema = config
         .get("responseJsonSchema")
         .or_else(|| config.get("response_json_schema"))
-        .or_else(|| config.get("_responseJsonSchema"))
+        .or_else(|| config.get("_responseJsonSchema"));
+    let schema = json_schema
         .or_else(|| config.get("responseSchema"))
         .or_else(|| config.get("response_schema"));
     if let Some(schema) = schema {
+        let mut schema = schema.clone();
+        if json_schema.is_none() {
+            normalize_gemini_schema_types(&mut schema);
+        }
         return Ok(ResponseFormat::JsonSchema {
             name: "gemini_response".to_string(),
             description: None,
-            schema: canonicalize_schema(schema).map_err(|error| {
+            schema: canonicalize_schema(&schema).map_err(|error| {
                 AdapterError::new(
                     error.code(),
                     "$.generationConfig.responseJsonSchema",
@@ -1206,8 +1288,8 @@ fn scan_gemini_content(
                 &["name", "args", "arguments", "id"] as &[&str],
             ),
             ("function_call", &["name", "args", "arguments", "id"]),
-            ("functionResponse", &["name", "response", "id"]),
-            ("function_response", &["name", "response", "id"]),
+            ("functionResponse", &["name", "response", "id", "parts"]),
+            ("function_response", &["name", "response", "id", "parts"]),
             ("inlineData", &["mimeType", "data"]),
             ("inline_data", &["mime_type", "data"]),
             ("fileData", &["mimeType", "fileUri"]),
@@ -1484,8 +1566,8 @@ fn scan_gemini_response_content(
                 &["name", "args", "arguments", "id"] as &[&str],
             ),
             ("function_call", &["name", "args", "arguments", "id"]),
-            ("functionResponse", &["name", "response", "id"]),
-            ("function_response", &["name", "response", "id"]),
+            ("functionResponse", &["name", "response", "id", "parts"]),
+            ("function_response", &["name", "response", "id", "parts"]),
             ("inlineData", &["mimeType", "data"]),
             ("inline_data", &["mime_type", "data"]),
             ("fileData", &["mimeType", "fileUri"]),
@@ -1750,6 +1832,7 @@ fn append_encoded_blocks(
                 if result.is_error && response.get("error").is_none() {
                     response = json!({"error":response});
                 }
+                append_tool_result_media(parts, &result.content, &path)?;
                 parts.push(json!({
                     "functionResponse": {
                         "id": result.call_id,
@@ -1853,6 +1936,26 @@ fn tool_result_response(content: &[ContentBlock]) -> Value {
         .collect::<Vec<_>>()
         .join("\n");
     json!({"content":text})
+}
+
+fn append_tool_result_media(
+    parts: &mut Vec<Value>,
+    content: &[ContentBlock],
+    path: &str,
+) -> Result<(), AdapterError> {
+    // Sibling parts work on older Gemini generations and Code Assist dialects
+    // too. Do not force Gemini 3's nested functionResponse.parts onto them.
+    for (index, block) in content.iter().enumerate() {
+        let source = match block {
+            ContentBlock::Image(media)
+            | ContentBlock::Audio(media)
+            | ContentBlock::Video(media) => &media.source,
+            ContentBlock::File(file) => &file.source,
+            _ => continue,
+        };
+        parts.push(encode_media(source, &format!("{path}.content[{index}]"))?);
+    }
+    Ok(())
 }
 
 fn gemini_part_extra(payload: &Value) -> Option<&Map<String, Value>> {
@@ -2231,13 +2334,16 @@ fn encode_response_parts(
                 );
                 parts.push(part);
             }
-            ContentBlock::ToolResult(result) => parts.push(json!({
-                "functionResponse":{
-                    "id":result.call_id,
-                    "name":result.name.clone().unwrap_or_else(||"tool_result".to_string()),
-                    "response":tool_result_response(&result.content),
-                }
-            })),
+            ContentBlock::ToolResult(result) => {
+                append_tool_result_media(&mut parts, &result.content, "response.blocks")?;
+                parts.push(json!({
+                    "functionResponse":{
+                        "id":result.call_id,
+                        "name":result.name.clone().unwrap_or_else(||"tool_result".to_string()),
+                        "response":tool_result_response(&result.content),
+                    }
+                }));
+            }
             ContentBlock::ProviderArtifact(artifact)
                 if artifact.kind == ArtifactKind::GeminiThoughtSignature
                     && affinity_matches_context(
@@ -2727,6 +2833,44 @@ mod tests {
         assert_eq!(
             encoded["contents"][2]["parts"][0]["functionResponse"]["id"],
             "call_gemini_0"
+        );
+    }
+
+    #[test]
+    fn protobuf_schema_enum_types_are_normalized_without_rewriting_literal_data() {
+        use super::{decode_response_format, decode_tools};
+        use serde_json::json;
+        let schema = json!({"type":"OBJECT","properties":{
+            "type":{"type":"STRING","enum":["OBJECT"]},
+            "rows":{"type":"ARRAY","items":{"type":"OBJECT","properties":{"n":{"type":"INTEGER"}}}}
+        },"default":{"type":"OBJECT"}});
+        let tools = decode_tools(Some(
+            &json!([{"functionDeclarations":[{"name":"read","parameters":schema}]}]),
+        ))
+        .unwrap();
+        let ToolDefinition::Function(tool) = &tools[0] else {
+            panic!("function tool")
+        };
+        assert_eq!(tool.input_schema["type"], "object");
+        assert_eq!(tool.input_schema["properties"]["type"]["type"], "string");
+        assert_eq!(tool.input_schema["properties"]["type"]["enum"][0], "OBJECT");
+        assert_eq!(
+            tool.input_schema["properties"]["rows"]["items"]["properties"]["n"]["type"],
+            "integer"
+        );
+        assert_eq!(tool.input_schema["default"]["type"], "OBJECT");
+        let ResponseFormat::JsonSchema {
+            schema: response, ..
+        } = decode_response_format(&json!({"generationConfig":{"responseSchema":schema}})).unwrap()
+        else {
+            panic!("JSON schema")
+        };
+        assert_eq!(response, tool.input_schema);
+        assert!(
+            decode_tools(Some(
+                &json!([{"functionDeclarations":[{"name":"read","parametersJsonSchema":schema}]}])
+            ))
+            .is_err()
         );
     }
 

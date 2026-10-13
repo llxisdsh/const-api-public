@@ -742,6 +742,8 @@ pub(crate) fn summary_quota_source(source: &str) -> String {
         | "anthropic_oauth_usage"
         | "grok_header"
         | "grok_billing"
+        | "kiro_billing"
+        | "cursor_billing"
         | "kimi_coding_usage"
         | "glm_coding_usage"
         | "minimax_token_usage"
@@ -1191,6 +1193,15 @@ mod tests {
     }
 
     #[test]
+    fn terminal_sse_retry_headers_reach_supplier_failure_metadata() {
+        let raw = "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\",\"headers\":{\"Retry-After\":\"21\"}}}}\n\n";
+        let payload = super::subscription_sse_terminal_error_payload(raw).unwrap();
+        assert_eq!(payload["retry_after_seconds"], 21);
+        assert_eq!(payload["retry_hint_source"], "structured_body");
+        assert_eq!(payload["failure_observation_v1"]["retry_after_seconds"], 21);
+    }
+
+    #[test]
     fn legacy_quota_payload_retains_explicit_exhaustion_without_promoting_extras() {
         use serde_json::json;
         for window in [json!({"remaining_ratio":0}), json!({"used_percent":100}), json!({"used_percent":120}), json!({"remaining_ratio":0,"model":"gpt-luna"})] {
@@ -1234,6 +1245,35 @@ mod tests {
         }
         assert!(reqwest::header::HeaderName::from_bytes(b"x-codex-feature:preview-used-percent").is_err());
         assert_eq!(super::quota_window_period_seconds("feature:preview:5h"), Some(18000));
+    }
+
+    #[test]
+    fn cursor_quota_pools_reach_health_snapshots_without_gating_the_whole_channel() {
+        let now = super::now_unix();
+        let mut state: crate::model::SubscriptionSafetyState = serde_json::from_value(
+            serde_json::json!({"channel_id":"cursor-quota-snapshot-test","provider":"cursor"})
+        ).unwrap();
+        let windows = [("cursor_models", 0.8), ("other_models", 0.0)].map(|(bucket, ratio)| {
+            crate::model::QuotaWindow {
+                source: "cursor_billing".into(), window: "monthly".into(),
+                token_type: Some(bucket.into()), remaining_ratio: ratio,
+                used_percent: (1.0 - ratio) * 100.0,
+                checked_at_unix: now, reset_at_unix: now + 86400,
+                ..Default::default()
+            }
+        });
+        super::apply_official_quota_windows_to_state(&mut state, &windows);
+        let snapshot = super::official_quota_snapshot_from_state(&state, now).unwrap();
+        assert_eq!(snapshot.quota_windows.len(), 2);
+        assert_eq!(snapshot.quota_windows[1].remaining_ratio, 0.0);
+        assert_eq!(snapshot.checked_at_unix, now);
+        assert_eq!(snapshot.status, "unknown", "pool usage is not account admission evidence");
+        assert_eq!(state.state, "active");
+        assert!(super::quota_reserve_decision(&windows, 95, now).is_none());
+        let mut payload = serde_json::Map::new();
+        super::insert_official_quota_windows(&mut payload, &windows);
+        assert_eq!(payload["quota_windows"].as_array().unwrap().len(), 2);
+        assert!(!payload.contains_key("quota_status"), "do not publish a false global outage");
     }
 
     #[test]

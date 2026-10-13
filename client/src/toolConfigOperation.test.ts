@@ -136,7 +136,7 @@ describe("tool config operation IPC", () => {
     expect(tauriMainSource).toMatch(
       /async fn execute_trae_tool_config_operation[\s\S]*?execute_atomic_tool_config_operation_with_preview/,
     );
-    expect(tauriMainSource).toContain('tool == "workbuddy"');
+    expect(tauriMainSource).toContain('matches!(tool, "workbuddy" | "workbuddy-ai")');
     expect(tauriMainSource).toMatch(
       /"copilot"[\s\S]*?"raven"[\s\S]*?"pi"[\s\S]*?"cline"[\s\S]*?"reasonix"[\s\S]*?"deepseek-harness"[\s\S]*?"open-design"/,
     );

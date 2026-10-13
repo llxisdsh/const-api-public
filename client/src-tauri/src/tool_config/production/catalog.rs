@@ -63,6 +63,21 @@ const fn desktop_and_command_manifest(
 // readers/writers and dynamic package discovery remain in their own modules.
 const TOOL_PROFILES: &[ToolProfile] = &[
     ToolProfile {
+        id: "muse-code",
+        display_name: "Muse Code",
+        protocols: &[ToolProtocol::OpenAiResponses],
+        default_protocol: ToolProtocol::OpenAiResponses,
+        model_sync_policy: ToolModelSyncPolicy::Catalog,
+        runtime: runtime_command_manifest(&["muse"]),
+        command_launch: ToolCommandLaunch::Terminal,
+        launch_args: &[],
+        desktop_preferred: false,
+        identity_aliases: &[],
+        external_environment_names: &["META_API_KEY", "MUSE_CUSTOM_HEADERS", "XDG_CONFIG_HOME"],
+        macos_app_names: &[],
+        windows_program_paths: &[("muse", "muse.cmd")],
+    },
+    ToolProfile {
         id: "grok-build",
         display_name: "Grok Build",
         protocols: &[
@@ -272,7 +287,7 @@ const TOOL_PROFILES: &[ToolProfile] = &[
     },
     ToolProfile {
         id: "trae",
-        display_name: "TraeCode",
+        display_name: "TRAE",
         protocols: &[
             ToolProtocol::OpenAiChat,
             ToolProtocol::OpenAiResponses,
@@ -291,7 +306,7 @@ const TOOL_PROFILES: &[ToolProfile] = &[
     },
     ToolProfile {
         id: "trae-cn",
-        display_name: "TraeCode CN",
+        display_name: "TRAE CN",
         protocols: &[
             ToolProtocol::OpenAiChat,
             ToolProtocol::OpenAiResponses,
@@ -550,6 +565,29 @@ const TOOL_PROFILES: &[ToolProfile] = &[
         external_environment_names: &[],
         macos_app_names: &["WorkBuddy.app"],
         windows_program_paths: &[("WorkBuddy", "WorkBuddy.exe")],
+    },
+    ToolProfile {
+        id: "workbuddy-ai",
+        display_name: "WorkBuddy AI",
+        protocols: &[ToolProtocol::OpenAiChat],
+        default_protocol: ToolProtocol::OpenAiChat,
+        model_sync_policy: ToolModelSyncPolicy::Catalog,
+        runtime: desktop_and_command_manifest(
+            &["workbuddy-ai"],
+            &["WorkBuddyAI.exe"],
+            &["WorkBuddy AI", "workbuddy-ai"],
+            &["workbuddy-ai"],
+        ),
+        command_launch: ToolCommandLaunch::Desktop,
+        launch_args: &[],
+        desktop_preferred: true,
+        identity_aliases: &[],
+        external_environment_names: &[],
+        macos_app_names: &["WorkBuddy AI.app"],
+        windows_program_paths: &[
+            ("WorkBuddyAI", "WorkBuddyAI.exe"),
+            ("WorkBuddy AI", "WorkBuddyAI.exe"),
+        ],
     },
     ToolProfile {
         id: "kimicode",

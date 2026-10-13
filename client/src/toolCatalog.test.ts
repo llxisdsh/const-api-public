@@ -13,6 +13,7 @@ describe("tool catalog", () => {
       "chatgpt.com",
       "claude.com",
       "docs.github.com",
+      "dev.meta.ai",
       "geminicli.com",
       "github.com",
       "block.github.io",
@@ -25,12 +26,13 @@ describe("tool catalog", () => {
       "open-design.ai",
       "code.visualstudio.com",
       "www.codebuddy.cn",
+      "www.workbuddy.ai",
       "www.kimi.com",
       "zcode.z.ai",
       "www.trae.ai",
       "www.trae.cn",
     ]);
-    expect(Object.keys(TOOL_CATALOG)).toHaveLength(33);
+    expect(Object.keys(TOOL_CATALOG)).toHaveLength(35);
     for (const entry of Object.values(TOOL_CATALOG)) {
       expect(entry.title).toBeTruthy();
       expect(entry.description.length).toBeGreaterThan(8);
@@ -69,11 +71,12 @@ describe("tool catalog", () => {
     expect(TOOL_CATALOG.copilot.modelSyncPolicy).toBe("selected");
   });
 
-  test("only labels parallel CLI and CN editions that need disambiguation", () => {
+  test("labels parallel editions without rebadging the original WorkBuddy", () => {
     expect(TOOL_CATALOG_ORDER.flatMap((tool) => {
       const badge = toolCatalogEntry(tool)?.badge;
       return badge ? [[tool, badge]] : [];
     })).toEqual([
+      ["workbuddy-ai", "AI"],
       ["copilot", "CLI"],
       ["trae-cn", "CN"],
     ]);
@@ -96,6 +99,8 @@ describe("tool catalog", () => {
   });
 
   test("keeps Trae editions separately managed with per-model protocols", () => {
+    expect(TOOL_CATALOG.trae.title).toBe("TRAE");
+    expect(TOOL_CATALOG["trae-cn"].title).toBe("TRAE CN");
     for (const tool of ["trae", "trae-cn", "trae-work"] as const) {
       expect(TOOL_CATALOG[tool].protocolScope).toBe("model");
       expect(TOOL_CATALOG[tool].protocols).toEqual(["openai_chat", "openai_responses", "anthropic_messages"]);
@@ -152,6 +157,19 @@ describe("tool catalog", () => {
     expect(DEFAULT_VISIBLE_TOOL_IDS).not.toContain("pi");
     expect(TOOL_CATALOG_ORDER[TOOL_CATALOG_ORDER.length - 1]).toBe("zcode");
     expect(DEFAULT_VISIBLE_TOOL_IDS.every((tool) => TOOL_CATALOG_ORDER.includes(tool))).toBe(true);
+  });
+
+  test("separates WorkBuddy editions without changing the existing tool identity", () => {
+    expect(TOOL_CATALOG.workbuddy).toMatchObject({tool: "workbuddy", title: "WorkBuddy"});
+    expect(toolCatalogEntry("workbuddy")?.badge).toBeUndefined();
+    expect(TOOL_CATALOG["workbuddy-ai"]).toMatchObject({
+      tool: "workbuddy-ai",
+      title: "WorkBuddy AI",
+      badge: "AI",
+      protocols: ["openai_chat"],
+      modelSyncPolicy: "catalog",
+    });
+    expect(TOOL_CATALOG["workbuddy-ai"].officialLinks[0].url).toBe("https://www.workbuddy.ai/");
   });
 
   test("keeps Claude Science as a managed Anthropic tool", () => {

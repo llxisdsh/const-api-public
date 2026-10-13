@@ -168,6 +168,8 @@ fn subscription_channel_from_managed_credential(
         "openai" => crate::source_driver::SourceDriverId::OpenAiSubscription,
         "antigravity" => crate::source_driver::SourceDriverId::GeminiSubscription,
         "grok" => crate::source_driver::SourceDriverId::GrokSubscription,
+        "kiro" => crate::source_driver::SourceDriverId::KiroSubscription,
+        "cursor" => crate::source_driver::SourceDriverId::CursorSubscription,
         _ => crate::source_driver::SourceDriverId::ClaudeSubscription,
     };
     let mut v2 = channel_v2_contract_for_source(source_driver);
@@ -308,6 +310,7 @@ fn subscription_account_identity_from_value(value: &serde_json::Value) -> Option
         json_string(value, &["account_id"]),
         json_string(value, &["accountID"]),
         json_string(value, &["chatgpt_account_id"]),
+        json_string(value, &["profile_arn"]),
         json_nested_string(value, &["account", "id"]),
         json_nested_string(value, &["account", "uuid"]),
         json_nested_string(value, &["user", "id"]),
@@ -376,6 +379,15 @@ pub(crate) fn normalize_subscription_token(
     if provider == "antigravity" {
         token = normalize_antigravity_credential_value(&token)
             .ok_or_else(|| anyhow!("token JSON is not a supported Antigravity credential"))?;
+    }
+    if provider == "cursor" {
+        token = crate::cursor::normalize_token(token, None)?;
+    }
+    if provider == "kiro" {
+        if token.get("accessToken").is_some() {
+            token = crate::kiro::normalize_token(token, None)?;
+        }
+        crate::kiro::validate_credential(&token)?;
     }
     ensure_subscription_token_provider(&mut token, &provider);
     if provider == "antigravity" {
@@ -458,6 +470,12 @@ pub(crate) async fn exchange_subscription_oauth_code_to_channel(
             exchange_antigravity_oauth_code(&parsed.code, code_verifier, redirect_uri).await?
         }
         "grok" => exchange_grok_oauth_code(&parsed.code, code_verifier, redirect_uri).await?,
+        "kiro" => {
+            let login_provider = crate::kiro::callback_provider(code_or_callback, state)?;
+            crate::kiro::exchange_authorization(
+                &crate::kiro::http_client()?, &parsed.code, code_verifier, &login_provider,
+            ).await?
+        }
         _ => return Err(anyhow!("unsupported subscription provider")),
     };
     prepare_subscription_token_and_import(&provider, token)
@@ -690,6 +708,11 @@ pub(crate) fn create_subscription_oauth_session_data(
                     .to_string(),
             )
         }
+        "kiro" => (
+            crate::kiro::authorization_url(&state, &code_challenge)?,
+            crate::kiro::CALLBACK.to_string(),
+            "Sign in with Google or GitHub. If the localhost page cannot open, paste the complete callback URL. AWS Builder ID and organization login are not supported by this flow.".to_string(),
+        ),
         _ => return Err(anyhow!("unsupported subscription provider")),
     };
     Ok(SubscriptionOAuthSession {
@@ -1199,7 +1222,9 @@ pub(crate) fn subscription_credential_candidate_from_value(
     let has_refresh_token = json_string(&value, &["refresh_token"])
         .map(|token| !token.trim().is_empty())
         .unwrap_or(false);
-    let status = if !has_refresh_token {
+    let status = if provider == "cursor" && has_access_token && !credential_is_expired(value) {
+        "ready"
+    } else if !has_refresh_token {
         "missing_refresh"
     } else if !has_access_token {
         "refreshable"
@@ -1274,6 +1299,9 @@ pub(crate) fn infer_subscription_provider(value: &serde_json::Value) -> Option<S
 
 pub(crate) fn normalize_subscription_provider(value: &str) -> Option<String> {
     let value = value.trim().to_lowercase();
+    if matches!(value.as_str(), "kiro" | "cursor") {
+        return Some(value);
+    }
     if value.contains("antigravity") {
         return Some("antigravity".to_string());
     }
@@ -1330,6 +1358,8 @@ pub(crate) fn subscription_provider_label(provider: &str) -> &'static str {
         "claude" => "Claude Account Subscription",
         "antigravity" => "Antigravity Account Subscription",
         "grok" => "Grok Account Subscription",
+        "kiro" => "Kiro Account Subscription",
+        "cursor" => "Cursor Account Subscription",
         _ => "Account Authorization",
     }
 }
@@ -1340,6 +1370,8 @@ pub(crate) fn subscription_channel_name(provider: &str) -> &'static str {
         "claude" => "Claude Account Subscription",
         "antigravity" => "Antigravity Account Subscription",
         "grok" => "Grok Account Subscription",
+        "kiro" => "Kiro Account Subscription",
+        "cursor" => "Cursor Account Subscription",
         _ => "Account Subscription",
     }
 }

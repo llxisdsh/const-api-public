@@ -116,6 +116,7 @@ struct PlatformPhysicalConnection {
     authenticated_token: Arc<StdMutex<String>>,
     resume_supported: bool,
     output_budget: crate::output_buffer::OutputBudget,
+    network_changes: tokio::sync::watch::Receiver<u64>,
 }
 
 enum PlatformPhysicalCommand {
@@ -709,6 +710,7 @@ fn platform_physical_connection(
     token: String,
     access_token: Arc<StdMutex<String>>,
     account_refresh_notify: Arc<Notify>,
+    network_changes: tokio::sync::watch::Receiver<u64>,
 ) -> Arc<PlatformPhysicalConnection> {
     let (commands, command_rx) = mpsc::channel(64);
     let closed = Arc::new(AtomicBool::new(false));
@@ -721,6 +723,7 @@ fn platform_physical_connection(
         authenticated_token: authenticated_token.clone(),
         resume_supported,
         output_budget: Default::default(),
+        network_changes: network_changes.clone(),
     });
     crate::spawn_logged(
         "platform duplex physical connection",
@@ -732,6 +735,7 @@ fn platform_physical_connection(
             token,
             access_token,
             account_refresh_notify,
+            network_changes,
         ),
     );
     connection
@@ -776,6 +780,7 @@ async fn run_platform_physical_connection(
     mut last_token: String,
     access_token: Arc<StdMutex<String>>,
     account_refresh_notify: Arc<Notify>,
+    mut network_changes: tokio::sync::watch::Receiver<u64>,
 ) {
     let mut sessions = HashMap::<
         String,
@@ -804,6 +809,10 @@ async fn run_platform_physical_connection(
             pending_output = None;
         }
         tokio::select! {
+            _ = network_changes.changed() => {
+                terminal_error = "local network configuration changed".to_string();
+                break;
+            }
             command = commands.recv() => {
                 let Some(command) = command else {
                     break;
@@ -1013,6 +1022,7 @@ async fn run_platform_physical_connection(
 impl PlatformPhysicalConnection {
     fn usable_with_token(&self, token: &str) -> bool {
         !self.closed.load(Ordering::Acquire)
+            && !self.network_changes.has_changed().unwrap_or(true)
             && self
                 .authenticated_token
                 .lock()
@@ -1131,6 +1141,9 @@ impl PlatformDuplexPool {
                 return Ok(connection);
             }
         }
+        // Subscribe before connecting, so a proxy/route change during the
+        // handshake cannot leave a freshly cached connection on the old route.
+        let network_changes = crate::network_recovery::subscribe();
         let (wire, transport) = open_platform_wire(endpoint, &token).await?;
         let connection = platform_physical_connection(
             wire,
@@ -1138,6 +1151,7 @@ impl PlatformDuplexPool {
             token,
             access_token,
             account_refresh_notify,
+            network_changes,
         );
         self.connections
             .lock()
@@ -1147,6 +1161,7 @@ impl PlatformDuplexPool {
     }
 }
 
+// The final flag is true only for a fresh session (whose sequence starts at 1).
 async fn reconnect_platform_logical_session(
     pool: &PlatformDuplexPool,
     endpoint: &Endpoint,
@@ -1187,7 +1202,7 @@ async fn reconnect_platform_logical_session(
                         after_platform_sequence,
                     );
                     match physical.open(resume).await {
-                        Ok((events, persisted)) => return Ok((physical, events, persisted)),
+                        Ok((events, _)) => return Ok((physical, events, false)),
                         Err(error) => format!("{error:#}"),
                     }
                 } else {
@@ -1198,15 +1213,17 @@ async fn reconnect_platform_logical_session(
                             0,
                             after_platform_sequence,
                         );
-                        if let Ok((events, persisted)) = physical.open(resume).await {
-                            return Ok((physical, events, persisted));
+                        if let Ok((events, _)) = physical.open(resume).await {
+                            return Ok((physical, events, false));
                         }
                     }
                     match physical
                         .open(platform_duplex_open_message(session_id, headers))
                         .await
                     {
-                        Ok((events, persisted)) => return Ok((physical, events, persisted)),
+                        // A new logical session starts a new platform sequence,
+                        // unlike either in-memory or durable response recovery.
+                        Ok((events, _)) => return Ok((physical, events, true)),
                         Err(error) => format!("{error:#}"),
                     }
                 }
@@ -1270,6 +1287,8 @@ pub(crate) async fn open_platform_responses_duplex(
         let mut active_turn_id: Option<String> = None;
         let mut last_turn_sequence = 0u64;
         let mut last_platform_sequence = 0u64;
+        let mut reconnect_before_send = false;
+        let mut recovering_closed_turn = false;
         loop {
             tokio::select! {
                 command = command_rx.recv() => {
@@ -1280,6 +1299,28 @@ pub(crate) async fn open_platform_responses_duplex(
                         break;
                     };
                     let close = matches!(command.frame, PlatformDuplexFrame::Close { .. });
+                    if reconnect_before_send && !close {
+                        match reconnect_platform_logical_session(
+                            &pool, &endpoint, reconnect_access_token.clone(),
+                            reconnect_notify.clone(), &headers, &session_id,
+                            None, 0, last_platform_sequence,
+                        ).await {
+                            Ok((next_physical, next_events, fresh)) => {
+                                physical = next_physical;
+                                events = next_events;
+                                if fresh {
+                                    last_platform_sequence = 0;
+                                }
+                                reconnect_before_send = false;
+                            }
+                            Err(error) => {
+                                let detail = format!("{error:#}");
+                                let _ = command.completed.send(Err(detail.clone()));
+                                let _ = frames.send(Err(detail)).await;
+                                break;
+                            }
+                        }
+                    }
                     let mut payload = platform_frame_payload(command.frame.clone());
                     if !close {
                         if let Some(turn_id) = platform_duplex_frame_turn_id(&command.frame) {
@@ -1295,6 +1336,7 @@ pub(crate) async fn open_platform_responses_duplex(
                             );
                             active_turn_id = Some(turn_id);
                             last_turn_sequence = 0;
+                            recovering_closed_turn = false;
                         }
                     }
                     let kind = if close {
@@ -1319,7 +1361,7 @@ pub(crate) async fn open_platform_responses_duplex(
                             last_turn_sequence,
                             last_platform_sequence,
                         ).await {
-                            Ok((next_physical, next_events, _persisted)) => {
+                            Ok((next_physical, next_events, _fresh)) => {
                                 physical = next_physical;
                                 events = next_events;
                                 let _ = command.completed.send(Ok(()));
@@ -1339,12 +1381,18 @@ pub(crate) async fn open_platform_responses_duplex(
                         break;
                     }
                 }
-                incoming = events.recv() => {
+                incoming = events.recv(), if !reconnect_before_send => {
                     let incoming = match incoming {
                         Some(Ok(message)) => Some(message),
                         Some(Err(_)) | None => None,
                     };
                     let Some(message) = incoming else {
+                        if active_turn_id.is_none() {
+                            // No model output is pending. Keep the local socket
+                            // usable, but do not reconnect an idle session forever.
+                            reconnect_before_send = true;
+                            continue;
+                        }
                         match reconnect_platform_logical_session(
                             &pool,
                             &endpoint,
@@ -1356,7 +1404,7 @@ pub(crate) async fn open_platform_responses_duplex(
                             last_turn_sequence,
                             last_platform_sequence,
                         ).await {
-                            Ok((next_physical, next_events, _persisted)) => {
+                            Ok((next_physical, next_events, _fresh)) => {
                                 physical = next_physical;
                                 events = next_events;
                                 continue;
@@ -1367,29 +1415,6 @@ pub(crate) async fn open_platform_responses_duplex(
                             }
                         }
                     };
-                    if message.kind == "platform_duplex_close" {
-                        match reconnect_platform_logical_session(
-                            &pool,
-                            &endpoint,
-                            reconnect_access_token.clone(),
-                            reconnect_notify.clone(),
-                            &headers,
-                            &session_id,
-                            active_turn_id.as_deref(),
-                            last_turn_sequence,
-                            last_platform_sequence,
-                        ).await {
-                            Ok((next_physical, next_events, _persisted)) => {
-                                physical = next_physical;
-                                events = next_events;
-                                continue;
-                            }
-                            Err(error) => {
-                                let _ = frames.send(Err(format!("{error:#}"))).await;
-                                break;
-                            }
-                        }
-                    }
                     let platform_sequence = message
                         .payload
                         .get(PLATFORM_DUPLEX_SEQUENCE_FIELD)
@@ -1413,6 +1438,42 @@ pub(crate) async fn open_platform_responses_duplex(
                                 "platform duplex response sequence has a gap".to_string()
                             )).await;
                             break;
+                        }
+                    }
+                    if message.kind == "platform_duplex_close" {
+                        // Close is a sequenced frame too. Acknowledge it before
+                        // any recovery, or the server replays the same close.
+                        if platform_sequence > 0 {
+                            last_platform_sequence = platform_sequence;
+                            let _ = physical.send(platform_duplex_ack_message(
+                                &session_id, platform_sequence,
+                            )).await;
+                        }
+                        if active_turn_id.is_none() {
+                            reconnect_before_send = true;
+                            continue;
+                        }
+                        if recovering_closed_turn {
+                            let _ = frames.send(Err(
+                                "platform duplex recovery ended without completing the active turn".to_string()
+                            )).await;
+                            break;
+                        }
+                        recovering_closed_turn = true;
+                        match reconnect_platform_logical_session(
+                            &pool, &endpoint, reconnect_access_token.clone(),
+                            reconnect_notify.clone(), &headers, &session_id,
+                            active_turn_id.as_deref(), last_turn_sequence, last_platform_sequence,
+                        ).await {
+                            Ok((next_physical, next_events, _fresh)) => {
+                                physical = next_physical;
+                                events = next_events;
+                                continue;
+                            }
+                            Err(error) => {
+                                let _ = frames.send(Err(format!("{error:#}"))).await;
+                                break;
+                            }
                         }
                     }
                     if message.kind == "platform_duplex_server_frame" {
@@ -1472,13 +1533,9 @@ pub(crate) async fn open_platform_responses_duplex(
                     let terminal_error = message.kind == "platform_duplex_error";
                     if platform_sequence > 0 {
                         last_platform_sequence = platform_sequence;
-                        if physical
+                        let _ = physical
                             .send(platform_duplex_ack_message(&session_id, platform_sequence))
-                            .await
-                            .is_err()
-                        {
-                            continue;
-                        }
+                            .await;
                     }
                     if terminal_error {
                         break;
@@ -1626,6 +1683,16 @@ mod platform_duplex_tests {
         mpsc::Sender<Result<SupplierMessage, String>>,
         mpsc::UnboundedReceiver<SupplierMessage>,
     ) {
+        buffered_mock_physical_with_network_changes(crate::network_recovery::subscribe())
+    }
+
+    fn buffered_mock_physical_with_network_changes(
+        network_changes: tokio::sync::watch::Receiver<u64>,
+    ) -> (
+        Arc<PlatformPhysicalConnection>,
+        mpsc::Sender<Result<SupplierMessage, String>>,
+        mpsc::UnboundedReceiver<SupplierMessage>,
+    ) {
         let (outbound, mut writes) = mpsc::channel::<PlatformWireCommand>(16);
         let (inbound, received) = mpsc::channel(32);
         let (observed, observations) = mpsc::unbounded_channel();
@@ -1661,6 +1728,7 @@ mod platform_duplex_tests {
             "access".into(),
             Arc::new(StdMutex::new("access".into())),
             Arc::new(Notify::new()),
+            network_changes,
         );
         (physical, inbound, observations)
     }
@@ -1671,6 +1739,19 @@ mod platform_duplex_tests {
             kind: "platform_duplex_server_frame".into(),
             payload: platform_frame_payload(PlatformDuplexFrame::Text(text)),
         }
+    }
+
+    #[tokio::test]
+    async fn network_change_retires_cached_physical_connection_and_wakes_sessions() {
+        let (changes, receiver) = tokio::sync::watch::channel(0);
+        let (physical, _incoming, _writes) = buffered_mock_physical_with_network_changes(receiver);
+        let (mut events, _) = physical.open(platform_duplex_open_message("network", &Default::default())).await.unwrap();
+        assert!(physical.usable_with_token("access"));
+        changes.send_modify(|generation| *generation += 1);
+        assert!(!physical.usable_with_token("access"));
+        let error = tokio::time::timeout(Duration::from_secs(2), events.recv()).await.unwrap().unwrap().unwrap_err();
+        assert!(error.contains("network configuration changed"));
+        assert!(physical.closed.load(Ordering::Acquire));
     }
 
     #[tokio::test]
@@ -2357,5 +2438,166 @@ mod platform_duplex_tests {
         let error = platform_auth_ack(&message)
             .expect_err("legacy server must not claim platform duplex");
         assert!(platform_duplex_error_is_safe_to_replay(&error));
+    }
+
+    #[tokio::test]
+    async fn delivered_terminal_error_stays_terminal_when_ack_write_fails() {
+        let endpoint = Endpoint {
+            server_id: String::new(), name: "failed-ack".into(), enabled: true,
+            base_url: "http://127.0.0.1:1".into(), supplier_ws_url: "ws://127.0.0.1:1".into(),
+            supplier_quic_url: String::new(),
+        };
+        let (commands, mut received) = mpsc::channel(4);
+        let closed = Arc::new(AtomicBool::new(false));
+        let physical = Arc::new(PlatformPhysicalConnection {
+            commands, transport: "mock".into(), closed: closed.clone(),
+            authenticated_token: Arc::new(StdMutex::new("access".into())),
+            resume_supported: true, output_budget: Default::default(),
+            network_changes: crate::network_recovery::subscribe(),
+        });
+        let pool = PlatformDuplexPool::default();
+        pool.connections.lock().await.insert(platform_endpoint_connection_key(&endpoint), physical);
+        let server = tokio::spawn(async move {
+            let mut output = None;
+            while let Some(command) = received.recv().await {
+                match command {
+                    PlatformPhysicalCommand::Open { message, events, completed } => {
+                        events.finish(Ok(SupplierMessage {
+                            id: message.id, kind: "platform_duplex_opened".into(), payload: Default::default(),
+                        }));
+                        output = Some(events);
+                        let _ = completed.send(Ok(()));
+                    }
+                    PlatformPhysicalCommand::Send { message, completed } => {
+                        if message.kind == "platform_duplex_ack" {
+                            closed.store(true, Ordering::Release);
+                            let _ = completed.send(Err("simulated ACK write failure".into()));
+                            break;
+                        }
+                        assert_eq!(message.kind, "platform_duplex_client_frame");
+                        output.as_ref().unwrap().finish(Ok(SupplierMessage {
+                            id: message.id, kind: "platform_duplex_error".into(),
+                            payload: serde_json::json!({"_const_platform_seq": 1, "error_kind": "test_terminal", "message": "completed with an error"}).as_object().unwrap().clone(),
+                        }));
+                        let _ = completed.send(Ok(()));
+                    }
+                    PlatformPhysicalCommand::Close { .. } => break,
+                }
+            }
+        });
+        let (session, _) = open_platform_responses_duplex(
+            &pool, &endpoint, Arc::new(StdMutex::new("access".into())),
+            Arc::new(Notify::new()), Default::default(),
+        ).await.unwrap();
+        let (sender, mut receiver) = session.split();
+        sender.send(PlatformDuplexFrame::Text(r#"{"type":"response.create","model":"test","input":"hello"}"#.into())).await.unwrap();
+        assert!(matches!(receiver.next().await.unwrap().unwrap(), PlatformDuplexFrame::Text(_)));
+        assert!(tokio::time::timeout(Duration::from_secs(1), receiver.next()).await
+            .expect("an already delivered error must not enter response recovery").is_none());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn closed_sessions_ack_then_wait_for_new_work_or_bound_active_recovery() {
+        for active_close in [false, true] {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let (idle_tx, idle_rx) = oneshot::channel();
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    let auth = read_mock_message(&mut socket).await;
+                    socket.send(WsMessage::Text(serde_json::json!({
+                        "id": auth.id, "type": "authenticate_ack", "payload": {
+                            "ok": true, "transport_features": [PLATFORM_DUPLEX_FEATURE, PLATFORM_DUPLEX_RESUME_FEATURE]
+                        }
+                    }).to_string().into())).await.unwrap();
+                    let open = read_mock_message(&mut socket).await;
+                    socket.send(WsMessage::Text(serde_json::json!({
+                        "id": open.id, "type": "platform_duplex_opened", "payload": {"ok": true}
+                    }).to_string().into())).await.unwrap();
+                    let request = read_mock_message(&mut socket).await;
+                    let turn_id = payload_string(&request.payload, PLATFORM_DUPLEX_TURN_ID_FIELD);
+                    socket.send(WsMessage::Text(serde_json::json!({
+                        "id": open.id, "type": "platform_duplex_server_frame", "payload": {
+                            "frame_type": "text", "data": "first", "turn_terminal": !active_close,
+                            "_const_platform_seq": 1, "_const_duplex_turn_id": turn_id,
+                            "_const_duplex_turn_seq": 1
+                        }
+                    }).to_string().into())).await.unwrap();
+                    assert_eq!(read_mock_message(&mut socket).await.kind, "platform_duplex_ack");
+                    socket.send(WsMessage::Text(serde_json::json!({
+                        "id": open.id, "type": "platform_duplex_close", "payload": {"_const_platform_seq": 2}
+                    }).to_string().into())).await.unwrap();
+                    let close_ack = read_mock_message(&mut socket).await;
+                    assert_eq!(close_ack.kind, "platform_duplex_ack");
+                    assert_eq!(close_ack.payload["sequence"], 2);
+                    if !active_close {
+                        assert!(tokio::time::timeout(Duration::from_millis(60), read_mock_message(&mut socket)).await.is_err(),
+                            "closed idle sessions must not generate recovery traffic");
+                    }
+                    let _ = idle_tx.send(());
+                    let resume = read_mock_message(&mut socket).await;
+                    assert_eq!(resume.kind, "platform_duplex_resume");
+                    assert_eq!(resume.payload["after_platform_sequence"], 2);
+                    if active_close {
+                        assert_eq!(resume.payload["turn_id"], turn_id);
+                        assert_eq!(resume.payload["after_turn_sequence"], 1);
+                        socket.send(WsMessage::Text(serde_json::json!({
+                            "id": open.id, "type": "platform_duplex_opened", "payload": {"ok": true, "persisted": true}
+                        }).to_string().into())).await.unwrap();
+                        socket.send(WsMessage::Text(serde_json::json!({
+                            "id": open.id, "type": "platform_duplex_close", "payload": {"_const_platform_seq": 3}
+                        }).to_string().into())).await.unwrap();
+                        assert_eq!(read_mock_message(&mut socket).await.payload["sequence"], 3);
+                        if let Ok(Some(Ok(frame))) = tokio::time::timeout(Duration::from_millis(60), socket.next()).await {
+                            assert!(matches!(frame, WsMessage::Close(_)),
+                                "an incomplete durable replay must close, never send another resume");
+                        }
+                    } else {
+                        socket.send(WsMessage::Text(serde_json::json!({
+                            "id": open.id, "type": "platform_duplex_error", "payload": {"message": "closed"}
+                        }).to_string().into())).await.unwrap();
+                        assert_eq!(read_mock_message(&mut socket).await.kind, "platform_duplex_open");
+                        socket.send(WsMessage::Text(serde_json::json!({
+                            "id": open.id, "type": "platform_duplex_opened", "payload": {"ok": true}
+                        }).to_string().into())).await.unwrap();
+                        let request = read_mock_message(&mut socket).await;
+                        assert_eq!(request.kind, "platform_duplex_client_frame");
+                        socket.send(WsMessage::Text(serde_json::json!({
+                            "id": open.id, "type": "platform_duplex_server_frame", "payload": {
+                                "frame_type": "text", "data": "second", "turn_terminal": true,
+                                "_const_platform_seq": 1,
+                                "_const_duplex_turn_id": payload_string(&request.payload, PLATFORM_DUPLEX_TURN_ID_FIELD),
+                                "_const_duplex_turn_seq": 1
+                            }
+                        }).to_string().into())).await.unwrap();
+                        assert_eq!(read_mock_message(&mut socket).await.payload["sequence"], 1);
+                    }
+                });
+                let endpoint = Endpoint {
+                    server_id: String::new(), name: "close-test".into(), enabled: true,
+                    base_url: format!("http://{address}"), supplier_ws_url: format!("ws://{address}"),
+                    supplier_quic_url: String::new(),
+                };
+                let (session, _) = open_platform_responses_duplex(
+                    &PlatformDuplexPool::default(), &endpoint,
+                    Arc::new(StdMutex::new("test-token".into())), Arc::new(Notify::new()), Default::default(),
+                ).await.unwrap();
+                let (sender, mut receiver) = session.split();
+                let request = PlatformDuplexFrame::Text(r#"{"type":"response.create","model":"test","input":"hello"}"#.into());
+                sender.send(request.clone()).await.unwrap();
+                assert_eq!(receiver.next().await.unwrap().unwrap(), PlatformDuplexFrame::Text("first".into()));
+                idle_rx.await.unwrap();
+                if active_close {
+                    assert!(receiver.next().await.unwrap().unwrap_err().to_string().contains("without completing"));
+                } else {
+                    sender.send(request).await.unwrap();
+                    assert_eq!(receiver.next().await.unwrap().unwrap(), PlatformDuplexFrame::Text("second".into()));
+                }
+                server.await.unwrap();
+            }).await.expect("close recovery must be bounded");
+        }
     }
 }

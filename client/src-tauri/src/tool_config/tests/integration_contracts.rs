@@ -256,6 +256,7 @@ fn linux_desktop_launchers_are_distinct_from_interactive_commands() {
     for (tool, program) in [
         ("vscode", "code"),
         ("workbuddy", "workbuddy"),
+        ("workbuddy-ai", "workbuddy-ai"),
         ("anythingllm", "anythingllm-desktop"),
         ("openscience", "ai4s-workbench"),
         ("reasonix", "reasonix-launcher"),

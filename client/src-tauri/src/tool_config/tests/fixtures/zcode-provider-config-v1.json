@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "config": {
+    "providerConfigRules": {
+      "providerRules": [{
+        "providerId": "const-api",
+        "providerName": "CONST API",
+        "enabled": true,
+        "config": {
+          "group": "standard-personal",
+          "access": {"type": "api-key", "apiKey": "test-key"},
+          "api": {"type": "openai-chat-completions", "baseUrl": "http://127.0.0.1:38787/v1"},
+          "personalModelIds": ["gpt-6-luna"],
+          "modelOrder": ["gpt-6-luna"]
+        }
+      }]
+    },
+    "modelConfigRules": {
+      "providerModelRules": [{
+        "providerId": "const-api",
+        "modelId": "gpt-6-luna",
+        "config": {
+          "enabled": true,
+          "properties": {
+            "contextWindow": 272000,
+            "supportsToolCall": true,
+            "inputFormat": {"supportsImage": true, "supportsVideo": false, "supportsAudio": false, "supportsPdf": false}
+          },
+          "optionSpecs": {
+            "maxOutputTokens": {"max": 128000},
+            "reasoningLevel": {"values": ["low", "high"], "map": "{\"reasoning_effort\": reasoningLevel}"}
+          }
+        }
+      }],
+      "manualProviderModelRules": []
+    }
+  }
+}

@@ -4,7 +4,7 @@ use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     sync::{Mutex, OnceLock},
     time::Duration,
 };
@@ -68,6 +68,10 @@ struct Snapshot {
     // One-time compatibility with subscriptions checked before grouped admission.
     // Do not reuse account history after an endpoint/credential identity change.
     legacy_admission_checked: bool,
+    // None is an older snapshot. Grandfather only the groups present at the
+    // legacy upgrade; a later catalog group still needs its own successful check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    legacy_admitted_groups: Option<BTreeSet<String>>,
     automatic_window_at: i64,
     automatic_attempts: usize,
     #[serde(skip)]
@@ -89,10 +93,16 @@ impl Snapshot {
             .groups
             .get("other")
             .is_some_and(|g| g.status == "suspended")
-            && !self
-                .groups
-                .get(group)
-                .is_some_and(|g| g.status == "suspended")
+            && match self.groups.get(group).map(|g| g.status.as_str()) {
+                Some("available") => true,
+                Some("suspended") => false,
+                _ => self.legacy_admitted_groups.as_ref().map_or_else(
+                    // Older inconclusive-only snapshots may have retained real
+                    // legacy admission. A success in another group is not such proof.
+                    || !self.groups.values().any(|g| g.status == "available"),
+                    |groups| groups.contains(group),
+                ),
+            }
     }
 
     fn merge(&mut self, groups: &[GroupResult]) {
@@ -115,6 +125,22 @@ impl Snapshot {
         groups: &[GroupResult],
         legacy_admitted: bool,
     ) {
+        self.upgrade_legacy_admission(channel, legacy_admitted);
+        self.merge(groups);
+        self.legacy_admission_checked = true;
+        self.admission_pending = self
+            .legacy_admitted_groups
+            .as_ref()
+            .is_none_or(BTreeSet::is_empty)
+            && !self.groups.values().any(|g| g.status == "available");
+        // Suspended groups still gate their own scope in allows(), even when the
+        // channel had previously been admitted. Only a successful check clears them.
+    }
+
+    fn upgrade_legacy_admission(&mut self, channel: &ChannelConfig, legacy_admitted: bool) {
+        if self.legacy_admitted_groups.is_some() {
+            return;
+        }
         // A directory GET is not admission evidence. A saved execution check is:
         // legacy verified channels must not lose supply because a new check could
         // not run. This also repairs snapshots saved by the earlier fail-closed bug.
@@ -131,12 +157,17 @@ impl Snapshot {
                     && profile.non_stream_json
                     && profile.verification_state.trim() == "verified"
             });
-        self.merge(groups);
-        self.legacy_admission_checked = true;
-        self.admission_pending =
-            !previously_admitted && !self.groups.values().any(|g| g.status == "available");
-        // Suspended groups still gate their own scope in allows(), even when the
-        // channel had previously been admitted. Only a successful check clears them.
+        self.legacy_admitted_groups = Some(
+            if previously_admitted && !self.groups.values().any(|g| g.status == "available") {
+                channel
+                    .models
+                    .iter()
+                    .map(|model| group(&catalog_identity(channel, model)).to_string())
+                    .collect()
+            } else {
+                BTreeSet::new()
+            },
+        );
     }
 }
 
@@ -414,7 +445,17 @@ fn representatives(channel: &ChannelConfig) -> Vec<(String, String)> {
         .collect()
 }
 
+fn driver_supply_enabled(channel: &ChannelConfig) -> bool {
+    crate::source_driver::source_driver(channel.source_driver())
+        .expect("configured source drivers come from the validated manifest")
+        .subscription_contract()
+        .is_none_or(|contract| contract.generation.default_enabled)
+}
+
 pub(crate) fn allows(channel: &ChannelConfig, model: &str) -> bool {
+    if !driver_supply_enabled(channel) {
+        return false;
+    }
     let mut state = store()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -433,6 +474,9 @@ pub(crate) fn allows(channel: &ChannelConfig, model: &str) -> bool {
 }
 
 pub(crate) fn effective_models(channel: &ChannelConfig, models: Vec<String>) -> Vec<String> {
+    if !driver_supply_enabled(channel) {
+        return Vec::new();
+    }
     let state = store()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -526,10 +570,18 @@ pub(crate) fn reconcile_catalog(channel: &ChannelConfig) {
         return;
     };
     let before = snapshot.groups.len();
+    let had_verified_group = snapshot.groups.values().any(|g| g.status == "available");
     snapshot.groups.retain(|_, g| g.applies_to_catalog(channel));
     let changed = before != snapshot.groups.len();
     if changed {
-        snapshot.admission_pending = false;
+        if had_verified_group && snapshot.legacy_admitted_groups.is_none() {
+            snapshot.legacy_admitted_groups = Some(BTreeSet::new());
+        }
+        snapshot.admission_pending = snapshot
+            .legacy_admitted_groups
+            .as_ref()
+            .is_some_and(BTreeSet::is_empty)
+            && !snapshot.groups.values().any(|g| g.status == "available");
     }
     drop(state);
     if changed {
@@ -1010,6 +1062,7 @@ mod tests {
             let mut channel = crate::default_config().channels.remove(0);
             channel.set_source_driver(source);
             channel.id = format!("legacy-admission-{source:?}");
+            channel.models = vec!["gpt-luna".into()];
             channel.capability_profiles.clear();
             channel.surface_bindings = crate::source_driver_surface_bindings(source, "");
             channel = crate::project_channel_legacy_fields(channel);
@@ -1134,6 +1187,7 @@ mod tests {
     #[test]
     fn inconclusive_checks_preserve_admission_and_effective_failure_scope() {
         let mut channel = crate::default_config().channels.remove(0);
+        channel.models = vec!["gpt-luna".into(), "claude-haiku-4-5".into()];
         channel.capability_profiles.clear();
         channel.surface_bindings.clear();
         let mut snapshot = Snapshot::default();
@@ -1184,6 +1238,64 @@ mod tests {
     }
 
     #[test]
+    fn a_successful_group_never_admits_an_unverified_group_including_old_snapshots() {
+        let mut channel = crate::default_config().channels.remove(0);
+        channel.capability_profiles.clear();
+        channel.surface_bindings.clear();
+        channel.models = vec!["claude-haiku-4.5".into(), "minimax-m2.1".into()];
+        let inconclusive = GroupResult {
+            group: "anthropic_closed".into(),
+            representative: channel.models[0].clone(),
+            upstream_model: channel.models[0].clone(),
+            status: "inconclusive".into(),
+            cause: "request_invalid".into(),
+            ..Default::default()
+        };
+        let available = GroupResult {
+            group: "other".into(),
+            representative: channel.models[1].clone(),
+            upstream_model: channel.models[1].clone(),
+            status: "available".into(),
+            ..Default::default()
+        };
+        // A snapshot written by the old channel-wide admission rule.
+        let mut old = Snapshot {
+            revision: 2,
+            admission_pending: false,
+            groups: [
+                (inconclusive.group.clone(), inconclusive.clone()),
+                (available.group.clone(), available.clone()),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        assert!(old.allows("minimax-m2.1"));
+        assert!(!old.allows("claude-haiku-4.5"));
+        assert!(!old.allows("gemini-new"));
+        old.merge_check(&channel, &[inconclusive.clone()], false);
+        assert!(!old.allows("claude-haiku-4.5"));
+        let mut fresh = Snapshot::default();
+        fresh.merge_check(&channel, &[inconclusive.clone(), available], false);
+        assert!(fresh.allows("minimax-m2.1"));
+        assert!(!fresh.allows("claude-haiku-4.5"));
+        let saved: Snapshot = serde_json::from_slice(&serde_json::to_vec(&fresh).unwrap()).unwrap();
+        assert!(!saved.allows("claude-haiku-4.5"));
+        fresh.merge_check(
+            &channel,
+            &[GroupResult {
+                status: "available".into(),
+                ..inconclusive.clone()
+            }],
+            false,
+        );
+        fresh.merge_check(&channel, &[inconclusive], false);
+        assert!(
+            fresh.allows("claude-haiku-4.5"),
+            "later uncertainty preserves that group's success"
+        );
+    }
+
+    #[test]
     fn tool_catalog_excludes_suspended_local_groups_without_hiding_other_routes() {
         let mut config = crate::default_config();
         let mut channel = config.channels.remove(0);
@@ -1196,14 +1308,24 @@ mod tests {
             channel.id.clone(),
             Snapshot {
                 fingerprint: fingerprint(&channel),
-                groups: BTreeMap::from([(
-                    "anthropic_closed".into(),
-                    GroupResult {
-                        group: "anthropic_closed".into(),
-                        status: "suspended".into(),
-                        ..Default::default()
-                    },
-                )]),
+                groups: BTreeMap::from([
+                    (
+                        "anthropic_closed".into(),
+                        GroupResult {
+                            group: "anthropic_closed".into(),
+                            status: "suspended".into(),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        "other".into(),
+                        GroupResult {
+                            group: "other".into(),
+                            status: "available".into(),
+                            ..Default::default()
+                        },
+                    ),
+                ]),
                 ..Default::default()
             },
         );
@@ -1613,7 +1735,11 @@ mod tests {
             status: "available".into(),
             ..Default::default()
         }]);
-        assert!(snapshot.allows("gpt-next"));
+        assert!(snapshot.allows("qwen-future"));
+        assert!(
+            !snapshot.allows("gpt-next"),
+            "other-group recovery does not admit a new group"
+        );
         assert!(!snapshot.allows("claude-opus-future"));
     }
     #[test]
@@ -1696,6 +1822,8 @@ mod tests {
                     (503, serde_json::json!({"error":{"type":"overloaded_error"}}))
                 } else if mode == 3 && other {
                     (429, serde_json::json!({"error":{"code":"usage_not_included","message":"Usage credits are required for this model."}}))
+                } else if mode == 4 && group(model) == "anthropic_closed" {
+                    (400, serde_json::json!({"error":{"message":"additionalModelRequestFields is not supported for this model"}}))
                 } else {
                     (200, serde_json::json!({"choices":[{"finish_reason":"stop","message":{"content":"OK"}}],"usage":{"prompt_tokens":8,"completion_tokens":1}}))
                 };
@@ -1818,6 +1946,19 @@ mod tests {
         mode.store(1, Ordering::SeqCst);
         check(&channel).await;
         assert_eq!(effective_models(&channel, source.clone()), source);
+        mode.store(4, Ordering::SeqCst);
+        channel.id = "availability-mock-inconclusive-admission".into();
+        let report = check(&channel).await;
+        assert_eq!(report.attempts, 4);
+        assert!(report.groups.iter().any(|g| g.group == "anthropic_closed"
+            && g.status == "inconclusive"
+            && g.attempts == 1));
+        let supplier = crate::supplier_from_channel(&channel);
+        assert_eq!(
+            supplier.models,
+            ["gemini-flash-lite", "gpt-luna", "qwen-27b"]
+        );
+        assert!(!allows(&channel, "claude-opus-future"));
         server.abort();
     }
 

@@ -10,7 +10,7 @@ use rtc::{
         configuration::{
             interceptor_registry::register_default_interceptors,
             media_engine::{MIME_TYPE_OPUS, MediaEngine},
-            setting_engine::SettingEngine,
+            setting_engine::SettingEngineBuilder,
         },
         sdp::RTCSessionDescription,
         transport::RTCIceCandidateInit,
@@ -211,11 +211,13 @@ impl MediaPeer {
             RtpCodecKind::Audio,
         )?;
         let registry = register_default_interceptors(Registry::new(), &mut engine)?;
-        let mut settings = SettingEngine::default();
-        settings.set_include_loopback_candidate(true);
         // Match Codex's negotiation budget; the library's short default can
         // exhaust ICE checks while TCP is still connecting.
-        settings.set_ice_connection_attempts(Some(Duration::from_millis(200)), Some(75));
+        let settings = SettingEngineBuilder::new()
+            .with_include_loopback_candidate(true)
+            .with_ice_connection_attempts(Some(Duration::from_millis(200)), Some(75))
+            .with_sctp_max_receive_buffer_size(MAX_DATA_BYTES as u32)
+            .build();
         let (output, received) = mpsc::channel(128);
         let handler = Arc::new(Handler {
             output,
@@ -232,7 +234,6 @@ impl MediaPeer {
                 .with_setting_engine(settings)
                 .with_handler(Arc::new(Events(handler.clone())))
                 .with_data_channel_send_buffer_limit(MAX_DATA_BYTES)
-                .with_sctp_receive_buffer_size(MAX_DATA_BYTES as u32)
                 .with_udp_addrs(if loopback {
                     vec!["127.0.0.1:0"]
                 } else {

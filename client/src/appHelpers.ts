@@ -66,6 +66,7 @@ export const emptyConfig: ClientConfig = {
   },
   proxy_auto_start: true,
   automatic_updates: true,
+  prevent_sleep_while_supplying: true,
   supplier_auto_start: false,
   api_key: "",
   registry_sources: [],
@@ -75,6 +76,7 @@ export const emptyConfig: ClientConfig = {
   development_endpoint: DEFAULT_DEVELOPMENT_ENDPOINT,
   allow_model_equivalence: true,
   prefer_local_supply: true,
+  tool_model_injection: { all_models: true, extra_models: [] },
   allow_unverified_platform_routes: true,
   model_aliases: {},
   endpoints: [],
@@ -100,6 +102,7 @@ export const emptyConfig: ClientConfig = {
     price_ratio: 1,
     subscription: {
       platform: "claude",
+      claude_fast_enabled: false,
       account_label: "",
       credential_ref: "",
       max_concurrency: DEFAULT_SUPPLIER_MAX_CONCURRENCY,
@@ -334,6 +337,7 @@ export function providerToChannelKind(provider: string) {
   if (provider === "gemini") return "gemini";
   if (provider === "antigravity") return "subscription_adapter";
   if (provider === "grok") return "subscription_adapter";
+  if (provider === "kiro" || provider === "cursor") return "subscription_adapter";
   if (provider === "ollama" || provider === "lmstudio" || provider === "vllm" || provider === "local_model") return "local_model";
   if (provider.startsWith("subscription_")) return "subscription_adapter";
   return "openai_compatible";
@@ -1009,6 +1013,7 @@ export function protocolsFromApiFormat(apiFormat: string): DebugProtocol[] {
 export function subscriptionSupportedProtocols(platform?: string): DebugProtocol[] {
   if (platform === "openai") return ["openai_responses"];
   if (platform === "grok") return ["openai_responses"];
+  if (platform === "kiro" || platform === "cursor") return ["anthropic_messages"];
   if (platform === "antigravity") return ["gemini_native"];
   if (!platform || platform === "claude") return ["anthropic_messages"];
   return [];
@@ -1268,6 +1273,8 @@ export function subscriptionProviderLabel(provider: SubscriptionProvider) {
   if (provider === "openai") return tr("labels.subscription.openai");
   if (provider === "antigravity") return tr("labels.subscription.antigravity");
   if (provider === "grok") return tr("labels.subscription.grok");
+  if (provider === "kiro") return tr("labels.subscription.kiro");
+  if (provider === "cursor") return tr("labels.subscription.cursor");
   return tr("labels.subscription.claude");
 }
 
@@ -1542,6 +1549,7 @@ export function supplierRouteReasonLabel(reason: string | undefined) {
     case "rate_limited":
       return tr("supplierRoute.reasons.rateLimited");
     case "auth_error":
+    case "auth_revoked":
       return tr("supplierRoute.reasons.authError");
     case "risk_blocked":
     case "risk_challenge":
@@ -1554,6 +1562,27 @@ export function supplierRouteReasonLabel(reason: string | undefined) {
       return tr("supplierRoute.reasons.timeout");
     case "network_error":
       return tr("supplierRoute.reasons.networkError");
+    case "transport_timeout":
+      return tr("supplierRoute.reasons.transportTimeout");
+    case "transport_interrupted":
+      return tr("supplierRoute.reasons.transportInterrupted");
+    case "upstream_websocket_interrupted":
+      return tr("supplierRoute.reasons.upstreamInterrupted");
+    case "upstream_connect_timeout":
+      return tr("supplierRoute.reasons.upstreamConnectTimeout");
+    case "upstream_connect_error":
+      return tr("supplierRoute.reasons.upstreamConnectError");
+    case "upstream_read_error":
+      return tr("supplierRoute.reasons.upstreamReadError");
+    case "upstream_send_error":
+      return tr("supplierRoute.reasons.upstreamSendError");
+    case "upstream_restart":
+      return tr("supplierRoute.reasons.upstreamRestart");
+    case "upstream_overloaded":
+    case "provider_overload":
+      return tr("supplierRoute.reasons.upstreamOverloaded");
+    case "upstream_backpressure":
+      return tr("supplierRoute.reasons.upstreamBackpressure");
     case "channel_failure":
       return tr("supplierRoute.reasons.channelFailure");
     case "temporary_failure":
@@ -1583,6 +1612,11 @@ type SupplierTransportFailurePayload = {
   phase?: unknown;
   timeout_ms?: unknown;
   transport?: unknown;
+  error?: { message?: unknown } | string;
+  failure_stage?: unknown;
+  transport_cause?: unknown;
+  upstream_close_reason?: unknown;
+  upstream_close_code?: unknown;
 };
 
 function supplierTransportLabel(value: string) {
@@ -1639,7 +1673,9 @@ function supplierStructuredRouteMessage(message: string): SupplierStructuredRout
   const transport = typeof payload.transport === "string" ? payload.transport.trim() : "";
   const phase = typeof payload.phase === "string" ? payload.phase.trim() : "";
   const errorKind = typeof payload.error_kind === "string" ? payload.error_kind.trim() : "";
-  const lowLevelMessage = typeof payload.message === "string" ? payload.message.trim() : "";
+  const nestedError = typeof payload.error === "string" ? payload.error : payload.error?.message;
+  const lowLevelMessage = typeof payload.message === "string" ? payload.message.trim()
+    : typeof nestedError === "string" ? nestedError.trim() : "";
   const timeoutMs = typeof payload.timeout_ms === "number" && Number.isFinite(payload.timeout_ms)
     ? Math.max(0, payload.timeout_ms)
     : 0;
@@ -1659,6 +1695,31 @@ function supplierStructuredRouteMessage(message: string): SupplierStructuredRout
         : tr("supplierRoute.transportTimeout", params), structured: true };
     }
     return { text: tr("supplierRoute.transportFailure", params), structured: true };
+  }
+
+  const upstreamDetails = [payload.failure_stage, payload.transport_cause, payload.upstream_close_reason]
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  if (upstreamDetails.length > 0) {
+    const labels: Record<string, string> = {
+      upstream_connect: tr("supplierRoute.diagnostics.upstreamConnect"),
+      connect_timeout: tr("supplierRoute.reasons.upstreamConnectTimeout"),
+      connect_error: tr("supplierRoute.reasons.upstreamConnectError"),
+      tls_error: tr("supplierRoute.diagnostics.tlsError"),
+      connection_reset: tr("supplierRoute.diagnostics.connectionReset"),
+      connection_refused: tr("supplierRoute.diagnostics.connectionRefused"),
+      upstream_close_frame: tr("supplierRoute.diagnostics.upstreamCloseFrame"),
+      upstream_eof: tr("supplierRoute.diagnostics.upstreamEof"),
+      upstream_read_error: tr("supplierRoute.reasons.upstreamReadError"),
+      upstream_send_failed: tr("supplierRoute.reasons.upstreamSendError"),
+      upstream_pong_failed: tr("supplierRoute.diagnostics.upstreamPongFailed"),
+      pool_event_queue_full: tr("supplierRoute.reasons.upstreamBackpressure"),
+    };
+    const details = upstreamDetails.map(value => labels[value] ?? value);
+    if (typeof payload.upstream_close_code === "number") {
+      details.push(tr("supplierRoute.diagnostics.closeCode", { code: payload.upstream_close_code }));
+    }
+    if (lowLevelMessage) details.push(lowLevelMessage);
+    return { text: [...new Set(details)].join(" · "), structured: true };
   }
 
   // Older servers carried only the scoped low-level message. Extract it so a
@@ -1834,11 +1895,14 @@ export function credentialStatusLabel(status: string | undefined, channel: Chann
   return tr("labels.channel.waitingCheck");
 }
 
-export function quotaStatusLabel(status: string | undefined, channel: ChannelConfig) {
+export function quotaStatusLabel(status: string | undefined, channel: ChannelConfig, windows?: SupplierChannelHealth["quota_windows"]) {
   if (channel.kind !== "subscription_adapter" && !channel.discovery?.quota) return tr("labels.channel.notApplicable");
   if (status === "available") return tr("labels.channel.available");
   if (status === "low") return tr("labels.channel.low");
   if (status === "exhausted") return tr("labels.channel.exhausted");
+  if (windows?.some((window) => window.source === "cursor_billing"
+    && ["cursor_models", "other_models", "included"].includes(window.token_type || "")
+    && Number.isFinite(window.remaining_ratio))) return tr("quota.includedUsage");
   return tr("labels.unknown");
 }
 
@@ -2048,9 +2112,10 @@ export function channelV5FromRenderer(channel: ChannelConfig): ChannelConfigV5 {
     server_quic_url: channel.server_quic_url,
     max_concurrency: channel.max_concurrency,
     quota_reserve_percent: channel.quota_reserve_percent,
-    ...(driver.category === "subscription" ? {
+    ...(driver.subscriptionProvider ? {
       subscription: {
         platform: driver.subscriptionProvider!,
+        claude_fast_enabled: channel.subscription.claude_fast_enabled ?? false,
         account_label: channel.subscription.account_label,
         max_concurrency: channel.max_concurrency,
         responses_ws_pool_enabled: channel.subscription.responses_ws_pool_enabled,
@@ -2221,6 +2286,7 @@ export function isLocalSupplierHost(host: string) {
 export function defaultSubscriptionAdapter(platform: string): SubscriptionAdapterConfig {
   return {
     platform,
+    claude_fast_enabled: false,
     account_label: "",
     credential_ref: "",
     max_concurrency: DEFAULT_SUPPLIER_MAX_CONCURRENCY,

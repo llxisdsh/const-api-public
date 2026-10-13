@@ -724,29 +724,38 @@ pub(crate) fn check_gemini_config(root_url: &str, api_key: &str) -> Result<ToolA
 }
 
 fn workbuddy_models_path_from_config_dirs(
+    tool: &str,
     home: &Path,
     workbuddy_config_dir: Option<&str>,
     codebuddy_config_dir: Option<&str>,
 ) -> PathBuf {
+    // Both editions use the same schema and overrides, but different product
+    // dataFolderName defaults. Never discover one edition from the other's files.
+    let data_folder = if tool == "workbuddy-ai" {
+        ".workbuddy-ai"
+    } else {
+        ".workbuddy"
+    };
     [workbuddy_config_dir, codebuddy_config_dir]
         .into_iter()
         .flatten()
         .map(str::trim)
         .find(|path| !path.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".workbuddy"))
+        .unwrap_or_else(|| home.join(data_folder))
         .join("models.json")
 }
 
-pub(crate) fn workbuddy_models_path() -> PathBuf {
+pub(crate) fn workbuddy_models_path(tool: &str) -> PathBuf {
     let home = home_dir();
     if test_home_active() {
-        return workbuddy_models_path_from_config_dirs(&home, None, None);
+        return workbuddy_models_path_from_config_dirs(tool, &home, None, None);
     }
 
     let workbuddy_config_dir = std::env::var("WORKBUDDY_CONFIG_DIR").ok();
     let codebuddy_config_dir = std::env::var("CODEBUDDY_CONFIG_DIR").ok();
     workbuddy_models_path_from_config_dirs(
+        tool,
         &home,
         workbuddy_config_dir.as_deref(),
         codebuddy_config_dir.as_deref(),
@@ -1151,19 +1160,20 @@ fn workbuddy_model_is_configured(
 }
 
 pub(crate) fn apply_workbuddy_config_with_model_info_for_protocol(
+    tool: &str,
     base_url: &str,
     api_key: &str,
     models: &[ToolModelInfo],
     protocol: ToolProtocol,
 ) -> Result<ToolApplyResult> {
-    resolve_tool_protocol("workbuddy", Some(protocol.as_str()))?;
+    resolve_tool_protocol(tool, Some(protocol.as_str()))?;
     if models.is_empty() {
         return Err(anyhow!(
             "WORKBUDDY_MODELS_REQUIRED: no available models were returned for WorkBuddy"
         ));
     }
     let endpoint_url = workbuddy_endpoint_url(base_url, protocol)?;
-    let path = workbuddy_models_path();
+    let path = workbuddy_models_path(tool);
     let mut root = read_json_or_default(&path, serde_json::json!([]))?;
     // WorkBuddy stores all custom models in one additive array. Replace models
     // marked by another CONST profile; the two legacy loopback ports migrate
@@ -1195,8 +1205,8 @@ pub(crate) fn apply_workbuddy_config_with_model_info_for_protocol(
     include_workbuddy_available_models(&mut root, &model_ids);
     normalize_workbuddy_managed_model_ids(&mut root, &endpoint_url, api_key, &model_ids)?;
     let mut result = ToolApplyBuilder::default();
-    write_json_with_backup(&path, &root, "workbuddy", &mut result)?;
-    let mut result = result.finish("workbuddy");
+    write_json_with_backup(&path, &root, tool, &mut result)?;
+    let mut result = result.finish(tool);
     attach_tool_protocol(&mut result, protocol);
     Ok(result)
 }
@@ -1319,10 +1329,10 @@ fn normalize_workbuddy_managed_model_ids(
     Ok(())
 }
 
-pub(crate) fn check_workbuddy_config(base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
+pub(crate) fn check_workbuddy_config(tool: &str, base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
     let protocol = ToolProtocol::OpenAiChat;
     let endpoint_url = workbuddy_endpoint_url(base_url, protocol)?;
-    let path = workbuddy_models_path();
+    let path = workbuddy_models_path(tool);
     let root = read_json_or_default(&path, serde_json::json!([]))?;
     let models_configured = workbuddy_models(&root)?.iter().any(|entry| {
         workbuddy_model_is_configured(entry, &endpoint_url, api_key)
@@ -1330,18 +1340,19 @@ pub(crate) fn check_workbuddy_config(base_url: &str, api_key: &str) -> Result<To
     });
     let mut builder = ToolApplyBuilder::default();
     observe_json(&path, &root, &mut builder)?;
-    let mut result = builder.finish("workbuddy");
+    let mut result = builder.finish(tool);
     result.already_configured &= models_configured;
     attach_tool_protocol(&mut result, protocol);
     Ok(result)
 }
 
 fn cleanup_unmanaged_workbuddy_models(
+    tool: &str,
     result: &mut ToolApplyResult,
     base_url: &str,
     api_key: &str,
 ) -> Result<()> {
-    let path = workbuddy_models_path();
+    let path = workbuddy_models_path(tool);
     if !path.exists() {
         return Ok(());
     }
@@ -1356,18 +1367,18 @@ fn cleanup_unmanaged_workbuddy_models(
     }
     let mut after = serde_json::to_vec_pretty(&root)?;
     after.push(b'\n');
-    record_post_restore_cleanup(result, &path, before, Some(after), "workbuddy")
+    record_post_restore_cleanup(result, &path, before, Some(after), tool)
 }
 
-pub(crate) fn remove_workbuddy_config(base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
-    let mut result = restore_tool_config_from_manifest("workbuddy")?;
+pub(crate) fn remove_workbuddy_config(tool: &str, base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
+    let mut result = restore_tool_config_from_manifest(tool)?;
     if result
         .details
         .get("manifest_entries_restored")
         .map(String::as_str)
         == Some("0")
     {
-        cleanup_unmanaged_workbuddy_models(&mut result, base_url, api_key)?;
+        cleanup_unmanaged_workbuddy_models(tool, &mut result, base_url, api_key)?;
     }
     Ok(result)
 }
@@ -1988,13 +1999,13 @@ pub(crate) fn apply_tool_config_by_name_for_protocol(
         "vscode" => {
             apply_vscode_config_with_model_info_for_protocol(base_url, api_key, &[], protocol)
         }
-        "workbuddy" => {
-            apply_workbuddy_config_with_model_info_for_protocol(base_url, api_key, &[], protocol)
+        "workbuddy" | "workbuddy-ai" => {
+            apply_workbuddy_config_with_model_info_for_protocol(tool, base_url, api_key, &[], protocol)
         }
         "copilot" | "copilot-desktop" | "raven" | "pi" | "cline" | "reasonix"
         | "deepseek-harness" | "open-interpreter" | "goose" | "mistral-vibe" | "open-design"
         | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading" | "zcode"
-        | "anythingllm" | "grok-build" | "minimax-code" => {
+        | "anythingllm" | "grok-build" | "minimax-code" | "muse-code" => {
             apply_additional_tool_config_with_model_info_for_protocol(
                 tool,
                 base_url,
@@ -2054,12 +2065,12 @@ pub(crate) fn check_tool_config_by_name(
         "openclaw" => check_openclaw_config(root_url, api_key),
         "hermes" => check_hermes_config(root_url, api_key),
         "vscode" => check_vscode_config(base_url, api_key),
-        "workbuddy" => check_workbuddy_config(base_url, api_key),
+        "workbuddy" | "workbuddy-ai" => check_workbuddy_config(tool, base_url, api_key),
         "trae" | "trae-cn" | "trae-work" => check_trae_config(tool, base_url, api_key),
         "copilot" | "copilot-desktop" | "raven" | "pi" | "cline" | "reasonix"
         | "deepseek-harness" | "open-interpreter" | "goose" | "mistral-vibe" | "open-design"
         | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading" | "zcode"
-        | "anythingllm" | "grok-build" | "minimax-code" => {
+        | "anythingllm" | "grok-build" | "minimax-code" | "muse-code" => {
             check_additional_tool_config(tool, base_url, api_key)
         }
         _ => Err(anyhow!("unknown tool: {tool}")),
@@ -2110,11 +2121,11 @@ pub(crate) fn remove_tool_config_by_name_with_mode(
         "openclaw" => remove_openclaw_config(root_url, api_key),
         "hermes" => remove_hermes_config(root_url, api_key),
         "vscode" => remove_vscode_config(),
-        "workbuddy" => remove_workbuddy_config(base_url, api_key),
+        "workbuddy" | "workbuddy-ai" => remove_workbuddy_config(tool, base_url, api_key),
         "copilot" | "copilot-desktop" | "raven" | "pi" | "cline" | "reasonix"
         | "deepseek-harness" | "open-interpreter" | "goose" | "mistral-vibe" | "open-design"
         | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading" | "zcode"
-        | "anythingllm" | "grok-build" | "minimax-code" => remove_additional_tool_config(tool),
+        | "anythingllm" | "grok-build" | "minimax-code" | "muse-code" => remove_additional_tool_config(tool),
         _ => Err(anyhow!("unknown tool: {tool}")),
     }?;
     attach_tool_config_remove_mode(&mut result, remove_mode, None);

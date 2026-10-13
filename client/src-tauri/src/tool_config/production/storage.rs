@@ -455,9 +455,11 @@ fn manifest_manages_tool(tool: &str) -> bool {
             | "hermes"
             | "vscode"
             | "workbuddy"
+            | "workbuddy-ai"
             | "copilot"
             | "grok-build"
             | "minimax-code"
+            | "muse-code"
             | "raven"
             | "pi"
             | "cline"
@@ -648,7 +650,7 @@ fn named_entry_key(value: &serde_json::Value) -> Option<String> {
 fn named_array_parts(
     value: Option<&serde_json::Value>,
 ) -> Option<(
-    BTreeMap<String, &serde_json::Value>,
+    BTreeMap<ToolConfigFieldPath, &serde_json::Value>,
     Vec<&serde_json::Value>,
 )> {
     let Some(value) = value else {
@@ -658,7 +660,7 @@ fn named_array_parts(
     let mut named = BTreeMap::new();
     let mut unnamed = Vec::new();
     for entry in array {
-        let name = entry.get("name").and_then(named_entry_key);
+        let name = tool_config_array_entry_identity(entry);
         let Some(name) = name else {
             unnamed.push(entry);
             continue;
@@ -668,6 +670,51 @@ fn named_array_parts(
         }
     }
     Some((named, unnamed))
+}
+
+fn tool_config_array_entry_identity(entry: &serde_json::Value) -> Option<ToolConfigFieldPath> {
+    // Muse's catalog uses wire IDs under the fixed meta transport. Track rows
+    // individually so cancellation preserves user-added models in this array.
+    if let (Some(provider), Some(model)) = (
+        entry.get("provider_id").and_then(serde_json::Value::as_str).filter(|v| !v.is_empty()),
+        entry.get("model_id").and_then(serde_json::Value::as_str).filter(|v| !v.is_empty()),
+    ) {
+        return Some(ToolConfigFieldPath::Identified(BTreeMap::from([
+            ("provider_id".to_string(), provider.to_string()),
+            ("model_id".to_string(), model.to_string()),
+        ])));
+    }
+    if let Some(name) = entry.get("name").and_then(named_entry_key) {
+        return Some(ToolConfigFieldPath::Named(name));
+    }
+    // ZCode's versioned provider/model rules use stable IDs, not display names.
+    let provider = entry
+        .get("providerId")?
+        .as_str()
+        .filter(|id| !id.is_empty())?;
+    let mut identity = BTreeMap::from([("providerId".to_string(), provider.to_string())]);
+    if let Some(model) = entry.get("modelId") {
+        identity.insert(
+            "modelId".to_string(),
+            model.as_str().filter(|id| !id.is_empty())?.to_string(),
+        );
+    }
+    Some(ToolConfigFieldPath::Identified(identity))
+}
+
+fn tool_config_array_entry_matches(
+    entry: &serde_json::Value,
+    identity: &ToolConfigFieldPath,
+) -> bool {
+    match identity {
+        ToolConfigFieldPath::Named(name) => {
+            entry.get("name").and_then(named_entry_key).as_ref() == Some(name)
+        }
+        ToolConfigFieldPath::Identified(fields) => fields.iter().all(|(key, value)| {
+            entry.get(key).and_then(serde_json::Value::as_str) == Some(value.as_str())
+        }),
+        ToolConfigFieldPath::Key(_) => false,
+    }
 }
 
 fn named_array_entry<'a>(
@@ -681,7 +728,10 @@ fn named_array_entry<'a>(
 }
 
 fn tool_config_logical_entry_path(path: &[ToolConfigFieldPath]) -> bool {
-    if matches!(path.last(), Some(ToolConfigFieldPath::Named(_))) {
+    if matches!(
+        path.last(),
+        Some(ToolConfigFieldPath::Named(_) | ToolConfigFieldPath::Identified(_))
+    ) {
         return true;
     }
     let [.., ToolConfigFieldPath::Key(collection), ToolConfigFieldPath::Key(id)] = path else {
@@ -788,7 +838,7 @@ fn collect_tool_config_owned_fields(
             .into_iter()
             .collect::<Vec<_>>();
         for name in names {
-            path.push(ToolConfigFieldPath::Named(name.clone()));
+            path.push(name.clone());
             collect_tool_config_owned_fields(
                 original_named.get(&name).copied(),
                 applied_named.get(&name).copied(),
@@ -891,6 +941,16 @@ fn tool_config_field_value_at(
                 Some(value) => value,
                 None => return ToolConfigFieldValue::Missing,
             },
+            identity @ ToolConfigFieldPath::Identified(_) => {
+                match current.as_array().and_then(|array| {
+                    array
+                        .iter()
+                        .find(|entry| tool_config_array_entry_matches(entry, identity))
+                }) {
+                    Some(value) => value,
+                    None => return ToolConfigFieldValue::Missing,
+                }
+            }
         };
     }
     ToolConfigFieldValue::Value(current.clone())
@@ -927,7 +987,10 @@ fn set_tool_config_field_value(
                 if matches!(value, ToolConfigFieldValue::Missing) {
                     return;
                 }
-                let container = if matches!(path.get(1), Some(ToolConfigFieldPath::Named(_))) {
+                let container = if matches!(
+                    path.get(1),
+                    Some(ToolConfigFieldPath::Named(_) | ToolConfigFieldPath::Identified(_))
+                ) {
                     serde_json::json!([])
                 } else {
                     serde_json::json!({})
@@ -938,13 +1001,13 @@ fn set_tool_config_field_value(
                 set_tool_config_field_value(next, &path[1..], value);
             }
         }
-        ToolConfigFieldPath::Named(name) => {
+        identity @ (ToolConfigFieldPath::Named(_) | ToolConfigFieldPath::Identified(_)) => {
             let Some(array) = root.as_array_mut() else {
                 return;
             };
-            let position = array.iter().position(|entry| {
-                entry.get("name").and_then(named_entry_key).as_deref() == Some(name.as_str())
-            });
+            let position = array
+                .iter()
+                .position(|entry| tool_config_array_entry_matches(entry, identity));
             if path.len() == 1 {
                 match (position, value) {
                     (Some(position), ToolConfigFieldValue::Missing) => {
@@ -962,7 +1025,11 @@ fn set_tool_config_field_value(
                 Some(position) => position,
                 None if matches!(value, ToolConfigFieldValue::Missing) => return,
                 None => {
-                    array.push(serde_json::json!({"name": name}));
+                    array.push(match identity {
+                        ToolConfigFieldPath::Named(name) => serde_json::json!({"name": name}),
+                        ToolConfigFieldPath::Identified(fields) => serde_json::json!(fields),
+                        ToolConfigFieldPath::Key(_) => unreachable!(),
+                    });
                     array.len() - 1
                 }
             };
@@ -998,21 +1065,41 @@ fn cleanup_created_empty_json_containers(
         }
         serde_json::Value::Array(array) => {
             for entry in array.iter_mut() {
-                let original_entry = entry
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|name| named_array_entry(original, name));
+                let original_entry = tool_config_array_entry_identity(entry).and_then(|identity| {
+                    original
+                        .and_then(serde_json::Value::as_array)
+                        .and_then(|array| {
+                            array
+                                .iter()
+                                .find(|entry| tool_config_array_entry_matches(entry, &identity))
+                        })
+                });
+                // Newly owned ID entries were removed as whole logical items.
+                // An unmatched survivor belongs to the user, including empty
+                // configuration objects that the native schema may require.
+                if original_entry.is_none()
+                    && matches!(
+                        tool_config_array_entry_identity(entry),
+                        Some(ToolConfigFieldPath::Identified(_))
+                    )
+                {
+                    continue;
+                }
                 cleanup_created_empty_json_containers(entry, original_entry);
             }
             array.retain(|entry| {
-                let placeholder_name = entry
-                    .as_object()
-                    .filter(|object| object.len() == 1)
-                    .and_then(|object| object.get("name"))
-                    .and_then(serde_json::Value::as_str);
-                placeholder_name
-                    .map(|name| named_array_entry(original, name).is_some())
-                    .unwrap_or(true)
+                let Some(identity) = tool_config_array_entry_identity(entry) else {
+                    return true;
+                };
+                matches!(identity, ToolConfigFieldPath::Identified(_))
+                    || entry.as_object().is_none_or(|object| object.len() != 1)
+                    || original
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|array| {
+                            array
+                                .iter()
+                                .any(|entry| tool_config_array_entry_matches(entry, &identity))
+                        })
             });
         }
         _ => {}

@@ -9,6 +9,75 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use reqwest::header::{HeaderMap, HeaderValue};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock},
+    time::{Duration, Instant},
+};
+
+struct CachedCatalog {
+    models: Vec<ModelObservation>,
+    loaded_at: Instant,
+}
+type CatalogSlot = Arc<tokio::sync::Mutex<Option<CachedCatalog>>>;
+type CatalogKey = (SourceDriverId, String, String);
+static CATALOGS: OnceLock<Mutex<HashMap<CatalogKey, CatalogSlot>>> = OnceLock::new();
+
+/// Share free metadata between health ticks. Explicit refreshes remain fresh;
+/// account and endpoint changes never reuse another account's catalog.
+pub(crate) async fn cached_catalog<F>(
+    driver: SourceDriverId,
+    credential: &str,
+    base: &str,
+    fresh: bool,
+    fetch: F,
+) -> Result<Vec<ModelObservation>>
+where
+    F: std::future::Future<Output = Result<Vec<ModelObservation>>>,
+{
+    let ttl = match driver {
+        SourceDriverId::PoeApi => Duration::from_secs(60 * 60),
+        SourceDriverId::CopilotSubscription | SourceDriverId::AbacusRoutellm => {
+            Duration::from_secs(5 * 60)
+        }
+        _ => return fetch.await,
+    };
+    let started = Instant::now();
+    let key = (
+        driver,
+        hex::encode(Sha256::digest(credential.trim().as_bytes())),
+        base.to_string(),
+    );
+    let slot = CATALOGS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| anyhow::anyhow!("gateway catalog cache poisoned"))?
+        .entry(key)
+        .or_default()
+        .clone();
+    let mut cached = slot.lock().await;
+    if let Some(entry) = cached.as_ref() {
+        if entry.loaded_at >= started || (!fresh && entry.loaded_at.elapsed() < ttl) {
+            return Ok(entry.models.clone());
+        }
+    }
+    match fetch.await {
+        Ok(models) => {
+            *cached = Some(CachedCatalog {
+                models: models.clone(),
+                loaded_at: Instant::now(),
+            });
+            Ok(models)
+        }
+        Err(error) => {
+            // A failed explicit refresh must not be concealed by a later health tick.
+            // The existing lifecycle owns retaining persisted models and recovery.
+            *cached = None;
+            Err(error)
+        }
+    }
+}
 
 pub(crate) fn catalog_url(driver: SourceDriverId, base: &str) -> Result<reqwest::Url> {
     let mut base = reqwest::Url::parse(base)?;
@@ -46,6 +115,10 @@ pub(crate) fn is_gateway(driver: SourceDriverId) -> bool {
             | SourceDriverId::GlmCodingPlan
             | SourceDriverId::MinimaxTokenPlan
             | SourceDriverId::OllamaCloud
+            | SourceDriverId::MuseCode
+            | SourceDriverId::CopilotSubscription
+            | SourceDriverId::AbacusRoutellm
+            | SourceDriverId::PoeApi
     )
 }
 
@@ -66,6 +139,7 @@ pub(crate) fn default_user_agent(driver: SourceDriverId) -> Option<&'static str>
             | SourceDriverId::GlmCodingPlan
             | SourceDriverId::MinimaxTokenPlan
             | SourceDriverId::OllamaCloud
+            | SourceDriverId::MuseCode
     )
     .then_some(concat!("const-api/", env!("CARGO_PKG_VERSION")))
 }
@@ -114,6 +188,32 @@ pub(crate) fn model_supports_protocol(
     model: &str,
     protocol: ProtocolKind,
 ) -> bool {
+    if matches!(
+        driver,
+        SourceDriverId::CopilotSubscription | SourceDriverId::PoeApi
+    ) {
+        // Older catalogs predate endpoint declarations and exposed Chat only.
+        return protocol == ProtocolKind::OpenAiChat;
+    }
+    if driver == SourceDriverId::AbacusRoutellm {
+        let model = model
+            .rsplit('/')
+            .next()
+            .unwrap_or(model)
+            .to_ascii_lowercase();
+        return match protocol {
+            ProtocolKind::OpenAiChat => true,
+            ProtocolKind::AnthropicMessages => model.starts_with("claude-"),
+            ProtocolKind::OpenAiResponses => {
+                model.starts_with("gpt-")
+                    || model.starts_with("grok-")
+                    || model.starts_with("o1")
+                    || model.starts_with("o3")
+                    || model.starts_with("o4")
+            }
+            _ => false,
+        };
+    }
     if driver == SourceDriverId::CommandCode {
         let model = model
             .rsplit('/')
@@ -174,6 +274,17 @@ pub(crate) fn upgrade_legacy_zen_surfaces(channel: &mut ChannelConfig) {
 /// The published Go/Zen catalogs contain IDs only. Their endpoint table defines
 /// family-specific dialects, with Chat as the default (see docs/coding-gateways.md).
 pub(crate) fn model_protocol(driver: SourceDriverId, model: &str) -> Option<ProtocolKind> {
+    if driver == SourceDriverId::AbacusRoutellm {
+        return Some(
+            if model_supports_protocol(driver, model, ProtocolKind::AnthropicMessages) {
+                ProtocolKind::AnthropicMessages
+            } else if model_supports_protocol(driver, model, ProtocolKind::OpenAiResponses) {
+                ProtocolKind::OpenAiResponses
+            } else {
+                ProtocolKind::OpenAiChat
+            },
+        );
+    }
     if driver == SourceDriverId::CommandCode {
         return Some(
             if model
@@ -210,6 +321,29 @@ pub(crate) fn model_protocol(driver: SourceDriverId, model: &str) -> Option<Prot
             ProtocolKind::OpenAiChat
         },
     )
+}
+
+pub(crate) fn channel_model_protocol(channel: &ChannelConfig, model: &str) -> Option<ProtocolKind> {
+    if matches!(
+        channel.source_driver(),
+        SourceDriverId::CopilotSubscription
+            | SourceDriverId::PoeApi
+            | SourceDriverId::AbacusRoutellm
+    ) {
+        // A model name is not evidence of its native wire dialect.
+        return [
+            ProtocolKind::AnthropicMessages,
+            ProtocolKind::OpenAiResponses,
+            ProtocolKind::OpenAiChat,
+        ]
+        .into_iter()
+        .find(|protocol| {
+            catalog_protocol_support(&channel.capability_profiles, model, *protocol) == Some(true)
+        })
+        .or_else(|| model_protocol(channel.source_driver(), model))
+        .or(Some(ProtocolKind::OpenAiChat));
+    }
+    model_protocol(channel.source_driver(), model)
 }
 
 pub(crate) fn probe_model(
@@ -257,7 +391,15 @@ pub(crate) fn scope_native_evidence(
     profiles: &[ChannelCapabilityProfile],
     evidence: &mut Vec<SupplierCapabilityEvidence>,
 ) {
-    if !is_opencode(driver) && driver != SourceDriverId::CommandCode {
+    if !is_opencode(driver)
+        && !matches!(
+            driver,
+            SourceDriverId::CommandCode
+                | SourceDriverId::CopilotSubscription
+                | SourceDriverId::PoeApi
+                | SourceDriverId::AbacusRoutellm
+        )
+    {
         return;
     }
     let protocols = crate::source_driver::source_driver(driver)
@@ -386,6 +528,30 @@ pub(crate) mod tests {
     fn published_dialects_and_plan_difference_are_preserved() {
         use ProtocolKind::*;
         assert!(model_supports_protocol(
+            SourceDriverId::AbacusRoutellm,
+            "claude-sonnet-5-5-thinking",
+            AnthropicMessages
+        ));
+        assert!(model_supports_protocol(
+            SourceDriverId::AbacusRoutellm,
+            "claude-sonnet-5-5-thinking",
+            OpenAiChat
+        ));
+        assert!(!model_supports_protocol(
+            SourceDriverId::AbacusRoutellm,
+            "claude-sonnet-5-5-thinking",
+            OpenAiResponses
+        ));
+        assert!(!model_supports_protocol(
+            SourceDriverId::AbacusRoutellm,
+            "route-llm",
+            AnthropicMessages
+        ));
+        assert_eq!(
+            model_protocol(SourceDriverId::AbacusRoutellm, "gpt-6-luna"),
+            Some(OpenAiResponses)
+        );
+        assert!(model_supports_protocol(
             SourceDriverId::CommandCode,
             "openai/gpt-5.6-luna",
             OpenAiResponses
@@ -502,6 +668,16 @@ pub(crate) mod tests {
     fn gateway_urls_preserve_the_documented_api_roots() {
         for (driver, base, expected) in [
             (
+                SourceDriverId::MuseCode,
+                "https://api.meta.ai/v1",
+                "https://api.meta.ai/v1/models",
+            ),
+            (
+                SourceDriverId::MuseCode,
+                "https://api.meta.ai",
+                "https://api.meta.ai/v1/models",
+            ),
+            (
                 SourceDriverId::CommandCode,
                 "https://api.commandcode.ai/provider/v1",
                 "https://api.commandcode.ai/provider/v1/models",
@@ -604,6 +780,8 @@ pub(crate) mod tests {
             SourceDriverId::KiloGateway,
             SourceDriverId::ClineApi,
             SourceDriverId::CommandCode,
+            SourceDriverId::MuseCode,
+            SourceDriverId::AbacusRoutellm,
         ] {
             let mut channel = channel(driver, &base);
             let result = crate::detection::refresh_channel(channel.clone())
@@ -669,9 +847,203 @@ pub(crate) mod tests {
         }
         assert_eq!(
             gets.load(std::sync::atomic::Ordering::Relaxed),
-            5,
+            7,
             "one shared catalog GET per refresh"
         );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn catalog_cache_avoids_health_tick_downloads_but_refreshes_and_accounts_are_isolated() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = AtomicUsize::new(0);
+        let key = format!("catalog-test-{}", rand::random::<u64>());
+        let fetch = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![ModelObservation {
+                id: "claude-test".into(),
+                ..Default::default()
+            }])
+        };
+        for _ in 0..2 {
+            assert_eq!(
+                cached_catalog(
+                    SourceDriverId::PoeApi,
+                    &key,
+                    "https://api.poe.com/v1/models",
+                    false,
+                    fetch()
+                )
+                .await
+                .unwrap()
+                .len(),
+                1
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        cached_catalog(
+            SourceDriverId::PoeApi,
+            &key,
+            "https://api.poe.com/v1/models",
+            true,
+            fetch(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let failed = cached_catalog(
+            SourceDriverId::PoeApi,
+            &key,
+            "https://api.poe.com/v1/models",
+            true,
+            async { Err(anyhow::anyhow!("HTTP 401")) },
+        )
+        .await;
+        assert!(failed.is_err());
+        cached_catalog(
+            SourceDriverId::PoeApi,
+            &key,
+            "https://api.poe.com/v1/models",
+            false,
+            fetch(),
+        )
+        .await
+        .unwrap();
+        cached_catalog(
+            SourceDriverId::PoeApi,
+            &format!("{key}-other"),
+            "https://api.poe.com/v1/models",
+            false,
+            fetch(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn poe_refresh_filters_bots_and_keeps_per_model_endpoints_for_both_supply_paths() {
+        use warp::Filter;
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = seen.clone();
+        let route = warp::get().and(warp::path!("v1" / "models")).map(move || {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            warp::reply::json(&serde_json::json!({"data":[
+                {"id":"claude-sonnet-5.5", "owned_by":"Anthropic", "supported_endpoints":["/v1/chat/completions"],
+                 "supported_features":["tools"], "context_window":{"context_length":1000000},
+                 "architecture":{"input_modalities":["text","image"],"output_modalities":["text"]}, "pricing":null},
+                {"id":"claude-opus-4.8", "owned_by":"Anthropic", "supported_endpoints":["/v1/messages","/v1/responses","/v1/chat/completions"]},
+                {"id":"claude-code", "owned_by":"Poe Tools"}, {"id":"claude-community", "owned_by":"someone"}
+            ]}))
+        });
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(warp::serve(route).incoming(listener).run());
+        let mut channel = channel(SourceDriverId::PoeApi, &base);
+        let result = crate::detection::refresh_channel(channel.clone())
+            .await
+            .unwrap();
+        assert_eq!(result.models.len(), 2);
+        assert!(
+            !result
+                .models
+                .iter()
+                .any(|model| model.contains("community") || model == "claude-code")
+        );
+        crate::supplier::merge_channel_detection_result(&mut channel, &result);
+        assert_eq!(
+            channel_model_protocol(&channel, "claude-sonnet-5.5"),
+            Some(ProtocolKind::OpenAiChat)
+        );
+        assert_eq!(
+            channel_model_protocol(&channel, "claude-opus-4.8"),
+            Some(ProtocolKind::AnthropicMessages)
+        );
+        let metadata = channel
+            .capability_profiles
+            .iter()
+            .find(|p| {
+                p.catalog_metadata
+                    && p.protocol == "openai_chat"
+                    && p.model_pattern == "claude-sonnet-5.5"
+            })
+            .unwrap();
+        assert_eq!(metadata.context_tokens, Some(1000000));
+        assert!(metadata.image_input && metadata.tool_calls);
+        let mut evidence = Vec::new();
+        scope_native_evidence(
+            SourceDriverId::PoeApi,
+            &channel.models,
+            &channel.capability_profiles,
+            &mut evidence,
+        );
+        assert!(
+            evidence
+                .iter()
+                .any(|e| e.model_pattern.as_deref() == Some("claude-sonnet-5.5")
+                    && e.protocol == "anthropic_messages"
+                    && e.state == "unsupported")
+        );
+        assert!(crate::source_driver::channel_is_platform_shareable(
+            &channel
+        ));
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn abacus_and_poe_preserve_native_claude_cache_tools_and_sse() {
+        use crate::channel_executor::{ChannelRequest, execute_channel_request};
+        use warp::Filter;
+        let body = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"c1\",\"name\":\"read\",\"input\":{}}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+        let route = warp::post()
+            .and(warp::path!("v1" / "messages"))
+            .and(warp::header::headers_cloned())
+            .and(warp::body::json())
+            .map(move |headers: HeaderMap, value: serde_json::Value| {
+                assert_eq!(headers["authorization"], "Bearer test-key");
+                assert_eq!(headers["anthropic-beta"], "future-beta");
+                assert_eq!(value["system"][0]["cache_control"]["type"], "ephemeral");
+                assert_eq!(value["tools"][0]["name"], "read");
+                assert_eq!(value["future_field"], true);
+                warp::reply::with_header(body, "content-type", "text/event-stream")
+            });
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(warp::serve(route).incoming(listener).run());
+        for driver in [SourceDriverId::AbacusRoutellm, SourceDriverId::PoeApi] {
+            let mut channel = channel(driver, &base);
+            channel.capability_profiles.push(ChannelCapabilityProfile {
+                protocol: "anthropic_messages".into(),
+                model_pattern: "claude-test".into(),
+                catalog_metadata: true,
+                catalog_protocol_supported: Some(true),
+                ..Default::default()
+            });
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            headers.insert("anthropic-beta", HeaderValue::from_static("future-beta"));
+            for content in [
+                serde_json::json!("hello"),
+                serde_json::json!([{"type":"tool_result","tool_use_id":"c1","content":"ok"}]),
+            ] {
+                let request = ChannelRequest { method:reqwest::Method::POST, path:"/anthropic/v1/messages".into(), raw_query:String::new(),
+                    has_query:false, headers:headers.clone(), body:serde_json::to_vec(&serde_json::json!({"model":"claude-test", "stream":true,
+                        "messages":[{"role":"user","content":content}], "system":[{"type":"text","text":"test","cache_control":{"type":"ephemeral"}}],
+                        "tools":[{"name":"read","input_schema":{"type":"object"}}], "future_field":true})).unwrap().into(),
+                    stream_requested:Some(true), selected_upstream_model:Some("claude-test".into()), selected_target_protocol:None,
+                    cache_identity:None, safety_identifier:None };
+                let response = execute_channel_request(&reqwest::Client::new(), &channel, request)
+                    .await
+                    .unwrap();
+                assert!(response.native_passthrough);
+                assert_eq!(response.response.text().await.unwrap(), body);
+            }
+        }
         server.abort();
     }
 

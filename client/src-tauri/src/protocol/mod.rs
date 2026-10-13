@@ -120,7 +120,20 @@ pub(crate) fn encode_request(
     plan: &ConversionPlan,
     context: &AdapterContext,
 ) -> Result<Value, ProtocolFacadeError> {
-    Ok(adapter(protocol).encode_request(request, plan, context)?)
+    let mut body = adapter(protocol).encode_request(request, plan, context)?;
+    if request
+        .metadata
+        .source_protocol
+        .is_some_and(|source| !conversion::service_tier_is_portable(source, protocol))
+    {
+        // Only cross-protocol generation controls are affected. Native paths
+        // retain all current and future fields verbatim.
+        if let Some(fields) = body.as_object_mut() {
+            fields.remove("service_tier");
+            fields.remove("serviceTier");
+        }
+    }
+    Ok(body)
 }
 
 pub(crate) fn decode_response(

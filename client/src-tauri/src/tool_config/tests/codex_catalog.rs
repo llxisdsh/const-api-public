@@ -53,6 +53,48 @@ fn model_discovery_rules_also_filter_generated_claude_desktop_aliases() {
     assert!(injected.iter().all(|entry| entry.get("const_api").is_none()));
 }
 
+#[test]
+fn restricted_injection_preserves_claude_desktop_compatible_models() {
+    let mut config = crate::default_config();
+    config.allow_model_equivalence = true;
+    config.tool_model_injection.all_models = false;
+    // No native Claude supply, and no Haiku recommendation: compatible models
+    // must still be derived from the full supply snapshot, with admin hiding kept.
+    let payload = serde_json::json!({
+        "data": [{"id": "gpt-5.6-sol"}],
+        "const_api_model_presentation": {"schema_version": 1, "rules": [
+            {"pattern": "claude-opus-5", "hidden": true},
+            {"pattern": "claude-opus-*", "hidden": false},
+            {"pattern": "claude-sonnet-*", "hidden": false}
+        ]}
+    });
+    let models = config
+        .tool_model_injection
+        .select_from_payload("claude-desktop", &payload)
+        .unwrap();
+    let injected = claude_desktop_inference_models(&config, &models);
+    assert!(injected.iter().any(|entry| entry["name"]
+        .as_str()
+        .unwrap()
+        .starts_with("claude-haiku-")));
+    assert!(!injected.iter().any(|entry| entry["name"] == "claude-opus-5"));
+    let full = crate::tool_model_metadata::tool_models_from_response(&payload);
+    assert_eq!(injected, claude_desktop_inference_models(&config, &full));
+    assert_eq!(
+        config
+            .tool_model_injection
+            .select_from_payload("workbuddy", &payload)
+            .unwrap_err(),
+        "TOOL_MODEL_INJECTION_EMPTY"
+    );
+
+    config.allow_model_equivalence = false;
+    assert!(
+        claude_desktop_inference_models(&config, &models).is_empty(),
+        "exemption must not enable compatible routing"
+    );
+}
+
 fn apply_test_codex_catalog(
     source: CodexModelSource,
     catalog: Option<&serde_json::Value>,

@@ -177,9 +177,8 @@ fn vibe_trading_config_path() -> PathBuf {
 }
 
 fn zcode_config_path() -> PathBuf {
-    // ZCode 3.x stores its OpenCode-compatible provider registry here. The
-    // desktop app preserves unrelated top-level fields when it rewrites this
-    // file, so CONST API follows the same merge contract.
+    // Legacy registry, also imported once by newer ZCode installations before
+    // they create provider_config.json. Never prefer it over the new file.
     home_dir().join(".zcode").join("v2").join("config.json")
 }
 
@@ -1091,6 +1090,9 @@ fn apply_zcode_config(
     models: &[ToolModelInfo],
 ) -> Result<ToolApplyResult> {
     let models = configured_additional_tool_models("ZCode", models)?;
+    if zcode_provider_config_path().exists() {
+        return configure_zcode_provider_registry(base_url, api_key, Some(&models));
+    }
     let path = zcode_config_path();
     let mut root = read_json_or_default(&path, serde_json::json!({}))?;
     ensure_json_object(&mut root);
@@ -1117,6 +1119,9 @@ fn apply_zcode_config(
 }
 
 fn check_zcode_config(base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
+    if zcode_provider_config_path().exists() {
+        return configure_zcode_provider_registry(base_url, api_key, None);
+    }
     let path = zcode_config_path();
     let mut root = read_json_or_default(&path, serde_json::json!({}))?;
     ensure_json_object(&mut root);
@@ -2609,6 +2614,7 @@ pub(crate) fn apply_additional_tool_config_with_model_info_for_protocol(
     resolve_tool_protocol(tool, Some(protocol.as_str()))?;
     match tool {
         "grok-build" => configure_grok_build(base_url, api_key, Some(models), protocol),
+        "muse-code" => configure_muse_code(base_url, api_key, Some(models)),
         "minimax-code" => configure_minimax_code(base_url, api_key, Some(models), protocol),
         "copilot" => apply_copilot_config(base_url, api_key, models),
         "copilot-desktop" => copilot_desktop::apply(base_url, api_key, models, protocol),
@@ -2654,6 +2660,7 @@ pub(crate) fn check_additional_tool_config(
     api_key: &str,
 ) -> Result<ToolApplyResult> {
     match tool {
+        "muse-code" => configure_muse_code(base_url, api_key, None),
         "grok-build" => {
             configure_grok_build(base_url, api_key, None, ToolProtocol::OpenAiResponses)
         }
@@ -2697,7 +2704,7 @@ pub(crate) fn check_additional_tool_config(
 pub(crate) fn remove_additional_tool_config(tool: &str) -> Result<ToolApplyResult> {
     match tool {
         "copilot-desktop" => copilot_desktop::remove(),
-        "copilot" | "grok-build" | "minimax-code" | "raven" | "pi" | "cline" | "reasonix"
+        "copilot" | "grok-build" | "minimax-code" | "muse-code" | "raven" | "pi" | "cline" | "reasonix"
         | "deepseek-harness" | "open-interpreter" | "anythingllm" | "goose" | "mistral-vibe"
         | "open-design" | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading"
         | "zcode" => restore_tool_config_from_manifest(tool),

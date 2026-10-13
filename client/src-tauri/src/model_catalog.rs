@@ -20,6 +20,8 @@ pub(crate) struct ModelObservation {
     pub(crate) supported_parameters: Option<Vec<String>>,
     /// Explicit endpoint contract from a maintained provider's catalog.
     pub(crate) supported_endpoints: Option<Vec<String>>,
+    /// Kiro's per-model contract for optional native generation controls.
+    pub(crate) kiro_request_schema: Option<serde_json::Value>,
     /// Catalog quote for a tiny 32-input/16-output check, never a billing rule.
     pub(crate) probe_cost_nanos: Option<u64>,
 }
@@ -28,6 +30,9 @@ pub(crate) struct ModelObservation {
 pub(crate) enum ModelCatalogKind {
     OpenAI,
     CommandCode,
+    Copilot,
+    Abacus,
+    Poe,
     Grok,
     Codex,
     Anthropic,
@@ -91,11 +96,34 @@ pub(crate) fn model_observations_from_value(
 ) -> Vec<ModelObservation> {
     let mut out = Vec::new();
     match kind {
-        ModelCatalogKind::OpenAI | ModelCatalogKind::CommandCode | ModelCatalogKind::Anthropic => {
+        ModelCatalogKind::OpenAI
+        | ModelCatalogKind::CommandCode
+        | ModelCatalogKind::Anthropic
+        | ModelCatalogKind::Abacus
+        | ModelCatalogKind::Poe => {
             if let Some(items) = value.get("data").and_then(|value| value.as_array()) {
                 for item in items {
+                    if kind == ModelCatalogKind::Abacus
+                        && item["model_type"]
+                            .as_str()
+                            .is_some_and(|kind| kind != "text_generation")
+                    {
+                        continue;
+                    }
+                    // Poe's public directory includes arbitrary user bots and agents.
+                    // This maintained preset offers only Anthropic's own models.
+                    if kind == ModelCatalogKind::Poe
+                        && item["owned_by"].as_str() != Some("Anthropic")
+                    {
+                        continue;
+                    }
                     push_model_observation(&mut out, item, None, source, false);
-                    if kind == ModelCatalogKind::CommandCode {
+                    if matches!(
+                        kind,
+                        ModelCatalogKind::CommandCode
+                            | ModelCatalogKind::Abacus
+                            | ModelCatalogKind::Poe
+                    ) {
                         if let Some(model) = out
                             .last_mut()
                             .filter(|model| item["id"].as_str() == Some(model.id.as_str()))
@@ -111,8 +139,116 @@ pub(crate) fn model_observations_from_value(
                                         .map(|endpoint| endpoint.trim().to_string())
                                         .collect()
                                 });
+                            if kind == ModelCatalogKind::Abacus {
+                                if let Some(formats) = item["api_formats"]
+                                    .as_array()
+                                    .filter(|items| items.iter().all(serde_json::Value::is_string))
+                                {
+                                    model.supported_endpoints = Some(
+                                        formats
+                                            .iter()
+                                            .filter_map(|format| match format.as_str()? {
+                                                "openai" => {
+                                                    Some("/v1/chat/completions".to_string())
+                                                }
+                                                "responses" => Some("/v1/responses".to_string()),
+                                                "anthropic" => Some("/v1/messages".to_string()),
+                                                _ => None,
+                                            })
+                                            .collect(),
+                                    );
+                                }
+                                if let Some(tools) = item["tools"].as_bool() {
+                                    model.supported_parameters = Some(if tools {
+                                        vec!["tools".into(), "tool_choice".into()]
+                                    } else {
+                                        Vec::new()
+                                    });
+                                }
+                            }
+                            if kind == ModelCatalogKind::Poe {
+                                model.context_tokens = positive_token_limit(
+                                    &item["context_window"],
+                                    &["context_length"],
+                                );
+                                model.output_tokens = positive_token_limit(
+                                    &item["context_window"],
+                                    &["max_output_tokens"],
+                                );
+                                model.supported_parameters = item["supported_features"]
+                                    .as_array()
+                                    .filter(|items| items.iter().all(serde_json::Value::is_string))
+                                    .map(|features| {
+                                        if features.iter().any(|feature| feature == "tools") {
+                                            vec!["tools".into(), "tool_choice".into()]
+                                        } else {
+                                            Vec::new()
+                                        }
+                                    });
+                            }
+                            if matches!(kind, ModelCatalogKind::Poe | ModelCatalogKind::Abacus) {
+                                // Do not infer USD/token from an unverified provider price unit.
+                                model.probe_cost_nanos = None;
+                            }
                         }
                     }
+                }
+            }
+        }
+        ModelCatalogKind::Copilot => {
+            for item in value["data"].as_array().into_iter().flatten() {
+                if item.get("custom_model").is_some_and(|custom| {
+                    !custom.is_null() && custom != &serde_json::Value::Bool(false)
+                }) || item
+                    .pointer("/policy/state")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("disabled")
+                    || item
+                        .pointer("/capabilities/type")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|kind| kind != "chat")
+                {
+                    continue;
+                }
+                let before = out.len();
+                push_model_observation(&mut out, item, None, source, false);
+                if out.len() == before {
+                    continue;
+                }
+                let model = out.last_mut().expect("model was appended");
+                // Copilot publishes AI credits, not a USD-per-token tariff.
+                model.probe_cost_nanos = None;
+                model.supported_endpoints = item["supported_endpoints"]
+                    .as_array()
+                    .filter(|items| items.iter().all(serde_json::Value::is_string))
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    });
+                let limits = &item["capabilities"]["limits"];
+                model.context_tokens = positive_token_limit(
+                    limits,
+                    &["max_context_window_tokens", "max_prompt_tokens"],
+                );
+                model.output_tokens = positive_token_limit(limits, &["max_output_tokens"]);
+                model.input_modalities = vec!["text".into()];
+                model.output_modalities = vec!["text".into()];
+                let supports = &item["capabilities"]["supports"];
+                if supports["vision"].as_bool() == Some(true) {
+                    model.input_modalities.push("image".into());
+                }
+                if supports["tool_calls"].is_boolean() {
+                    let mut parameters = Vec::new();
+                    if supports["tool_calls"].as_bool() == Some(true) {
+                        parameters.push("tools".into());
+                    }
+                    if supports["parallel_tool_calls"].as_bool() == Some(true) {
+                        parameters.push("parallel_tool_calls".into());
+                    }
+                    model.supported_parameters = Some(parameters);
                 }
             }
         }
@@ -344,6 +480,7 @@ fn push_model_observation_with_id(
                     .collect()
             }),
         supported_endpoints: None,
+        kiro_request_schema: None,
         probe_cost_nanos: catalog_probe_cost(entry),
     });
 }
@@ -544,7 +681,7 @@ fn next_page_cursor(
                 ))
             }
         }
-        ModelCatalogKind::OpenAI | ModelCatalogKind::CommandCode => {
+        ModelCatalogKind::OpenAI | ModelCatalogKind::CommandCode | ModelCatalogKind::Abacus => {
             let has_more = value
                 .get("has_more")
                 .and_then(|value| value.as_bool())
@@ -564,7 +701,11 @@ fn next_page_cursor(
                 ))
             }
         }
-        ModelCatalogKind::Codex | ModelCatalogKind::Grok | ModelCatalogKind::Ollama => None,
+        ModelCatalogKind::Codex
+        | ModelCatalogKind::Grok
+        | ModelCatalogKind::Ollama
+        | ModelCatalogKind::Copilot
+        | ModelCatalogKind::Poe => None,
     };
     Ok(cursor)
 }
@@ -582,6 +723,7 @@ pub(crate) fn models_from_quota_observations<'a>(
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: model.to_string(),
                 priority: None,
@@ -656,6 +798,42 @@ mod tests {
                 "openai"
             )),
             vec!["z-model", "a-model"]
+        );
+    }
+
+    #[test]
+    fn abacus_public_catalog_keeps_text_models_and_explicit_api_formats() {
+        let models = model_observations_from_value(
+            ModelCatalogKind::Abacus,
+            &serde_json::json!({"data":[
+                {"id":"claude-sonnet-5-5","model_type":"text_generation","context_length":1000000,
+                 "max_completion_tokens":128000,"api_formats":["openai","anthropic"],"tools":true,
+                 "input_token_rate":"0.000002","output_token_rate":"0.00001"},
+                {"id":"gpt-future","model_type":"text_generation","api_formats":["openai"],"tools":false},
+                {"id":"route-llm-code","model_type":"text_generation","api_formats":["openai","anthropic"]},
+                {"id":"media","model_type":"image_generation"}
+            ]}),
+            "abacus",
+        );
+        assert_eq!(models.len(), 3);
+        assert_eq!(models[0].context_tokens, Some(1000000));
+        assert_eq!(models[0].output_tokens, Some(128000));
+        assert_eq!(
+            models[0].supported_parameters.as_deref(),
+            Some(["tools".to_string(), "tool_choice".to_string()].as_slice())
+        );
+        assert!(models[0].probe_cost_nanos.is_none());
+        assert_eq!(
+            crate::coding_gateway::catalog_supports_protocol(&models[1], "openai_responses"),
+            Some(false)
+        );
+        assert_eq!(
+            models[2].id, "route-llm-code",
+            "an automatic router is not a Claude identity"
+        );
+        assert_eq!(
+            crate::coding_gateway::catalog_supports_protocol(&models[2], "anthropic_messages"),
+            Some(true)
         );
     }
 
@@ -759,6 +937,7 @@ mod tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: " GPT-5.6-Terra ".to_string(),
                 priority: None,
@@ -773,6 +952,7 @@ mod tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "gpt-5.6-terra".to_string(),
                 priority: Some(0),
@@ -851,6 +1031,7 @@ mod tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "duplicate".to_string(),
                 priority: None,
@@ -865,6 +1046,7 @@ mod tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "other".to_string(),
                 priority: Some(10),
@@ -879,6 +1061,7 @@ mod tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "duplicate".to_string(),
                 priority: Some(0),

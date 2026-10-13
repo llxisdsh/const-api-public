@@ -364,6 +364,47 @@ impl SupplierPreparedPayload {
 mod message_chunk_tests {
     use super::*;
 
+    #[test]
+    fn small_stream_frames_compress_without_changing_legacy_or_control_frames() {
+        let message = SupplierMessage {
+            id: "small-stream".into(),
+            kind: "stream_chunk".into(),
+            payload: serde_json::json!({"data": "response.output_text.delta ".repeat(16)})
+                .as_object()
+                .unwrap()
+                .clone(),
+        };
+        let raw = serde_json::to_vec(&message).unwrap();
+        assert!((256..1024).contains(&raw.len()));
+        for encrypted in [false, true] {
+            let (sender, receiver) = codec_pair(encrypted);
+            let (wire, binary) = sender.encode(message.clone()).unwrap();
+            assert!(binary);
+            assert!(wire.len() < raw.len());
+            let decoded = receiver
+                .decode_websocket(WsMessage::Binary(wire.into()))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&decoded).unwrap(),
+                serde_json::from_slice::<serde_json::Value>(&raw).unwrap()
+            );
+        }
+        let legacy = SupplierTransportCodec::default();
+        let (wire, binary) = legacy.encode(message).unwrap();
+        assert!(!binary);
+        assert_eq!(wire, raw);
+        let (sender, _) = codec_pair(false);
+        let (_, binary) = sender
+            .encode(SupplierMessage {
+                id: "ping".into(),
+                kind: "ping".into(),
+                payload: Default::default(),
+            })
+            .unwrap();
+        assert!(!binary);
+    }
+
     fn codec_pair(encrypted: bool) -> (SupplierTransportCodec, SupplierTransportCodec) {
         let sender = SupplierTransportCodec::default();
         let receiver = SupplierTransportCodec::default();

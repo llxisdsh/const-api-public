@@ -114,6 +114,8 @@ async fn forward_antigravity_subscription_request_with_cache_identity(
         }
         serde_json::json!({"request": native}).to_string()
     } else {
+        let native_body =
+            crate::antigravity_models::normalize_antigravity_gemini_history(&model, &native_body)?;
         gemini_native_body_to_antigravity_body_with_cache_identity(
             &native_body,
             &upstream_model,
@@ -445,7 +447,10 @@ pub(crate) async fn forward_antigravity_subscription_stream_request_with_capacit
     )?;
     let model = prepared.canonical_model;
     let upstream_model = prepared.upstream_model;
-    let native_body = prepared.native_body;
+    let native_body = crate::antigravity_models::normalize_antigravity_gemini_history(
+        &model,
+        &prepared.native_body,
+    )?;
     let upstream_body = gemini_native_body_to_antigravity_body_with_cache_identity(
         &native_body,
         &upstream_model,

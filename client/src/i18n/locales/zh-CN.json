@@ -2,6 +2,62 @@
   "app": {
     "name": "CONST API"
   },
+  "cursor": {
+    "login": "登录 Cursor",
+    "starting": "正在生成登录链接…",
+    "hint": "使用 Cursor 账号登录。授权不调用模型、不购买套餐；可用模型和用量以账号订阅为准。",
+    "code": "登录确认码：",
+    "openLogin": "打开 Cursor 登录页",
+    "waiting": "请在浏览器确认授权，完成后会自动返回这里。",
+    "retrying": "暂时无法连接或请求受限，正在等待重试；可随时取消。",
+    "success": "已授权，点击保存导入账号。模型测试会消耗上游额度。",
+    "errors": {
+      "network": "连接 Cursor 失败，请检查网络后重试。",
+      "invalid_response": "Cursor 返回了无法识别的授权信息，未导入凭据。",
+      "denied": "Cursor 授权被拒绝，可重新发起。",
+      "expired": "登录链接已过期，请重新登录。",
+      "slow_down": "登录尝试过多，请等待几分钟再试。",
+      "upstream_error": "Cursor 授权失败，请稍后重试。"
+    }
+  },
+  "copilot": {
+    "login": "登录 GitHub Copilot",
+    "starting": "正在生成登录码…",
+    "hint": "登录有 Copilot 权益的 GitHub 账号。仅列出账号已开放的模型；用量受套餐、组织和地区限制。登录不调用模型、不自动付款。此接入使用客户端接口，正式供应前请先完成检查并确认账号的使用权限。",
+    "code": "登录确认码：",
+    "openLogin": "打开 GitHub 登录页",
+    "waiting": "请在 GitHub 输入确认码并授权，完成后会自动填入凭据。",
+    "retrying": "暂时无法连接或请求受限，正在等待重试；可随时取消。",
+    "success": "已授权。刷新可读取账号模型列表；验证并保存会调用模型并消耗额度。",
+    "errors": {
+      "network": "连接 GitHub 失败，请检查网络后重试。",
+      "invalid_response": "GitHub 返回了无法识别的授权信息，未导入凭据。",
+      "denied": "GitHub 登录授权被拒绝，可重新发起。",
+      "expired": "登录码已过期，请重新登录。",
+      "upstream_error": "GitHub 授权失败，请稍后重试。"
+    }
+  },
+  "museCode": {
+    "login": "登录获取订阅密钥",
+    "starting": "正在生成登录码…",
+    "hint": "通过 Meta 登录获取 Muse Code 订阅专用密钥，不使用普通按量 Key。官方限定订阅用于 Muse Code CLI；CONST 的实际订阅扣费仍待账号实测。登录不调用模型、不自动付款。",
+    "code": "登录确认码：",
+    "openLogin": "打开 Meta 登录页",
+    "waiting": "请在浏览器确认登录，完成后会自动填入密钥。",
+    "retrying": "暂时无法连接或请求受限，正在等待重试；可随时取消。",
+    "success": "已填入订阅专用密钥。点击“验证并保存”可检查渠道；检查会消耗上游额度。",
+    "errors": {
+      "network": "连接 Meta 失败，请检查网络后重试。",
+      "invalid_response": "Meta 返回了无法确认的授权或订阅信息，未导入密钥。",
+      "unexpected_endpoint": "Meta 返回了非预期地址，已停止授权。",
+      "region_restricted": "Meta 提示当前地区不支持此服务，请核对账号与订阅的适用地区。",
+      "denied": "Meta 登录授权被拒绝，可重新发起。",
+      "expired": "登录码已过期，请重新登录。",
+      "subscription_inactive": "该账号没有有效的 Muse Code 订阅，未导入密钥。",
+      "payment_required": "Meta 要求先完成订阅付款。本客户端不会自动付款或改用按量 Key。",
+      "upstream_error": "Meta 授权请求失败，可重新登录；未启用按量计费回退。"
+    }
+  },
   "windowControls": {
     "minimize": "最小化",
     "maximize": "最大化",
@@ -94,8 +150,8 @@
     "title": "模型价格参考",
     "subtitle": "参考单价来自当前价格目录；预计价格结合当前可用渠道、容量、服务表现和报价估算。",
     "routingPolicy": "请求如何分配",
-    "withinBest": "同一优先级内，更倾向低价",
-    "routingPolicyHint": "同一模型先选可用的官方渠道，无法使用时再尝试自定义渠道；同一优先级内综合服务表现与报价，价格越低越容易被选中。进行中的会话尽量保持原渠道，空闲后重新评估。",
+    "withinBest": "先官方、后自定义；同级按价格反平方加权",
+    "routingPolicyHint": "同一模型只选可用渠道，同级免费优先。付费按服务表现与 1/报价² 加权抽选：半价对应 4 倍价格权重。活跃会话尽量保留原渠道，空闲后重选。",
     "updatedAt": "快照时间",
     "catalogPrice": "目录 {{price}}",
     "noPriceComponents": "当前价格目录没有可展示的计费项。",
@@ -746,7 +802,17 @@
       "defaultTarget": "没有同协议接口时，转换到",
       "defaultTargetHint": "这是兜底设置，通常无需修改。",
       "sharedCredentialHint": "下方启用的接口共用此 API Key；使用不同 Key 的接口，请另建渠道。",
-      "managedConnection": "由订阅连接管理"
+      "managedConnection": "由订阅连接管理",
+      "acceptedProtocols": "工具可用协议",
+      "subscriptionHint": "上游连接由订阅适配器管理。工具请求经 CONST 适配后发送，协议名称不代表模型厂商。",
+      "subscriptionTransports": {
+        "openai": "Codex Responses · SSE / WebSocket",
+        "claude": "Anthropic Messages · HTTP / SSE",
+        "antigravity": "Antigravity generateContent · HTTP / SSE",
+        "grok": "Grok Responses · HTTP / SSE",
+        "kiro": "Kiro GenerateAssistantResponse · AWS EventStream",
+        "cursor": "Cursor AgentService · Connect / HTTP2"
+      }
     },
     "defaultModelHint": "当前采用模型名透传。",
     "bedrockModelHint": "推荐使用 bedrock-mantle 的 OpenAI-compatible 模型名；能力以上线检测结果为准。",
@@ -765,6 +831,7 @@
       "userAgentProfileDefault": "不覆盖（跟随请求）",
       "userAgentProfileHint": "仅当上游渠道限制或要求特定客户端时选择。渠道刷新、检查和工具请求都会改用所选客户端的 User-Agent；普通渠道保持不覆盖。",
       "surfaceTitle": "上游 API 接口",
+      "subscriptionInterfaceTitle": "订阅接口与工具协议",
       "notConfigured": "未配置",
       "collapse": "收起",
       "expand": "展开",
@@ -806,6 +873,8 @@
       "rpmLowWarning": "每分钟请求限制较低，可能降低成交机会；仅在上游确有额度限制时设置。",
       "rpmConfigured": "仅在上游确有每分钟额度时限制；0 表示不额外限制。",
       "subscriptionPlatform": "订阅平台",
+      "claudeFast": "允许 Claude Fast",
+      "claudeFastHint": "默认关闭，Fast 请求按普通速度执行。开启后仅在调用方请求时尝试 Fast；会消耗 Claude 额外用量额度，不包含在订阅额度内。不会自动开启上游额外付费，最终按上游实际档位计价。",
       "legacyGemini": "旧 Gemini Code Assist",
       "credentialReference": "凭证文件",
       "credentialReferenceHint": "仅保存在本机：{{path}}",
@@ -822,11 +891,16 @@
       "empty": "当前渠道暂未提供可展示的扩展能力。",
       "primaryTitle": "主要能力",
       "primaryHint": "当前渠道可用于模型请求的主要能力。",
+      "subscriptionPrimaryHint": "依据订阅适配器、模型目录和已有检查结果汇总。分组检查验证代表模型可调用，不代表逐项实测了全部能力。",
       "clientHostTitle": "在工具中可用",
       "clientHostHint": "由 Codex 或其他 Agent 工具在本机完成，不等同于标准 API 能力。",
       "clientHostFileInput": "Codex / Agent 可读取本地文件",
       "apiTitle": "可处理的 API 请求",
       "apiHint": "下列本地 API 请求可交给当前渠道处理；未列出的请求不会使用该渠道。",
+      "subscriptionApiHint": "以下是 CONST 适配后可接收的 API 请求，不代表上游原生提供这些接口。具体能力取决于模型和适配范围。",
+      "coreOperationsOnly": "支持核心调用，部分扩展操作暂不可用",
+      "adapterConversion": "通过订阅适配器转换，部分高级参数受限",
+      "modelDependent": "实际范围取决于当前模型和上游渠道",
       "supported": "支持",
       "experimental": "实验性支持",
       "limited": "有限支持",
@@ -882,8 +956,8 @@
       "localValidatedSignInLater": "{{channel}} 本机检测通过；登录后会自动连接平台。",
       "platformConnectionIncomplete": "{{channel}} 本机检测通过；平台连接未完成：{{error}}",
       "platformNotConfirmed": "{{channel}} 本机检测通过；平台尚未确认上线。",
-      "channelDisabled": "{{channel}} 已停用。",
-      "channelDisabledOthersContinue": "{{channel}} 已停用，其余渠道继续供应。",
+      "channelDisabled": "{{channel}} 已停止接收新请求，进行中的请求继续完成。",
+      "channelDisabledOthersContinue": "{{channel}} 已停止接收新请求，进行中的请求和其他渠道不受影响。",
       "saveBeforeReorder": "请先保存或取消当前渠道修改，再调整本机优先级。",
       "reorderFailed": "保存本机优先级失败：{{error}}",
       "saveBeforeRefresh": "请先保存或取消当前修改，再刷新渠道信息。",
@@ -913,6 +987,8 @@
   },
   "account": {
     "title": "账户",
+    "restoring": "正在恢复账户状态…",
+    "refreshRetained": "{{error}}，已保留上次加载的内容。",
     "signedOutSubtitle": "当前未登录，客户端以本机模式运行。",
     "tabs": {
       "overview": "概览",
@@ -1417,6 +1493,10 @@
     "catalogVersion": "模型目录版本",
     "catalogSource": "目录来源",
     "startupAndUpdates": "启动",
+    "preventSleepWhileSupplying": "供应时保持唤醒",
+    "sleepPreventionHint": "仅在有可用供应或请求未结束时防止自动睡眠；空闲时恢复系统原设置，仍可关屏、锁屏和手动睡眠。",
+    "sleepPreventionFailed": "防睡眠设置失败：{{error}}",
+    "releasePreferencesDevHint": "dev 版不执行自动更新或登录时启动；正式版中可设置。",
     "interfaceSettings": "界面设置",
     "autoRestartUpdate": "自动重启更新",
     "launchAtLogin": "登录时启动",
@@ -1582,6 +1662,8 @@
       "antigravity": "Antigravity 账号订阅",
       "claude": "Claude 账号订阅",
       "grok": "Grok 账号订阅",
+      "kiro": "Kiro 账号订阅",
+      "cursor": "Cursor 账号订阅",
       "connect": "连接 {{provider}}"
     },
     "capability": {
@@ -1843,13 +1925,13 @@
       "description": "桌面端与终端共用模型配置的 Cline 编码代理"
     },
     "trae": {
-      "description": "自动配置自定义模型的 TraeCode 国际版；需先登录 Trae"
+      "description": "融合 Agent 与 IDE 模式的 TRAE 国际版；自动配置自定义模型，需先登录"
     },
     "trae-cn": {
-      "description": "自动配置自定义模型的 TraeCode 国内版；需先登录 Trae"
+      "description": "融合 Agent 与 IDE 模式的 TRAE 国内版；自动配置自定义模型，需先登录"
     },
     "trae-work": {
-      "description": "为 TraeWork 桌面版的本地任务配置模型；需先登录 TraeWork"
+      "description": "已合并至 TRAE，2026 年 10 月 23 日停止服务；请在 TraeWork 内升级"
     },
     "opencode": {
       "description": "覆盖终端、桌面与 IDE 的开源 AI 编码代理"
@@ -1887,6 +1969,9 @@
     "grok-build": {
       "description": "xAI 终端编码工具；同步模型列表，并为每个模型选择匹配的 API 协议"
     },
+    "muse-code": {
+      "description": "Meta 终端编程工具；支持自定义模型、思考深度和上下文配置"
+    },
     "minimax-code": {
       "description": "MiniMax 桌面端与终端共用模型配置；默认优先桌面版，统一使用工具菜单中选择的协议"
     },
@@ -1897,7 +1982,12 @@
       "description": "在 VS Code Chat 与 Agent 中使用 CONST API，按模型匹配协议"
     },
     "workbuddy": {
-      "description": "面向办公、研究与多步骤任务的专业桌面智能体"
+      "title": "WorkBuddy",
+      "description": "WorkBuddy 中国版桌面智能体，与国际版配置独立"
+    },
+    "workbuddy-ai": {
+      "title": "WorkBuddy AI",
+      "description": "WorkBuddy 国际版桌面智能体，独立管理模型配置"
     },
     "kimicode": {
       "description": "桌面端与终端共用模型配置的 Kimi Code 编码代理"
@@ -1922,6 +2012,31 @@
       "website": "官方网站",
       "github": "GitHub"
     }
+  },
+  "toolModelInjection": {
+    "allModels": "注入全部模型",
+    "hint": "关闭后，仅注入推荐列表中的模型，减少选择干扰。Claude、使用原生模型列表的 Codex，以及自行获取模型的工具不受影响。",
+    "editList": "推荐列表",
+    "title": "工具推荐模型",
+    "editorHint": "后台推荐在前，你的追加项在后。支持模型名或末尾 * 前缀。",
+    "recommended": "后台推荐",
+    "fixed": "后台管理，不可在客户端修改",
+    "noRecommendations": "暂无推荐规则，可在下方追加。",
+    "additions": "我的追加",
+    "modelInput": "追加模型或前缀",
+    "placeholder": "例如 glm-5.3 或 glm-*",
+    "add": "追加",
+    "remove": "删除追加项 {{model}}",
+    "invalid": "请输入不重复的短模型名或末尾 * 前缀。",
+    "allModelsNote": "当前注入全部模型；关闭“注入全部模型”后使用此列表。",
+    "saveAndSync": "保存并同步",
+    "syncHint": "仅同步已配置的工具；恢复默认只清空追加项。",
+    "loadFailed": "推荐列表读取失败：{{error}}",
+    "syncing": "正在同步 {{tool}}…",
+    "saved": "已保存，已同步 {{count}} 个工具。",
+    "partial": "已保存，以下工具尚未完成同步：{{errors}}",
+    "skipped": "{{tool}}：已取消同步",
+    "restoreDefaults": "恢复默认"
   },
   "modelCompatibility": {
     "title": "定制兼容模型",
@@ -2040,6 +2155,20 @@
     "listSeparator": "；",
     "remainingModels": "；另 {{count}} 个",
     "routeDetailTitle": "服务端路由详情",
+    "updatedAt": "状态更新：{{time}}",
+    "reasonCode": "原因码：{{code}}",
+    "cooldownUntil": "冷却至 {{time}}，恢复状态以服务端评估为准。",
+    "cooldownElapsed": "冷却期限 {{time}} 已过，等待服务端更新状态。",
+    "diagnostics": {
+      "upstreamConnect": "建立上游连接时失败",
+      "tlsError": "TLS 握手失败",
+      "connectionReset": "连接被重置",
+      "connectionRefused": "连接被拒绝",
+      "upstreamCloseFrame": "上游发送了关闭帧",
+      "upstreamEof": "上游连接结束，未收到关闭帧",
+      "upstreamPongFailed": "向上游回复心跳失败",
+      "closeCode": "关闭码 {{code}}"
+    },
     "durationSeconds": "{{value}} 秒",
     "durationMilliseconds": "{{value}} 毫秒",
     "transportTimeoutWithLimit": "{{transport}} {{phase}}超时（{{timeout}}；底层：{{message}}）",
@@ -2059,6 +2188,16 @@
       "cooldown": "冷却",
       "timeout": "超时",
       "networkError": "网络异常",
+      "transportTimeout": "平台与供应客户端之间的连接超时",
+      "transportInterrupted": "平台与供应客户端之间的连接中断",
+      "upstreamInterrupted": "供应客户端与上游之间的 WebSocket 连接中断",
+      "upstreamConnectTimeout": "连接上游超时",
+      "upstreamConnectError": "连接上游失败",
+      "upstreamReadError": "读取上游响应失败",
+      "upstreamSendError": "向上游发送数据失败",
+      "upstreamRestart": "上游通知服务重启",
+      "upstreamOverloaded": "上游服务繁忙",
+      "upstreamBackpressure": "上游响应处理队列已满",
       "channelFailure": "通道异常",
       "temporaryFailure": "临时异常",
       "clientOffline": "客户端下线",
@@ -2091,6 +2230,12 @@
     "summary": "汇总额度",
     "periodUnknown": "周期未标明",
     "upstreamSummary": "上游汇总",
+    "includedUsage": "套餐用量",
+    "includedMonthly": "套餐月额度",
+    "cursorModels": "Cursor 模型（月）",
+    "cursorOtherModels": "其他模型（月）",
+    "onDemandMonthly": "额外付费（月）",
+    "cursorHint": "显示各额度池剩余比例。套餐额度与额外付费分别计算，不因单个池用尽而停用整个渠道。",
     "official": "官方",
     "sevenDays": "7天",
     "fiveHours": "5小时",
@@ -2103,6 +2248,8 @@
       "openai": "OpenAI 官方额度",
       "claude": "Claude 官方额度",
       "grok": "Grok 官方额度",
+      "kiro": "Kiro 积分额度",
+      "cursor": "Cursor 官方额度",
       "gemini": "Gemini 官方额度",
       "official": "官方额度",
       "upstream": "上游额度"
@@ -2462,6 +2609,14 @@
       "title": "Grok 账号订阅",
       "description": "连接个人 Grok / SuperGrok 账号，使用账号订阅额度"
     },
+    "cursor_subscription": {
+      "title": "Cursor 账号订阅",
+      "description": "登录 Cursor，使用账号的模型与订阅额度；支持外部工具调用"
+    },
+    "kiro_subscription": {
+      "title": "Kiro 账号订阅",
+      "description": "通过 Google 或 GitHub 登录 Kiro，使用账号实际开放的模型和额度"
+    },
     "openai_api": {
       "title": "OpenAI 官方 API",
       "description": "使用 OpenAI 官方 API Key 接入"
@@ -2568,7 +2723,11 @@
     },
     "kilo_gateway": {
       "title": "Kilo AI Gateway",
-      "description": "使用 Kilo API Key，接入聚合模型"
+      "description": "使用 Kilo API Key，支持 Kilo 余额及 Kilo Pass 赠送额度"
+    },
+    "copilot_subscription": {
+      "title": "GitHub Copilot 账号订阅",
+      "description": "登录 GitHub，使用账号已开放的模型；按 Copilot 套餐扣除额度"
     },
     "cline_api": {
       "title": "Cline API",
@@ -2593,6 +2752,18 @@
     "ollama_cloud": {
       "title": "Ollama Cloud",
       "description": "使用 Ollama Cloud API Key；不是本机 Ollama"
+    },
+    "muse_code": {
+      "title": "Meta Muse Code 订阅",
+      "description": "登录 Meta 获取订阅专用 Key；标准 API 接入，订阅计费待实测"
+    },
+    "abacus_routellm": {
+      "title": "Abacus RouteLLM",
+      "description": "使用 RouteLLM API Key，消耗 ChatLLM 套餐额度"
+    },
+    "poe_api": {
+      "title": "Poe Claude API",
+      "description": "使用 Poe API Key，接入 Anthropic 官方 Claude 模型并消耗账号点数"
     },
     "omniroute": {
       "title": "OmniRoute 本地聚合端点",
@@ -2653,6 +2824,11 @@
       "top_k": "Top K"
     },
     "codes": {
+      "tool_model_injection_empty": "没有可注入模型。请在使用页设置中追加模型，或开启“注入全部模型”。原配置未改动。",
+      "tool_model_injection_invalid": "最多追加 128 项，请使用不重复的短模型名或末尾 * 前缀。",
+      "tool_model_injection_busy": "工具配置正在进行，请完成后再保存并同步。",
+      "tool_model_injection_incomplete": "同步后检查发现配置仍不完整，请检查工具设置后重试。",
+      "tool_model_recommendations_invalid": "推荐模型规则无效或版本不受支持，原配置未改动。请更新客户端或检查后台规则后重试。",
       "unauthorized": "认证失败，请重新登录。",
       "forbidden": "没有执行此操作的权限。",
       "not_found": "未找到请求的资源。",
@@ -2679,6 +2855,7 @@
       "account_endpoint_unavailable": "未找到可用的平台账户服务地址，请检查客户端配置后重试。",
       "account_platform_unavailable": "当前登录平台暂时不可用，请稍后重试。",
       "account_invalid_request": "提交的账户信息有误，请检查后重试。",
+      "account_invalid_response": "平台返回的账户数据格式异常，请稍后重试或联系支持。",
       "account_authentication_failed": "身份验证未通过，请检查账号信息或重新登录。",
       "account_forbidden": "当前账户没有执行此操作的权限。",
       "account_endpoint_not_found": "找不到平台账户接口，请检查服务端地址或版本。",

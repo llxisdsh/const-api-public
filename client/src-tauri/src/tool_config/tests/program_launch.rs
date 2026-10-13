@@ -957,6 +957,53 @@
 
         assert!(known_tool_program_paths("workbuddy").contains(&expected));
         assert_eq!(known_tool_process_names("workbuddy"), &["WorkBuddy.exe"]);
+        assert!(known_tool_program_paths("workbuddy-ai")
+            .contains(&local_app_data.join("Programs/WorkBuddyAI/WorkBuddyAI.exe")));
+        assert_eq!(
+            known_tool_process_names("workbuddy-ai"),
+            &["WorkBuddyAI.exe", "workbuddy-ai.exe"]
+        );
+        assert!(windows_installed_product_matches("WorkBuddy AI 5.7.6", "WorkBuddy AI"));
+        assert!(!windows_installed_product_matches("WorkBuddy AI 5.7.6", "WorkBuddy"));
+        assert!(windows_installed_entry_paths(
+            tool_profile("workbuddy-ai").unwrap(), None,
+            Some(r"D:\Programs\WorkBuddyAI\WorkBuddyAI.exe,0"),
+        ).contains(&PathBuf::from(r"D:\Programs\WorkBuddyAI\WorkBuddyAI.exe")));
+    }
+
+    #[test]
+    fn workbuddy_editions_do_not_claim_each_others_programs() {
+        for (tool, sibling, paths) in [
+            (
+                "workbuddy",
+                "workbuddy-ai",
+                [
+                    "/tools/WorkBuddy.exe",
+                    "/Applications/WorkBuddy.app",
+                    "/usr/bin/workbuddy",
+                ],
+            ),
+            (
+                "workbuddy-ai",
+                "workbuddy",
+                [
+                    "/tools/WorkBuddyAI.exe",
+                    "/Applications/WorkBuddy AI.app",
+                    "/usr/bin/workbuddy-ai",
+                ],
+            ),
+        ] {
+            for path in paths {
+                assert!(
+                    is_tool_owned_program_path(tool, Path::new(path)),
+                    "{tool}: {path}"
+                );
+                assert!(
+                    !is_tool_owned_program_path(sibling, Path::new(path)),
+                    "{sibling}: {path}"
+                );
+            }
+        }
     }
 
     #[cfg(target_os = "windows")]

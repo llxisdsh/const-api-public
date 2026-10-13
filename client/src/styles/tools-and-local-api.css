@@ -811,6 +811,7 @@ button.lan-share-member-disclosure:focus-visible {
 }
 
 :root[data-theme="dark"] .brand-badge-codex img,
+:root[data-theme="dark"] .brand-badge-commandcode img,
 :root[data-theme="dark"] .brand-badge-hermes img,
 :root[data-theme="dark"] .brand-badge-opencode img {
   filter: invert(1) brightness(0.82);
@@ -1198,9 +1199,9 @@ button.lan-share-member-disclosure:focus-visible {
   color: var(--text);
   font-size: 12px;
   line-height: 1.25;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-wrap: balance;
 }
 
 .tool-dock-context {

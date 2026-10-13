@@ -229,7 +229,7 @@ fn collect_artifacts<'a>(
     }
 }
 
-pub(super) fn affinity_permits(
+pub(crate) fn affinity_permits(
     affinity: &ArtifactAffinity,
     target_protocol: ProtocolKind,
     issuer: &IssuerIdentity,

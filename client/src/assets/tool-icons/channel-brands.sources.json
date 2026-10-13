@@ -1,0 +1,10 @@
+{
+  "kiro.svg": {"source":"https://unpkg.com/@lobehub/icons-static-svg@1.95.1/icons/kiro-color.svg","license":"lobehub.LICENSE.txt"},
+  "commandcode.svg": {"source":"https://unpkg.com/@lobehub/icons-static-svg@1.95.1/icons/commandcode.svg","license":"lobehub.LICENSE.txt"},
+  "groq.svg": {"source":"https://groq.com/favicon.svg","changes":"Removed redundant SVG markup; retained the official mark."},
+  "kilo.svg": {"source":"https://kilo.ai/favicon/favicon.svg?v=3","changes":"Removed redundant SVG markup."},
+  "abacus.png": {"source":"https://abacus.ai/static/h23c4bfa0/icon2/favicon-192.png","changes":"Resized to 64 by 64 pixels."},
+  "xai": {"source":"https://unpkg.com/@lobehub/icons-static-svg@1.95.1/icons/xai.svg","license":"lobehub.LICENSE.txt","rendering":"Inline SVG in sourceDriverCardPresentation."},
+  "cursor_copilot_poe_meta": {"source":"simple-icons (existing dependency)","rendering":"Inline SVG; inherits the theme foreground."},
+  "notice": "Brand marks identify upstream services. Their trademarks belong to their respective owners; use does not imply endorsement."
+}

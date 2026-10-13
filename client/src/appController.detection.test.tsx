@@ -61,6 +61,24 @@ describe("channel refresh and inference command boundaries", () => {
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+  it("restores account identity without waiting for unrelated configuration loading", async () => {
+    let resolveConfig!: (value: typeof wire) => void;
+    const pendingConfig = new Promise<typeof wire>((resolve) => { resolveConfig = resolve; });
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    const signedIn = { ...emptyAccountStatus(), state: "signed_in", user_id: "restored-user" };
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_config") return pendingConfig;
+      if (command === "account_status" || command === "account_refresh") return signedIn;
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.account.statusReady).toBe(true));
+    expect(result.current.account.status.user_id).toBe("restored-user");
+    expect(result.current.selectedChannel.id).not.toBe("refresh-channel");
+    await act(async () => { resolveConfig(structuredClone(wire)); });
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+  });
+
   it("new subscription authorization creates a separate channel without a duplicate prompt", async () => {
     const driver = sourceDriverById("openai_subscription");
     wire.channels[0] = sourceDriverInitialChannelV5(driver, {
@@ -96,6 +114,21 @@ describe("channel refresh and inference command boundaries", () => {
     expect(wire.channels[1]).toMatchObject({ id: "new-subscription", credential_ref: "new-managed.json", enabled: true });
     expect(result.current.subscriptionWizardOpen).toBe(false);
   });
+
+  it.each(["muse_code", "copilot_subscription"] as const)(
+    "%s opens its key sign-in flow from account subscriptions without probing", async (id) => {
+      const { result } = renderHook(() => useAppController());
+      await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+      vi.mocked(invoke).mockClear();
+      await act(async () => { result.current.addSubscriptionPreset(sourceDriverById(id)); });
+      expect(result.current.selectedChannel.source_driver).toBe(id);
+      expect(result.current.selectedChannel.upstream_api_key).toBe("");
+      expect(result.current.subscriptionWizardOpen).toBe(false);
+      for (const command of ["detect_channel_upstream", "activate_supplier_channel", "save_supplier_config"]) {
+        expect(vi.mocked(invoke).mock.calls.map(([name]) => name)).not.toContain(command);
+      }
+    },
+  );
 
   it("refreshes native platform status when the About page is entered", async () => {
     const { result } = renderHook(() => useAppController());

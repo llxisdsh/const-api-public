@@ -183,6 +183,14 @@ async fn test_channel_upstream_attempt(
             req = req.header("x-goog-api-key", channel.upstream_api_key.trim());
         }
     }
+    let (req, copilot_generation) = crate::copilot::prepare_request_with_generation(&channel, req)
+        .await
+        .map_err(|error| ProbeError {
+            failure: None,
+            message: error.to_string(),
+            // Authentication failed before inference; this is not evidence against the model group.
+            deferred: true,
+        })?;
     let resp = crate::upstream_transport::send(req)
         .await
         .map_err(|err| {
@@ -192,6 +200,7 @@ async fn test_channel_upstream_attempt(
             let cause = if err.is_timeout() { "timeout" } else { "network_error" };
             ProbeError { failure: Some(crate::upstream_failure::Failure { version: 1, cause: cause.into(), scope: "request".into(), rule_id: "probe.transport.v1".into(), ..Default::default() }), message: format!("request upstream failed: {err}"), deferred: err.is_ambiguous() }
         })?;
+    crate::copilot::observe_response(&channel, resp.status(), copilot_generation).await;
     let status = resp.status().as_u16();
     let upstream_http_version =
         crate::upstream_transport::http_version_transport(resp.version()).to_string();
@@ -337,7 +346,7 @@ pub(crate) fn subscription_probe_request(
             })
             .to_string(),
         )),
-        "claude" => Ok((
+        "claude" | "kiro" | "cursor" => Ok((
             "/v1/messages".to_string(),
             serde_json::json!({
                 "model": model,
@@ -366,6 +375,61 @@ fn exact_probe_model(channel: &ChannelConfig, requested_model: &str) -> Result<S
 #[cfg(test)]
 mod channel_probe_tests {
     use super::*;
+
+    #[test]
+    fn gateway_model_checks_follow_catalog_endpoints_before_family_defaults() {
+        use crate::source_driver::SourceDriverId;
+        for (driver, base) in [
+            (SourceDriverId::CopilotSubscription, "https://api.githubcopilot.com"),
+            (SourceDriverId::PoeApi, "https://api.poe.com/v1"),
+            (SourceDriverId::AbacusRoutellm, "https://routellm.abacus.ai/v1"),
+        ] {
+            for (selected, supported, path, body_field) in [
+                ("openai_chat", "anthropic_messages", "/v1/messages", "messages"),
+                ("anthropic_messages", "openai_chat", "/v1/chat/completions", "messages"),
+                ("openai_chat", "openai_responses", "/v1/responses", "input"),
+            ] {
+                let mut channel = crate::coding_gateway::tests::channel(driver, base);
+                channel.api_format = selected.into();
+                channel.capability_profiles = ["openai_chat", "anthropic_messages", "openai_responses"]
+                    .into_iter()
+                    .map(|protocol| ChannelCapabilityProfile {
+                        protocol: protocol.into(),
+                        model_pattern: "claude-test".into(),
+                        catalog_metadata: true,
+                        catalog_protocol_supported: Some(protocol == supported),
+                        ..Default::default()
+                    })
+                    .collect();
+                let (url, body, _) = test_request_for_channel(&channel, "claude-test", "OK").unwrap();
+                assert_eq!(reqwest::Url::parse(&url).unwrap().path(), path, "{driver:?}");
+                assert_eq!(body["model"], "claude-test");
+                assert!(body.get(body_field).is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn incomplete_endpoint_metadata_never_retries_an_explicitly_unsupported_protocol() {
+        let mut channel = crate::coding_gateway::tests::channel(
+            crate::source_driver::SourceDriverId::CopilotSubscription,
+            "https://api.githubcopilot.com",
+        );
+        channel.capability_profiles = vec![ChannelCapabilityProfile {
+            protocol: "openai_chat".into(),
+            model_pattern: "gpt-6-luna".into(),
+            catalog_metadata: true,
+            catalog_protocol_supported: Some(false),
+            ..Default::default()
+        }];
+        let error = test_request_for_channel(&channel, "gpt-6-luna", "OK").unwrap_err();
+        assert!(error.to_string().contains("refresh channel information"));
+        // Older directories with no endpoint declarations still use their native default.
+        channel.capability_profiles.clear();
+        let (url, body, _) = test_request_for_channel(&channel, "gpt-4o-mini", "OK").unwrap();
+        assert!(url.ends_with("/chat/completions"));
+        assert_eq!(body["model"], "gpt-4o-mini");
+    }
 
     #[test]
     fn completed_responses_can_begin_with_reasoning_but_truncation_is_inconclusive() {

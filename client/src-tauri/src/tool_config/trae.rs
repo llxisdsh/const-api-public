@@ -1,7 +1,7 @@
 //! TraeCode / CN / TraeWork custom models are account-scoped vendor settings, not local
 //! SQLite configuration. Never edit their caches or replace user-owned models.
 use super::*;
-use futures_util::{StreamExt, stream};
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde_json::{Value, json};
 #[path = "trae_auth.rs"]
 mod auth;
@@ -10,7 +10,7 @@ use auth::TraeSession;
 mod capabilities;
 use capabilities::{AdvancedState, Fields};
 
-// Updates use bounded concurrency. Additions must be submitted in order;
+// Updates/deletions use bounded concurrency. Additions must be submitted in order;
 // concurrent requests can scramble even the highest-priority model choices.
 const MODEL_WRITE_CONCURRENCY: usize = 4;
 
@@ -395,6 +395,38 @@ impl TraeSession {
             return Err(anyhow!("Trae did not acknowledge the model configuration"));
         }
         Ok(())
+    }
+
+    async fn write_updates(
+        &self,
+        bodies: &[Value],
+        mut confirmed: impl FnMut(usize) -> Result<()>,
+    ) -> Result<()> {
+        let mut writes = bodies.iter().enumerate().map(|(index, body)| async move {
+            (
+                index,
+                self.write_model("/api/ide/v1/update_custom_model", body)
+                    .await,
+            )
+        });
+        let mut pending = writes
+            .by_ref()
+            .take(MODEL_WRITE_CONCURRENCY)
+            .collect::<FuturesUnordered<_>>();
+        let mut failure = None;
+        while let Some((index, result)) = pending.next().await {
+            if let Err(error) = result.and_then(|()| confirmed(index)) {
+                failure.get_or_insert(error);
+            }
+            // Refill free slots without waiting for a whole batch. After an
+            // error, drain and record already-started writes but start no more.
+            if failure.is_none()
+                && let Some(next) = writes.next()
+            {
+                pending.push(next);
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 }
 
@@ -807,31 +839,15 @@ impl PreparedTraeConfig {
             .accounts
             .insert(self.session.account.clone(), owned.clone());
         save_manifest(&self.manifest_path, &self.manifest)?;
-        for batch in updates.chunks(MODEL_WRITE_CONCURRENCY) {
-            let session = &self.session;
-            let mut pending = stream::iter(batch.iter().map(|body| async move {
-                // IDs and display names stay unchanged. Advanced changes have
-                // already been merged field-by-field with the read-back state.
-                session
-                    .write_model("/api/ide/v1/update_custom_model", body)
-                    .await
-            }))
-            .buffer_unordered(MODEL_WRITE_CONCURRENCY);
-            let mut failure = None;
-            while let Some(result) = pending.next().await {
-                if let Err(error) = result {
-                    failure.get_or_insert(error);
-                    continue;
-                }
+        self.session
+            .write_updates(&updates, |_| {
+                // IDs and display names stay unchanged; advanced fields were
+                // merged with the read-back state before scheduling the write.
                 completed += 1;
                 progress(completed, total);
-            }
-            // Drain all in-flight updates before returning an error. Re-read on
-            // the next explicit attempt; never blindly retry uncertain writes.
-            if let Some(error) = failure {
-                return Err(error);
-            }
-        }
+                Ok(())
+            })
+            .await?;
         // Await each add acknowledgement before submitting the next priority.
         // No per-model read-back or artificial sleep; the vendor can still apply
         // its own tie-breaking to entries created within the same time bucket.
@@ -896,27 +912,34 @@ impl PreparedTraeConfig {
         }
         // Add replacements before removing retired owned entries. Never match
         // by name/URL alone when deleting; numeric IDs and account must agree.
+        let mut delete_keys = Vec::new();
+        let mut deletions = Vec::new();
         for key in retired {
             if let Some(remote) = self
                 .remote
                 .iter()
                 .find(|entry| remote_matches(&owned[&key], entry))
             {
-                self.session
-                    .write_model(
-                        "/api/ide/v1/update_custom_model",
-                        &json!({"action": "delete", "id": remote.id}),
-                    )
-                    .await?;
+                delete_keys.push(key);
+                deletions.push(json!({"action": "delete", "id": remote.id}));
+            } else {
+                owned.remove(&key);
+                completed += 1;
+                progress(completed, total);
             }
-            owned.remove(&key);
-            self.manifest
-                .accounts
-                .insert(self.session.account.clone(), owned.clone());
-            save_manifest(&self.manifest_path, &self.manifest)?;
-            completed += 1;
-            progress(completed, total);
         }
+        self.session
+            .write_updates(&deletions, |index| {
+                owned.remove(&delete_keys[index]);
+                self.manifest
+                    .accounts
+                    .insert(self.session.account.clone(), owned.clone());
+                save_manifest(&self.manifest_path, &self.manifest)?;
+                completed += 1;
+                progress(completed, total);
+                Ok(())
+            })
+            .await?;
         self.manifest
             .accounts
             .insert(self.session.account.clone(), owned);

@@ -1804,20 +1804,36 @@ fn encode_turn(
     }
     let mut regular = Vec::new();
     let mut regular_start = 0;
+    let mut tool_media = Vec::new();
     for (block_index, block) in turn.blocks.iter().enumerate() {
         match block {
             ContentBlock::ToolResult(result) => {
                 flush_user_blocks(&mut regular, regular_start, turn_index, plan, messages)?;
+                let mut content = encode_content(
+                    &result.content,
+                    plan,
+                    &format!("turns[{turn_index}].blocks[{block_index}].blocks"),
+                    0,
+                )?;
+                if let Value::Array(parts) = &mut content {
+                    // Chat tool messages accept text only. Keep media in a
+                    // following user message, after all parallel tool results.
+                    for part in std::mem::take(parts) {
+                        if part.get("type").and_then(Value::as_str) == Some("text") {
+                            parts.push(part);
+                        } else {
+                            tool_media.push(part);
+                        }
+                    }
+                    if parts.is_empty() {
+                        content = json!("");
+                    }
+                }
                 messages.push(json!({
                     "role":"tool",
                     "tool_call_id":result.call_id,
                     "name":result.name.clone().unwrap_or_else(||"tool".to_string()),
-                    "content":encode_content(
-                        &result.content,
-                        plan,
-                        &format!("turns[{turn_index}].blocks[{block_index}].blocks"),
-                        0,
-                    )?,
+                    "content":content,
                 }));
                 regular_start = block_index + 1;
             }
@@ -1825,6 +1841,9 @@ fn encode_turn(
         }
     }
     flush_user_blocks(&mut regular, regular_start, turn_index, plan, messages)?;
+    if !tool_media.is_empty() {
+        messages.push(json!({"role":"user", "content":tool_media}));
+    }
     Ok(())
 }
 

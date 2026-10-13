@@ -121,7 +121,9 @@ pub(crate) fn channel_execution_error_code(error: &anyhow::Error) -> Option<&'st
 }
 
 pub(crate) fn response_conversion_error(error: impl fmt::Display) -> anyhow::Error {
-    execution_error(ChannelExecutionErrorCode::ConversionFailed, error)
+    // The upstream has already answered. Unlike request conversion, this is
+    // not a pre-dispatch failure and must not authorize another model call.
+    crate::supplier::response_conversion_failure(false, false, error)
 }
 
 pub(crate) fn ambiguous_transport_error(error: impl fmt::Display) -> anyhow::Error {
@@ -133,6 +135,56 @@ pub(crate) fn surface_operation_not_supported_error(error: impl fmt::Display) ->
         ChannelExecutionErrorCode::SurfaceOperationNotSupported,
         error,
     )
+}
+
+// Selection and execution must agree on whether this model has an executable
+// dialect. A usable channel default alone is not sufficient for coding gateways.
+pub(crate) fn resolve_model_protocol_target(
+    channel: &ChannelConfig,
+    upstream_model: &str,
+    target: ChannelSurfaceTarget,
+    explicitly_selected: bool,
+) -> Result<ChannelSurfaceTarget> {
+    let Some(protocol) = crate::coding_gateway::channel_model_protocol(channel, upstream_model)
+    else {
+        return Ok(target);
+    };
+    let supported = crate::coding_gateway::catalog_protocol_support(
+        &channel.capability_profiles,
+        upstream_model,
+        target.protocol,
+    )
+    .unwrap_or_else(|| {
+        crate::coding_gateway::model_supports_protocol(
+            channel.source_driver(),
+            upstream_model,
+            target.protocol,
+        )
+    });
+    if supported {
+        return Ok(target);
+    }
+    if explicitly_selected {
+        return Err(surface_operation_not_supported_error(format!(
+            "selected target {} does not match gateway model {upstream_model} dialect {protocol}",
+            target.protocol,
+        )));
+    }
+    if crate::coding_gateway::catalog_protocol_support(
+        &channel.capability_profiles,
+        upstream_model,
+        protocol,
+    ) == Some(false)
+    {
+        return Err(surface_operation_not_supported_error(format!(
+            "gateway catalog has no supported target protocol for {upstream_model}",
+        )));
+    }
+    channel_protocol_target(channel, protocol).ok_or_else(|| {
+        surface_operation_not_supported_error(format!(
+            "gateway model {upstream_model} requires an available {protocol} binding",
+        ))
+    })
 }
 
 impl ChannelExecution {
@@ -207,6 +259,8 @@ pub(crate) fn subscription_provider_for_execution_kind(
         crate::source_driver::ExecutionKind::ClaudeSubscription => Some("claude"),
         crate::source_driver::ExecutionKind::GeminiSubscription => Some("antigravity"),
         crate::source_driver::ExecutionKind::GrokSubscription => Some("grok"),
+        crate::source_driver::ExecutionKind::KiroSubscription => Some("kiro"),
+        crate::source_driver::ExecutionKind::CursorSubscription => Some("cursor"),
         crate::source_driver::ExecutionKind::HttpSurface => None,
     }
 }
@@ -294,37 +348,12 @@ pub(crate) async fn execute_channel_request(
         upstream_model = crate::config::without_context_hint(&upstream_model).to_string();
     }
     if route.protocol.is_some() {
-        if let Some(protocol) =
-            crate::coding_gateway::model_protocol(channel.source_driver(), &upstream_model)
-        {
-            let supported = crate::coding_gateway::catalog_protocol_support(
-                &channel.capability_profiles,
-                &upstream_model,
-                target.protocol,
-            )
-            .unwrap_or_else(|| {
-                crate::coding_gateway::model_supports_protocol(
-                    channel.source_driver(),
-                    &upstream_model,
-                    target.protocol,
-                )
-            });
-            if selected_target_protocol.is_some() && !supported {
-                return Err(execution_error(
-                    ChannelExecutionErrorCode::SurfaceOperationNotSupported,
-                    format!(
-                        "selected target {} does not match gateway model {upstream_model} dialect {protocol}",
-                        target.protocol
-                    ),
-                ));
-            }
-            if !supported {
-                target = channel_protocol_target(channel, protocol).ok_or_else(|| execution_error(
-                ChannelExecutionErrorCode::SurfaceOperationNotSupported,
-                format!("gateway model {upstream_model} requires an available {protocol} binding"),
-            ))?;
-            }
-        }
+        target = resolve_model_protocol_target(
+            channel,
+            &upstream_model,
+            target,
+            selected_target_protocol.is_some(),
+        )?;
     }
     let inbound_stream_requested = request.stream_requested.unwrap_or_else(|| {
         top_level_json_bool(&request.body, "stream")
@@ -684,8 +713,11 @@ pub(crate) async fn execute_channel_request(
             reqwest::header::HeaderValue::from_static("identity"),
         );
     }
-    apply_upstream_auth(&mut headers, channel, &target, !opaque)
-        .map_err(|error| execution_error(ChannelExecutionErrorCode::AuthenticationFailed, error))?;
+    if channel.source_driver() != crate::source_driver::SourceDriverId::CopilotSubscription {
+        apply_upstream_auth(&mut headers, channel, &target, !opaque).map_err(|error| {
+            execution_error(ChannelExecutionErrorCode::AuthenticationFailed, error)
+        })?;
+    }
 
     if !opaque {
         if let Ok(text) = std::str::from_utf8(&upstream_body) {
@@ -714,6 +746,9 @@ pub(crate) async fn execute_channel_request(
         .request(request.method, url)
         .headers(headers)
         .body(upstream_body);
+    // Token-endpoint network/5xx failures are not invalid credentials.
+    let (request, copilot_generation) =
+        crate::copilot::prepare_request_with_generation(channel, request).await?;
     let mut response = crate::upstream_transport::send(request)
         .await
         .map_err(|error| {
@@ -727,6 +762,7 @@ pub(crate) async fn execute_channel_request(
             execution_error_with_source(code, error)
         })?;
     strip_http_response_headers(response.headers_mut());
+    crate::copilot::observe_response(channel, response.status(), copilot_generation).await;
     let response = crate::openrouter::observe_response(channel, response);
     Ok(ChannelExecution {
         response,
@@ -807,6 +843,12 @@ pub(crate) async fn execute_native_streaming_channel_request(
         return Err(execution_error(
             ChannelExecutionErrorCode::SurfaceOperationNotSupported,
             "operation is not admitted by the native streaming-upload pipeline",
+        ));
+    }
+    if channel.source_driver() == crate::source_driver::SourceDriverId::CopilotSubscription {
+        return Err(execution_error(
+            ChannelExecutionErrorCode::SurfaceOperationNotSupported,
+            "Copilot subscriptions do not expose resource upload operations",
         ));
     }
     validate_channel_v2(channel).map_err(|error| {
@@ -1051,6 +1093,10 @@ pub(crate) fn apply_upstream_auth(
     target: &ChannelSurfaceTarget,
     add_protocol_defaults: bool,
 ) -> Result<()> {
+    anyhow::ensure!(
+        channel.source_driver() != crate::source_driver::SourceDriverId::CopilotSubscription,
+        "Copilot requires the subscription token exchange; raw GitHub credentials cannot authenticate this operation"
+    );
     let key = channel.upstream_api_key.trim();
     if key.is_empty() || target.auth_scheme == "none" || target.auth_scheme == "subscription" {
         return Ok(());
@@ -1438,6 +1484,24 @@ mod tests {
             (
                 SourceDriverId::OllamaCloud,
                 "gpt-oss:120b",
+                "anthropic_messages",
+                "/v1/messages",
+            ),
+            (
+                SourceDriverId::MuseCode,
+                "muse-spark-1.3",
+                "openai_responses",
+                "/v1/responses",
+            ),
+            (
+                SourceDriverId::MuseCode,
+                "muse-spark-1.3",
+                "openai_chat",
+                "/v1/chat/completions",
+            ),
+            (
+                SourceDriverId::MuseCode,
+                "muse-spark-1.3",
                 "anthropic_messages",
                 "/v1/messages",
             ),

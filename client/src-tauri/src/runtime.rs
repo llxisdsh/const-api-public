@@ -127,7 +127,7 @@ pub(crate) fn create_runtime_state(config_path: PathBuf, initial_config: ClientC
         platform_transport::PlatformTransportSnapshot::default(),
     ));
     let platform_transport = Arc::new(platform_transport::PlatformHttpTransport::new(
-        crate::long_http_client().clone(),
+        crate::long_http_client_source(),
         platform_transport_state.clone(),
     ));
     AppState {
@@ -254,6 +254,16 @@ impl RuntimeSupervisor {
         let account_task = spawn_supervised("account_refresh", Duration::from_secs(1), move || {
             run_account_refresh_loop(account_state.clone())
         });
+        let network_state = self.state.clone();
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        let power_task = crate::spawn_logged(
+            "supply_sleep_prevention",
+            crate::power_management::run(self.state.clone()),
+        );
+        let network_task =
+            spawn_supervised("network_recovery", Duration::from_secs(1), move || {
+                crate::network_recovery::run(network_state.clone())
+            });
         let announcement_state = self.state.clone();
         let announcement_task =
             spawn_supervised("announcement_refresh", Duration::from_secs(1), move || {
@@ -327,6 +337,9 @@ impl RuntimeSupervisor {
         {
             let mut control = self.control.lock().await;
             control.tasks.push(account_task);
+            control.tasks.push(network_task);
+            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+            control.tasks.push(power_task);
             control.tasks.push(announcement_task);
             control.tasks.push(release_source_task);
             control.tasks.push(endpoint_task);
@@ -339,8 +352,8 @@ impl RuntimeSupervisor {
         if cfg.proxy_auto_start {
             if let Err(error) = start_proxy_inner(&self.state).await {
                 log::error!("[const-api][runtime] local proxy startup failed: {error}");
-                self.cleanup_failed_start().await;
-                return Err(error);
+                // Account/catalog recovery is independent of the local port.
+                // Keep those tasks alive while the listener is degraded.
             }
         }
 
@@ -422,13 +435,6 @@ impl RuntimeSupervisor {
         let _ = stop_proxy_inner(&self.state).await;
         self.set_lifecycle(RuntimeLifecycle::Stopped).await;
         log::info!("[const-api][runtime] stopped");
-    }
-
-    async fn cleanup_failed_start(&self) {
-        let _ = supplier::stop_supplier_inner(&self.state).await;
-        let _ = stop_proxy_inner(&self.state).await;
-        self.abort_background_tasks().await;
-        self.set_lifecycle(RuntimeLifecycle::Stopped).await;
     }
 
     async fn abort_background_tasks(&self) {
@@ -539,7 +545,7 @@ impl RuntimeSupervisor {
 async fn run_release_source_refresh_loop(state: AppState) {
     loop {
         match crate::release_sources::refresh_release_sources(
-            crate::short_http_client(),
+            &crate::short_http_client(),
             &state.config_path,
         )
         .await
@@ -638,6 +644,13 @@ mod tests {
     use super::*;
     use crate::config::default_config;
     use warp::Filter;
+
+    // Desktop platforms also own the supply sleep-prevention task.
+    const BACKGROUND_TASK_COUNT: usize = 9 + cfg!(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "linux"
+    )) as usize;
 
     #[test]
     fn saved_platform_key_is_not_enabled_before_legal_reconciliation() {
@@ -923,13 +936,41 @@ mod tests {
         let supervisor = RuntimeSupervisor::new(create_runtime_state(config_path, config));
         supervisor.start().await.unwrap();
         let tasks_after_first_start = supervisor.control.lock().await.tasks.len();
-        assert_eq!(tasks_after_first_start, 8);
+        assert_eq!(tasks_after_first_start, BACKGROUND_TASK_COUNT);
         supervisor.start().await.unwrap();
         assert_eq!(
             supervisor.control.lock().await.tasks.len(),
             tasks_after_first_start
         );
         supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn occupied_local_port_does_not_stop_account_and_catalog_recovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("client.json");
+        let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut cfg = default_config();
+        cfg.listen = occupied.local_addr().unwrap().to_string();
+        cfg.supplier_auto_start = false;
+        write_config_to_path(&path, &cfg).unwrap();
+        let state = create_runtime_state(path, cfg);
+        let supervisor = RuntimeSupervisor::new(state.clone());
+        let summary = supervisor.start().await.unwrap();
+        assert_eq!(summary.lifecycle, RuntimeLifecycle::Degraded);
+        assert!(!summary.proxy_running);
+        assert_eq!(
+            supervisor.control.lock().await.tasks.len(),
+            BACKGROUND_TASK_COUNT
+        );
+        drop(occupied);
+        assert!(start_proxy_inner(&state).await.unwrap().running);
+        assert_eq!(
+            supervisor.control.lock().await.tasks.len(),
+            BACKGROUND_TASK_COUNT
+        );
+        supervisor.shutdown().await;
+        assert!(supervisor.control.lock().await.tasks.is_empty());
     }
 
     #[tokio::test]

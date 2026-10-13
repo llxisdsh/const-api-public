@@ -22,6 +22,10 @@ use std::{
 
 mod capability_check;
 mod check_deadline;
+mod kiro_subscription;
+pub(crate) use kiro_subscription::ensure_kiro_subscription_access_token;
+mod cursor_subscription;
+pub(crate) use cursor_subscription::ensure_cursor_subscription_access_token;
 #[cfg(test)]
 mod protocol_check_tests;
 #[cfg(test)]
@@ -29,6 +33,7 @@ mod quota_tests;
 #[cfg(test)]
 mod refresh_tests;
 pub(crate) mod responses_features;
+pub(crate) mod subscription_refresh;
 mod surface_families;
 mod tool_probe;
 use surface_families::*;
@@ -72,24 +77,30 @@ struct ProbeObservation {
     detection_checks: Vec<ChannelDetectionCheck>,
 }
 
-type SubscriptionRefreshLock = std::sync::Arc<tokio::sync::Mutex<()>>;
+type SubscriptionRefreshLock =
+    std::sync::Arc<tokio::sync::Mutex<subscription_refresh::RefreshState>>;
 
 static SUBSCRIPTION_REFRESH_LOCKS: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<PathBuf, SubscriptionRefreshLock>>,
 > = std::sync::OnceLock::new();
 static SUBSCRIPTION_REFRESH_TOKEN_LOCKS: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
+    std::sync::Mutex<
+        std::collections::HashMap<
+            String,
+            std::sync::Weak<tokio::sync::Mutex<subscription_refresh::RefreshState>>,
+        >,
+    >,
 > = std::sync::OnceLock::new();
-const CLAUDE_REFRESH_RESULT_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const SUBSCRIPTION_REFRESH_RESULT_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone)]
-struct ClaudeRefreshResultCacheEntry {
+struct SubscriptionRefreshResultCacheEntry {
     token_material: serde_json::Value,
     refreshed_at: Instant,
 }
 
-static CLAUDE_REFRESH_RESULT_CACHE: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, ClaudeRefreshResultCacheEntry>>,
+static SUBSCRIPTION_REFRESH_RESULT_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, SubscriptionRefreshResultCacheEntry>>,
 > = std::sync::OnceLock::new();
 const OPENAI_CREDENTIAL_READ_CACHE_TTL: Duration = Duration::from_secs(1);
 
@@ -184,7 +195,7 @@ fn subscription_refresh_lock(path: &Path) -> Result<SubscriptionRefreshLock> {
         .map_err(|_| anyhow!("subscription refresh lock registry poisoned"))?;
     Ok(locks
         .entry(path.to_path_buf())
-        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(Default::default())))
         .clone())
 }
 
@@ -205,29 +216,29 @@ fn subscription_refresh_token_lock(key: &str) -> SubscriptionRefreshLock {
     if let Some(lock) = locks.get(key).and_then(std::sync::Weak::upgrade) {
         return lock;
     }
-    let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+    let lock = std::sync::Arc::new(tokio::sync::Mutex::new(Default::default()));
     locks.insert(key.to_string(), std::sync::Arc::downgrade(&lock));
     lock
 }
 
-fn cached_claude_refresh_result(key: &str) -> Option<serde_json::Value> {
-    let mut cache = CLAUDE_REFRESH_RESULT_CACHE
+fn cached_subscription_refresh_result(key: &str) -> Option<serde_json::Value> {
+    let mut cache = SUBSCRIPTION_REFRESH_RESULT_CACHE
         .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    cache.retain(|_, entry| entry.refreshed_at.elapsed() < CLAUDE_REFRESH_RESULT_CACHE_TTL);
+    cache.retain(|_, entry| entry.refreshed_at.elapsed() < SUBSCRIPTION_REFRESH_RESULT_CACHE_TTL);
     cache.get(key).map(|entry| entry.token_material.clone())
 }
 
-fn remember_claude_refresh_result(key: String, token_material: serde_json::Value) {
-    let mut cache = CLAUDE_REFRESH_RESULT_CACHE
+fn remember_subscription_refresh_result(key: String, token_material: serde_json::Value) {
+    let mut cache = SUBSCRIPTION_REFRESH_RESULT_CACHE
         .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    cache.retain(|_, entry| entry.refreshed_at.elapsed() < CLAUDE_REFRESH_RESULT_CACHE_TTL);
+    cache.retain(|_, entry| entry.refreshed_at.elapsed() < SUBSCRIPTION_REFRESH_RESULT_CACHE_TTL);
     cache.insert(
         key,
-        ClaudeRefreshResultCacheEntry {
+        SubscriptionRefreshResultCacheEntry {
             token_material,
             refreshed_at: Instant::now(),
         },
@@ -486,7 +497,8 @@ async fn detect_channel_protocols_inner(channel: ChannelConfig) -> Result<Channe
         {
             Ok(result) => results.push(result),
             Err(error) => {
-                let mut result = rejected_surface_probe_result(&context, &error)?;
+                let mut result =
+                    rejected_surface_probe_result(&context, &error, &channel.capability_profiles)?;
                 if check_deadline::incomplete(&error) {
                     let mut detail = format!("{error:#}");
                     for secret in [
@@ -576,11 +588,11 @@ async fn detect_surface(
             }
         }
         crate::openrouter::prepare_probe_channel(&mut projection);
-        responses_features::enrich(short_http_client(), &projection, &mut observation).await;
+        responses_features::enrich(&short_http_client(), &projection, &mut observation).await;
     }
     if context.mode == SurfaceProbeMode::Creation && inspect_operation_families {
         match check_deadline::observe(surface_operation_family_evidence(
-            short_http_client(),
+            &short_http_client(),
             &context,
         ))
         .await
@@ -609,7 +621,7 @@ async fn detect_channel_single(
         let mut quota_status = "unknown".to_string();
         let mut remaining_ratio = 0.0;
         let mut quota_windows = Vec::new();
-        let (models, model_observations) = if platform == "openai"
+        let (mut models, model_observations) = if platform == "openai"
             && !channel.subscription.credential_ref.trim().is_empty()
         {
             let (observations, did_refresh, windows) =
@@ -730,6 +742,33 @@ async fn detect_channel_single(
             }
             refreshed = catalog_refreshed || quota_refreshed;
             (models, observations)
+        } else if platform == "kiro" && !channel.subscription.credential_ref.trim().is_empty() {
+            let (observations, did_refresh, catalog_warnings) =
+                kiro_subscription::catalog(&channel, subscription_catalog_policy).await?;
+            refreshed = did_refresh;
+            warnings.extend(catalog_warnings);
+            quota_windows = kiro_subscription::quota(&channel, subscription_catalog_policy).await?;
+            if let Some((ratio, status)) = quota_snapshot_from_windows(&quota_windows) {
+                remaining_ratio = ratio;
+                quota_status = status;
+            }
+            checks.push(format!(
+                "models: Kiro account catalog loaded ({} models)",
+                observations.len()
+            ));
+            (model_ids(observations.clone()), observations)
+        } else if platform == "cursor" && !channel.subscription.credential_ref.trim().is_empty() {
+            let (observations, did_refresh, catalog_warnings) =
+                cursor_subscription::catalog(&channel, subscription_catalog_policy).await?;
+            refreshed = did_refresh;
+            warnings.extend(catalog_warnings);
+            quota_windows =
+                cursor_subscription::quota(&channel, subscription_catalog_policy).await?;
+            checks.push(format!(
+                "models: Cursor account catalog loaded ({} models)",
+                observations.len()
+            ));
+            (model_ids(observations.clone()), observations)
         } else if platform == "gemini" {
             return Err(anyhow!(
                 "Gemini Code Assist consumer subscriptions are no longer supported; remove the old channel and connect Antigravity."
@@ -757,9 +796,10 @@ async fn detect_channel_single(
             "claude" => "anthropic_messages",
             "antigravity" => "gemini_native",
             "grok" => "openai_responses",
+            "kiro" | "cursor" => "anthropic_messages",
             _ => "",
         };
-        let capability_profiles = if native_protocol.is_empty() {
+        let mut capability_profiles = if native_protocol.is_empty() {
             Vec::new()
         } else {
             let mut profile = basic_protocol_capability(native_protocol, "declared");
@@ -768,7 +808,12 @@ async fn detect_channel_single(
             profile.stream_sse = true;
             profile.tool_calls = true;
             profile.tool_choice = true;
-            apply_subscription_driver_capabilities(native_protocol, &mut profile);
+            if matches!(platform, "kiro" | "cursor") {
+                // Kiro is a dedicated bridge, not an Anthropic passthrough endpoint.
+                profile.tool_choice = false;
+            } else {
+                apply_subscription_driver_capabilities(native_protocol, &mut profile);
+            }
             let mut profiles = vec![profile.clone()];
             profiles.extend(model_modality_capability_profiles(
                 &profile,
@@ -783,6 +828,9 @@ async fn detect_channel_single(
             }
             profiles
         };
+        if platform == "cursor" {
+            crate::cursor::models::normalize_projection(&mut models, &mut capability_profiles);
+        }
         return Ok(ProbeObservation {
             models,
             native_protocol_verified: false,
@@ -925,10 +973,73 @@ fn surface_probe_result_from_observation(
 fn rejected_surface_probe_result(
     context: &SurfaceProbeContext,
     error: &anyhow::Error,
+    previous_profiles: &[ChannelCapabilityProfile],
 ) -> Result<SurfaceDetectionOutcome> {
     let protocol = probe_protocol(context)?;
     let message = error.to_string();
     let checked_at_unix = now_unix();
+    if let Some(failure) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<crate::upstream_failure::Failure>())
+        .filter(|failure| failure.scope == "model" && !failure.model.is_empty())
+    {
+        let message = format!("{error:#}");
+        let mut surface_verification = context.binding.verification.clone();
+        let mut protocol_verification = context.binding.protocols[0].verification.clone();
+        // A fresh model-specific denial is not a protocol verdict. Keep an
+        // earlier success; otherwise retain only the configured declaration,
+        // including when an older detector incorrectly rejected this dialect.
+        if surface_verification.state != "verified" {
+            surface_verification = SurfaceVerification {
+                state: "declared".into(),
+                checked_at_unix,
+                summary: message.clone(),
+            };
+        }
+        if protocol_verification.state != "verified" {
+            protocol_verification = ProtocolVerification {
+                state: "declared".into(),
+                checked_at_unix,
+                summary: message.clone(),
+            };
+        }
+        let mut profiles = previous_profiles
+            .iter()
+            .filter(|profile| profile.protocol == protocol.as_str())
+            .cloned()
+            .collect::<Vec<_>>();
+        for profile in &mut profiles {
+            if !profile.catalog_metadata
+                && profile.model_pattern.is_empty()
+                && profile.verification_state == "rejected"
+            {
+                *profile = basic_protocol_capability(protocol.as_str(), "declared");
+            }
+        }
+        return Ok(SurfaceDetectionOutcome {
+            result: SurfaceProbeResult {
+                surface: context.binding.surface,
+                protocol,
+                surface_verification,
+                protocol_verification,
+                models: context.models.clone(),
+                model_capability_evidence: profiles,
+                detection_evidence: vec![ChannelDetectionCheck {
+                    name: "model_probe".into(),
+                    status: "rejected".into(),
+                    checked_at_unix,
+                    protocol: protocol.as_str().into(),
+                    capability: failure.model.clone(),
+                    message: message.clone(),
+                }],
+                checks: Vec::new(),
+                warnings: vec![message],
+            },
+            quota_status: "unknown".into(),
+            remaining_ratio: 0.0,
+            quota_windows: Vec::new(),
+        });
+    }
     Ok(SurfaceDetectionOutcome {
         result: SurfaceProbeResult {
             surface: context.binding.surface,
@@ -944,10 +1055,22 @@ fn rejected_surface_probe_result(
                 summary: message.clone(),
             },
             models: Vec::new(),
-            model_capability_evidence: vec![basic_protocol_capability(
+            // Inference rejection does not invalidate the directory's wire contract.
+            // Keep declarations separate from the rejected execution evidence so a
+            // later model check does not fall back to an explicitly unsupported API.
+            model_capability_evidence: std::iter::once(basic_protocol_capability(
                 protocol.as_str(),
                 "rejected",
-            )],
+            ))
+            .chain(
+                previous_profiles
+                    .iter()
+                    .filter(|profile| {
+                        profile.catalog_metadata && profile.protocol == protocol.as_str()
+                    })
+                    .cloned(),
+            )
+            .collect(),
             detection_evidence: Vec::new(),
             checks: Vec::new(),
             warnings: vec![message],
@@ -1090,7 +1213,14 @@ async fn catalog_snapshot(
                 let models = if let Some(models) = cached {
                     models
                 } else {
-                    let models = fetch_surface_catalog(&client, &context).await?;
+                    let models = crate::coding_gateway::cached_catalog(
+                        context.source_driver,
+                        &context.credential_ref,
+                        &cache_url,
+                        subscription_policy == SubscriptionCatalogPolicy::Fresh,
+                        fetch_surface_catalog(&client, &context),
+                    )
+                    .await?;
                     catalog_cache.push((cache_surface, cache_url, models.clone()));
                     models
                 };
@@ -1920,6 +2050,7 @@ fn model_observations_from_tool_catalog(
             output_tokens: None,
             supported_parameters: None,
             supported_endpoints: None,
+            kiro_request_schema: None,
             probe_cost_nanos: None,
             id: model.id,
             priority: None,
@@ -1953,6 +2084,7 @@ fn model_observations_from_saved_channel(
                     && profile.verification_state != "rejected"
                     && !matches!(profile.release_status.as_str(), "suspended" | "prepared")
                 {
+                    observation.kiro_request_schema = profile.kiro_request_schema.clone();
                     observation.context_tokens = crate::model_catalog::conservative_limit(
                         observation.context_tokens,
                         profile.context_tokens,
@@ -2084,6 +2216,7 @@ fn model_modality_capability_profiles(
                 catalog_text_output: (!model.output_modalities.is_empty())
                     .then(|| model.output_modalities.iter().any(|m| m == "text")),
                 catalog_source_model: Some(model.id.clone()),
+                kiro_request_schema: model.kiro_request_schema.clone(),
                 output_tokens: model.output_tokens,
                 catalog_metadata: true,
                 catalog_protocol_supported: crate::coding_gateway::catalog_supports_protocol(
@@ -2654,6 +2787,258 @@ mod stream_probe_tests {
     }
 
     #[test]
+    fn rejected_protocol_preserves_catalog_endpoints_without_preserving_execution_success() {
+        use crate::model::ChannelCapabilityProfile;
+        use crate::source_driver::SourceDriverId;
+        let mut channel = crate::coding_gateway::tests::channel(
+            SourceDriverId::CopilotSubscription,
+            "https://api.githubcopilot.com",
+        );
+        channel.models = vec!["gpt-6-luna".into()];
+        let models = crate::model_catalog::model_observations_from_value(
+            crate::model_catalog::ModelCatalogKind::Copilot,
+            &serde_json::json!({"data":[{
+                "id":"gpt-6-luna", "capabilities":{"type":"chat"},
+                "supported_endpoints":["/responses","ws:/responses"]
+            }]}),
+            "github_copilot",
+        );
+        let contexts =
+            super::surface_probe_contexts(channel.clone(), SurfaceProbeMode::Creation).unwrap();
+        channel.capability_profiles = contexts
+            .iter()
+            .flat_map(|context| {
+                model_modality_capability_profiles(
+                    &basic_protocol_capability(
+                        context.binding.protocols[0].protocol.as_str(),
+                        "declared",
+                    ),
+                    &models,
+                    false,
+                )
+            })
+            .collect();
+        channel.capability_profiles.push(ChannelCapabilityProfile {
+            protocol: "openai_responses".into(),
+            model_pattern: "gpt-6-luna".into(),
+            verification_state: "verified".into(),
+            ..Default::default()
+        });
+        let outcomes = contexts
+            .iter()
+            .map(|context| {
+                super::rejected_surface_probe_result(
+                    context,
+                    &anyhow::anyhow!("The requested model is not supported."),
+                    &channel.capability_profiles,
+                )
+                .unwrap()
+            })
+            .collect();
+        let result = super::merge_surface_detection_results(outcomes, true).unwrap();
+        assert!(result.surface_results.iter().all(|surface| {
+            surface.protocol_verification.state == "rejected"
+                && surface
+                    .model_capability_evidence
+                    .iter()
+                    .all(|profile| profile.protocol == surface.protocol.as_str())
+        }));
+        assert!(
+            result
+                .model_capability_evidence
+                .iter()
+                .all(|profile| { profile.verification_state != "verified" })
+        );
+        let json = serde_json::to_vec(&result.model_capability_evidence).unwrap();
+        channel.capability_profiles = serde_json::from_slice(&json).unwrap();
+        let (url, body, _) =
+            crate::supplier::test_request_for_channel(&channel, "gpt-6-luna", "OK").unwrap();
+        assert!(url.ends_with("/responses"));
+        assert_eq!(body["model"], "gpt-6-luna");
+        assert_eq!(body["input"], "OK");
+    }
+
+    #[tokio::test]
+    async fn protocol_probe_keeps_http_and_semantic_failures_distinct_from_success() {
+        use reqwest::Client;
+        use warp::Filter;
+        let upstream = warp::path::param::<u16>().and(warp::body::bytes()).map(
+            |status: u16, body: bytes::Bytes| {
+                warp::reply::with_status(
+                    String::from_utf8(body.to_vec()).unwrap(),
+                    warp::http::StatusCode::from_u16(status).unwrap(),
+                )
+            },
+        );
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        for (status, body, expected_scope, succeeds) in [
+            (
+                200,
+                r#"{"choices":[{"message":{"content":"model_not_supported"}}]}"#,
+                None,
+                true,
+            ),
+            (
+                200,
+                r#"{"error":{"code":"model_not_supported"}}"#,
+                Some("model"),
+                false,
+            ),
+            (
+                400,
+                r#"{"error":{"code":"model_not_supported"}}"#,
+                Some("model"),
+                false,
+            ),
+            (
+                400,
+                r#"{"error":{"code":"invalid_argument"}}"#,
+                Some("request"),
+                false,
+            ),
+            (
+                401,
+                r#"{"error":{"code":"invalid_api_key"}}"#,
+                Some("channel"),
+                false,
+            ),
+            (
+                500,
+                "<html>upstream unavailable</html>",
+                Some("request"),
+                false,
+            ),
+            (302, "redirect without a destination", None, false),
+        ] {
+            let response = Client::new()
+                .post(format!("http://{address}/{status}"))
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            let result = super::ensure_probe_success(response, "test protocol", "model-a").await;
+            assert_eq!(result.is_ok(), succeeds, "status={status}, body={body}");
+            if let Err(error) = result {
+                let scope = error.chain().find_map(|cause| {
+                    cause
+                        .downcast_ref::<crate::upstream_failure::Failure>()
+                        .map(|failure| failure.scope.as_str())
+                });
+                assert_eq!(scope, expected_scope, "status={status}, body={body}");
+            }
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn model_probe_refusal_does_not_reject_the_protocol_or_other_models() {
+        use super::{
+            ensure_probe_success, probe_protocol, protocol_probe_failure,
+            rejected_surface_probe_result, surface_probe_contexts,
+        };
+        use reqwest::Client;
+        use warp::Filter;
+        let upstream = warp::any().map(|| warp::reply::with_status(
+            warp::reply::json(&serde_json::json!({"error": {
+                "code": "model_not_supported", "message": "The requested model is not supported."
+            }})), warp::http::StatusCode::BAD_REQUEST,
+        ));
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        let mut channel = crate::coding_gateway::tests::channel(
+            crate::source_driver::SourceDriverId::OpencodeZen,
+            &format!("http://{address}"),
+        );
+        channel.models = vec!["restricted-model".into(), "available-model".into()];
+        let contexts = surface_probe_contexts(channel, SurfaceProbeMode::Creation).unwrap();
+        for mut context in contexts {
+            let protocol = probe_protocol(&context).unwrap();
+            for state in ["declared", "verified", "rejected"] {
+                context.binding.verification.state = state.into();
+                context.binding.protocols[0].verification.state = state.into();
+                let mut available = basic_protocol_capability(protocol.as_str(), "verified");
+                available.model_pattern = "available-model".into();
+                let previous = vec![
+                    basic_protocol_capability(protocol.as_str(), state),
+                    available.clone(),
+                ];
+                let response = Client::new()
+                    .post(format!("http://{address}"))
+                    .send()
+                    .await
+                    .unwrap();
+                let error = ensure_probe_success(response, protocol.as_str(), "restricted-model")
+                    .await
+                    .unwrap_err();
+                let error = protocol_probe_failure(
+                    "primary protocol verification failed".into(),
+                    [Some(Err(error))],
+                );
+                let result = rejected_surface_probe_result(&context, &error, &previous)
+                    .unwrap()
+                    .result;
+                let expected = if state == "verified" {
+                    "verified"
+                } else {
+                    "declared"
+                };
+                assert_eq!(result.protocol_verification.state, expected);
+                assert_eq!(result.surface_verification.state, expected);
+                assert_eq!(result.models, context.models);
+                assert!(result.model_capability_evidence.contains(&available));
+                assert!(
+                    !result
+                        .model_capability_evidence
+                        .iter()
+                        .any(|p| p.model_pattern.is_empty() && p.verification_state == "rejected")
+                );
+                assert_eq!(result.detection_evidence[0].capability, "restricted-model");
+                assert_eq!(result.detection_evidence[0].status, "rejected");
+                assert!(result.warnings[0].contains("model_unavailable"));
+            }
+            // A genuine endpoint/protocol failure still rejects the binding.
+            let result = rejected_surface_probe_result(
+                &context,
+                &anyhow::anyhow!("unsupported endpoint"),
+                &[],
+            )
+            .unwrap();
+            assert_eq!(result.result.protocol_verification.state, "rejected");
+        }
+        server.abort();
+    }
+
+    #[test]
+    fn kiro_catalog_request_schema_survives_saved_channel_projection() {
+        let schema =
+            serde_json::json!({"properties":{"max_tokens":{"minimum":1024,"maximum":64000}}});
+        let models = crate::kiro::catalog_page(&serde_json::json!({"models":[{
+            "modelId":"claude-sonnet-test", "additionalModelRequestFieldsSchema":schema
+        }]}))
+        .unwrap();
+        let mut channel = explicit_test_channel("http://localhost");
+        channel.models = vec!["claude-sonnet-test".into()];
+        channel.capability_profiles = model_modality_capability_profiles(
+            &basic_protocol_capability("anthropic_messages", "declared"),
+            &models,
+            false,
+        );
+        let saved = serde_json::to_vec(&channel.capability_profiles).unwrap();
+        channel.capability_profiles = serde_json::from_slice(&saved).unwrap();
+        assert_eq!(
+            channel.capability_profiles[0].kiro_request_schema.as_ref(),
+            Some(&schema)
+        );
+        assert_eq!(
+            super::model_observations_from_saved_channel(&channel)[0]
+                .kiro_request_schema
+                .as_ref(),
+            Some(&schema)
+        );
+    }
+
+    #[test]
     fn model_catalog_modalities_become_exact_experimental_media_profiles() {
         let base = basic_protocol_capability("openai_responses", "declared");
         let profiles = model_modality_capability_profiles(
@@ -2663,6 +3048,7 @@ mod stream_probe_tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "gpt-audio-preview".to_string(),
                 priority: Some(0),
@@ -2702,6 +3088,7 @@ mod stream_probe_tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "gpt-5.6-sol".to_string(),
                 priority: None,
@@ -2762,6 +3149,7 @@ mod stream_probe_tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "gpt-5.6-sol".to_string(),
                 priority: None,
@@ -2776,6 +3164,7 @@ mod stream_probe_tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "future-codex-model".to_string(),
                 priority: None,
@@ -3159,6 +3548,9 @@ pub(crate) async fn fetch_openai_compatible_catalog(
     base_url: &str,
     api_key: &str,
 ) -> Result<Vec<crate::model_catalog::ModelObservation>> {
+    if channel.source_driver() == crate::source_driver::SourceDriverId::CopilotSubscription {
+        return crate::copilot::catalog(client, channel).await;
+    }
     crate::coding_plan::validate_key(channel)?;
     let url = crate::coding_gateway::catalog_url(channel.source_driver(), base_url)?;
     let mut headers = HeaderMap::new();
@@ -3176,6 +3568,8 @@ pub(crate) async fn fetch_openai_compatible_catalog(
     let kind = match channel.source_driver() {
         crate::source_driver::SourceDriverId::OllamaCloud => ModelCatalogKind::Ollama,
         crate::source_driver::SourceDriverId::CommandCode => ModelCatalogKind::CommandCode,
+        crate::source_driver::SourceDriverId::AbacusRoutellm => ModelCatalogKind::Abacus,
+        crate::source_driver::SourceDriverId::PoeApi => ModelCatalogKind::Poe,
         _ => ModelCatalogKind::OpenAI,
     };
     fetch_model_catalog(client, url, headers, kind).await
@@ -3329,7 +3723,7 @@ fn clear_openai_model_etag_hint_observed_no_later_than(key: &str, cutoff: Instan
     }
 }
 
-fn subscription_catalog_error_allows_stale(error: &anyhow::Error) -> bool {
+pub(crate) fn subscription_catalog_error_allows_stale(error: &anyhow::Error) -> bool {
     error
         .chain()
         .find_map(|cause| cause.downcast_ref::<reqwest::Error>())
@@ -4247,8 +4641,27 @@ pub(crate) async fn fetch_grok_subscription_quota_windows(
     client: &Client,
     token: &str,
 ) -> Result<Vec<QuotaWindow>> {
-    let weekly = fetch_grok_billing_payload(client, token, GROK_BILLING_WEEKLY_URL).await;
-    let monthly = fetch_grok_billing_payload(client, token, GROK_BILLING_MONTHLY_URL).await;
+    fetch_grok_subscription_quota_windows_with_urls(
+        client,
+        token,
+        GROK_BILLING_WEEKLY_URL,
+        GROK_BILLING_MONTHLY_URL,
+    )
+    .await
+}
+
+async fn fetch_grok_subscription_quota_windows_with_urls(
+    client: &Client,
+    token: &str,
+    weekly_url: &str,
+    monthly_url: &str,
+) -> Result<Vec<QuotaWindow>> {
+    // Independent metadata queries: overlap latency, but keep either successful
+    // result and both errors' backoff hints instead of short-circuiting on one.
+    let (weekly, monthly) = tokio::join!(
+        fetch_grok_billing_payload(client, token, weekly_url),
+        fetch_grok_billing_payload(client, token, monthly_url),
+    );
     let (weekly, monthly) = match (weekly, monthly) {
         (Err(weekly), Err(monthly)) => return Err(combined_quota_error(weekly, monthly)),
         results => results,
@@ -4306,21 +4719,19 @@ fn append_grok_billing_window(
     else {
         return;
     };
-    let reset_at_unix = [
-        "/config/currentPeriod/end",
-        "/config/billingPeriodEnd",
-        "/currentPeriod/end",
-        "/billingPeriodEnd",
-    ]
-    .into_iter()
-    .find_map(|path| {
-        config
-            .pointer(path.trim_start_matches("/config"))
-            .or_else(|| value.pointer(path))
-            .and_then(serde_json::Value::as_str)
-            .and_then(parse_token_expiry_text)
-    })
-    .unwrap_or_default();
+    // A missing weekly reset must not borrow the monthly spending-cap reset
+    // (or vice versa), which could turn a short quota pause into weeks.
+    let reset_path = if weekly {
+        "/currentPeriod/end"
+    } else {
+        "/billingPeriodEnd"
+    };
+    let reset_at_unix = config
+        .pointer(reset_path)
+        .or_else(|| value.pointer(reset_path))
+        .and_then(serde_json::Value::as_str)
+        .and_then(parse_token_expiry_text)
+        .unwrap_or_default();
     out.push(QuotaWindow {
         source: "grok_billing".to_string(),
         window: window.to_string(),
@@ -4500,6 +4911,7 @@ pub(crate) async fn ensure_openai_subscription_access_token_with_options(
     token_url: &str,
 ) -> Result<(String, serde_json::Value, bool)> {
     let force_refresh = rejected_access_token.is_some();
+    let started_at = Instant::now();
     let path = subscription_credential_path(channel)?;
     let mut credential = if force_refresh {
         read_subscription_credential(&path)?
@@ -4517,79 +4929,81 @@ pub(crate) async fn ensure_openai_subscription_access_token_with_options(
     }
 
     let refresh_lock = subscription_refresh_lock(&path)?;
-    let _refresh_guard = refresh_lock.lock().await;
-    let mut latest = read_subscription_credential(&path)?;
-    ensure_subscription_token_provider(&mut latest, "openai");
-    remember_openai_subscription_credential(&path, &latest);
-    if let Some(access_token) =
-        json_string(&latest, &["access_token"]).filter(|token| !token.trim().is_empty())
-    {
-        // A delayed 401 may arrive after another request already rotated the token.
-        // Compare with the token actually rejected, not a new disk snapshot.
-        let refreshed_by_peer = rejected_access_token.or(original_access_token.as_deref())
-            != Some(access_token.as_str());
-        if !credential_needs_refresh(&latest) && (!force_refresh || refreshed_by_peer) {
-            return Ok((access_token, latest, refreshed_by_peer));
+    let mut refresh_guard = refresh_lock.lock().await;
+    refresh_guard.run(started_at, async {
+        let mut latest = read_subscription_credential(&path)?;
+        ensure_subscription_token_provider(&mut latest, "openai");
+        remember_openai_subscription_credential(&path, &latest);
+        if let Some(access_token) =
+            json_string(&latest, &["access_token"]).filter(|token| !token.trim().is_empty())
+        {
+            // A delayed 401 may arrive after another request already rotated the token.
+            // Compare with the token actually rejected, not a new disk snapshot.
+            let refreshed_by_peer = rejected_access_token.or(original_access_token.as_deref())
+                != Some(access_token.as_str());
+            if !credential_needs_refresh(&latest) && (!force_refresh || refreshed_by_peer) {
+                return Ok((access_token, latest, refreshed_by_peer));
+            }
         }
-    }
-    credential = latest;
+        credential = latest;
 
-    let refresh_token = json_string(&credential, &["refresh_token"])
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| anyhow!("OpenAI subscription credential is missing refresh_token"))?;
-    let refresh_request = serde_json::json!({
-        "client_id": OPENAI_OAUTH_CLIENT_ID,
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token.clone(),
-    });
-    let identity = active_codex_identity();
-    let resp = apply_codex_control_identity_headers(
-        client
-            .post(token_url)
-            .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&refresh_request),
-        &identity,
-    )
-    .send_adaptive()
-    .await?;
-    let status = resp.status();
-    let refreshed = resp.json::<serde_json::Value>().await;
-    if !status.is_success() {
-        // An empty or HTML error body must not hide the upstream HTTP status.
-        // Successful responses still require valid JSON before saving credentials.
-        let error = SubscriptionOAuthError::from_response(
-            "openai",
-            status.as_u16(),
-            refreshed.as_ref().unwrap_or(&serde_json::Value::Null),
-        );
-        log::warn!(
-            "[const-api][subscription-auth] provider=openai stage=refresh status={} code={}",
-            status.as_u16(),
-            error.code(),
-        );
-        return Err(error.into());
-    }
-    let mut refreshed = refreshed?;
-    if json_string(&refreshed, &["refresh_token"])
-        .map(|token| token.trim().is_empty())
-        .unwrap_or(true)
-    {
-        if let Some(object) = refreshed.as_object_mut() {
-            object.insert(
-                "refresh_token".to_string(),
-                serde_json::Value::String(refresh_token),
+        let refresh_token = json_string(&credential, &["refresh_token"])
+            .filter(|token| !token.trim().is_empty())
+            .ok_or_else(|| anyhow!("OpenAI subscription credential is missing refresh_token"))?;
+        let refresh_request = serde_json::json!({
+            "client_id": OPENAI_OAUTH_CLIENT_ID,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token.clone(),
+        });
+        let identity = active_codex_identity();
+        let resp = apply_codex_control_identity_headers(
+            client
+                .post(token_url)
+                .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .json(&refresh_request),
+            &identity,
+        )
+        .send_adaptive()
+        .await?;
+        let status = resp.status();
+        let refreshed = resp.json::<serde_json::Value>().await;
+        if !status.is_success() {
+            // An empty or HTML error body must not hide the upstream HTTP status.
+            // Successful responses still require valid JSON before saving credentials.
+            let error = SubscriptionOAuthError::from_response(
+                "openai",
+                status.as_u16(),
+                refreshed.as_ref().unwrap_or(&serde_json::Value::Null),
             );
+            log::warn!(
+                "[const-api][subscription-auth] provider=openai stage=refresh status={} code={}",
+                status.as_u16(),
+                error.code(),
+            );
+            return Err(error.into());
         }
-    }
-    copy_token_metadata(&credential, &mut refreshed);
-    ensure_subscription_token_provider(&mut refreshed, "openai");
-    normalize_token_expiry(&mut refreshed);
-    let access_token = json_string(&refreshed, &["access_token"])
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| anyhow!("OpenAI OAuth refresh response did not include access_token"))?;
-    write_subscription_credential_atomically(&path, &refreshed)?;
-    Ok((access_token, refreshed, true))
+        let mut refreshed = refreshed?;
+        if json_string(&refreshed, &["refresh_token"])
+            .map(|token| token.trim().is_empty())
+            .unwrap_or(true)
+        {
+            if let Some(object) = refreshed.as_object_mut() {
+                object.insert(
+                    "refresh_token".to_string(),
+                    serde_json::Value::String(refresh_token),
+                );
+            }
+        }
+        copy_token_metadata(&credential, &mut refreshed);
+        ensure_subscription_token_provider(&mut refreshed, "openai");
+        normalize_token_expiry(&mut refreshed);
+        let access_token = json_string(&refreshed, &["access_token"])
+            .filter(|token| !token.trim().is_empty())
+            .ok_or_else(|| anyhow!("OpenAI OAuth refresh response did not include access_token"))?;
+        write_subscription_credential_atomically(&path, &refreshed)?;
+        Ok((access_token, refreshed, true))
+    }).await
 }
 
 async fn check_antigravity_subscription_with_policy(
@@ -5252,6 +5666,7 @@ pub(crate) async fn ensure_antigravity_subscription_access_token_with_options(
     force_refresh: bool,
     token_url: &str,
 ) -> Result<(String, serde_json::Value, bool)> {
+    let started_at = Instant::now();
     let path = subscription_credential_path(channel)?;
     let mut credential = read_subscription_credential(&path)?;
     credential = normalize_antigravity_credential_value(&credential).ok_or_else(|| {
@@ -5267,66 +5682,68 @@ pub(crate) async fn ensure_antigravity_subscription_access_token_with_options(
     }
 
     let refresh_lock = subscription_refresh_lock(&path)?;
-    let _refresh_guard = refresh_lock.lock().await;
-    let mut latest = read_subscription_credential(&path)?;
-    latest = normalize_antigravity_credential_value(&latest).ok_or_else(|| {
-        anyhow!("Legacy Gemini Code Assist credentials cannot be used with Antigravity; authorize Antigravity again.")
-    })?;
-    if let Some(access_token) =
-        json_string(&latest, &["access_token"]).filter(|token| !token.trim().is_empty())
-    {
-        let refreshed_by_peer = original_access_token.as_deref() != Some(access_token.as_str());
-        if !credential_needs_refresh(&latest) && (!force_refresh || refreshed_by_peer) {
-            return Ok((access_token, latest, refreshed_by_peer));
-        }
-    }
-    credential = latest;
-
-    let refresh_token = json_string(&credential, &["refresh_token"])
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| anyhow!("Antigravity credential is missing refresh_token"))?;
-    let mut form = std::collections::HashMap::new();
-    form.insert("grant_type", "refresh_token");
-    form.insert("refresh_token", refresh_token.as_str());
-    crate::local_policy::require_antigravity_oauth_app()?;
-    form.insert("client_id", ANTIGRAVITY_OAUTH_CLIENT_ID);
-    form.insert("client_secret", ANTIGRAVITY_OAUTH_CLIENT_SECRET);
-
-    let response = client
-        .post(token_url)
-        .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
-        .form(&form)
-        .send_adaptive()
-        .await?;
-    let status = response.status();
-    let mut refreshed = response.json::<serde_json::Value>().await?;
-    if !status.is_success() {
-        return Err(anyhow!(
-            "Antigravity OAuth refresh returned {status}: {refreshed}"
-        ));
-    }
-    if json_string(&refreshed, &["refresh_token"])
-        .map(|token| token.trim().is_empty())
-        .unwrap_or(true)
-    {
-        if let Some(object) = refreshed.as_object_mut() {
-            object.insert(
-                "refresh_token".to_string(),
-                serde_json::Value::String(refresh_token),
-            );
-        }
-    }
-    copy_token_metadata(&credential, &mut refreshed);
-    ensure_subscription_token_provider(&mut refreshed, "antigravity");
-    ensure_antigravity_token_defaults(&mut refreshed);
-    normalize_token_expiry(&mut refreshed);
-    let access_token = json_string(&refreshed, &["access_token"])
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow!("Antigravity OAuth refresh response did not include access_token")
+    let mut refresh_guard = refresh_lock.lock().await;
+    refresh_guard.run(started_at, async {
+        let mut latest = read_subscription_credential(&path)?;
+        latest = normalize_antigravity_credential_value(&latest).ok_or_else(|| {
+            anyhow!("Legacy Gemini Code Assist credentials cannot be used with Antigravity; authorize Antigravity again.")
         })?;
-    write_subscription_credential_atomically(&path, &refreshed)?;
-    Ok((access_token, refreshed, true))
+        if let Some(access_token) =
+            json_string(&latest, &["access_token"]).filter(|token| !token.trim().is_empty())
+        {
+            let refreshed_by_peer = original_access_token.as_deref() != Some(access_token.as_str());
+            if !credential_needs_refresh(&latest) && (!force_refresh || refreshed_by_peer) {
+                return Ok((access_token, latest, refreshed_by_peer));
+            }
+        }
+        credential = latest;
+
+        let refresh_token = json_string(&credential, &["refresh_token"])
+            .filter(|token| !token.trim().is_empty())
+            .ok_or_else(|| anyhow!("Antigravity credential is missing refresh_token"))?;
+        let mut form = std::collections::HashMap::new();
+        form.insert("grant_type", "refresh_token");
+        form.insert("refresh_token", refresh_token.as_str());
+        crate::local_policy::require_antigravity_oauth_app()?;
+    form.insert("client_id", ANTIGRAVITY_OAUTH_CLIENT_ID);
+        form.insert("client_secret", ANTIGRAVITY_OAUTH_CLIENT_SECRET);
+
+        let response = client
+            .post(token_url)
+            .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
+            .form(&form)
+            .send_adaptive()
+            .await?;
+        let status = response.status();
+        let mut refreshed = response.json::<serde_json::Value>().await?;
+        if !status.is_success() {
+            return Err(anyhow!(
+                "Antigravity OAuth refresh returned {status}: {refreshed}"
+            ));
+        }
+        if json_string(&refreshed, &["refresh_token"])
+            .map(|token| token.trim().is_empty())
+            .unwrap_or(true)
+        {
+            if let Some(object) = refreshed.as_object_mut() {
+                object.insert(
+                    "refresh_token".to_string(),
+                    serde_json::Value::String(refresh_token),
+                );
+            }
+        }
+        copy_token_metadata(&credential, &mut refreshed);
+        ensure_subscription_token_provider(&mut refreshed, "antigravity");
+        ensure_antigravity_token_defaults(&mut refreshed);
+        normalize_token_expiry(&mut refreshed);
+        let access_token = json_string(&refreshed, &["access_token"])
+            .filter(|token| !token.trim().is_empty())
+            .ok_or_else(|| {
+                anyhow!("Antigravity OAuth refresh response did not include access_token")
+            })?;
+        write_subscription_credential_atomically(&path, &refreshed)?;
+        Ok((access_token, refreshed, true))
+    }).await
 }
 
 pub(crate) async fn ensure_claude_subscription_access_token(
@@ -5357,6 +5774,7 @@ pub(crate) async fn ensure_claude_subscription_access_token_with_options(
     force_refresh: bool,
     token_url: &str,
 ) -> Result<(String, serde_json::Value, bool)> {
+    let started_at = Instant::now();
     let path = subscription_credential_path(channel)?;
     let mut credential = read_subscription_credential(&path)?;
     ensure_subscription_token_provider(&mut credential, "claude");
@@ -5370,77 +5788,94 @@ pub(crate) async fn ensure_claude_subscription_access_token_with_options(
     }
 
     let refresh_lock = subscription_refresh_lock(&path)?;
-    let _refresh_guard = refresh_lock.lock().await;
-    let mut latest = read_subscription_credential(&path)?;
-    ensure_subscription_token_provider(&mut latest, "claude");
-    if let Some(access_token) =
-        json_string(&latest, &["access_token"]).filter(|token| !token.trim().is_empty())
-    {
-        let refreshed_by_peer = original_access_token.as_deref() != Some(access_token.as_str());
-        if !credential_needs_refresh(&latest) && (!force_refresh || refreshed_by_peer) {
-            return Ok((access_token, latest, refreshed_by_peer));
-        }
-    }
-    credential = latest;
+    let mut refresh_guard = refresh_lock.lock().await;
+    refresh_guard
+        .run(started_at, async {
+            let mut latest = read_subscription_credential(&path)?;
+            ensure_subscription_token_provider(&mut latest, "claude");
+            if let Some(access_token) =
+                json_string(&latest, &["access_token"]).filter(|token| !token.trim().is_empty())
+            {
+                let refreshed_by_peer =
+                    original_access_token.as_deref() != Some(access_token.as_str());
+                if !credential_needs_refresh(&latest) && (!force_refresh || refreshed_by_peer) {
+                    return Ok((access_token, latest, refreshed_by_peer));
+                }
+            }
+            credential = latest;
 
-    let refresh_token = json_string(&credential, &["refresh_token"])
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| anyhow!("Claude subscription credential is missing refresh_token"))?;
-    let refresh_key = subscription_refresh_token_key("claude", &refresh_token);
-    let token_refresh_lock = subscription_refresh_token_lock(&refresh_key);
-    let _token_refresh_guard = token_refresh_lock.lock().await;
-
-    // Two locally imported channels may refer to distinct credential files but
-    // contain the same rotating refresh token. Reuse the first successful
-    // rotation instead of sending the now-invalid old token a second time.
-    if let Some(mut refreshed) = cached_claude_refresh_result(&refresh_key) {
-        copy_token_metadata(&credential, &mut refreshed);
-        ensure_subscription_token_provider(&mut refreshed, "claude");
-        normalize_token_expiry(&mut refreshed);
-        let access_token = json_string(&refreshed, &["access_token"])
-            .filter(|token| !token.trim().is_empty())
-            .ok_or_else(|| anyhow!("cached Claude OAuth refresh did not include access_token"))?;
-        write_subscription_credential_atomically(&path, &refreshed)?;
-        return Ok((access_token, refreshed, true));
-    }
-    let body = claude_oauth_refresh_body(&refresh_token);
-    let resp = client
-        .post(token_url)
-        .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
-        .header("Accept", "application/json, text/plain, */*")
-        .header("Content-Type", "application/json")
-        .header("User-Agent", CLAUDE_OAUTH_AXIOS_USER_AGENT)
-        .json(&body)
-        .send_adaptive()
-        .await?;
-    let status = resp.status();
-    let mut refreshed = resp.json::<serde_json::Value>().await?;
-    if !status.is_success() {
-        return Err(
-            SubscriptionOAuthError::from_response("claude", status.as_u16(), &refreshed).into(),
-        );
-    }
-    if json_string(&refreshed, &["refresh_token"])
-        .map(|token| token.trim().is_empty())
-        .unwrap_or(true)
-    {
-        if let Some(object) = refreshed.as_object_mut() {
-            object.insert(
-                "refresh_token".to_string(),
-                serde_json::Value::String(refresh_token),
-            );
-        }
-    }
-    ensure_subscription_token_provider(&mut refreshed, "claude");
-    normalize_token_expiry(&mut refreshed);
-    let access_token = json_string(&refreshed, &["access_token"])
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| anyhow!("Claude OAuth refresh response did not include access_token"))?;
-    let token_material = refreshed.clone();
-    copy_token_metadata(&credential, &mut refreshed);
-    write_subscription_credential_atomically(&path, &refreshed)?;
-    remember_claude_refresh_result(refresh_key, token_material);
-    Ok((access_token, refreshed, true))
+            let refresh_token = json_string(&credential, &["refresh_token"])
+                .filter(|token| !token.trim().is_empty())
+                .ok_or_else(|| {
+                    anyhow!("Claude subscription credential is missing refresh_token")
+                })?;
+            let refresh_key = subscription_refresh_token_key("claude", &refresh_token);
+            let token_refresh_lock = subscription_refresh_token_lock(&refresh_key);
+            let mut token_refresh_guard = token_refresh_lock.lock().await;
+            token_refresh_guard
+                .run(started_at, async {
+                    // Two locally imported channels may refer to distinct credential files but
+                    // contain the same rotating refresh token. Reuse the first successful
+                    // rotation instead of sending the now-invalid old token a second time.
+                    if let Some(mut refreshed) = cached_subscription_refresh_result(&refresh_key) {
+                        copy_token_metadata(&credential, &mut refreshed);
+                        ensure_subscription_token_provider(&mut refreshed, "claude");
+                        normalize_token_expiry(&mut refreshed);
+                        let access_token = json_string(&refreshed, &["access_token"])
+                            .filter(|token| !token.trim().is_empty())
+                            .ok_or_else(|| {
+                                anyhow!("cached Claude OAuth refresh did not include access_token")
+                            })?;
+                        write_subscription_credential_atomically(&path, &refreshed)?;
+                        return Ok((access_token, refreshed, true));
+                    }
+                    let body = claude_oauth_refresh_body(&refresh_token);
+                    let resp = client
+                        .post(token_url)
+                        .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
+                        .header("Accept", "application/json, text/plain, */*")
+                        .header("Content-Type", "application/json")
+                        .header("User-Agent", CLAUDE_OAUTH_AXIOS_USER_AGENT)
+                        .json(&body)
+                        .send_adaptive()
+                        .await?;
+                    let status = resp.status();
+                    let mut refreshed = resp.json::<serde_json::Value>().await?;
+                    if !status.is_success() {
+                        return Err(SubscriptionOAuthError::from_response(
+                            "claude",
+                            status.as_u16(),
+                            &refreshed,
+                        )
+                        .into());
+                    }
+                    if json_string(&refreshed, &["refresh_token"])
+                        .map(|token| token.trim().is_empty())
+                        .unwrap_or(true)
+                    {
+                        if let Some(object) = refreshed.as_object_mut() {
+                            object.insert(
+                                "refresh_token".to_string(),
+                                serde_json::Value::String(refresh_token),
+                            );
+                        }
+                    }
+                    ensure_subscription_token_provider(&mut refreshed, "claude");
+                    normalize_token_expiry(&mut refreshed);
+                    let access_token = json_string(&refreshed, &["access_token"])
+                        .filter(|token| !token.trim().is_empty())
+                        .ok_or_else(|| {
+                            anyhow!("Claude OAuth refresh response did not include access_token")
+                        })?;
+                    let token_material = refreshed.clone();
+                    copy_token_metadata(&credential, &mut refreshed);
+                    write_subscription_credential_atomically(&path, &refreshed)?;
+                    remember_subscription_refresh_result(refresh_key, token_material);
+                    Ok((access_token, refreshed, true))
+                })
+                .await
+        })
+        .await
 }
 
 pub(crate) async fn ensure_grok_subscription_access_token(
@@ -5457,6 +5892,7 @@ pub(crate) async fn ensure_grok_subscription_access_token_with_options(
     force_refresh: bool,
     token_url: &str,
 ) -> Result<(String, serde_json::Value, bool)> {
+    let started_at = Instant::now();
     let path = subscription_credential_path(channel)?;
     let mut credential = read_subscription_credential(&path)?;
     ensure_subscription_token_provider(&mut credential, "grok");
@@ -5470,67 +5906,74 @@ pub(crate) async fn ensure_grok_subscription_access_token_with_options(
     }
 
     let refresh_lock = subscription_refresh_lock(&path)?;
-    let _refresh_guard = refresh_lock.lock().await;
-    let mut latest = read_subscription_credential(&path)?;
-    ensure_subscription_token_provider(&mut latest, "grok");
-    if let Some(access_token) =
-        json_string(&latest, &["access_token"]).filter(|token| !token.trim().is_empty())
-    {
-        let refreshed_by_peer = original_access_token.as_deref() != Some(access_token.as_str());
-        if !credential_needs_refresh(&latest) && (!force_refresh || refreshed_by_peer) {
-            return Ok((access_token, latest, refreshed_by_peer));
-        }
-    }
-    credential = latest;
+    let mut refresh_guard = refresh_lock.lock().await;
+    refresh_guard
+        .run(started_at, async {
+            let mut latest = read_subscription_credential(&path)?;
+            ensure_subscription_token_provider(&mut latest, "grok");
+            if let Some(access_token) =
+                json_string(&latest, &["access_token"]).filter(|token| !token.trim().is_empty())
+            {
+                let refreshed_by_peer =
+                    original_access_token.as_deref() != Some(access_token.as_str());
+                if !credential_needs_refresh(&latest) && (!force_refresh || refreshed_by_peer) {
+                    return Ok((access_token, latest, refreshed_by_peer));
+                }
+            }
+            credential = latest;
 
-    let refresh_token = json_string(&credential, &["refresh_token"])
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| anyhow!("Grok subscription credential is missing refresh_token"))?;
-    let client_id = json_string(&credential, &["client_id"])
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| GROK_OAUTH_CLIENT_ID.to_string());
-    let mut form = std::collections::HashMap::new();
-    form.insert("grant_type", "refresh_token");
-    form.insert("client_id", client_id.as_str());
-    form.insert("refresh_token", refresh_token.as_str());
+            let refresh_token = json_string(&credential, &["refresh_token"])
+                .filter(|token| !token.trim().is_empty())
+                .ok_or_else(|| anyhow!("Grok subscription credential is missing refresh_token"))?;
+            let client_id = json_string(&credential, &["client_id"])
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| GROK_OAUTH_CLIENT_ID.to_string());
+            let mut form = std::collections::HashMap::new();
+            form.insert("grant_type", "refresh_token");
+            form.insert("client_id", client_id.as_str());
+            form.insert("refresh_token", refresh_token.as_str());
 
-    let response = client
-        .post(token_url)
-        .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
-        .header("User-Agent", "const-api-grok-oauth/1.0")
-        .form(&form)
-        .send_adaptive()
-        .await?;
-    let status = response.status();
-    let mut refreshed = response.json::<serde_json::Value>().await?;
-    if !status.is_success() {
-        return Err(anyhow!("Grok OAuth refresh returned {status}: {refreshed}"));
-    }
-    if json_string(&refreshed, &["refresh_token"])
-        .map(|token| token.trim().is_empty())
-        .unwrap_or(true)
-    {
-        if let Some(object) = refreshed.as_object_mut() {
-            object.insert(
-                "refresh_token".to_string(),
-                serde_json::Value::String(refresh_token),
-            );
-        }
-    }
-    copy_token_metadata(&credential, &mut refreshed);
-    ensure_subscription_token_provider(&mut refreshed, "grok");
-    if let Some(object) = refreshed.as_object_mut() {
-        object.insert(
-            "client_id".to_string(),
-            serde_json::Value::String(client_id),
-        );
-    }
-    normalize_token_expiry(&mut refreshed);
-    let access_token = json_string(&refreshed, &["access_token"])
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| anyhow!("Grok OAuth refresh response did not include access_token"))?;
-    write_subscription_credential_atomically(&path, &refreshed)?;
-    Ok((access_token, refreshed, true))
+            let response = client
+                .post(token_url)
+                .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
+                .header("User-Agent", "const-api-grok-oauth/1.0")
+                .form(&form)
+                .send_adaptive()
+                .await?;
+            let status = response.status();
+            let mut refreshed = response.json::<serde_json::Value>().await?;
+            if !status.is_success() {
+                return Err(anyhow!("Grok OAuth refresh returned {status}: {refreshed}"));
+            }
+            if json_string(&refreshed, &["refresh_token"])
+                .map(|token| token.trim().is_empty())
+                .unwrap_or(true)
+            {
+                if let Some(object) = refreshed.as_object_mut() {
+                    object.insert(
+                        "refresh_token".to_string(),
+                        serde_json::Value::String(refresh_token),
+                    );
+                }
+            }
+            copy_token_metadata(&credential, &mut refreshed);
+            ensure_subscription_token_provider(&mut refreshed, "grok");
+            if let Some(object) = refreshed.as_object_mut() {
+                object.insert(
+                    "client_id".to_string(),
+                    serde_json::Value::String(client_id),
+                );
+            }
+            normalize_token_expiry(&mut refreshed);
+            let access_token = json_string(&refreshed, &["access_token"])
+                .filter(|token| !token.trim().is_empty())
+                .ok_or_else(|| {
+                    anyhow!("Grok OAuth refresh response did not include access_token")
+                })?;
+            write_subscription_credential_atomically(&path, &refreshed)?;
+            Ok((access_token, refreshed, true))
+        })
+        .await
 }
 
 pub(crate) fn extract_antigravity_project_id(value: &serde_json::Value) -> Option<String> {

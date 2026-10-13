@@ -325,6 +325,152 @@ mod transport_regression_tests {
         Quic(quinn::Endpoint),
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn stopped_channel_drains_inflight_streams_on_quic_and_websocket() {
+        tokio::join!(
+            check_stopped_channel_drain(false, false),
+            check_stopped_channel_drain(false, true),
+            check_stopped_channel_drain(true, false),
+            check_stopped_channel_drain(true, true),
+        );
+    }
+
+    async fn check_stopped_channel_drain(quic: bool, resumable: bool) {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = upstream.local_addr().unwrap();
+        let (started, started_rx) = oneshot::channel();
+        let (finish, finish_rx) = oneshot::channel();
+        let upstream_task = tokio::spawn(async move {
+            let (mut socket, _) = upstream.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut bytes = [0; 1024];
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let count = socket.read(&mut bytes).await.unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&bytes[..count]);
+            }
+            let body = "data: {\"id\":\"drain\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"finished after stop\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n";
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+            started.send(()).unwrap();
+            finish_rx.await.unwrap();
+            socket.write_all(body.as_bytes()).await.unwrap();
+        });
+        let (listener, url) = NegotiationListener::bind(quic).await;
+        let mut supplier = default_supplier_config();
+        supplier.channel_id = format!("draining-{quic}-{resumable}");
+        supplier.upstream_base_url = format!("http://{address}");
+        supplier.surface_bindings = crate::source_driver_surface_bindings(
+            crate::source_driver::SourceDriverId::CustomEndpoint, &supplier.upstream_base_url,
+        );
+        supplier.api_format = "openai_chat".into();
+        supplier.public_model = "code-cheap".into();
+        supplier.upstream_model = "code-cheap".into();
+        let mut config = large_catalog().with_suppliers(vec![supplier.clone()]);
+        let mut removed = supplier;
+        removed.registration_removed = true;
+        let (updates_tx, mut updates) = mpsc::channel(8);
+        let (finished, finished_rx) = oneshot::channel();
+        let peer = tokio::spawn(async move {
+            let mut peer = listener.accept().await;
+            loop {
+                let msg = peer.recv().await;
+                let kind = if msg.kind == "authenticate" { "authenticate_ack" } else { "register_ack" };
+                let features = if resumable { vec![SUPPLIER_TRANSPORT_STREAM_RESUME_FEATURE] } else { vec![] };
+                peer.send(serde_json::json!({"id":msg.id,"type":kind,"payload":{
+                    "ok":true,"registered_count":1,"transport_features":features
+                }})).await;
+                if msg.kind == "register" { break; }
+            }
+            let id = format!("inflight-drain-{quic}-{resumable}");
+            let wire = crate::surface_wire::SurfaceEnvelope {
+                surface: Some(crate::surface::ApiSurface::OpenAi),
+                operation: Some(crate::surface::ApiOperation::ChatCompletions),
+                protocol: Some("openai_chat".into()),
+                method: "POST".into(), path: "/v1/chat/completions".into(),
+                body: crate::surface_wire::WireBody::from_bytes(br#"{"model":"code-cheap","messages":[],"stream":true}"#),
+                stream: Some(true), ..Default::default()
+            };
+            let mut payload = crate::surface_wire::wire_payload(wire).unwrap();
+            payload.insert("target_channel_id".into(), removed.channel_id.clone().into());
+            peer.send(serde_json::json!({"id":id,"type":"http_request","payload":payload})).await;
+            started_rx.await.unwrap();
+            updates_tx.send(SupplierRegistrationUpdate { suppliers: vec![removed], force: true }).await.unwrap();
+            let mut finish = Some(finish);
+            let mut refused = 0;
+            let mut saw_tail = false;
+            loop {
+                let msg = peer.recv().await;
+                if msg.kind == "register" {
+                    assert_eq!(msg.payload["channels"][0]["removed"], true);
+                    peer.send(serde_json::json!({"id":msg.id,"type":"register_ack","payload":{
+                        "ok":true,"registered_count":0,
+                        "transport_features":if resumable { vec![SUPPLIER_TRANSPORT_STREAM_RESUME_FEATURE] } else { vec![] }
+                    }})).await;
+                    for kind in ["http_request", "duplex_open"] {
+                        peer.send(serde_json::json!({"id":format!("late-{kind}-{quic}-{resumable}"),"type":kind,"payload":payload})).await;
+                    }
+                    continue;
+                }
+                if msg.kind == "ping" {
+                    peer.send(serde_json::json!({"id":msg.id,"type":"pong","payload":{}})).await;
+                    continue;
+                }
+                if resumable {
+                    peer.send(serde_json::json!({"id":msg.id,"type":"stream_ack","payload":{
+                        "seq":msg.payload[SUPPLIER_STREAM_SEQUENCE_FIELD],
+                        SUPPLIER_STREAM_EXECUTION_ID_FIELD:msg.payload[SUPPLIER_STREAM_EXECUTION_ID_FIELD]
+                    }})).await;
+                }
+                if msg.id.starts_with("late-") {
+                    assert_eq!(msg.payload["error_kind"], "supplier_unavailable");
+                    assert_eq!(msg.payload["request_sent"], false);
+                    refused += 1;
+                    if refused == 2 { finish.take().unwrap().send(()).unwrap(); }
+                } else {
+                    assert!(!matches!(msg.kind.as_str(), "error" | "duplex_error"), "{msg:?}");
+                    saw_tail |= serde_json::to_string(&msg.payload).unwrap().contains("finished after stop");
+                    if msg.kind == "stream_end" { break; }
+                }
+            }
+            assert_eq!(refused, 2);
+            assert!(saw_tail, "in-flight response was lost during stop");
+            let _ = finished_rx.await;
+        });
+        let (_stop, mut shutdown) = oneshot::channel();
+        let (output, mut output_rx) = mpsc::channel(64);
+        let tasks = SupplierRequestTasks::default();
+        let _guard = SupplierRequestTaskGuard::new(tasks.clone());
+        let mut replay = SupplierReplayState::default();
+        let mut disconnected = None;
+        let state = Arc::new(StdMutex::new(SupplierTransportSnapshot::default()));
+        let result = tokio::time::timeout(Duration::from_secs(8), async {
+            if quic {
+                run_supplier_quic_connection_with_runtime(&Client::new().into(), &mut config, &url,
+                    &mut shutdown, &mut updates, &state, &output, &mut output_rx, &tasks, &mut replay, &mut disconnected).await
+            } else {
+                run_supplier_websocket_connection_with_runtime(&Client::new().into(), &mut config, &url,
+                    &mut shutdown, &mut updates, &state, &output, &mut output_rx, &tasks, &mut replay, &mut disconnected).await
+            }
+        }).await;
+        let _ = finished.send(());
+        assert_eq!(result.unwrap(), SupplierRunOutcome::Idle);
+        peer.await.unwrap();
+        upstream_task.await.unwrap();
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn stopped_or_unknown_target_never_falls_back_to_another_channel() {
+        let mut supplier = default_supplier_config();
+        supplier.channel_id = "remaining-channel".into();
+        let config = large_catalog().with_suppliers(vec![supplier]);
+        assert!(config.supplier_for_target("stopped-channel", "").is_none());
+        assert!(config.supplier_for_target("", "unknown-unit").is_none());
+        assert!(config.supplier_for_target("remaining-channel", "").is_some());
+        assert!(config.supplier_for_target("", "").is_some(), "legacy untargeted request");
+        assert!(config.with_suppliers(vec![]).supplier_for_target("", "").is_none());
+    }
+
     enum NegotiationPeer {
         WebSocket(tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>),
         Quic {
@@ -459,13 +605,13 @@ mod transport_regression_tests {
         let result = tokio::time::timeout(Duration::from_secs(25), async {
             if quic {
                 run_supplier_quic_connection_with_runtime(
-                    &Client::new(), &mut config, &url, &mut shutdown, &mut updates,
+                    &Client::new().into(), &mut config, &url, &mut shutdown, &mut updates,
                     &state, &output, &mut output_rx, &SupplierRequestTasks::default(),
                     &mut replay, &mut disconnected,
                 ).await
             } else {
                 run_supplier_websocket_connection_with_runtime(
-                    &Client::new(), &mut config, &url, &mut shutdown, &mut updates,
+                    &Client::new().into(), &mut config, &url, &mut shutdown, &mut updates,
                     &state, &output, &mut output_rx, &SupplierRequestTasks::default(),
                     &mut replay, &mut disconnected,
                 ).await
@@ -568,12 +714,12 @@ mod transport_regression_tests {
         let outcome = tokio::time::timeout(Duration::from_secs(5), async {
             if quic {
                 run_supplier_quic_connection_with_runtime(
-                    &Client::new(), &mut config, &url, &mut shutdown, &mut updates,
+                    &Client::new().into(), &mut config, &url, &mut shutdown, &mut updates,
                     &state, &output, &mut output_rx, &SupplierRequestTasks::default(), &mut replay, &mut disconnected,
                 ).await
             } else {
                 run_supplier_websocket_connection_with_runtime(
-                    &Client::new(), &mut config, &url, &mut shutdown, &mut updates,
+                    &Client::new().into(), &mut config, &url, &mut shutdown, &mut updates,
                     &state, &output, &mut output_rx, &SupplierRequestTasks::default(), &mut replay, &mut disconnected,
                 ).await
             }
@@ -673,7 +819,7 @@ mod transport_regression_tests {
         let result = tokio::time::timeout(
             Duration::from_secs(6),
             run_supplier_websocket_connection_with_runtime(
-                &Client::new(),
+                &Client::new().into(),
                 &mut config,
                 &format!("ws://{addr}"),
                 &mut shutdown,

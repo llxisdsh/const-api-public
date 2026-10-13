@@ -32,9 +32,12 @@ pub(super) async fn run(
                     &channel.upstream_api_key,
                     &channel.upstream_base_url,
                 )
+                .await?
                 .json(&body)
             }
-            ProtocolKind::AnthropicMessages => anthropic_messages_request(client, channel, &body),
+            ProtocolKind::AnthropicMessages => {
+                anthropic_messages_request(client, channel, &body).await?
+            }
             ProtocolKind::GeminiNative => gemini_native_request(
                 client,
                 channel,

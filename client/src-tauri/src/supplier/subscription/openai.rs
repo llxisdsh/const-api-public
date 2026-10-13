@@ -171,7 +171,7 @@ pub(crate) async fn forward_openai_subscription_stream_request_with_capacity(
     debug_assert_eq!(target_protocol, "openai_responses");
     let endpoint_body = json_body_with_stream(&upstream_body, true)?;
     let upstream_body = if grok {
-        endpoint_body.clone()
+        openai_subscription_body_with_cache_identity(&endpoint_body, cache_identity)?
     } else {
         let prepared = prepare_codex_subscription_endpoint_request(
             config,
@@ -650,7 +650,7 @@ pub(crate) async fn forward_openai_subscription_buffered_request_with_capacity(
         json_body_with_stream(&upstream_body, true)?
     };
     let upstream_body = if grok {
-        endpoint_body.clone()
+        openai_subscription_body_with_cache_identity(&endpoint_body, cache_identity)?
     } else {
         let prepared = prepare_codex_subscription_endpoint_request(
             config,

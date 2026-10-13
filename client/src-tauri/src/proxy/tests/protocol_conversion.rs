@@ -3230,12 +3230,96 @@ data: {"type":"message_delta","delta":{"stop_reason":"compaction"},"usage":{"out
 
     #[tokio::test]
     async fn platform_sse_transport_error_resumes_exactly_once_from_byte_offset() {
+        check_platform_sse_resume(false, false).await;
+    }
+
+    #[tokio::test]
+    async fn platform_sse_resume_refreshes_stale_proxy_pool() {
+        check_platform_sse_resume(true, false).await;
+    }
+
+    #[tokio::test]
+    async fn platform_sse_resume_can_use_the_same_servers_tcp_endpoint() {
+        check_platform_sse_resume(false, true).await;
+    }
+
+    #[tokio::test]
+    async fn platform_sse_network_change_resumes_even_if_old_socket_never_fails() {
+        let first = bytes::Bytes::from_static(b"data: first\n\n");
+        let last = b"data: [DONE]\n\n";
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_raw_http_request(&mut socket).await;
+            assert_eq!(raw_header_values(&request.headers, PLATFORM_STREAM_ID_HEADER), vec!["network-test"]);
+            assert_eq!(raw_header_values(&request.headers, PLATFORM_STREAM_OFFSET_HEADER), vec!["13"]);
+            assert_eq!(request.body, b"test-only");
+            socket.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Const-Stream-Id: network-test\r\nX-Const-Stream-Resumable: 1\r\nX-Const-Stream-Resumed: 1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", last.len()
+            ).as_bytes()).await.unwrap();
+            socket.write_all(last).await.unwrap();
+        });
+        let (changes, receiver) = tokio::sync::watch::channel(0);
+        let source = futures_util::stream::iter([Ok::<_, std::io::Error>(first.clone())])
+            .chain(futures_util::stream::pending());
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(PLATFORM_STREAM_ID_HEADER, reqwest::header::HeaderValue::from_static("network-test"));
+        let request = PlatformResumableRequest {
+            client: Client::builder().no_proxy().build().unwrap().into(),
+            method: reqwest::Method::POST,
+            url: format!("http://{address}/v1/responses"),
+            headers,
+            body: bytes::Bytes::from_static(b"test-only"),
+            request_version: None,
+            network_changes: receiver.clone(),
+        };
+        let response = response_from_resumable_platform_event_stream(
+            warp::http::StatusCode::OK,
+            &reqwest::header::HeaderMap::new(),
+            crate::network_recovery::watch_stream(source, receiver), request,
+        ).unwrap();
+        let mut output = http_body_util::BodyExt::into_data_stream(response.into_body());
+        assert_eq!(tokio::time::timeout(Duration::from_secs(2), output.next()).await.unwrap().unwrap().unwrap(), first);
+        changes.send_modify(|generation| *generation += 1);
+        let remaining = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut bytes = Vec::new();
+            while let Some(chunk) = output.next().await { bytes.extend_from_slice(&chunk.unwrap()); }
+            bytes
+        }).await.expect("network change must wake the silent stream");
+        assert_eq!(remaining, last);
+        server.await.unwrap();
+    }
+
+    async fn check_platform_sse_resume(refresh_pool: bool, switch_endpoint: bool) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let changed = Arc::new(AtomicBool::new(false));
+        let setting = changed.clone();
+        let client = crate::http_client::HttpClient::new(move || {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                "x-test-pool",
+                if setting.load(Ordering::Relaxed) {
+                    reqwest::header::HeaderValue::from_static("new")
+                } else {
+                    reqwest::header::HeaderValue::from_static("initial")
+                },
+            );
+            Client::builder().no_proxy().default_headers(headers)
+        })
+        .unwrap();
         let first = b"event: response.output_text.delta\ndata: {\"delta\":\"first\"}\n\n";
         let second = b"event: response.completed\ndata: {\"status\":\"completed\"}\n\n";
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind resumable platform");
         let address = listener.local_addr().expect("resumable platform address");
+        let resume_listener = if switch_endpoint {
+            Some(tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap())
+        } else {
+            None
+        };
+        let resume_base = resume_listener.as_ref().map(|listener| format!("http://{}", listener.local_addr().unwrap()));
         let (captures_tx, captures_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let (mut initial, _) = listener.accept().await.expect("initial request");
@@ -3261,12 +3345,22 @@ data: {"type":"message_delta","delta":{"stop_reason":"compaction"},"usage":{"out
                 .write_all(b"\r\n")
                 .await
                 .expect("write first chunk trailer");
+            if refresh_pool {
+                changed.store(true, Ordering::Relaxed);
+                let generation = crate::http_client::network_generation();
+                // Respect the production throttle even if another test just
+                // reported a failure; only the next send should see this pool.
+                while crate::http_client::network_generation() == generation {
+                    crate::http_client::connection_failed();
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }
             initial
                 .shutdown()
                 .await
                 .expect("interrupt initial response");
 
-            let (mut resumed, _) = listener.accept().await.expect("resume request");
+            let (mut resumed, _) = resume_listener.as_ref().unwrap_or(&listener).accept().await.expect("resume request");
             let resumed_request = read_raw_http_request(&mut resumed).await;
             let resumed_response_head = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Const-Stream-Id: {stream_id}\r\nX-Const-Stream-Resumable: 1\r\nX-Const-Stream-Resumed: 1\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
@@ -3298,24 +3392,28 @@ data: {"type":"message_delta","delta":{"stop_reason":"compaction"},"usage":{"out
             supplier_quic_url: String::new(),
             enabled: true,
         };
-        let response = forward_once(
+        let (response, _) = forward_once_to_base(
             warp::http::Method::POST,
             "/v1/responses",
             "",
             false,
             HeaderMap::new(),
             bytes::Bytes::from_static(br#"{"model":"gpt-test","stream":true}"#),
-            &Client::new(),
+            &client,
             &cfg,
-            &endpoint,
+            &endpoint.base_url,
+            None,
             "sk-platform",
+            PlatformModelRouteMode::Configured,
+            MODEL_REQUEST_MAX_UPSTREAM_ATTEMPTS,
+            resume_base.as_deref().map(|base| (&client, base)),
         )
         .await
         .expect("initial platform response");
         // The tool has not read any body bytes yet. Recovery must still retain
         // both portions locally and request only the missing suffix once.
         let (initial_request, resumed_request) =
-            tokio::time::timeout(Duration::from_secs(3), captures_rx)
+            tokio::time::timeout(Duration::from_secs(10), captures_rx)
                 .await
                 .expect("read-ahead resume timeout")
                 .expect("capture channel");
@@ -3336,6 +3434,14 @@ data: {"type":"message_delta","delta":{"stop_reason":"compaction"},"usage":{"out
             vec![expected_offset.as_str()]
         );
         assert_eq!(initial_request.body, resumed_request.body);
+        assert_eq!(
+            raw_header_values(&initial_request.headers, "x-test-pool"),
+            vec!["initial"],
+        );
+        assert_eq!(
+            raw_header_values(&resumed_request.headers, "x-test-pool"),
+            vec![if refresh_pool { "new" } else { "initial" }],
+        );
     }
 
     async fn check_platform_resume_rejection(status: &str, code: &str, permanent: bool) {

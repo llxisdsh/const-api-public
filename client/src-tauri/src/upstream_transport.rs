@@ -99,15 +99,26 @@ fn claim_probe_attempt(request: &reqwest::Request) -> Result<(), UpstreamTranspo
         ]
         .iter()
         .any(|suffix| path.contains(suffix));
+    let inference = inference
+        || request.method() == Method::POST
+            && request
+                .headers()
+                .get("x-amz-target")
+                .is_some_and(|target| target == "KiroRuntimeService.GenerateAssistantResponse");
     if !inference {
         return Ok(());
     }
+    claim_inference_probe_attempt()
+}
+
+/// For proprietary transports that do not use the adaptive HTTP sender.
+pub(crate) fn claim_inference_probe_attempt() -> Result<(), UpstreamTransportError> {
     PROBE_BUDGET
         .try_with(|budgets| {
             use std::sync::atomic::Ordering::Relaxed;
             for (index, remaining) in budgets.iter().enumerate() {
                 if remaining
-                    .fetch_update(Relaxed, Relaxed, |v| v.checked_sub(1))
+                    .try_update(Relaxed, Relaxed, |v| v.checked_sub(1))
                     .is_err()
                 {
                     for reserved in &budgets[..index] {
@@ -124,6 +135,33 @@ fn claim_probe_attempt(request: &reqwest::Request) -> Result<(), UpstreamTranspo
 #[cfg(test)]
 mod probe_budget_tests {
     use super::*;
+    #[tokio::test]
+    async fn proprietary_runtime_is_counted_but_root_metadata_posts_are_free() {
+        let client = Client::new();
+        let request = |target| {
+            client
+                .post("http://127.0.0.1:9/")
+                .header("x-amz-target", target)
+                .build()
+                .unwrap()
+        };
+        let (_, attempts) = with_probe_budget(2, async {
+            claim_probe_attempt(&request(
+                "KiroControlPlaneBearerService.ListAvailableModels",
+            ))
+            .unwrap();
+            claim_probe_attempt(&request("AmazonCodeWhispererService.GetUsageLimits")).unwrap();
+            claim_probe_attempt(&request("KiroRuntimeService.GenerateAssistantResponse")).unwrap();
+            claim_inference_probe_attempt().unwrap();
+            assert!(claim_inference_probe_attempt().is_err());
+            assert!(
+                claim_probe_attempt(&request("KiroRuntimeService.GenerateAssistantResponse"))
+                    .is_err()
+            );
+        })
+        .await;
+        assert_eq!(attempts, 2);
+    }
     #[tokio::test]
     async fn metadata_is_free_and_nested_attempts_share_one_budget() {
         let client = Client::new();
@@ -200,7 +238,15 @@ async fn execute_observed(
     client: &Client,
     request: reqwest::Request,
 ) -> Result<Response, reqwest::Error> {
-    let response = client.execute(request).await?;
+    let http3 = request.version() == Version::HTTP_3;
+    let response = client.execute(request).await.inspect_err(|error| {
+        // UDP failure has its own cooldown/fallback. Do not churn healthy TCP
+        // pools when only HTTP/3 is unavailable.
+        if !http3 {
+            crate::http_client::observe_error(error);
+        }
+    })?;
+    crate::http_client::observe_response(&response);
     record_http_version(response.version());
     Ok(response)
 }
@@ -230,7 +276,8 @@ struct AdaptiveUpstreamTransport {
 }
 
 struct AdaptiveUpstreamTransportInner {
-    proxy_matcher: Matcher,
+    proxy_matcher: StdMutex<(u64, Matcher)>,
+    system_proxy: bool,
     authorities: StdMutex<HashMap<String, AuthorityState>>,
 }
 
@@ -255,13 +302,22 @@ enum AuthoritySelection {
 
 impl AdaptiveUpstreamTransport {
     fn from_system() -> Self {
-        Self::with_proxy_matcher(Matcher::from_system())
+        Self::with_matcher(Matcher::from_system(), true)
     }
 
+    #[cfg(test)]
     fn with_proxy_matcher(proxy_matcher: Matcher) -> Self {
+        Self::with_matcher(proxy_matcher, false)
+    }
+
+    fn with_matcher(proxy_matcher: Matcher, system_proxy: bool) -> Self {
         Self {
             inner: Arc::new(AdaptiveUpstreamTransportInner {
-                proxy_matcher,
+                proxy_matcher: StdMutex::new((
+                    crate::http_client::network_generation(),
+                    proxy_matcher,
+                )),
+                system_proxy,
                 authorities: StdMutex::new(HashMap::new()),
             }),
         }
@@ -291,7 +347,19 @@ impl AdaptiveUpstreamTransport {
                 .await
                 .map_err(UpstreamTransportError::Request);
         };
-        if proxy_applies(&self.inner.proxy_matcher, request.url()) {
+        let uses_proxy = {
+            let mut matcher = self
+                .inner
+                .proxy_matcher
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let generation = crate::http_client::network_generation();
+            if self.inner.system_proxy && matcher.0 != generation {
+                *matcher = (generation, Matcher::from_system());
+            }
+            proxy_applies(&matcher.1, request.url())
+        };
+        if uses_proxy {
             return execute_observed(&client, request)
                 .await
                 .map_err(UpstreamTransportError::Request);

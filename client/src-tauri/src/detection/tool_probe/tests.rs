@@ -74,7 +74,7 @@ async fn mock_probe_with_tool_choice(
     let mut channel = channel_from_supplier("tool-probe".into(), &default_supplier_config());
     channel.upstream_base_url = format!("http://{addr}");
     let result = run(
-        short_http_client(),
+        &short_http_client(),
         &channel,
         "configured-model",
         protocol,

@@ -75,7 +75,7 @@ export type LanShareSelfStatus = LanShareUsageSnapshot & {
   output_weight: number;
 };
 
-export type CustomBrandIcon = "anythingllm" | "azure" | "bedrock" | "claude" | "claude-science" | "cline" | "codex" | "copilot" | "deepseek-harness" | "gemini" | "goose" | "grok" | "hermes" | "kimi" | "mimocode" | "minimax-code" | "mistral-vibe" | "omniroute" | "open-design" | "open-interpreter" | "openclaw" | "opencode" | "openscience" | "pi" | "qwen" | "raven" | "reasonix" | "trae" | "trae-work" | "vibe-trading" | "vscode" | "workbuddy" | "zcode";
+export type CustomBrandIcon = "abacus" | "commandcode" | "groq" | "kilo" | "kiro" | "anythingllm" | "azure" | "bedrock" | "claude" | "claude-science" | "cline" | "codex" | "copilot" | "deepseek-harness" | "gemini" | "goose" | "grok" | "hermes" | "kimi" | "mimocode" | "minimax-code" | "mistral-vibe" | "omniroute" | "open-design" | "open-interpreter" | "openclaw" | "opencode" | "openscience" | "pi" | "qwen" | "raven" | "reasonix" | "trae" | "trae-work" | "vibe-trading" | "vscode" | "workbuddy" | "zcode";
 
 export type CopyField =
   | "base-url"
@@ -105,6 +105,9 @@ export type ClientConfig = {
   lan_share: LanShareConfig;
   proxy_auto_start: boolean;
   automatic_updates: boolean;
+  prevent_sleep_while_supplying?: boolean;
+  /** Runtime capability, not a persisted preference. */
+  sleep_prevention_supported?: boolean;
   supplier_auto_start: boolean;
   api_key: string;
   registry_sources: string[];
@@ -114,6 +117,7 @@ export type ClientConfig = {
   development_endpoint: string;
   allow_model_equivalence: boolean;
   prefer_local_supply: boolean;
+  tool_model_injection?: import("./toolModelInjection").ToolModelInjectionSettings;
   /** Legacy persisted field; runtime routing now always permits custom fallback. */
   allow_unverified_platform_routes: boolean;
   model_aliases: Record<string, string>;
@@ -172,6 +176,7 @@ export type ChannelConfig = Omit<ChannelConfigV5, "subscription"> & {
 };
 
 export type SubscriptionAdapterConfig = {
+  claude_fast_enabled: boolean;
   platform: string;
   account_label: string;
   credential_ref: string;
@@ -186,7 +191,7 @@ export type SubscriptionAdapterConfig = {
   audit_enabled: boolean;
 };
 
-export type SubscriptionProvider = "openai" | "claude" | "antigravity" | "grok";
+export type SubscriptionProvider = "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor";
 
 export type SubscriptionOAuthSession = {
   provider: string;

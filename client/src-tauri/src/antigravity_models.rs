@@ -302,6 +302,61 @@ pub(crate) fn prepare_subscription_request(
     })
 }
 
+pub(crate) fn normalize_antigravity_gemini_history(
+    canonical_model: &str,
+    body: &str,
+) -> anyhow::Result<String> {
+    if !canonical_model.starts_with("gemini-") {
+        return Ok(body.to_string());
+    }
+    let mut value: serde_json::Value = serde_json::from_str(body)?;
+    let Some(contents) = value
+        .get_mut("contents")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return Ok(body.to_string());
+    };
+    let mut keep = contents.len();
+    // Antigravity rejects replayed reasoning that leaves a Gemini request ending
+    // in a model turn. Drop only a pure thought suffix, not signed history, tools
+    // or media. Unknown fields remain intact for forward compatibility.
+    while keep > 1
+        && contents[keep - 1].as_object().is_some_and(|turn| {
+            matches!(
+                turn.get("role").and_then(serde_json::Value::as_str),
+                Some("model" | "assistant")
+            ) && turn
+                .keys()
+                .all(|key| matches!(key.as_str(), "role" | "parts"))
+                && turn
+                    .get("parts")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|parts| {
+                        !parts.is_empty()
+                            && parts.iter().all(|part| {
+                                part.as_object().is_some_and(|part| {
+                                    part.get("thought").and_then(serde_json::Value::as_bool)
+                                        == Some(true)
+                                        && part.keys().all(|key| {
+                                            matches!(
+                                                key.as_str(),
+                                                "thought" | "text" | "thoughtSignature"
+                                            )
+                                        })
+                                })
+                            })
+                    })
+        })
+    {
+        keep -= 1;
+    }
+    if keep == contents.len() {
+        return Ok(body.to_string());
+    }
+    contents.truncate(keep);
+    serde_json::to_string(&value).map_err(Into::into)
+}
+
 fn antigravity_uses_claude_bridge(resolved: &ResolvedAntigravityModel) -> bool {
     resolved
         .canonical_model
@@ -1554,6 +1609,67 @@ mod tests {
                 prepare_subscription_request(&serde_json::json!({}), model, "{}", native).unwrap();
             assert_eq!(prepared.native_body, native, "{model}");
         }
+    }
+
+    #[test]
+    fn gemini_history_removes_only_trailing_thought_only_turns() {
+        let history = serde_json::json!([
+            {"role":"user", "parts":[{"text":"start"}]},
+            {"role":"model", "parts":[{"thought":true, "text":"earlier thought", "thoughtSignature":"signature"}]},
+            {"role":"model", "parts":[{"functionCall":{"name":"read_file", "args":{}}}]},
+            {"role":"user", "parts":[{"functionResponse":{"name":"read_file", "response":{"result":"ok"},
+                "parts":[{"inlineData":{"mimeType":"image/png", "data":"aW1hZ2U="}}]}}]}
+        ]);
+        let mut native = serde_json::json!({"contents":history, "sessionId":"stable-session"});
+        for part in [
+            serde_json::json!({"thought":true, "text":"pending thought"}),
+            serde_json::json!({"thought":true, "text":"signed thought", "thoughtSignature":"signed-tail"}),
+        ] {
+            native["contents"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"role":"model", "parts":[part]}));
+        }
+        let body = native.to_string();
+        let prepared =
+            prepare_subscription_request(&serde_json::json!({}), "gemini-3-flash", &body, &body)
+                .unwrap();
+        // Request preparation also serves countTokens; generation-only cleanup
+        // must not affect that path.
+        assert_eq!(prepared.native_body, body);
+        let normalized =
+            normalize_antigravity_gemini_history(&prepared.canonical_model, &prepared.native_body)
+                .unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&normalized).unwrap();
+        assert_eq!(
+            actual,
+            serde_json::json!({"contents":history, "sessionId":"stable-session"})
+        );
+
+        for model in ["claude-opus-4-6", "gpt-oss-120b"] {
+            let normalized = normalize_antigravity_gemini_history(model, &body).unwrap();
+            assert_eq!(normalized, body, "{model}");
+        }
+
+        for parts in [
+            serde_json::json!([]),
+            serde_json::json!([{"text":"answer"}]),
+            serde_json::json!([{"thought":true,"text":"thinking"},{"text":"answer"}]),
+            serde_json::json!([{"thought":true,"functionCall":{"name":"read_file","args":{}}}]),
+            serde_json::json!([{"thought":true,"inlineData":{"mimeType":"image/png","data":"aW1hZ2U="}}]),
+            serde_json::json!([{"thought":true,"text":"thinking","futureMetadata":true}]),
+        ] {
+            let body = serde_json::json!({"contents":[
+                {"role":"user","parts":[{"text":"start"}]}, {"role":"model","parts":parts}
+            ]})
+            .to_string();
+            let normalized = normalize_antigravity_gemini_history("gemini-3-flash", &body).unwrap();
+            assert_eq!(normalized, body);
+        }
+        let only_thought = r#"{ "contents": [{"role":"model","parts":[{"thought":true,"text":"only thought"}]}] }"#;
+        let normalized =
+            normalize_antigravity_gemini_history("gemini-3-flash", only_thought).unwrap();
+        assert_eq!(normalized, only_thought);
     }
 
     #[test]

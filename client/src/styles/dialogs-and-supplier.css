@@ -389,6 +389,74 @@
   opacity: 0.45;
 }
 
+/* Simple recommendation lists do not have compatibility tiers or supply columns. */
+.model-rule-note {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.model-rule-section {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px 0;
+}
+
+.model-rule-patterns,
+.model-rule-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.model-rule-patterns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.model-rule-patterns li {
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.model-rule-list {
+  display: grid;
+  gap: 4px;
+}
+
+.model-rule-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 38px;
+}
+
+.model-rule-row code {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.model-rule-remove {
+  --control-height: var(--control-height-compact);
+  width: var(--control-height);
+  min-width: var(--control-height);
+  padding: 0;
+  color: var(--danger-text);
+}
+
 .compatibility-editor-footer {
   position: sticky;
   bottom: -18px;

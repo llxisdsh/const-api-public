@@ -28,6 +28,16 @@ pub(crate) fn canonical_error_type(
 pub(crate) use diagnostics::{ResponseDiagnostics, observe_response, response_diagnostics};
 pub(crate) use request::prepare_headers;
 
+// OpenRouter Messages reports the served acceleration tier even for non-Claude
+// models. Do not apply that interpretation to Anthropic capacity tiers.
+pub(crate) fn usage_protocol<'a>(channel: &ChannelConfig, protocol: &'a str) -> &'a str {
+    if channel.source_driver() == SourceDriverId::Openrouter && protocol == "anthropic_messages" {
+        "openrouter_messages"
+    } else {
+        protocol
+    }
+}
+
 #[cfg(test)]
 pub(crate) async fn fetch_models(
     client: &reqwest::Client,
@@ -270,7 +280,7 @@ mod tests {
         normalize_channel(&mut channel);
         let client = crate::short_http_client();
         let models = fetch_models(
-            client,
+            &client,
             &channel.upstream_base_url,
             &channel.v2.credential_ref,
         )
@@ -317,7 +327,7 @@ mod tests {
                 };
                 let started = std::time::Instant::now();
                 let result = execute_channel_request(
-                    crate::long_http_client(),
+                    &crate::long_http_client(),
                     &channel,
                     ChannelRequest {
                         method: reqwest::Method::POST,

@@ -19,8 +19,8 @@ fn indexed_codex_fixture(home: &Path, header_fields: &str) -> (PathBuf, PathBuf,
     let catalog = Connection::open(root.join("sqlite/codex-dev.db")).unwrap();
     catalog
         .execute_batch(
-            "CREATE TABLE local_thread_catalog (thread_id TEXT PRIMARY KEY, model_provider TEXT);
-         INSERT INTO local_thread_catalog VALUES ('indexed', 'openai');",
+            "CREATE TABLE local_thread_catalog (host_id TEXT NOT NULL, thread_id TEXT NOT NULL, model_provider TEXT, PRIMARY KEY (host_id, thread_id));
+         INSERT INTO local_thread_catalog VALUES ('local', 'indexed', 'openai'), ('ssh:fixture', 'indexed', 'remote-provider');",
         )
         .unwrap();
     let history_path = root.join("thread_history_1.sqlite");
@@ -65,6 +65,12 @@ fn codex_indexed_apply_remove_preserves_every_history_byte_and_offset() {
         );
         assert_eq!(applied.details["session_migrated_files"], "0");
         assert_eq!(applied.details["session_migrated_sqlite_rows"], "2");
+        let catalog = Connection::open(home.join(".codex/sqlite/codex-dev.db")).unwrap();
+        let remote_provider = || catalog.query_row(
+            "SELECT model_provider FROM local_thread_catalog WHERE host_id = 'ssh:fixture' AND thread_id = 'indexed'",
+            [], |row| row.get::<_, String>(0),
+        ).unwrap();
+        assert_eq!(remote_provider(), "remote-provider");
         assert!(!applied
             .details
             .contains_key("session_migrated_sqlite_error"));
@@ -111,6 +117,7 @@ fn codex_indexed_apply_remove_preserves_every_history_byte_and_offset() {
         assert_eq!(scan_codex_sessions().unwrap().provider_counts["openai"], 1);
         let repeated = remove_codex_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").unwrap();
         assert_eq!(repeated.details["session_migrated_sqlite_rows"], "0");
+        assert_eq!(remote_provider(), "remote-provider");
         assert_eq!(fs::read(&path).unwrap(), raw);
     });
 }

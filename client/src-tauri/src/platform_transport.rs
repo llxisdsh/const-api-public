@@ -47,8 +47,8 @@ enum HTTP3State {
 }
 
 pub(crate) struct PlatformHttpTransport {
-    tcp_client: Client,
-    tcp_stream_client: Client,
+    tcp_client: crate::http_client::HttpClient,
+    tcp_stream_client: crate::http_client::HttpClient,
     http3_clients: StdMutex<HashMap<String, Client>>,
     http3_states: StdMutex<HashMap<String, HTTP3State>>,
     tcp_probes: StdMutex<HashSet<String>>,
@@ -57,18 +57,23 @@ pub(crate) struct PlatformHttpTransport {
 }
 
 impl PlatformHttpTransport {
-    pub(crate) fn new(tcp_client: Client, state: Arc<StdMutex<PlatformTransportSnapshot>>) -> Self {
+    pub(crate) fn new(
+        tcp_client: impl Into<crate::http_client::HttpClient>,
+        state: Arc<StdMutex<PlatformTransportSnapshot>>,
+    ) -> Self {
         // Streaming requests deliberately have no total-duration timeout. They
-        // are still bounded by connect timeout, downstream cancellation, QUIC
-        // idle timeout, and the supplier protocol's inactivity watchdog.
-        let tcp_stream_client = Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .pool_idle_timeout(Duration::from_secs(90))
-            .retry(reqwest::retry::never())
-            .build()
-            .expect("platform streaming HTTP client");
+        // are still bounded by connect/read-inactivity timeouts, downstream
+        // cancellation, and the supplier protocol's inactivity watchdog.
+        let tcp_stream_client = crate::http_client::HttpClient::new(|| {
+            Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .read_timeout(MODEL_REQUEST_TIMEOUT)
+                .pool_idle_timeout(Duration::from_secs(90))
+                .retry(reqwest::retry::never())
+        })
+        .expect("platform streaming HTTP client");
         Self {
-            tcp_client,
+            tcp_client: tcp_client.into(),
             tcp_stream_client,
             http3_clients: StdMutex::new(HashMap::new()),
             http3_states: StdMutex::new(HashMap::new()),
@@ -103,7 +108,7 @@ impl PlatformHttpTransport {
         true
     }
 
-    pub(crate) fn tcp_client(&self, stream_requested: bool) -> &Client {
+    pub(crate) fn tcp_client(&self, stream_requested: bool) -> &crate::http_client::HttpClient {
         if stream_requested {
             &self.tcp_stream_client
         } else {
@@ -123,6 +128,35 @@ impl PlatformHttpTransport {
     pub(crate) fn start_probe(self: &Arc<Self>, endpoint: Endpoint) {}
 
     fn start_tcp_probe(self: &Arc<Self>, endpoint: Endpoint) {}
+
+    pub(crate) fn reset_network(&self) {
+        // Drop cached DNS/QUIC endpoints as well as health/probe gates. Running
+        // probes observe the same change signal and stop rather than multiply.
+        self.http3_clients
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.http3_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.tcp_probes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.health_refresh_attempts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.connected_transport.clear();
+        if !state.endpoint.is_empty() {
+            state.connection_state = "reconnecting".to_string();
+        }
+    }
 
     pub(crate) fn http3_target(&self, endpoint: &Endpoint) -> Option<(Client, String)> {
         let key = endpoint_key(endpoint);
@@ -275,6 +309,9 @@ impl PlatformHttpTransport {
     }
 
     fn mark_tcp_failed(&self, endpoint: &Endpoint, error: &anyhow::Error) {
+        if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+            crate::http_client::observe_error(error);
+        }
         if let Ok(mut state) = self.state.lock() {
             if (state.endpoint.is_empty() || state.endpoint == endpoint.name)
                 && state.connected_transport != "http3"

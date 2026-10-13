@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { ChannelSurfaceBinding } from "../appTypes";
 import { changeAppLanguage } from "../i18n";
+import { SOURCE_DRIVERS } from "../sourceDrivers";
 import { SupplierSurfaceConfig } from "./SupplierSurfaceConfig";
 
 const verification = { state: "declared", checked_at_unix: 0, summary: "" };
@@ -74,4 +75,20 @@ describe("SupplierSurfaceConfig", () => {
     expect(screen.getByText("OpenAI Chat")).toBeInTheDocument();
     expect(screen.getByText("https://gateway.example.test/v1")).toBeInTheDocument();
   });
+
+  test.each(SOURCE_DRIVERS.filter((driver) => driver.subscriptionContract))(
+    "$id separates the managed upstream from all accepted tool protocols",
+    (driver) => {
+      render(<SupplierSurfaceConfig mode="readonly" bindings={[]} driver={driver} />);
+
+      for (const name of ["OpenAI Responses", "OpenAI Chat", "Anthropic Messages", "Gemini Native"]) {
+        expect(screen.getByText(name)).toBeInTheDocument();
+      }
+      expect(screen.queryByText("Anthropic API")).not.toBeInTheDocument();
+      expect(screen.queryByText("Base URL")).not.toBeInTheDocument();
+      if (driver.id === "cursor_subscription") {
+        expect(screen.getByText("Cursor AgentService · Connect / HTTP2")).toBeInTheDocument();
+      }
+    },
+  );
 });

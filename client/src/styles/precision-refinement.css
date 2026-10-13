@@ -567,17 +567,17 @@ textarea:focus-visible,
 /* Edition labels belong to the tool control, not to the vendor's artwork. */
 .tool-edition-badge {
   position: absolute;
-  right: 4px;
-  bottom: -3px;
+  right: 10px;
+  bottom: 2px;
   z-index: 2;
-  padding: 1px 4px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--panel);
-  color: var(--text);
-  font-size: 9px;
-  font-weight: 650;
-  line-height: 13px;
+  padding: 0 3px;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 3px;
+  background: var(--panel-muted);
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 10px;
   pointer-events: none;
 }
 
@@ -595,6 +595,7 @@ textarea:focus-visible,
  * identical for every tool without changing the source assets.
  */
 :root[data-theme="dark"] .brand-badge-copilot img,
+:root[data-theme="dark"] .brand-badge-trae img,
 :root[data-theme="dark"] .brand-badge-trae-work img,
 :root[data-theme="dark"] .brand-badge-pi img,
 :root[data-theme="dark"] .brand-badge-zcode img,
@@ -623,14 +624,6 @@ textarea:focus-visible,
 
 :root[data-theme="dark"] .brand-badge-open-design img {
   filter: brightness(0.9) saturate(0.92);
-}
-
-:root[data-theme="light"] .brand-badge-trae img {
-  filter: brightness(0.74) saturate(0.9);
-}
-
-:root[data-theme="dark"] .brand-badge-trae img {
-  filter: brightness(0.82) saturate(0.9);
 }
 
 :root[data-theme="dark"] .brand-badge-claude-science img,
@@ -693,6 +686,7 @@ textarea:focus-visible,
 
 #hermes-tool-button,
 #workbuddy-tool-button,
+#workbuddy-ai-tool-button,
 #copilot-tool-button,
 #copilot-desktop-tool-button,
 #zcode-tool-button {

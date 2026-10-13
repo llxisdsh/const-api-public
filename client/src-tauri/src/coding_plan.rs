@@ -9,7 +9,10 @@ use serde_json::Value;
 pub(crate) fn has_quota(driver: SourceDriverId) -> bool {
     matches!(
         driver,
-        SourceDriverId::KimiCode | SourceDriverId::GlmCodingPlan | SourceDriverId::MinimaxTokenPlan
+        SourceDriverId::KimiCode
+            | SourceDriverId::GlmCodingPlan
+            | SourceDriverId::MinimaxTokenPlan
+            | SourceDriverId::CopilotSubscription
     )
 }
 
@@ -98,6 +101,9 @@ pub(crate) async fn fetch_quota(
     client: &reqwest::Client,
     channel: &ChannelConfig,
 ) -> Result<Vec<QuotaWindow>> {
+    if channel.source_driver() == SourceDriverId::CopilotSubscription {
+        return crate::copilot::quota(channel).await;
+    }
     validate_key(channel)?;
     let url = quota_url(channel.source_driver()).expect("quota driver has a fixed endpoint");
     fetch_quota_at(client, channel, url).await

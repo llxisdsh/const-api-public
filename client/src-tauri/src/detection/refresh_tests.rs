@@ -84,7 +84,7 @@ fn check_projections_preserve_the_same_default_used_by_the_text_test() {
 }
 
 #[tokio::test]
-async fn information_refresh_for_every_http_driver_never_requests_generation() {
+async fn information_refresh_for_direct_http_drivers_never_requests_generation() {
     use crate::source_driver::{ALL_SOURCE_DRIVER_IDS, ExecutionKind, SourceDriverId};
     let requests = Arc::new(Mutex::new(Vec::new()));
     let captured = requests.clone();
@@ -103,6 +103,14 @@ async fn information_refresh_for_every_http_driver_never_requests_generation() {
             .execution_kind()
             != ExecutionKind::HttpSurface
         {
+            continue;
+        }
+        // Copilot's token exchange and Poe's official-bot catalog have dedicated
+        // GET-only refresh tests; neither accepts this generic API-key fixture.
+        if matches!(
+            driver,
+            SourceDriverId::CopilotSubscription | SourceDriverId::PoeApi
+        ) {
             continue;
         }
         for verified in [false, true] {

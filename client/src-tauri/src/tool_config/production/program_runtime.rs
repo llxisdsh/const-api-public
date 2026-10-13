@@ -1259,6 +1259,11 @@ fn tool_process_match_names(tool: &str) -> Result<HashSet<String>> {
             insert_process_match_names_for_path(&mut names, Path::new(path));
         }
     }
+    if tool == "muse-code" {
+        for path in tool_process_owner_paths(tool)? {
+            insert_process_match_names_for_path(&mut names, &path);
+        }
+    }
     Ok(names)
 }
 
@@ -1287,6 +1292,13 @@ fn tool_process_owner_paths(tool: &str) -> Result<Vec<PathBuf>> {
             .filter(|path| is_supported_tool_runtime_owner_path(tool, path))
         {
             push_unique_path(&mut paths, path);
+        }
+    }
+    if tool == "muse-code" {
+        for launcher in paths.clone() {
+            for executable in muse_code_runtime_executables(&launcher) {
+                push_unique_path(&mut paths, executable);
+            }
         }
     }
     Ok(paths)
@@ -1384,7 +1396,7 @@ fn insert_windows_tool_process_scope_path(
         }
         return;
     }
-    if is_command_path {
+    if is_command_path || tool == "muse-code" {
         return;
     }
     if let Some(parent) = windows_tool_install_root(tool, path) {
@@ -3736,6 +3748,9 @@ fn command_search_dirs(home: &Path) -> Vec<PathBuf> {
     }
 
     if !test_home_active() {
+        if let Some(root) = nonempty_env_path("MUSE_INSTALL_DIR").map(expand_tool_home_path) {
+            push_unique_path(&mut paths, root);
+        }
         if let Some(root) = nonempty_env_path("MCODE_INSTALL_DIR").map(expand_tool_home_path) {
             push_unique_path(&mut paths, root.join("bin"));
             push_unique_path(&mut paths, root);
@@ -4152,6 +4167,9 @@ fn tool_specific_command_paths(tool: &str, command: &str) -> Vec<PathBuf> {
 #[cfg(target_os = "windows")]
 fn tool_specific_command_paths(tool: &str, command: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
+    if tool == "muse-code" && command == "muse" {
+        paths.extend(known_tool_program_paths(tool));
+    }
     if tool == "openclaw" && command == "openclaw" {
         if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
             paths.push(local_app_data.join("OpenClaw/bin/openclaw.exe"));

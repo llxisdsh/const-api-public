@@ -266,7 +266,7 @@ fn decrement(counter: &AtomicUsize, amount: usize) {
     if amount == 0 {
         return;
     }
-    let _ = counter.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+    let _ = counter.try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
         Some(value.saturating_sub(amount))
     });
 }

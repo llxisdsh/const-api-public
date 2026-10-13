@@ -208,6 +208,7 @@ async fn refresh_catalog_tool_from_source(
     let mut response = request
         .send()
         .await
+        .inspect_err(crate::http_client::observe_error)
         .context("refresh catalog registry manifest")?;
     validate_final_https(response.url(), "catalog manifest")?;
     if response.status() == StatusCode::NOT_MODIFIED {
@@ -233,6 +234,7 @@ async fn refresh_catalog_tool_from_source(
             .header("User-Agent", "const-api-client/catalog-registry")
             .send()
             .await
+            .inspect_err(crate::http_client::observe_error)
             .context("repair catalog registry cache")?;
         validate_final_https(response.url(), "catalog manifest")?;
     }
@@ -351,7 +353,8 @@ async fn load_or_fetch_component(
                 .header(ACCEPT, "application/json")
                 .header("User-Agent", "const-api-client/catalog-registry")
                 .send()
-                .await?;
+                .await
+                .inspect_err(crate::http_client::observe_error)?;
             validate_final_https(response.url(), "catalog component")?;
             if !response.status().is_success() {
                 return Err(anyhow!(

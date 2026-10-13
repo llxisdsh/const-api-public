@@ -992,7 +992,7 @@ impl ResponsesWsPooledConnection {
     fn unpin_session(self: &Arc<Self>) {
         let previous = self
             .session_pins
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pins| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |pins| {
                 Some(pins.saturating_sub(1))
             })
             .unwrap_or_default();

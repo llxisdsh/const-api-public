@@ -10,6 +10,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import azureIconUrl from "../assets/tool-icons/azure.svg";
+import abacusIconUrl from "../assets/tool-icons/abacus.png";
+import commandCodeIconUrl from "../assets/tool-icons/commandcode.svg";
+import groqIconUrl from "../assets/tool-icons/groq.svg";
+import kiloIconUrl from "../assets/tool-icons/kilo.svg";
+import kiroIconUrl from "../assets/tool-icons/kiro.svg";
 import anythingllmIconUrl from "../assets/tool-icons/anythingllm.svg";
 import bedrockIconUrl from "../assets/tool-icons/bedrock.svg";
 import claudeIconUrl from "../assets/tool-icons/claude.svg";
@@ -18,7 +23,6 @@ import codexIconUrl from "../assets/tool-icons/codex.svg";
 import copilotIconUrl from "../assets/tool-icons/copilot.svg";
 import clineIconUrl from "../assets/tool-icons/cline.svg";
 import traeIconUrl from "../assets/tool-icons/trae.svg";
-import traeWorkIconUrl from "../assets/tool-icons/trae-work.svg";
 import deepseekHarnessIconUrl from "../assets/tool-icons/deepseek-harness.svg";
 import geminiIconUrl from "../assets/tool-icons/gemini.svg";
 import gooseIconUrl from "../assets/tool-icons/goose.svg";
@@ -46,7 +50,7 @@ import vscodeIconUrl from "../assets/tool-icons/vscode.svg";
 import workBuddyIconUrl from "../assets/tool-icons/workbuddy.svg";
 import zcodeIconUrl from "../assets/tool-icons/zcode.svg";
 import { useToolDockMenu } from "../ToolDockMenu";
-import type { ToolCatalogId } from "../toolCatalog";
+import type { ToolCatalogEntry, ToolCatalogId } from "../toolCatalog";
 import {
   channelCapabilityFeatures,
   channelClientHostFeatures,
@@ -435,7 +439,10 @@ export function CompactChoiceMenu<T extends string>({
   );
 }
 
-export function CapabilityProfileList({ profiles }: { profiles: ChannelCapabilityProfile[] }) {
+export function CapabilityProfileList({ profiles, subscription = false }: {
+  profiles: ChannelCapabilityProfile[];
+  subscription?: boolean;
+}) {
   const { t } = useTranslation();
   const visibleFeatures = channelCapabilityFeatures(profiles);
   const clientHostFeatures = channelClientHostFeatures(profiles);
@@ -448,7 +455,8 @@ export function CapabilityProfileList({ profiles }: { profiles: ChannelCapabilit
         <section className="capability-overview-section">
           <header className="capability-section-heading">
             <h4>{t("supplier.capabilities.primaryTitle")}</h4>
-            <p>{t("supplier.capabilities.primaryHint")}</p>
+            <p>{t(subscription
+              ? "supplier.capabilities.subscriptionPrimaryHint" : "supplier.capabilities.primaryHint")}</p>
           </header>
           <div className="capability-list">
             {visibleFeatures.map(({ id, support }) => (
@@ -1098,7 +1106,7 @@ export function QuickCard({
   description?: string;
   icon: BrandIconData | null;
   customIcon?: CustomBrandIcon;
-  badge?: "CLI" | "CN";
+  badge?: ToolCatalogEntry["badge"];
   fallback: LucideIcon;
   tone: string;
   configured?: boolean;
@@ -1424,7 +1432,7 @@ export function QuickCard({
 type HiddenToolCard = {
   tool: ToolCatalogId;
   title: string;
-  badge?: "CLI" | "CN";
+  badge?: ToolCatalogEntry["badge"];
   icon: BrandIconData | null;
   customIcon?: CustomBrandIcon;
   fallback: LucideIcon;
@@ -1682,6 +1690,16 @@ export function BrandBadge({
 
 export function customBrandIconUrl(icon: CustomBrandIcon) {
   switch (icon) {
+    case "abacus":
+      return abacusIconUrl;
+    case "commandcode":
+      return commandCodeIconUrl;
+    case "groq":
+      return groqIconUrl;
+    case "kilo":
+      return kiloIconUrl;
+    case "kiro":
+      return kiroIconUrl;
     case "anythingllm":
       return anythingllmIconUrl;
     case "azure":
@@ -1699,9 +1717,8 @@ export function customBrandIconUrl(icon: CustomBrandIcon) {
     case "cline":
       return clineIconUrl;
     case "trae":
-      return traeIconUrl;
     case "trae-work":
-      return traeWorkIconUrl;
+      return traeIconUrl;
     case "deepseek-harness":
       return deepseekHarnessIconUrl;
     case "gemini":

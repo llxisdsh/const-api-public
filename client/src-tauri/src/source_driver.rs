@@ -49,6 +49,10 @@ pub(crate) enum SourceDriverId {
     GlmCodingPlan,
     MinimaxTokenPlan,
     OllamaCloud,
+    MuseCode,
+    CopilotSubscription,
+    AbacusRoutellm,
+    PoeApi,
     Omniroute,
     Ollama,
     LmStudio,
@@ -61,9 +65,11 @@ pub(crate) enum SourceDriverId {
     // Persisted compatibility key; this driver now implements Antigravity.
     GeminiSubscription,
     GrokSubscription,
+    KiroSubscription,
+    CursorSubscription,
 }
 
-pub(crate) const ALL_SOURCE_DRIVER_IDS: [SourceDriverId; 43] = [
+pub(crate) const ALL_SOURCE_DRIVER_IDS: [SourceDriverId; 49] = [
     SourceDriverId::OpenAiApi,
     SourceDriverId::AnthropicApi,
     SourceDriverId::GeminiApi,
@@ -97,6 +103,10 @@ pub(crate) const ALL_SOURCE_DRIVER_IDS: [SourceDriverId; 43] = [
     SourceDriverId::GlmCodingPlan,
     SourceDriverId::MinimaxTokenPlan,
     SourceDriverId::OllamaCloud,
+    SourceDriverId::MuseCode,
+    SourceDriverId::CopilotSubscription,
+    SourceDriverId::AbacusRoutellm,
+    SourceDriverId::PoeApi,
     SourceDriverId::Omniroute,
     SourceDriverId::Ollama,
     SourceDriverId::LmStudio,
@@ -107,6 +117,8 @@ pub(crate) const ALL_SOURCE_DRIVER_IDS: [SourceDriverId; 43] = [
     SourceDriverId::ClaudeSubscription,
     SourceDriverId::GeminiSubscription,
     SourceDriverId::GrokSubscription,
+    SourceDriverId::KiroSubscription,
+    SourceDriverId::CursorSubscription,
 ];
 
 pub(crate) fn channel_is_lan_share(channel: &ChannelConfig) -> bool {
@@ -124,6 +136,8 @@ pub(crate) enum ExecutionKind {
     // Serialized as `gemini_subscription` to keep existing channel configs readable.
     GeminiSubscription,
     GrokSubscription,
+    KiroSubscription,
+    CursorSubscription,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -245,6 +259,7 @@ pub(crate) struct SubscriptionConversionContract {
 pub(crate) enum UsageConfidencePolicy {
     Reported,
     ReportedOrUnknown,
+    #[serde(rename = "estimated", alias = "derived")]
     Derived,
     Unknown,
 }
@@ -402,18 +417,8 @@ pub(crate) fn admit_subscription_operation(
             operation.as_str()
         ));
     }
-    let compatible = capability.conversion.request <= ConversionLevel::C1
-        && capability.conversion.response <= ConversionLevel::C1
-        && capability.conversion.error <= ConversionLevel::C1
-        && (mode != SubscriptionResponseMode::Sse
-            || capability.conversion.stream <= ConversionLevel::C1);
-    if !compatible {
-        return Err(anyhow!(
-            "subscription operation {}.{} is not C0/C1 compatible",
-            surface.as_str(),
-            operation.as_str()
-        ));
-    }
+    // The validated manifest owns admission. Conversion precision is descriptive:
+    // an explicitly enabled adapter may approximate fields without being unusable.
     Ok(capability)
 }
 
@@ -468,6 +473,8 @@ fn validate_source_driver_manifest(manifest: &SourceDriverManifest) -> Result<()
             SourceDriverId::ClaudeSubscription => ExecutionKind::ClaudeSubscription,
             SourceDriverId::GeminiSubscription => ExecutionKind::GeminiSubscription,
             SourceDriverId::GrokSubscription => ExecutionKind::GrokSubscription,
+            SourceDriverId::KiroSubscription => ExecutionKind::KiroSubscription,
+            SourceDriverId::CursorSubscription => ExecutionKind::CursorSubscription,
             _ => ExecutionKind::HttpSurface,
         };
         if driver.execution_kind != expected_execution {
@@ -627,7 +634,9 @@ fn validate_executor_locator(driver: &SourceDriver) -> Result<()> {
             ExecutionKind::OpenAiSubscription
             | ExecutionKind::ClaudeSubscription
             | ExecutionKind::GeminiSubscription
-            | ExecutionKind::GrokSubscription,
+            | ExecutionKind::GrokSubscription
+            | ExecutionKind::KiroSubscription
+            | ExecutionKind::CursorSubscription,
             ChannelExecutorLocator::RetainedSubscription { provider },
         ) if driver.subscription_provider.as_deref() == Some(provider.as_str()) => Ok(()),
         _ => Err(anyhow!(
@@ -682,18 +691,17 @@ fn validate_subscription_driver_contract(driver: &SourceDriver) -> Result<()> {
         }
     }
     validate_subscription_capability(driver.id, "generation", &contract.generation)?;
-    if !contract.generation.default_enabled
-        || !contract
-            .generation
-            .modes
-            .contains(&SubscriptionResponseMode::Buffered)
+    if !contract
+        .generation
+        .modes
+        .contains(&SubscriptionResponseMode::Buffered)
         || !contract
             .generation
             .modes
             .contains(&SubscriptionResponseMode::Sse)
     {
         return Err(anyhow!(
-            "source driver {:?} must enable buffered and SSE generation",
+            "source driver {:?} must declare buffered and SSE generation modes",
             driver.id
         ));
     }
@@ -745,16 +753,6 @@ fn validate_subscription_capability(
     {
         return Err(anyhow!(
             "source driver {driver:?} capability {label} declares an unusable conversion"
-        ));
-    }
-    if capability.default_enabled
-        && (capability.conversion.request > ConversionLevel::C1
-            || capability.conversion.response > ConversionLevel::C1
-            || capability.conversion.error > ConversionLevel::C1
-            || (has_stream && capability.conversion.stream > ConversionLevel::C1))
-    {
-        return Err(anyhow!(
-            "source driver {driver:?} capability {label} enables a C2/C3 conversion by default"
         ));
     }
     Ok(())
@@ -888,6 +886,8 @@ mod tests {
             ("claude_subscription", "claude_subscription"),
             ("gemini_subscription", "gemini_subscription"),
             ("grok_subscription", "grok_subscription"),
+            ("kiro_subscription", "kiro_subscription"),
+            ("cursor_subscription", "cursor_subscription"),
         ];
 
         assert_eq!(drivers.len(), ALL_SOURCE_DRIVER_IDS.len());
@@ -1054,14 +1054,32 @@ mod tests {
     }
 
     #[test]
-    fn manifest_rejects_default_enabled_approximate_subscription_operations() {
-        let raw = include_str!("../../source-drivers.json").replacen(
-            r#""default_enabled": false"#,
-            r#""default_enabled": true"#,
-            1,
-        );
-        let error = parse_source_driver_manifest(&raw).unwrap_err();
-        assert!(error.to_string().contains("C2/C3"));
+    fn manifest_keeps_enabled_approximate_adapters_distinct_from_unusable_conversions() {
+        let raw = include_str!("../../source-drivers.json");
+        let manifest = parse_source_driver_manifest(raw).unwrap();
+        let generation = &manifest
+            .driver(SourceDriverId::KiroSubscription)
+            .unwrap()
+            .subscription_contract()
+            .unwrap()
+            .generation;
+        assert!(generation.default_enabled);
+        assert_eq!(generation.conversion.request, ConversionLevel::C2);
+
+        for field in ["request", "response", "error", "stream"] {
+            let mut value: serde_json::Value = serde_json::from_str(raw).unwrap();
+            let kiro = value["drivers"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|driver| driver["id"] == "kiro_subscription")
+                .unwrap();
+            kiro["subscription_contract"]["generation"]["conversion"][field] = "c3".into();
+            assert!(
+                parse_source_driver_manifest(&value.to_string()).is_err(),
+                "{field}"
+            );
+        }
     }
 
     #[test]

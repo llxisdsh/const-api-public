@@ -840,6 +840,12 @@ async fn forward_non_openai_subscription_local_stream_response_with_cache_identi
         let guarded =
             crate::catch_runtime_panic("local subscription stream execution", async move {
                 let result = match provider.as_str() {
+                    "cursor" => forward_cursor_subscription_request(&task_config, &task_path, &task_body,
+                        Some((&outbound, "local-subscription-stream")), task_upstream_override.as_deref(),
+                        None, task_cache_identity.as_deref()).await,
+                    "kiro" => forward_kiro_subscription_request(&task_config, &task_path, &task_body,
+                        Some((&outbound, "local-subscription-stream")), task_upstream_override.as_deref(),
+                        None, task_cache_identity.as_deref()).await,
                     "claude" | "anthropic" => {
                         forward_claude_subscription_stream_request_with_capacity(
                             &task_client,
