@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCompatibilityGroup, ModelCompatibilityPolicyState } from "../appTypes";
+import bundledMetadata from "../../src-tauri/resources/tool-model-metadata.json";
 import {
   compatibilityCatalogCandidates,
   ModelCompatibilityEditor,
@@ -86,6 +87,27 @@ describe("ModelCompatibilityEditor candidates", () => {
 });
 
 describe("ModelCompatibilityEditor system baseline", () => {
+  it("shows restored Gemini, Codex and Claude candidates in the generated tier order", () => {
+    const modelGroups: ModelCompatibilityGroup[] = bundledMetadata.compatibility_groups;
+    renderEditor(readyPolicy({
+      modelGroups,
+      templateModelGroups: modelGroups,
+      catalogModels: bundledMetadata.catalog_models,
+    }));
+
+    expect(screen.getAllByRole("article")).toHaveLength(8);
+    for (const [index, group] of modelGroups.entries()) {
+      const tier = screen.getAllByRole("article")[index];
+      expect(within(tier).getByRole("heading", { name: group.label })).toBeInTheDocument();
+      expect(Array.from(tier.querySelectorAll(".compatibility-model-row > code"), (row) => row.textContent))
+        .toEqual(group.models);
+    }
+    for (const model of ["gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gpt-5.4", "gpt-5.3-codex-spark", "claude-opus-4-7"]) {
+      expect(screen.getByText(model).closest(".compatibility-model-row")).not.toBeNull();
+    }
+    expect(screen.queryByText("codex-auto-review")).not.toBeInTheDocument();
+  });
+
   it("renders system models as fixed without move or remove controls", () => {
     renderEditor(readyPolicy());
 

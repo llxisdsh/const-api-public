@@ -1,7 +1,7 @@
 {
-  "sequence": 44,
-  "release_id": "catalog-v44-2026-10-13",
-  "model_version_id": "models-v33-2026-10-13",
-  "compatibility_version_id": "compat-v26-2026-10-13",
-  "pricing_version_id": "pricing-20261013-model-refresh-v14"
+  "sequence": 45,
+  "release_id": "catalog-v45-2026-10-13",
+  "model_version_id": "models-v34-2026-10-13",
+  "compatibility_version_id": "compat-v27-2026-10-13",
+  "pricing_version_id": "pricing-20261013-cursor-catalog-v15"
 }

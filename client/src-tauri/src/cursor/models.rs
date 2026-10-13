@@ -319,6 +319,8 @@ mod tests {
             ("cursor-grok-4.5-medium", "grok-4.5"),
             ("muse-spark-1.3-minimal", "muse-spark-1.3"),
             ("gemini-3.8-flash-high", "gemini-3.8-flash"),
+            ("gemini-3-flash", "gemini-3-flash-preview"),
+            ("gemini-3.1-pro", "gemini-3.1-pro-preview"),
             ("composer-2.5-fast", "composer-2.5-fast"),
             ("new-vendor-high", "new-vendor-high"),
             ("gpt-5-mini", "gpt-5-mini"),
@@ -329,6 +331,134 @@ mod tests {
         for id in fixture() {
             assert_eq!(public_id(&public_id(&id)), public_id(&id), "{id}");
         }
+    }
+
+    #[test]
+    fn catalog_aliases_preserve_cursor_wire_ids_without_cross_model_substitution() {
+        let ids: Vec<String> = [
+            "composer-2.5",
+            "composer-2.5-fast",
+            "gemini-3-flash",
+            "gemini-3.1-pro",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let mut channel = crate::channel_from_supplier(
+            "cursor-aliases".into(),
+            &crate::default_supplier_config(),
+        );
+        channel.v2 = crate::channel_v2_contract_for_source(SourceDriverId::CursorSubscription);
+        channel.models = ids.clone();
+        normalize_channel(&mut channel);
+        assert_eq!(source_ids(&channel), ids);
+        assert_eq!(
+            channel.models,
+            [
+                "composer-2.5",
+                "gemini-3-flash-preview",
+                "gemini-3.1-pro-preview"
+            ]
+        );
+        let mut config = crate::default_config();
+        config.allow_model_equivalence = false;
+        for (public, wire) in [
+            ("composer-2.5", "composer-2.5"),
+            ("gemini-3-flash-preview", "gemini-3-flash"),
+            ("gemini-3.1-pro-preview", "gemini-3.1-pro"),
+        ] {
+            assert!(
+                crate::model_compatibility::model_compatibility_candidates(&config, public)
+                    .is_empty()
+            );
+            assert_eq!(
+                resolve(&ids, public, &ReasoningConfig::default(), false).unwrap(),
+                wire
+            );
+            assert!(crate::proxy::channel_supports_model(&channel, public));
+        }
+        assert_eq!(
+            resolve(&ids, "composer-2.5", &ReasoningConfig::default(), true).unwrap(),
+            "composer-2.5-fast"
+        );
+        // Normalizing a stored legacy channel must never replace its wire IDs.
+        normalize_channel(&mut channel);
+        assert_eq!(source_ids(&channel), ids);
+    }
+
+    #[test]
+    fn online_alias_refresh_reaches_saved_cursor_channels_without_restart() {
+        // Metadata is process-global; isolate real activation from parallel tests.
+        const CHILD_ENV: &str = "CONST_API_TEST_CURSOR_ALIAS_REFRESH";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "cursor::models::tests::online_alias_refresh_reaches_saved_cursor_channels_without_restart", "--nocapture"])
+                .env(CHILD_ENV, "1")
+                .output().unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let latest: serde_json::Value =
+            serde_json::from_slice(include_bytes!("../../resources/tool-model-metadata.json"))
+                .unwrap();
+        let mut old = latest.clone();
+        let aliases = old["model_aliases"].as_object_mut().unwrap();
+        aliases.remove("gemini-3-flash");
+        aliases.remove("gemini-3.1-pro");
+        let mut version = crate::tool_model_metadata::active_model_catalog_version();
+        crate::tool_model_metadata::install_tool_model_metadata(
+            &serde_json::to_vec(&old).unwrap(),
+            &version.compatibility_version_id.clone(),
+            version.clone(),
+        )
+        .unwrap();
+        let mut channel = crate::channel_from_supplier(
+            "cursor-saved-aliases".into(),
+            &crate::default_supplier_config(),
+        );
+        channel.v2 = crate::channel_v2_contract_for_source(SourceDriverId::CursorSubscription);
+        channel.models = vec!["gemini-3-flash".into(), "gemini-3.1-pro".into()];
+        normalize_channel(&mut channel);
+        assert!(!crate::proxy::channel_supports_model(
+            &channel,
+            "gemini-3-flash-preview"
+        ));
+        let before = channel.clone();
+        version.release_id = "cursor-alias-online".into();
+        version.sequence = Some(version.sequence.unwrap() + 1);
+        version.source = "public".into();
+        version.delivery_source = "network".into();
+        crate::tool_model_metadata::install_tool_model_metadata(
+            &serde_json::to_vec(&latest).unwrap(),
+            &version.compatibility_version_id.clone(),
+            version,
+        )
+        .unwrap();
+        // No restart, re-detection or rewrite of the persisted channel.
+        for (canonical, wire) in [
+            ("gemini-3-flash-preview", "gemini-3-flash"),
+            ("gemini-3.1-pro-preview", "gemini-3.1-pro"),
+        ] {
+            assert!(crate::proxy::channel_supports_model(&channel, canonical));
+            assert_eq!(
+                resolve(
+                    &source_ids(&channel),
+                    canonical,
+                    &ReasoningConfig::default(),
+                    false
+                )
+                .unwrap(),
+                wire
+            );
+        }
+        assert_eq!(channel.models, before.models);
+        assert_eq!(channel.capability_profiles, before.capability_profiles);
     }
 
     #[test]

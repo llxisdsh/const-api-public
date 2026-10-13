@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "source_revision": "ff0c6e0a5143a671a9d926e6effb74573e3caea9",
-  "compatibility_version_id": "compat-v26-2026-10-13",
+  "source_revision": "e5db66df92cc1955978c6254ba2719869e9e72ac",
+  "compatibility_version_id": "compat-v27-2026-10-13",
   "compatibility_groups": [
     {
       "id": "apex",
@@ -45,7 +45,8 @@
         "gpt-5.6-sol",
         "claude-opus-5",
         "grok-4.7",
-        "muse-wonder-1.0"
+        "muse-wonder-1.0",
+        "claude-mythos-5"
       ],
       "match_models": [
         "anthropic/claude-fable-5",
@@ -59,8 +60,7 @@
         "x-ai/grok-4.7",
         "meta/muse-wonder-1.0",
         "meta/muse-wonder",
-        "muse-wonder",
-        "claude-mythos-5"
+        "muse-wonder"
       ]
     },
     {
@@ -75,7 +75,8 @@
         "kimi-k3",
         "gpt-5.6-terra",
         "claude-opus-4-8",
-        "muse-spark-1.3"
+        "muse-spark-1.3",
+        "gpt-5.5"
       ],
       "match_models": [
         "moonshotai/kimi-k3",
@@ -84,7 +85,6 @@
         "anthropic/claude-opus-4.8",
         "claude-opus-4.8",
         "meta/muse-spark-1.3",
-        "gpt-5.5",
         "openai/gpt-5.5"
       ]
     },
@@ -100,19 +100,19 @@
         "claude-sonnet-5",
         "claude-haiku-5-5",
         "gpt-6-luna",
-        "gpt-5.6-luna"
+        "gpt-5.6-luna",
+        "gpt-5.4",
+        "claude-opus-4-7"
       ],
       "match_models": [
         "anthropic/claude-sonnet-5",
         "claude-haiku-5.5",
         "openai/gpt-6-luna",
         "openai/gpt-5.6-luna",
-        "codex-auto-review",
-        "gpt-5.4",
         "openai/gpt-5.4",
-        "claude-opus-4-7",
         "anthropic/claude-opus-4.7",
-        "claude-opus-4.7"
+        "claude-opus-4.7",
+        "codex-auto-review"
       ]
     },
     {
@@ -127,20 +127,21 @@
       "models": [
         "gemini-3.8-flash",
         "deepseek-v4.1-flash",
-        "claude-opus-4-6"
+        "claude-opus-4-6",
+        "gemini-3.1-pro-preview",
+        "gemini-3.7-flash",
+        "gpt-5.3-codex"
       ],
       "match_models": [
         "google/gemini-3.8-flash",
         "deepseek/deepseek-v4.1-flash",
         "anthropic/claude-opus-4.6",
         "claude-opus-4.6",
-        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro",
         "gemini-3.1-pro-preview-customtools",
         "google/gemini-3.1-pro-preview-customtools",
         "google/gemini-3.1-pro-preview",
-        "gemini-3.7-flash",
         "google/gemini-3.7-flash",
-        "gpt-5.3-codex",
         "openai/gpt-5.3-codex"
       ]
     },
@@ -153,24 +154,24 @@
         "t5"
       ],
       "models": [
-        "claude-sonnet-4-6"
+        "claude-sonnet-4-6",
+        "gpt-5.2",
+        "gpt-5.2-codex",
+        "claude-opus-4-5",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gpt-5.4-mini"
       ],
       "match_models": [
         "anthropic/claude-sonnet-4.6",
         "claude-sonnet-4.6",
-        "gpt-5.2",
         "gpt-5.2-2025-12-11",
         "openai/gpt-5.2",
-        "gpt-5.2-codex",
         "openai/gpt-5.2-codex",
-        "claude-opus-4-5",
         "anthropic/claude-opus-4.5",
         "claude-opus-4.5",
-        "gemini-3.6-flash",
         "google/gemini-3.6-flash",
-        "gemini-3.5-flash",
         "google/gemini-3.5-flash",
-        "gpt-5.4-mini",
         "openai/gpt-5.4-mini"
       ]
     },
@@ -180,20 +181,20 @@
       "description": "兼容档位 T6；本档无可用候选时继续向上档寻找。",
       "aliases": [
         "standard",
-        "t6",
-        "gemini-3-flash"
+        "t6"
       ],
       "models": [
-        "claude-sonnet-4-5"
+        "claude-sonnet-4-5",
+        "gemini-3-flash-preview",
+        "gpt-5.3-codex-spark",
+        "gpt-5.4-nano"
       ],
       "match_models": [
         "claude-sonnet-4-5-20250929",
         "anthropic/claude-sonnet-4.5",
         "claude-sonnet-4.5",
-        "gemini-3-flash-preview",
+        "gemini-3-flash",
         "google/gemini-3-flash-preview",
-        "gpt-5.3-codex-spark",
-        "gpt-5.4-nano",
         "openai/gpt-5.4-nano"
       ]
     },
@@ -206,26 +207,26 @@
         "t7"
       ],
       "models": [
-        "claude-haiku-4-5"
+        "claude-haiku-4-5",
+        "gemini-2.5-pro",
+        "gemini-3.5-flash-lite",
+        "gemma-4-31b-it",
+        "gemma-4-26b-a4b-it",
+        "gemini-2.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash-lite"
       ],
       "match_models": [
         "claude-haiku-4-5-20251001",
         "anthropic/claude-haiku-4.5",
         "claude-haiku-4.5",
-        "gemini-2.5-pro",
         "google/gemini-2.5-pro",
-        "gemini-3.5-flash-lite",
         "google/gemini-3.5-flash-lite",
-        "gemma-4-31b-it",
         "google/gemma-4-31b-it",
         "gemma4:31b",
-        "gemma-4-26b-a4b-it",
         "google/gemma-4-26b-a4b-it",
-        "gemini-2.5-flash",
         "google/gemini-2.5-flash",
-        "gemini-3.1-flash-lite",
         "google/gemini-3.1-flash-lite",
-        "gemini-2.5-flash-lite",
         "google/gemini-2.5-flash-lite"
       ]
     }
@@ -405,6 +406,11 @@
       "id": "command-r7b-12-2024",
       "display_name": "command-r7b-12-2024",
       "vendor": "cohere"
+    },
+    {
+      "id": "composer-2.5",
+      "display_name": "Composer 2.5",
+      "vendor": "cursor"
     },
     {
       "id": "cydonia-24b-v4.1",
@@ -2907,6 +2913,18 @@
       ],
       "tool_call": true,
       "source_key": "command-r7b-12-2024"
+    },
+    "composer-2.5": {
+      "display_name": "Composer 2.5",
+      "family": "composer",
+      "context_tokens": 200000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true
     },
     "cydonia-24b-v4.1": {
       "display_name": "cydonia-24b-v4.1",
@@ -8745,6 +8763,8 @@
     "deepseek/deepseek-v4-pro": "deepseek-v4-pro",
     "deepseek/deepseek-v4-pro-0813": "deepseek-v4-pro-0813",
     "deepseek/deepseek-v4.1-flash": "deepseek-v4.1-flash",
+    "gemini-3-flash": "gemini-3-flash-preview",
+    "gemini-3.1-pro": "gemini-3.1-pro-preview",
     "gemini-3.1-pro-preview-customtools": "gemini-3.1-pro-preview",
     "gemini/gemini-3.1-flash-image": "gemini-3.1-flash-image",
     "gemini/gemini-3.8-flash-lite-tts": "gemini-3.8-flash-lite-tts",

@@ -1342,8 +1342,14 @@ mod tests {
             !group
                 .models
                 .iter()
-                .any(|model| model == "codex-auto-review" || model == "gpt-5.3-codex-spark")
+                .any(|model| model == "codex-auto-review")
         }));
+        assert!(
+            standard
+                .models
+                .iter()
+                .any(|model| model == "gpt-5.3-codex-spark")
+        );
         assert!(
             reviewer
                 .models

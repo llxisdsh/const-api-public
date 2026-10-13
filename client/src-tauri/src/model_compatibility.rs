@@ -1788,6 +1788,7 @@ mod tests {
                 "kimi-k3",
                 "gpt-5.6-terra",
                 "muse-spark-1.3",
+                "gpt-5.5",
                 "claude-fable-5",
                 "gpt-6.1-sol",
                 "claude-sonnet-5-5",
@@ -1798,6 +1799,7 @@ mod tests {
                 "claude-opus-5",
                 "grok-4.7",
                 "muse-wonder-1.0",
+                "claude-mythos-5",
                 "claude-opus-5-5",
                 "claude-mythos-5-1",
                 "claude-fable-5-1",
@@ -1807,7 +1809,7 @@ mod tests {
     }
 
     #[test]
-    fn embedded_default_only_auto_substitutes_reviewed_coding_models() {
+    fn embedded_default_preserves_metadata_for_primary_and_legacy_candidates() {
         let profile = client_default_model_compatibility_profile();
         let ids = profile
             .model_groups
@@ -1950,22 +1952,41 @@ mod tests {
                 .map(|group| group.id.as_str());
             assert_eq!(actual, Some(expected_group), "{model}");
         }
-        for model in [
-            "gemini-3.7-flash",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
-            "gemini-3-flash-preview",
-            "gemini-2.5-flash",
-            "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-flash-lite",
+        // Ordinary tool/legacy identities are visible candidates, appended
+        // after each tier's primary models. Keep specialized Guardian separate.
+        for (model, expected_group) in [
+            ("claude-mythos-5", "frontier"),
+            ("gpt-5.5", "elite"),
+            ("gpt-5.4", "expert"),
+            ("claude-opus-4-7", "expert"),
+            ("gemini-3.1-pro-preview", "advanced"),
+            ("gemini-3.7-flash", "advanced"),
+            ("gpt-5.3-codex", "advanced"),
+            ("gpt-5.2", "capable"),
+            ("gpt-5.2-codex", "capable"),
+            ("claude-opus-4-5", "capable"),
+            ("gemini-3.6-flash", "capable"),
+            ("gemini-3.5-flash", "capable"),
+            ("gpt-5.4-mini", "capable"),
+            ("gemini-3-flash-preview", "standard"),
+            ("gpt-5.3-codex-spark", "standard"),
+            ("gpt-5.4-nano", "standard"),
+            ("gemini-2.5-pro", "basic"),
+            ("gemini-3.5-flash-lite", "basic"),
+            ("gemma-4-31b-it", "basic"),
+            ("gemma-4-26b-a4b-it", "basic"),
+            ("gemini-2.5-flash", "basic"),
+            ("gemini-3.1-flash-lite", "basic"),
+            ("gemini-2.5-flash-lite", "basic"),
         ] {
-            assert!(
-                !profile
+            assert_eq!(
+                profile
                     .model_groups
                     .iter()
-                    .any(|group| group.models.iter().any(|candidate| candidate == model)),
-                "{model} must not become a default substitution target"
+                    .find(|group| group.models.iter().any(|candidate| candidate == model))
+                    .map(|group| group.id.as_str()),
+                Some(expected_group),
+                "{model} must be a visible candidate at its original tier"
             );
             assert!(
                 profile
@@ -1978,14 +1999,12 @@ mod tests {
     }
 
     #[test]
-    fn embedded_default_routes_tool_requests_without_restoring_old_candidates() {
+    fn embedded_default_routes_tool_requests_with_visible_legacy_candidates() {
         let mut config = crate::default_config();
         config.account_platform_id.clear();
         config.account_user_id.clear();
         config.model_compatibility_profiles.clear();
         config.allow_model_equivalence = true;
-        let profile = client_default_model_compatibility_profile();
-
         for (model, first) in [
             ("claude-mythos-5", "claude-fable-5"),
             ("gpt-5.5", "kimi-k3"),
@@ -2029,15 +2048,7 @@ mod tests {
                 "{model}"
             );
             assert!(candidates.iter().any(|id| id == "gpt-6-astra"), "{model}");
-            if model != "gemini-3.8-flash" {
-                assert!(
-                    !profile
-                        .model_groups
-                        .iter()
-                        .any(|group| group.models.iter().any(|id| id == model)),
-                    "{model} is a request match, not a default substitution target"
-                );
-            }
+            assert!(!candidates.iter().any(|id| id == "codex-auto-review"));
             config.allow_model_equivalence = false;
             assert!(model_compatibility_candidates(&config, model).is_empty());
             config.allow_model_equivalence = true;
@@ -2102,6 +2113,21 @@ mod tests {
         document["compatibility_version_id"] = json!("compat-online-test");
         for group in document["compatibility_groups"].as_array_mut().unwrap() {
             group["match_models"] = json!([]);
+            // The online fixture removes both visible candidates and request
+            // aliases; packaged rows must not survive as a second baseline.
+            group["models"].as_array_mut().unwrap().retain(|model| {
+                !matches!(
+                    model.as_str(),
+                    Some(
+                        "gpt-5.4"
+                            | "claude-opus-4-7"
+                            | "gemini-3.1-pro-preview"
+                            | "gemini-3-flash-preview"
+                            | "gemini-2.5-flash-lite"
+                            | "gpt-5.4-mini"
+                    )
+                )
+            });
             group["aliases"]
                 .as_array_mut()
                 .unwrap()
@@ -2405,7 +2431,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_legacy_and_internal_models_stay_request_only() {
+    fn codex_legacy_models_are_candidates_but_guardian_stays_request_only() {
         let mut config = crate::default_config();
         config.model_compatibility_profiles.clear();
         let profile = client_default_model_compatibility_profile();
@@ -2414,13 +2440,13 @@ mod tests {
             .iter()
             .find(|group| group.id == "standard")
             .expect("T6 group");
-        assert_eq!(standard.aliases, ["standard", "t6", "gemini-3-flash"]);
-        assert!(profile.model_groups.iter().all(|group| {
-            !group
+        assert_eq!(standard.aliases, ["standard", "t6"]);
+        assert!(
+            standard
                 .models
                 .iter()
                 .any(|model| model == "gpt-5.3-codex-spark")
-        }));
+        );
         assert!(
             profile
                 .catalog_models
@@ -2487,6 +2513,21 @@ mod tests {
                 .iter()
                 .any(|model| model == "codex-auto-review")
         }));
+
+        // The visible old Codex model must also be usable in the other
+        // direction, when a lower-tier ordinary request needs a substitute.
+        let basic_candidates = model_compatibility_candidates(&config, "claude-haiku-4-5");
+        assert!(
+            basic_candidates
+                .iter()
+                .any(|model| model == "gpt-5.3-codex-spark")
+        );
+        assert!(basic_candidates.iter().any(|model| model == "gpt-5.4"));
+        assert!(
+            !basic_candidates
+                .iter()
+                .any(|model| model == "codex-auto-review")
+        );
     }
 
     #[test]
@@ -2511,11 +2552,14 @@ mod tests {
                 "claude-fable-5",
                 "claude-sonnet-5-5",
                 "claude-opus-5",
+                "claude-mythos-5",
                 "claude-opus-4-8",
                 "claude-sonnet-5",
                 "claude-haiku-5-5",
+                "claude-opus-4-7",
                 "claude-opus-4-6",
                 "claude-sonnet-4-6",
+                "claude-opus-4-5",
                 "claude-sonnet-4-5",
                 "claude-haiku-4-5",
             ]
@@ -2534,11 +2578,14 @@ mod tests {
                 "claude-fable-5",
                 "claude-sonnet-5-5",
                 "claude-opus-5",
+                "claude-mythos-5",
                 "claude-opus-4-8",
                 "claude-sonnet-5",
                 "claude-haiku-5-5",
+                "claude-opus-4-7",
                 "claude-opus-4-6",
                 "claude-sonnet-4-6",
+                "claude-opus-4-5",
                 "claude-sonnet-4-5",
                 "claude-haiku-4-5",
             ]
