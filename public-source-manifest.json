@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_revision": "a614b0eec0f4f533bec5a926b8eeac48981d8c83",
+  "source_revision": "50deb39a4e93910f89007231fe1b57499be6fbfe",
   "edition": "local-only",
   "files": {
     "client/.node-version": "45507e6d96329a845faa642c0f485313bcb2ca1e08b043589cde4ddd15969cd6",
@@ -352,7 +352,7 @@
     "client/src/account/useAccountFinanceData.ts": "53935810423a7c76bb49adca77b817001256d704b216b8accb468672f8ae8c18",
     "client/src/account/useAccountReferralData.ts": "b704445ec18d8ead40120fc65549963a8019d8562f4d922bc8715af8dc330b7e",
     "client/src/appController.detection.test.tsx": "1317624dc0fe4635aa5ca7015fba022e62936f48a57956f008538ee4ea625619",
-    "client/src/appController.toolPrograms.test.tsx": "54bb603e44b7dc66fde7691637386bbf920b8c035b8a6e8c6ac97c97096209ff",
+    "client/src/appController.toolPrograms.test.tsx": "059b4d049dbd7844c11ca787a587a622931adbb87f8f8e720dfe04c98a149bde",
     "client/src/appController.tsx": "187a91970c735111986e135285b09808fbc52b1788a0faf8108c44d412ce619a",
     "client/src/appController.updates.test.tsx": "55593a49cac8ab5bf17783733fc8a8f897044c0c82f75b12c506f50cacbce50d",
     "client/src/appHelpers.about.test.ts": "8b7c34d399bb55b981603eeafbf6e94c7bb5f82638de2baf0aafc056ef528926",

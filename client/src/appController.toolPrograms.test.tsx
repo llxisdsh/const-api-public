@@ -475,8 +475,10 @@ describe("shared tool program selection", () => {
       expect(checkedTools()).toEqual(DEFAULT_VISIBLE_TOOL_IDS);
       fail = false;
       act(() => window.dispatchEvent(new Event("focus")));
-      await waitFor(() => expect(releaseCheck).toBeTypeOf("function"));
-      expect(result.current.toolConfigChecking).toBe(true);
+      await waitFor(() => {
+        expect(releaseCheck).toBeTypeOf("function");
+        expect(result.current.toolConfigChecking).toBe(true);
+      });
       act(() => window.dispatchEvent(new Event("focus")));
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)); });
       expect(checks()).toHaveLength(result.current.visibleToolCards.length * 2);
