@@ -1791,13 +1791,16 @@ mod tests {
                 "claude-fable-5",
                 "gpt-6.1-sol",
                 "claude-sonnet-5-5",
+                "muse-wonder-full-1.0",
+                "gemini-4-argon",
                 "gpt-6-sol",
                 "gpt-5.6-sol",
                 "claude-opus-5",
                 "grok-4.7",
+                "muse-wonder-1.0",
+                "claude-opus-5-5",
                 "claude-mythos-5-1",
                 "claude-fable-5-1",
-                "claude-opus-5-5",
                 "gpt-6-astra",
             ]
         );
@@ -1835,11 +1838,17 @@ mod tests {
                     model.id
                 );
             }
-            assert!(
-                model.context_tokens.is_some_and(|tokens| tokens >= 128_000),
-                "{} must expose at least 128K context",
-                model.id
-            );
+            if model.id == "gemini-4-argon" {
+                // The reviewed preview has no published API context limit.
+                // Keep it unknown instead of inventing one to satisfy a test.
+                assert_eq!(model.context_tokens, None);
+            } else {
+                assert!(
+                    model.context_tokens.is_some_and(|tokens| tokens >= 128_000),
+                    "{} must expose at least 128K context",
+                    model.id
+                );
+            }
         }
         // Compatibility selects the explicit V4.1 Flash identity; the generic
         // and older V4 names remain catalog entries, not duplicate choices.
@@ -2186,9 +2195,9 @@ mod tests {
         assert_eq!(
             apex.models,
             [
+                "claude-opus-5-5",
                 "claude-mythos-5-1",
                 "claude-fable-5-1",
-                "claude-opus-5-5",
                 "gpt-6-astra",
                 "custom/local-gpt-6",
             ]
@@ -2464,8 +2473,13 @@ mod tests {
             !review_candidates
                 .iter()
                 .any(|model| model == "codex-auto-review"
-                    || model.starts_with("gemini-")
+                    || (model.starts_with("gemini-") && model != "gemini-4-argon")
                     || model == "gpt-5.3-codex-spark")
+        );
+        assert!(
+            review_candidates
+                .iter()
+                .any(|model| model == "gemini-4-argon")
         );
         assert!(profile.model_groups.iter().all(|group| {
             !group

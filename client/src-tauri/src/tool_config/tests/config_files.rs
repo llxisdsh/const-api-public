@@ -1775,6 +1775,112 @@
     }
 
     #[test]
+    fn config_presence_reads_live_fields_without_changing_stale_ownership() {
+        with_temp_home(|home| {
+            for (name, original, applied, cleared, partial) in [
+                ("presence.json", r#"{"keep":1}"#,
+                    r#"{"keep":1,"url":"http://localhost/v1","key":"sk-test"}"#,
+                    r#"{"keep":2,"url":"https://other.example/v1","key":"other"}"#,
+                    r#"{"keep":2,"url":"http://localhost/v1"}"#),
+                ("presence.toml", "keep = 1\n",
+                    "keep = 1\nurl = \"http://localhost/v1\"\nkey = \"sk-test\"\n",
+                    "keep = 2\nurl = 'https://other.example/v1'\n",
+                    "keep = 2\nurl='http://localhost/v1' # rewritten by tool\n"),
+                (".env", "KEEP=1\n",
+                    "KEEP=1\nURL=http://localhost/v1\nKEY=sk-test\n",
+                    "KEEP=2\nURL=https://other.example/v1\n",
+                    "KEEP=2\nURL='http://localhost/v1'\n"),
+                ("presence.yaml", "keep: 1\n",
+                    "keep: 1\nurl: http://localhost/v1\nkey: sk-test\n",
+                    "keep: 2\nurl: https://other.example/v1\n",
+                    "keep: 2\nurl: http://localhost/v1\n"),
+            ] {
+                let path = home.join(name);
+                fs::write(&path, original).unwrap();
+                write_text_with_backup(&path, applied, "mimocode", &mut ToolApplyBuilder::default()).unwrap();
+                let manifest = fs::read(tool_config_manifest_path()).unwrap();
+                assert!(tool_has_owned_config_files("mimocode").unwrap(), "{name}");
+                fs::write(&path, cleared).unwrap();
+                assert!(!tool_has_owned_config_files("mimocode").unwrap(), "{name}: old manifest is not live evidence");
+                fs::write(&path, partial).unwrap();
+                assert!(tool_has_owned_config_files("mimocode").unwrap(), "{name}: partial configuration remains");
+                fs::write(&path, original).unwrap();
+                assert!(!tool_has_owned_config_files("mimocode").unwrap(), "{name}: restored externally");
+                assert_eq!(fs::read(tool_config_manifest_path()).unwrap(), manifest);
+                assert_eq!(fs::read_to_string(&path).unwrap(), original);
+                restore_tool_config_from_manifest("mimocode").unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn config_presence_keeps_owned_entries_but_not_removed_conflicts() {
+        with_temp_home(|home| {
+            let path = home.join("presence.json");
+            fs::write(&path, r#"{"conflict":"old"}"#).unwrap();
+            write_text_with_backup(&path, "{}", "mimocode", &mut ToolApplyBuilder::default()).unwrap();
+            assert!(!tool_has_owned_config_files("mimocode").unwrap());
+            restore_tool_config_from_manifest("mimocode").unwrap();
+
+            write_text_with_backup(&path, r#"{"providers":{"CONST_API":{"key":"test"}}}"#,
+                "mimocode", &mut ToolApplyBuilder::default()).unwrap();
+            fs::write(&path, r#"{"providers":{"CONST_API":{"runtime":"metadata"}},"keep":true}"#).unwrap();
+            assert!(tool_has_owned_config_files("mimocode").unwrap());
+            fs::write(&path, r#"{"providers":{"user":{"key":"user"}},"keep":true}"#).unwrap();
+            assert!(!tool_has_owned_config_files("mimocode").unwrap());
+        });
+    }
+
+    #[test]
+    fn config_presence_legacy_whole_file_keeps_uncertain_residue() {
+        with_temp_home(|home| {
+            let path = home.join("legacy.json");
+            let original = r#"{"keep":"original"}"#;
+            fs::write(&path, original).unwrap();
+            write_text_with_backup(&path, r#"{"url":"const"}"#,
+                "mimocode", &mut ToolApplyBuilder::default()).unwrap();
+            let mut manifest = load_tool_config_manifest().unwrap();
+            manifest.files.get_mut(&manifest_file_key(&path)).unwrap().fields.clear();
+            save_tool_config_manifest(&manifest).unwrap();
+            assert!(tool_has_owned_config_files("mimocode").unwrap());
+            fs::write(&path, r#"{"keep":"user"}"#).unwrap();
+            assert!(tool_has_owned_config_files("mimocode").unwrap());
+            fs::write(&path, "invalid json").unwrap();
+            assert!(tool_has_owned_config_files("mimocode").unwrap());
+            // Only an exact original file proves this legacy write was undone.
+            fs::write(&path, original).unwrap();
+            assert!(!tool_has_owned_config_files("mimocode").unwrap());
+        });
+    }
+
+    #[test]
+    fn config_presence_codex_voice_residue_is_owned_and_restorable() {
+        with_temp_home(|home| {
+            let dir = home.join(".codex");
+            fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("config.toml");
+            let auth_path = dir.join("auth.json");
+            let auth = r#"{"auth_mode":"chatgpt","tokens":{"access_token":"fixture"}}"#;
+            fs::write(&path, "model = 'user-model'\n").unwrap();
+            fs::write(&auth_path, auth).unwrap();
+            apply_codex_config("http://127.0.0.1:38788/v1", "sk-dev").unwrap();
+            fs::write(&path, concat!(
+                "model = 'user-model'\n",
+                "experimental_realtime_ws_base_url = 'http://127.0.0.1:38788/v1'\n",
+                "experimental_realtime_webrtc_call_base_url = 'http://127.0.0.1:38788/v1'\n",
+            )).unwrap();
+            assert!(tool_has_owned_config_files("codex").unwrap());
+            assert!(!check_codex_config("http://127.0.0.1:38788/v1", "sk-dev").unwrap().already_configured);
+            restore_tool_config_from_manifest("codex").unwrap();
+            let restored = fs::read_to_string(&path).unwrap();
+            assert!(!restored.contains("experimental_realtime"));
+            assert!(restored.contains("user-model"));
+            assert_eq!(fs::read_to_string(&auth_path).unwrap(), auth);
+            assert!(!tool_has_owned_config_files("codex").unwrap());
+        });
+    }
+
+    #[test]
     fn additional_tool_configs_apply_check_and_restore_original_files() {
         with_temp_home(|home| {
             let base_url = TOOL_CONFIG_OPENAI_BASE_URL;
@@ -3499,6 +3605,8 @@
                 &config_path,
                 concat!(
                     "model_provider = \"third_party\"\n",
+                    "experimental_realtime_ws_base_url = \"https://voice.example/v1\"\n",
+                    "experimental_realtime_webrtc_call_base_url = \"https://calls.example/v1\"\n",
                     "model = \"user-model\"\n",
                     "approval_policy = \"on-request\"\n\n",
                     "[model_providers.third_party]\n",
@@ -3533,6 +3641,8 @@
             let config = fs::read_to_string(&config_path).expect("read native Codex config");
             let doc = config.parse::<DocumentMut>().expect("parse native Codex config");
             assert!(doc.get("model_provider").is_none());
+            assert!(doc.get("experimental_realtime_ws_base_url").is_none());
+            assert!(doc.get("experimental_realtime_webrtc_call_base_url").is_none());
             assert_eq!(doc.get("model").and_then(Item::as_str), Some("user-model"));
             assert_eq!(
                 doc.get("approval_policy").and_then(Item::as_str),
@@ -3594,6 +3704,66 @@
             assert!(!home.join(".const-api/tool-config-manifest.json").exists());
             assert!(!home.join(".const-api/codex-session-sync.json").exists());
         });
+    }
+
+    #[test]
+    fn native_codex_remove_clears_voice_only_residue_without_claiming_other_profile() {
+        with_temp_home(|home| {
+            let dir = home.join(".codex");
+            fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("config.toml");
+            let original = concat!(
+                "model = 'user-model'\n",
+                "experimental_realtime_ws_base_url = 'http://127.0.0.1:38788/v1'\n",
+                "experimental_realtime_webrtc_call_base_url = 'https://calls.example/v1'\n",
+            );
+            fs::write(&path, original).unwrap();
+            let peer_path = home.join(".const-api-dev/tool-config-manifest.json");
+            fs::create_dir_all(peer_path.parent().unwrap()).unwrap();
+            fs::write(&peer_path, "peer-owned record").unwrap();
+            let mut progress = |_: &str, _: Option<u64>, _: Option<u64>, _: Option<f64>| {};
+            remove_codex_config_with_progress_and_mode(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test",
+                ToolConfigRemoveMode::RestorePreConst, &mut progress).unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), original);
+            remove_codex_config_with_progress_and_mode(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test",
+                ToolConfigRemoveMode::NativeRoute, &mut progress).unwrap();
+            let restored = fs::read_to_string(&path).unwrap();
+            assert!(!restored.contains("experimental_realtime"));
+            assert!(restored.contains("user-model"));
+            assert_eq!(fs::read_to_string(&peer_path).unwrap(), "peer-owned record");
+            assert!(!tool_config_manifest_path().exists());
+        });
+    }
+
+    #[test]
+    fn claude_remove_modes_preserve_login_but_distinguish_restore_from_native_routing() {
+        for mode in [ToolConfigRemoveMode::RestorePreConst, ToolConfigRemoveMode::NativeRoute] {
+            with_temp_home(|home| {
+                let dir = home.join(".claude");
+                fs::create_dir_all(&dir).unwrap();
+                let path = dir.join("settings.json");
+                let login = dir.join(".credentials.json");
+                fs::write(&login, "official-login-fixture").unwrap();
+                fs::write(&path, r#"{"env":{"ANTHROPIC_BASE_URL":"https://previous.example","ANTHROPIC_AUTH_TOKEN":"previous","KEEP":"yes"},"model":"user-model","permissions":{"allow":["Read"]}}"#).unwrap();
+                apply_claude_config(TOOL_CONFIG_ROOT_URL, "sk-test").unwrap();
+                let mut settings = read_json_or_default(&path, serde_json::json!({})).unwrap();
+                settings["env"]["ANTHROPIC_BASE_URL"] = serde_json::json!("https://user-edited.example");
+                fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
+                remove_claude_config_with_mode(TOOL_CONFIG_ROOT_URL, "sk-test", mode).unwrap();
+                let settings = read_json_or_default(&path, serde_json::json!({})).unwrap();
+                if mode == ToolConfigRemoveMode::RestorePreConst {
+                    assert_eq!(settings["env"]["ANTHROPIC_BASE_URL"], "https://user-edited.example");
+                    assert_eq!(settings["env"]["ANTHROPIC_AUTH_TOKEN"], "previous");
+                } else {
+                    assert!(settings["env"].get("ANTHROPIC_BASE_URL").is_none());
+                    assert!(settings["env"].get("ANTHROPIC_AUTH_TOKEN").is_none());
+                }
+                assert_eq!(settings["env"]["KEEP"], "yes");
+                assert_eq!(settings["model"], "user-model");
+                assert_eq!(settings["permissions"]["allow"][0], "Read");
+                assert_eq!(fs::read_to_string(&login).unwrap(), "official-login-fixture");
+            });
+        }
     }
 
     #[test]

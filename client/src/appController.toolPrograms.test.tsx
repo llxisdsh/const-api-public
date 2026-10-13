@@ -7,11 +7,22 @@ import { emptyAccountStatus } from "./account/accountTypes";
 import { sourceDriverById, sourceDriverInitialChannelV5 } from "./sourceDrivers";
 import type { ToolApplyResult } from "./appTypes";
 import { toolHasManagedConfig } from "./toolMenuPresentation";
-import { TOOL_ORDER_STORAGE_KEY, TOOL_VISIBILITY_STORAGE_KEY } from "./toolVisibility";
+import { DEFAULT_VISIBLE_TOOL_IDS, type ToolCatalogId } from "./toolCatalog";
+import { LEGACY_TOOL_VISIBILITY_STORAGE_KEY, TOOL_ORDER_STORAGE_KEY, TOOL_VISIBILITY_STORAGE_KEY } from "./toolVisibility";
 import { i18n } from "./i18n";
 
 function configStatus(tool: string, ready: boolean, details: Record<string, string> = {}): ToolApplyResult {
   return { tool, already_configured: ready, files: [], file_statuses: [], backups: [], details };
+}
+
+function setVisibleTools(tools: readonly ToolCatalogId[]) {
+  localStorage.setItem(TOOL_VISIBILITY_STORAGE_KEY, JSON.stringify({ visible: tools }));
+}
+
+function checkedTools() {
+  return vi.mocked(invoke).mock.calls
+    .filter(([command]) => command === "check_tool_config")
+    .map(([, args]) => (args as { tool: string }).tool);
 }
 
 vi.mock("./runtimeProfile", async (importOriginal) => ({
@@ -26,6 +37,9 @@ describe("shared tool program selection", () => {
   const desktop = "D:/apps/Xiaomi MiMo.exe";
   beforeEach(() => {
     selected = "";
+    localStorage.removeItem(TOOL_VISIBILITY_STORAGE_KEY);
+    localStorage.removeItem(LEGACY_TOOL_VISIBILITY_STORAGE_KEY);
+    localStorage.removeItem(TOOL_ORDER_STORAGE_KEY);
     vi.stubGlobal("__TAURI_INTERNALS__", {});
     vi.mocked(invoke).mockReset().mockImplementation(async (command, args) => {
       if (command === "get_config") return {
@@ -63,7 +77,139 @@ describe("shared tool program selection", () => {
       throw new Error(`Unexpected fixture command: ${command}`);
     });
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.removeItem(TOOL_VISIBILITY_STORAGE_KEY);
+    localStorage.removeItem(TOOL_ORDER_STORAGE_KEY);
+  });
+
+  it("checks only visible tools on startup and connection changes without clearing hidden state", async () => {
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.toolConfigChecking).toBe(false));
+    expect(checkedTools()).toEqual(DEFAULT_VISIBLE_TOOL_IDS);
+    expect(result.current.toolConfigStatuses.mimocode).toBeUndefined();
+    const workbuddyStatus = result.current.toolConfigStatuses.workbuddy;
+    vi.mocked(invoke).mockClear();
+    act(() => {
+      result.current.hideToolCard("workbuddy");
+      result.current.resetToolOrder();
+    });
+    expect(checkedTools()).toEqual([]);
+    expect(result.current.toolConfigStatuses.workbuddy).toBe(workbuddyStatus);
+    act(() => result.current.setConfig((config) => ({ ...config, api_key: "changed-fixture-key" })));
+    await waitFor(() => expect(result.current.toolConfigChecking).toBe(false));
+    expect(checkedTools()).toEqual(DEFAULT_VISIBLE_TOOL_IDS.filter((tool) => tool !== "workbuddy"));
+    expect(result.current.toolConfigStatuses.workbuddy).toBe(workbuddyStatus);
+  });
+
+  it("checks only a restored tool and preserves its known residue and unapplied selection on failure", async () => {
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.toolConfigChecking).toBe(false));
+    const codexStatus = result.current.toolConfigStatuses.codex;
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let fail = false;
+    vi.mocked(invoke).mockClear().mockImplementation(async (command, args) => {
+      if (command === "check_tool_config") {
+        if (fail) throw new Error("temporarily unreadable config");
+        return configStatus("mimocode", false, { has_managed_config: "true", tool_protocol: "openai_responses" });
+      }
+      return base(command, args);
+    });
+    act(() => result.current.showToolCard("mimocode"));
+    await waitFor(() => expect(result.current.toolConfigChecking).toBe(false));
+    expect(checkedTools()).toEqual(["mimocode"]);
+    expect(toolHasManagedConfig(result.current.toolConfigStatuses.mimocode)).toBe(true);
+    expect(result.current.toolProtocolSelections.mimocode).toBe("openai_responses");
+    expect(result.current.toolConfigStatuses.codex).toBe(codexStatus);
+    act(() => {
+      result.current.toolProtocolDraftTouchedRef.current.mimocode = true;
+      result.current.setToolProtocolSelections((current) => ({ ...current, mimocode: "anthropic_messages" }));
+      result.current.hideToolCard("mimocode");
+    });
+    fail = true;
+    act(() => result.current.showToolCard("mimocode"));
+    await waitFor(() => expect(result.current.toolConfigChecking).toBe(false));
+    expect(checkedTools()).toEqual(["mimocode", "mimocode"]);
+    expect(toolHasManagedConfig(result.current.toolConfigStatuses.mimocode)).toBe(true);
+    expect(result.current.toolConfigStatuses.mimocode?.details?.config_check_failed).toBe("true");
+    expect(result.current.toolProtocolSelections.mimocode).toBe("anthropic_messages");
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => [
+      "scan_codex_session_history", "begin_tool_config_operation", "execute_tool_config_operation", "start_tool_program",
+    ].includes(command))).toBe(false);
+  });
+
+  it("does no status or session scan with an empty dock and initializes Codex when shown", async () => {
+    setVisibleTools([]);
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "check_tool_config") return configStatus("codex", true, { codex_model_source: "const" });
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("program-fixture"));
+    expect(checkedTools()).toEqual([]);
+    expect(invoke).not.toHaveBeenCalledWith("scan_codex_session_history");
+    act(() => result.current.showToolCard("codex"));
+    await waitFor(() => expect(result.current.toolConfigChecking).toBe(false));
+    expect(checkedTools()).toEqual(["codex"]);
+    expect(result.current.codexModelSource).toBe("const");
+  });
+
+  it("keeps a pending visible batch busy when a newly shown tool finishes first", async () => {
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let releaseCodex!: (status: ToolApplyResult) => void;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "check_tool_config" && (args as { tool: string }).tool === "codex") {
+        return new Promise<ToolApplyResult>((resolve) => { releaseCodex = resolve; });
+      }
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(releaseCodex).toBeTypeOf("function"));
+    act(() => result.current.showToolCard("mimocode"));
+    await waitFor(() => expect(result.current.toolConfigStatuses.mimocode?.already_configured).toBe(true));
+    expect(result.current.toolConfigChecking).toBe(true);
+    act(() => window.dispatchEvent(new Event("focus")));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)); });
+    expect(checkedTools()).toEqual([...DEFAULT_VISIBLE_TOOL_IDS, "mimocode"]);
+    await act(async () => releaseCodex(configStatus("codex", true)));
+    expect(result.current.toolConfigChecking).toBe(false);
+    expect(result.current.toolConfigStatuses.mimocode?.already_configured).toBe(true);
+  });
+
+  it.each([
+    { visible: ["vscode"], dependencies: ["codex", "claude"] },
+    { visible: ["vscode", "codex"], dependencies: ["claude"] },
+  ] satisfies { visible: ToolCatalogId[]; dependencies: ToolCatalogId[] }[])(
+    "checks only hidden VS Code dependencies on demand for $visible and coalesces pending reads",
+    async ({ visible, dependencies }) => {
+      setVisibleTools(visible);
+      const { result } = renderHook(() => useAppController());
+      await waitFor(() => expect(result.current.toolConfigChecking).toBe(false));
+      expect(new Set(checkedTools())).toEqual(new Set(visible));
+      act(() => result.current.changeCodexModelSource("const"));
+      const base = vi.mocked(invoke).getMockImplementation()!;
+      const releases: Record<string, (status: ToolApplyResult) => void> = {};
+      vi.mocked(invoke).mockClear().mockImplementation(async (command, args) => {
+        if (command === "check_tool_config") {
+          return new Promise<ToolApplyResult>((resolve) => { releases[(args as { tool: string }).tool] = resolve; });
+        }
+        return base(command, args);
+      });
+      let refresh!: Promise<void>;
+      act(() => { refresh = result.current.refreshVsCodeExtensionConfigStatuses(); });
+      await act(() => result.current.refreshVsCodeExtensionConfigStatuses());
+      expect(checkedTools()).toEqual(dependencies);
+      expect(result.current.toolConfigChecking).toBe(true);
+      await act(async () => {
+        for (const tool of dependencies) releases[tool](configStatus(tool, true, { codex_model_source: "codex" }));
+        await refresh;
+      });
+      expect(result.current.toolConfigChecking).toBe(false);
+      expect(result.current.codexModelSource).toBe("const");
+      expect(vi.mocked(invoke).mock.calls.every(([command]) => command === "check_tool_config")).toBe(true);
+    },
+  );
 
   it.each([
     ["zh-CN", "WorkBuddy", "WorkBuddy AI"],
@@ -145,6 +291,8 @@ describe("shared tool program selection", () => {
     });
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.selectedChannel.id).toBe("program-fixture"));
+    expect(result.current.hiddenToolCards.some(({ tool }) => tool === "workbuddy-ai")).toBe(true);
+    expect(checkedTools()).not.toContain("workbuddy-ai");
     await act(() => {
       result.current.setConfig((config) => ({ ...config, api_key: "unsaved-local-key" }));
       result.current.toolProtocolDraftTouchedRef.current.opencode = true;
@@ -230,6 +378,7 @@ describe("shared tool program selection", () => {
   });
 
   it("rechecks on use and repairs incomplete configuration despite its green dot", async () => {
+    setVisibleTools([...DEFAULT_VISIBLE_TOOL_IDS, "mimocode"]);
     selected = desktop;
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.toolConfigStatuses.mimocode?.already_configured).toBe(true));
@@ -252,6 +401,7 @@ describe("shared tool program selection", () => {
     selected = desktop;
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.toolConfigChecking).toBe(false));
+    expect(result.current.toolConfigStatuses.mimocode).toBeUndefined();
     vi.mocked(invoke).mockClear();
     await act(() => result.current.useTool("mimocode", "MiMo Code"));
     const commands = vi.mocked(invoke).mock.calls.map(([command]) => command);
@@ -259,6 +409,7 @@ describe("shared tool program selection", () => {
   });
 
   it("keeps known configuration when a use-time check fails, without launching or rewriting", async () => {
+    setVisibleTools([...DEFAULT_VISIBLE_TOOL_IDS, "mimocode"]);
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.toolConfigStatuses.mimocode?.already_configured).toBe(true));
     vi.mocked(invoke).mockClear().mockRejectedValue(new Error("read temporarily unavailable"));
@@ -271,6 +422,7 @@ describe("shared tool program selection", () => {
   });
 
   it("merges a bulk check with a newer single-tool check instead of discarding other cards", async () => {
+    setVisibleTools([...DEFAULT_VISIBLE_TOOL_IDS, "mimocode", "cline", "trae"]);
     selected = desktop;
     const base = vi.mocked(invoke).getMockImplementation()!;
     let releaseBulk!: (status: ToolApplyResult) => void;
@@ -294,7 +446,58 @@ describe("shared tool program selection", () => {
     expect(result.current.toolConfigStatuses.trae?.already_configured).toBe(false);
   });
 
+  it("refreshes external removals on window return without configuring or scanning sessions", async () => {
+    const { result, unmount } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.toolConfigStatuses.codex?.already_configured).toBe(true));
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let fail = true;
+    let releaseCheck: ((status: ToolApplyResult) => void) | undefined;
+    vi.mocked(invoke).mockClear().mockImplementation(async (command, args) => {
+      if (command === "check_tool_config") {
+        const { tool } = args as { tool: string };
+        if (tool === "codex") {
+          if (fail) throw new Error("temporarily unreadable config");
+          return new Promise<ToolApplyResult>((resolve) => { releaseCheck = resolve; });
+        }
+        return configStatus(tool, false);
+      }
+      return base(command, args);
+    });
+    try {
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await waitFor(() => expect(result.current.toolConfigStatuses.codex?.details?.config_check_failed).toBe("true"));
+      expect(toolHasManagedConfig(result.current.toolConfigStatuses.codex)).toBe(true);
+      const checks = () => vi.mocked(invoke).mock.calls.filter(([command]) => command === "check_tool_config");
+      expect(checks()).toHaveLength(result.current.visibleToolCards.length);
+      expect(checkedTools()).toEqual(DEFAULT_VISIBLE_TOOL_IDS);
+      fail = false;
+      act(() => window.dispatchEvent(new Event("focus")));
+      await waitFor(() => expect(releaseCheck).toBeTypeOf("function"));
+      expect(result.current.toolConfigChecking).toBe(true);
+      act(() => window.dispatchEvent(new Event("focus")));
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)); });
+      expect(checks()).toHaveLength(result.current.visibleToolCards.length * 2);
+      await act(async () => releaseCheck!(configStatus("codex", false, { has_managed_config: "false" })));
+      expect(toolHasManagedConfig(result.current.toolConfigStatuses.codex)).toBe(false);
+      expect(result.current.toolConfigStatuses.codex?.details?.config_check_failed).toBeUndefined();
+      expect(vi.mocked(invoke).mock.calls.some(([command]) => [
+        "scan_codex_session_history", "begin_tool_config_operation", "execute_tool_config_operation", "start_tool_program",
+      ].includes(command))).toBe(false);
+      vi.mocked(invoke).mockClear();
+      act(() => window.dispatchEvent(new Event("focus")));
+      unmount();
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)); });
+      expect(checks()).toHaveLength(0);
+    } finally {
+      unmount();
+    }
+  });
+
   it("refreshes partial writes after failure and keeps concurrent tool checks independent", async () => {
+    setVisibleTools([...DEFAULT_VISIBLE_TOOL_IDS, "mimocode"]);
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.toolConfigStatuses.mimocode?.already_configured).toBe(true));
     const base = vi.mocked(invoke).getMockImplementation()!;
@@ -327,6 +530,7 @@ describe("shared tool program selection", () => {
   });
 
   it("does not use a pre-write apply result as verified readiness when refresh fails", async () => {
+    setVisibleTools([...DEFAULT_VISIBLE_TOOL_IDS, "mimocode"]);
     selected = desktop;
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.toolConfigStatuses.mimocode?.already_configured).toBe(true));
@@ -345,9 +549,11 @@ describe("shared tool program selection", () => {
     expect(toolHasManagedConfig(status)).toBe(true);
   });
 
-  it("clears presence after verified removal and refreshes partial failed removal", async () => {
+  it("clears hidden-tool presence after verified removal and refreshes partial failed removal", async () => {
+    setVisibleTools([...DEFAULT_VISIBLE_TOOL_IDS, "mimocode"]);
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.toolConfigStatuses.mimocode?.already_configured).toBe(true));
+    act(() => result.current.hideToolCard("mimocode"));
     const base = vi.mocked(invoke).getMockImplementation()!;
     let failed = true;
     vi.mocked(invoke).mockImplementation(async (command, args) => {

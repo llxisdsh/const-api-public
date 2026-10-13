@@ -212,7 +212,17 @@ fn normalize_codex_native_route(result: &mut ToolApplyResult, api_key: &str) -> 
         let mut doc = String::from_utf8_lossy(&before)
             .parse::<DocumentMut>()
             .with_context(|| format!("parse {} for native Codex route", config_path.display()))?;
-        if doc.as_table_mut().remove("model_provider").is_some() {
+        // Native mode is an explicit routing reset, unlike three-way restore.
+        // Leaving these overrides would still send voice traffic to a gateway.
+        let mut changed = false;
+        for key in [
+            "model_provider",
+            "experimental_realtime_ws_base_url",
+            "experimental_realtime_webrtc_call_base_url",
+        ] {
+            changed |= doc.as_table_mut().remove(key).is_some();
+        }
+        if changed {
             record_post_restore_cleanup(
                 result,
                 &config_path,

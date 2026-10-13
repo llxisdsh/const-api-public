@@ -367,7 +367,74 @@ fn save_tool_config_manifest(manifest: &ToolConfigManifest) -> Result<()> {
 
 struct ToolConfigPresenceIndex {
     stamp: (PathBuf, std::time::SystemTime, u64),
-    files: HashMap<String, Vec<PathBuf>>,
+    files: HashMap<String, Vec<ToolConfigPresenceFile>>,
+}
+
+struct ToolConfigPresenceFile {
+    path: PathBuf,
+    format: ToolConfigFormat,
+    applied_sha256: String,
+    original_sha256: String,
+    fields: Vec<ToolConfigPresenceField>,
+}
+
+struct ToolConfigPresenceField {
+    path: Vec<ToolConfigFieldPath>,
+    // Added logical entries remain owned when the tool adds runtime metadata.
+    // Other fields must still match the applied value, not just exist.
+    applied_sha256: Option<String>,
+}
+
+fn tool_config_presence_value_hash(
+    format: ToolConfigFormat,
+    value: &serde_json::Value,
+) -> Result<String> {
+    let normalized = match format {
+        ToolConfigFormat::Toml => {
+            let mut document = DocumentMut::new();
+            document["value"] = toml_item_from_owned_value(value)?;
+            toml_edit::de::from_str::<serde_json::Value>(&document.to_string())
+                .context("parse TOML value for configuration presence")?
+        }
+        ToolConfigFormat::Env => env_text_to_status_json(&format!(
+            "value={}",
+            value.as_str().ok_or_else(|| anyhow!("invalid env manifest value"))?
+        )),
+        _ => return Ok(sha256_hex(&serde_json::to_vec(value)?)),
+    };
+    Ok(sha256_hex(&serde_json::to_vec(&normalized)?))
+}
+
+impl ToolConfigPresenceFile {
+    fn is_present(&self) -> Result<bool> {
+        let Some(content) = read_optional_file(&self.path)? else {
+            return Ok(false);
+        };
+        // Also supports old manifests with only whole-file evidence.
+        let content_hash = sha256_hex(&content);
+        if content_hash == self.applied_sha256 {
+            return Ok(true);
+        }
+        if self.fields.is_empty() {
+            // Legacy records cannot prove which fields remain. Keep the dot
+            // until the file is gone or positively matches its original state.
+            return Ok(content_hash != self.original_sha256);
+        }
+        let document = parse_tool_config_document_at(&self.path, self.format, Some(&content))?;
+        for field in &self.fields {
+            let ToolConfigFieldValue::Value(value) = tool_config_field_value_at(&document, &field.path)
+            else {
+                continue;
+            };
+            if field.applied_sha256.is_none()
+                || field.applied_sha256.as_ref()
+                    == Some(&tool_config_presence_value_hash(self.format, &value)?)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 fn tool_config_presence_cache() -> &'static Mutex<Option<ToolConfigPresenceIndex>> {
@@ -396,11 +463,17 @@ fn tool_has_owned_config_files(tool: &str) -> Result<bool> {
     };
     let stamp = (path.clone(), metadata.modified()?, metadata.len());
     if cache.as_ref().is_none_or(|index| index.stamp != stamp) {
-        // All cards share this small projection. Do not retain credential-bearing
-        // backup contents or deserialize the full manifest once per tool.
+        // All cards share this small projection. Retain only identities and
+        // value hashes, not credentials or backup contents; parse once per version.
         #[derive(Deserialize)]
         struct Entry {
             tool: String,
+            #[serde(default)]
+            format: ToolConfigFormat,
+            #[serde(default)]
+            fields: Vec<ToolConfigOwnedField>,
+            applied_sha256: String,
+            original_sha256: String,
         }
         #[derive(Deserialize)]
         struct Index {
@@ -410,21 +483,59 @@ fn tool_has_owned_config_files(tool: &str) -> Result<bool> {
         let raw = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
         let index: Index =
             serde_json::from_slice(&raw).with_context(|| format!("parse {}", path.display()))?;
-        let mut files: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        let mut files: HashMap<String, Vec<ToolConfigPresenceFile>> = HashMap::new();
         for (path, entry) in index.files {
+            let legacy_whole_file = entry.fields.is_empty();
+            let mut fields = Vec::new();
+            for mut field in refine_tool_config_owned_fields(entry.fields) {
+                let ToolConfigFieldValue::Value(value) = &field.applied else {
+                    // Removing an old conflict is not a remaining configuration.
+                    continue;
+                };
+                let applied_sha256 = if owned_field_is_added_entry(&field) {
+                    None
+                } else {
+                    Some(tool_config_presence_value_hash(entry.format, value)?)
+                };
+                if entry.format == ToolConfigFormat::Toml {
+                    for segment in &mut field.path {
+                        if let ToolConfigFieldPath::Named(name) = segment {
+                            *name = named_entry_key(&serde_json::Value::String(name.clone()))
+                                .ok_or_else(|| anyhow!("invalid TOML manifest entry name"))?;
+                        }
+                    }
+                }
+                fields.push(ToolConfigPresenceField {
+                    path: field.path,
+                    applied_sha256,
+                });
+            }
+            if fields.is_empty() && !legacy_whole_file {
+                continue;
+            }
             files
                 .entry(entry.tool)
                 .or_default()
-                .push(PathBuf::from(path));
+                .push(ToolConfigPresenceFile {
+                    path: PathBuf::from(path),
+                    format: entry.format,
+                    applied_sha256: entry.applied_sha256,
+                    original_sha256: entry.original_sha256,
+                    fields,
+                });
         }
         *cache = Some(ToolConfigPresenceIndex { stamp, files });
     }
-    Ok(cache
-        .as_ref()
-        .unwrap()
-        .files
-        .get(tool)
-        .is_some_and(|files| files.iter().any(|path| path.is_file())))
+    if let Some(files) = cache.as_ref().unwrap().files.get(tool) {
+        for file in files {
+            if file.is_present().with_context(|| {
+                format!("check configuration presence {}", file.path.display())
+            })? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 pub(crate) fn attach_tool_config_presence(result: &mut ToolApplyResult) -> Result<()> {

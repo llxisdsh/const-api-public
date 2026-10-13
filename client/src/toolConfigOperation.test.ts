@@ -174,7 +174,8 @@ describe("tool config operation IPC", () => {
     expect(mainSource).toMatch(
       /onConfigure=\{\(\) => \{[\s\S]*?prepareToolUse\(\)[\s\S]*?applyToolConfig\(card\.tool, card\.title\)/,
     );
-    expect(controllerSource).toContain("Promise.all(toolCards.map(async (card) =>");
+    expect(controllerSource).toContain("cards = visibleToolCards");
+    expect(controllerSource).toContain("Promise.all(cards.map(async (card) =>");
     expect(controllerSource).toMatch(
       /continueWithLaunch[\s\S]*?setToolLocator\(null\)[\s\S]*?launchToolConfig\(tool, title\)/,
     );

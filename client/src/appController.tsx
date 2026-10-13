@@ -25,7 +25,7 @@ import {
   Zap,
   type LucideIcon
 } from "lucide-react";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import {
   siAnthropic,
   siBaidu,
@@ -931,7 +931,7 @@ export function useAppController({
   const [toolConfigChecking, setToolConfigChecking] = useState(false);
 
   const toolConfigStatusEpochRef = useRef<Record<string, number>>({});
-  const toolConfigBulkEpochRef = useRef(0);
+  const toolConfigChecksRunningRef = useRef<Record<string, number>>({});
 
   const toolProtocolDraftTouchedRef = useRef<Record<string, boolean>>({});
 
@@ -1581,6 +1581,7 @@ export function useAppController({
         writeToolOrder(next);
         return next;
       });
+      void refreshToolConfigStatuses(false, toolCards.filter((card) => card.tool === tool));
     }
 
   function resetToolOrder() {
@@ -1725,6 +1726,32 @@ export function useAppController({
       if (!isTauriRuntime() || !config.listen) return;
       void refreshToolConfigStatuses();
     }, [config.listen, config.api_key, claudeModelSettings]);
+
+  const refreshToolConfigOnReturn = useEffectEvent(() => {
+      if (!config.listen || toolConfigChecking || Object.values(toolOperationRunningRef.current).some(Boolean)) return;
+      void refreshToolConfigStatuses(true);
+    });
+
+  useEffect(() => {
+      if (!isTauriRuntime()) return;
+      let timer: number | undefined;
+      const scheduleRefresh = () => {
+        window.clearTimeout(timer);
+        if (document.visibilityState === "hidden") return;
+        // Focus and visibility usually arrive together. Only check local state;
+        // never apply configuration or scan session history on window return.
+        timer = window.setTimeout(() => {
+          if (document.visibilityState !== "hidden") refreshToolConfigOnReturn();
+        }, 200);
+      };
+      window.addEventListener("focus", scheduleRefresh);
+      document.addEventListener("visibilitychange", scheduleRefresh);
+      return () => {
+        window.clearTimeout(timer);
+        window.removeEventListener("focus", scheduleRefresh);
+        document.removeEventListener("visibilitychange", scheduleRefresh);
+      };
+    }, []);
 
   useEffect(() => {
       const nextChannels = config.channels.length > 0 ? config.channels : [channelFromSupplier("channel-1", config.supplier)];
@@ -4279,13 +4306,15 @@ export function useAppController({
       ));
     }
 
-  async function refreshToolConfigStatuses() {
-      if (!isTauriRuntime()) return;
-      const bulkEpoch = ++toolConfigBulkEpochRef.current;
-      const epochs = Object.fromEntries(toolCards.map(({ tool }) => [tool, nextToolConfigStatusEpoch(tool)]));
+  async function refreshToolConfigStatuses(background = false, cards = visibleToolCards) {
+      if (!isTauriRuntime() || !config.listen || cards.length === 0) return;
+      const epochs = Object.fromEntries(cards.map(({ tool }) => [tool, nextToolConfigStatusEpoch(tool)]));
+      for (const { tool } of cards) {
+        toolConfigChecksRunningRef.current[tool] = (toolConfigChecksRunningRef.current[tool] ?? 0) + 1;
+      }
       setToolConfigChecking(true);
       try {
-        const entries = await Promise.all(toolCards.map(async (card) => {
+        const entries = await Promise.all(cards.map(async (card) => {
           try {
             const result = await withUiTimeout(
               invoke<ToolApplyResult>("check_tool_config", {
@@ -4309,10 +4338,10 @@ export function useAppController({
           return next;
         });
         const codexStatus = currentEntries.find(([tool]) => tool === "codex")?.[1];
-        if (codexStatus && !codexModelSourceTouchedRef.current) {
+        if (!background && codexStatus && !codexModelSourceTouchedRef.current) {
           setCodexModelSource(codexModelSourceFromStatus(codexStatus));
         }
-        setToolProtocolSelections((current) => {
+        if (!background) setToolProtocolSelections((current) => {
           const next = { ...current };
           for (const [tool, status] of currentEntries) {
             if (toolProtocolDraftTouchedRef.current[tool]) continue;
@@ -4323,12 +4352,26 @@ export function useAppController({
           }
           return next;
         });
-        void refreshCodexSessionScan();
+        if (!background && codexStatus) void refreshCodexSessionScan();
       } finally {
-        if (bulkEpoch === toolConfigBulkEpochRef.current) {
-          setToolConfigChecking(false);
+        for (const { tool } of cards) {
+          if (--toolConfigChecksRunningRef.current[tool] === 0) {
+            delete toolConfigChecksRunningRef.current[tool];
+          }
         }
+        setToolConfigChecking(Object.keys(toolConfigChecksRunningRef.current).length > 0);
       }
+    }
+
+  function refreshVsCodeExtensionConfigStatuses() {
+      // The detail panel needs these shared configs even when their own cards
+      // are hidden. Do not scan the whole picker or duplicate an active check.
+      return refreshToolConfigStatuses(true, toolCards.filter(({ tool }) => (
+        (tool === "codex" || tool === "claude")
+        && hiddenToolIds.has(tool)
+        && !toolConfigChecksRunningRef.current[tool]
+        && !toolOperationRunningRef.current[tool]
+      )));
     }
 
   async function refreshCodexSessionScan() {
@@ -5623,6 +5666,7 @@ export function useAppController({
     setSelectedCallRecord,
     toolConfigStatuses,
     toolConfigChecking,
+    refreshVsCodeExtensionConfigStatuses,
     saveToolModelInjectionSettings,
     toolProtocolDraftTouchedRef,
     toolProtocolSelections,

@@ -2339,7 +2339,7 @@
       "nativeOptions": {
         "codex": {
           "title": "Use native OpenAI / ChatGPT access",
-          "description": "Disable the custom provider while preserving a valid ChatGPT login, model settings, and unrelated user configuration. Sign in again in Codex if needed."
+          "description": "Disable the custom provider and clear realtime voice endpoint overrides. Preserve a valid ChatGPT login, model settings, and unrelated user configuration. Sign in again in Codex if needed."
         },
         "claude": {
           "title": "Use the native Claude Code login",

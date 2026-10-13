@@ -2339,7 +2339,7 @@
       "nativeOptions": {
         "codex": {
           "title": "切换到 OpenAI / ChatGPT 原生接入",
-          "description": "停用自定义 Provider，保留有效的 ChatGPT 登录、模型设置和其他用户配置；未登录时需在 Codex 中重新登录。"
+          "description": "停用自定义 Provider，并清除实时语音地址覆盖；保留有效的 ChatGPT 登录、模型设置和其他用户配置。未登录时需在 Codex 中重新登录。"
         },
         "claude": {
           "title": "切换到 Claude Code 原生登录",

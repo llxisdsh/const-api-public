@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState } from "react";
+import React, { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
@@ -741,13 +741,17 @@ export function VsCodeExtensionLinkage({
   vscodeConfigured,
   claudeConfigured,
   codexConfigured,
+  onRefresh,
 }: {
   checking: boolean;
   vscodeConfigured?: boolean;
   claudeConfigured?: boolean;
   codexConfigured?: boolean;
+  onRefresh: () => void;
 }) {
   const { t } = useTranslation();
+  const refreshOnOpen = useEffectEvent(onRefresh);
+  useEffect(() => { refreshOnOpen(); }, []);
   const extensions = [
     {
       name: "Copilot",

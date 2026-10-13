@@ -392,6 +392,7 @@ function ProductApp({
     setSelectedCallRecord,
     toolConfigStatuses,
     toolConfigChecking,
+    refreshVsCodeExtensionConfigStatuses,
     saveToolModelInjectionSettings,
     toolProtocolDraftTouchedRef,
     toolProtocolSelections,
@@ -1186,6 +1187,7 @@ function ProductApp({
                                     vscodeConfigured={configStatus?.already_configured}
                                     claudeConfigured={toolConfigStatuses.claude?.already_configured}
                                     codexConfigured={toolConfigStatuses.codex?.already_configured}
+                                    onRefresh={refreshVsCodeExtensionConfigStatuses}
                                   />
                                 )}
                               </div>

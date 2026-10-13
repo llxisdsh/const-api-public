@@ -19,6 +19,7 @@ import {
   ModelInput,
   QuickCard,
   ToolRemoveDialog,
+  VsCodeExtensionLinkage,
 } from "./AppControls";
 
 describe("ClaudeModelSettingsPanel", () => {
@@ -41,6 +42,43 @@ describe("ClaudeModelSettingsPanel", () => {
 
     expect(screen.getByText("待配置")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "应用并重启 Claude Code" })).toBeNull();
+  });
+});
+
+describe("VsCodeExtensionLinkage", () => {
+  test("refreshes dependencies only when the detail panel opens, not on status rerenders", () => {
+    const onRefresh = vi.fn();
+    const content = (checking: boolean) => (
+      <ToolDockMenuProvider>
+        <QuickCard
+          id="vscode"
+          title="VS Code"
+          icon={null}
+          fallback={Circle}
+          tone="#111827"
+          actionLabel="配置"
+          onAction={vi.fn()}
+          panels={[{ id: "details", label: "更多", content: (
+            <VsCodeExtensionLinkage checking={checking} onRefresh={() => onRefresh()} />
+          ) }]}
+        />
+        <HiddenToolMenu cards={[]} onShow={vi.fn()} onResetOrder={vi.fn()} />
+      </ToolDockMenuProvider>
+    );
+    const { rerender } = render(content(false));
+    fireEvent.click(screen.getByRole("button", { name: "显示更多工具" }));
+    expect(onRefresh).not.toHaveBeenCalled();
+    fireEvent.contextMenu(screen.getByRole("button", { name: "VS Code" }), { button: 2 });
+    expect(onRefresh).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "VS Code 更多" }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    rerender(content(true));
+    rerender(content(false));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    fireEvent.pointerDown(document.body);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "VS Code" }), { button: 2 });
+    fireEvent.click(screen.getByRole("button", { name: "VS Code 更多" }));
+    expect(onRefresh).toHaveBeenCalledTimes(2);
   });
 });
 
