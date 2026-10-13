@@ -1,14 +1,17 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { DEFAULT_VISIBLE_TOOL_IDS, TOOL_CATALOG_ORDER } from "./toolCatalog";
 import {
   defaultToolOrder,
   defaultHiddenToolIds,
   isDefaultToolOrder,
+  LEGACY_TOOL_VISIBILITY_STORAGE_KEY,
   moveToolToEnd,
   parseHiddenToolIds,
   parseToolOrder,
+  readHiddenToolIds,
   serializeHiddenToolIds,
   serializeToolOrder,
+  TOOL_VISIBILITY_STORAGE_KEY,
 } from "./toolVisibility";
 
 describe("tool dock visibility", () => {
@@ -19,6 +22,9 @@ describe("tool dock visibility", () => {
     expect(hidden.has("hermes")).toBe(false);
     expect(hidden.has("workbuddy")).toBe(false);
     expect(hidden.has("deepseek-harness")).toBe(false);
+    expect(hidden.has("openclaw")).toBe(true);
+    expect(hidden.has("workbuddy-ai")).toBe(true);
+    expect(hidden.has("muse-code")).toBe(true);
     expect(hidden.has("gemini")).toBe(true);
     expect(hidden.has("copilot")).toBe(true);
     expect(hidden.has("cline")).toBe(true);
@@ -27,10 +33,40 @@ describe("tool dock visibility", () => {
     expect(hidden.has("open-design")).toBe(true);
   });
 
-  test("ignores unknown ids and serializes hidden tools in canonical order", () => {
+  test("preserves legacy hidden choices and saves explicit visible tools in canonical order", () => {
     const hidden = parseHiddenToolIds(JSON.stringify(["zcode", "unknown", "copilot", "zcode"]));
     expect([...hidden]).toEqual(["zcode", "copilot"]);
-    expect(serializeHiddenToolIds(hidden)).toBe(JSON.stringify(["copilot", "zcode"]));
+    expect(JSON.parse(serializeHiddenToolIds(hidden))).toEqual({
+      visible: TOOL_CATALOG_ORDER.filter((tool) => !hidden.has(tool)),
+    });
+    expect(parseHiddenToolIds(serializeHiddenToolIds(hidden))).toEqual(hidden);
+  });
+
+  test("keeps catalog additions hidden unless explicitly shown", () => {
+    const hidden = parseHiddenToolIds(JSON.stringify({ visible: ["codex", "workbuddy", "unknown", "codex"] }));
+    expect(TOOL_CATALOG_ORDER.filter((tool) => !hidden.has(tool))).toEqual(["codex", "workbuddy"]);
+    expect(hidden.has("workbuddy-ai")).toBe(true);
+    expect(hidden.has("muse-code")).toBe(true);
+    expect(parseHiddenToolIds('{"visible":[]}').size).toBe(TOOL_CATALOG_ORDER.length);
+  });
+
+  test("snapshots legacy visibility once without resetting user choices", () => {
+    const legacy = JSON.stringify(["gemini"]);
+    const stored = new Map([[LEGACY_TOOL_VISIBILITY_STORAGE_KEY, legacy]]);
+    const setItem = vi.fn((key: string, value: string) => {
+      expect(key).toBe(TOOL_VISIBILITY_STORAGE_KEY);
+      stored.set(key, value);
+    });
+    vi.stubGlobal("window", { localStorage: { getItem: (key: string) => stored.get(key) ?? null, setItem } });
+    try {
+      expect([...readHiddenToolIds()]).toEqual(["gemini"]);
+      expect(JSON.parse(stored.get(TOOL_VISIBILITY_STORAGE_KEY)!).visible).toContain("workbuddy");
+      expect(stored.get(LEGACY_TOOL_VISIBILITY_STORAGE_KEY)).toBe(legacy);
+      expect([...readHiddenToolIds()]).toEqual(["gemini"]);
+      expect(setItem).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   test("falls back safely when stored visibility is invalid", () => {

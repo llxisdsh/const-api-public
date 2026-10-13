@@ -99,4 +99,6 @@ cargo test --manifest-path src-tauri/Cargo.toml local_policy::tests -- --test-th
 官方安装包仍通过原来的私有构建和发布流程产生。公开 CI 只有仓库读取权限，
 不发布应用或更新源。通过审查的社区贡献先合入主仓库，再进入下一次公开快照。
 
+本公开仓库的提交标题和正文统一使用英文。
+
 许可范围见 [LICENSE](LICENSE) 和[第三方声明](THIRD_PARTY_NOTICES.md)。

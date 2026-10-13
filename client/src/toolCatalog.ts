@@ -442,7 +442,8 @@ export type ToolCatalogId = keyof typeof TOOL_CATALOG;
 export const RETIRED_TOOL_IDS: ReadonlySet<ToolCatalogId> = new Set(["trae-work"]);
 
 // This is the canonical/default dock order. Users can move a tool to the end by
-// hiding and restoring it, while newly supported tools reconcile against this list.
+// hiding and restoring it. Append newly supported tools; do not insert editions
+// next to their siblings and disturb the established default order.
 export const TOOL_CATALOG_ORDER = [
   "codex",
   "claude",
@@ -453,7 +454,6 @@ export const TOOL_CATALOG_ORDER = [
   "deepseek-harness",
   "workbuddy",
   "openclaw",
-  "workbuddy-ai",
   "gemini",
   "copilot",
   "copilot-desktop",
@@ -477,8 +477,9 @@ export const TOOL_CATALOG_ORDER = [
   "vibe-trading",
   "grok-build",
   "minimax-code",
-  "muse-code",
   "zcode",
+  "workbuddy-ai",
+  "muse-code",
 ] as const satisfies readonly ToolCatalogId[];
 
 export const DEFAULT_VISIBLE_TOOL_IDS = [
@@ -490,7 +491,6 @@ export const DEFAULT_VISIBLE_TOOL_IDS = [
   "hermes",
   "deepseek-harness",
   "workbuddy",
-  "openclaw",
 ] as const satisfies readonly ToolCatalogId[];
 
 export function toolCatalogEntry(tool: string): ToolCatalogEntry | null {

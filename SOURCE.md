@@ -124,4 +124,6 @@ pipeline. Public CI has read-only repository permissions and never publishes
 applications or update feeds. Accepted contributions are integrated upstream
 before a new snapshot is exported.
 
+Write commit subjects and bodies in English in this public repository.
+
 See [LICENSE](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md).

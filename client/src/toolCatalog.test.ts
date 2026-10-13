@@ -76,9 +76,9 @@ describe("tool catalog", () => {
       const badge = toolCatalogEntry(tool)?.badge;
       return badge ? [[tool, badge]] : [];
     })).toEqual([
-      ["workbuddy-ai", "AI"],
       ["copilot", "CLI"],
       ["trae-cn", "CN"],
+      ["workbuddy-ai", "AI"],
     ]);
   });
 
@@ -148,14 +148,13 @@ describe("tool catalog", () => {
       "hermes",
       "deepseek-harness",
       "workbuddy",
-      "openclaw",
     ]);
     expect(DEFAULT_VISIBLE_TOOL_IDS).not.toContain("gemini");
     expect(DEFAULT_VISIBLE_TOOL_IDS).not.toContain("copilot");
     expect(DEFAULT_VISIBLE_TOOL_IDS).not.toContain("cline");
     expect(DEFAULT_VISIBLE_TOOL_IDS).not.toContain("raven");
     expect(DEFAULT_VISIBLE_TOOL_IDS).not.toContain("pi");
-    expect(TOOL_CATALOG_ORDER[TOOL_CATALOG_ORDER.length - 1]).toBe("zcode");
+    expect(TOOL_CATALOG_ORDER.slice(-3)).toEqual(["zcode", "workbuddy-ai", "muse-code"]);
     expect(DEFAULT_VISIBLE_TOOL_IDS.every((tool) => TOOL_CATALOG_ORDER.includes(tool))).toBe(true);
   });
 
