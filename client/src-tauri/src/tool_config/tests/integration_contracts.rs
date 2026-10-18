@@ -189,7 +189,7 @@ fn copilot_isolates_registry_and_preserves_user_registry_on_remove() {
         );
         let registry =
             read_json_or_default(&copilot_providers_path(), serde_json::Value::Null).unwrap();
-        assert_eq!(registry, serde_json::json!({"providers": {}, "models": {}}));
+        assert_eq!(registry, serde_json::json!({"providers": [], "models": []}));
         fs::remove_file(copilot_providers_path()).unwrap();
         assert!(
             !check_copilot_config(TOOL_CONFIG_ROOT_URL, "mock-key")
@@ -210,13 +210,13 @@ fn empty_provider_registry_ownership_preserves_later_user_additions() {
         apply_copilot_config(TOOL_CONFIG_ROOT_URL, "mock-key", &models).unwrap();
         fs::write(
             copilot_providers_path(),
-            r#"{"providers":{"user":{"keep":true}},"models":{}}"#,
+            r#"{"providers":[{"id":"user","keep":true}],"models":[]}"#,
         )
         .unwrap();
         remove_additional_tool_config("copilot").unwrap();
         let remaining =
             read_json_or_default(&copilot_providers_path(), serde_json::Value::Null).unwrap();
-        assert_eq!(remaining["providers"]["user"]["keep"], true);
+        assert_eq!(remaining["providers"][0]["keep"], true);
         assert!(remaining.get("models").is_none());
     });
 }

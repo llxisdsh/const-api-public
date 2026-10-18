@@ -560,6 +560,73 @@ pub(crate) fn resolve_tool_protocol(tool: &str, requested: Option<&str>) -> Resu
     Ok(protocol)
 }
 
+/// Resolve a provider-level protocol from the model metadata returned by the
+/// server. An explicit menu choice always wins; automatic selection only uses
+/// protocols that every model with verified native metadata supports. The
+/// server's per-model preference is the primary signal, while the tool's
+/// configured default is only a deterministic tie-breaker.
+pub(crate) fn resolve_tool_protocol_for_models(
+    tool: &str,
+    requested: Option<&str>,
+    models: &[ToolModelInfo],
+) -> Result<ToolProtocol> {
+    if requested.is_some_and(|value| !value.trim().is_empty()) {
+        return resolve_tool_protocol(tool, requested);
+    }
+
+    let fallback = default_tool_protocol(tool)?;
+    let Some(profile) = tool_profile(tool) else {
+        return Ok(fallback);
+    };
+    if models.is_empty() || models.iter().any(|model| model.native_protocols.is_empty()) {
+        return Ok(fallback);
+    }
+
+    let candidates = profile
+        .protocols
+        .iter()
+        .copied()
+        .filter(|protocol| {
+            models.iter().all(|model| {
+                model
+                    .native_protocols
+                    .iter()
+                    .any(|value| value == protocol.as_str())
+            })
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(fallback);
+    }
+
+    let preferred_count = |protocol: ToolProtocol| {
+        models
+            .iter()
+            .filter(|model| {
+                model
+                    .preferred_protocol
+                    .as_deref()
+                    .and_then(ToolProtocol::parse)
+                    == Some(protocol)
+            })
+            .count()
+    };
+    Ok(candidates
+        .into_iter()
+        .enumerate()
+        .max_by_key(|(index, protocol)| {
+            (
+                preferred_count(*protocol),
+                (*protocol == fallback) as usize,
+                // Keep the profile's explicit ordering as the final stable
+                // tie-breaker, rather than making equal metadata arbitrary.
+                usize::MAX - *index,
+            )
+        })
+        .map(|(_, protocol)| protocol)
+        .unwrap_or(fallback))
+}
+
 // Only writers with a verified per-model API override call this. For other
 // tools, the menu selection remains the one global protocol for every model.
 fn tool_model_protocol(tool: &str, model: &ToolModelInfo, fallback: ToolProtocol) -> ToolProtocol {
@@ -581,24 +648,21 @@ fn select_model_protocol(
                 .iter()
                 .any(|value| value == protocol.as_str())
     };
-    // Discovery aggregates channels and its generic preference can be Responses
-    // even for Claude. Catalog identity breaks that tie, but never proves that
-    // a protocol is available: both the live native set and tool must allow it.
+    // The server preference is derived from live channel capabilities and
+    // defaults. Catalog identity is only a fallback for older payloads that do
+    // not carry that preference; it never proves that a protocol is available.
     let catalog_preference = match model.catalog_vendor.as_str() {
         "anthropic" => Some(ToolProtocol::AnthropicMessages),
         "openai" => Some(ToolProtocol::OpenAiResponses),
         "google" if model.family.starts_with("gemini-") => Some(ToolProtocol::GeminiNative),
         _ => None,
     };
-    catalog_preference
+    model
+        .preferred_protocol
+        .as_deref()
+        .and_then(ToolProtocol::parse)
         .filter(|protocol| native(*protocol))
-        .or_else(|| {
-            model
-                .preferred_protocol
-                .as_deref()
-                .and_then(ToolProtocol::parse)
-                .filter(|protocol| native(*protocol))
-        })
+        .or_else(|| catalog_preference.filter(|protocol| native(*protocol)))
         .or_else(|| native(fallback).then_some(fallback))
         .or_else(|| supported.iter().copied().find(|protocol| native(*protocol)))
         .unwrap_or(fallback)

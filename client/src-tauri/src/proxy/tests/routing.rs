@@ -999,6 +999,7 @@
                 ("model-a".to_string(), "exact-only".to_string()),
                 ("model-b".to_string(), "exact-only".to_string()),
                 ("model-fallback".to_string(), "exact-only".to_string()),
+                ("model-fallback".to_string(), "exact-only".to_string()),
             ]
         );
         assert_eq!(
@@ -1008,6 +1009,152 @@
 
         platform_task.abort();
         local_task.abort();
+    }
+
+    #[tokio::test]
+    async fn local_route_sticky_compatibility_yields_to_recovered_exact_routes() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let platform_exact_available = Arc::new(AtomicBool::new(false));
+        let platform_available_filter = platform_exact_available.clone();
+        let platform = warp::any().map(move || {
+            if platform_available_filter.load(Ordering::SeqCst) {
+                return warp::reply::json(&serde_json::json!({
+                    "source": "platform-exact", "choices": []
+                }))
+                .into_response();
+            }
+            let response = warp::reply::with_status(
+                warp::reply::json(&serde_json::json!({"error": {"message": "no exact route"}})),
+                StatusCode::SERVICE_UNAVAILABLE,
+            );
+            let response = warp::reply::with_header(
+                response,
+                PLATFORM_MODEL_ROUTE_MODE_APPLIED_HEADER,
+                "exact-only",
+            );
+            let response = warp::reply::with_header(
+                response,
+                PLATFORM_UPSTREAM_ATTEMPTS_USED_HEADER,
+                "0",
+            );
+            warp::reply::with_header(response, PLATFORM_MODEL_FALLBACK_SAFE_HEADER, "1")
+                .into_response()
+        });
+        let (platform_addr, platform_server) = crate::bind_ephemeral!(platform, ([127, 0, 0, 1], 0));
+        let platform_task = tokio::spawn(platform_server);
+
+        let fail_local_exact = Arc::new(AtomicBool::new(false));
+        let fail_local_filter = fail_local_exact.clone();
+        let local = warp::body::json().map(move |body: serde_json::Value| {
+            let model = body["model"].as_str().expect("model");
+            if model == "model-a" && fail_local_filter.load(Ordering::SeqCst) {
+                return warp::reply::with_status(
+                    warp::reply::json(&serde_json::json!({"error": {"message": "temporary failure"}})),
+                    StatusCode::SERVICE_UNAVAILABLE,
+                )
+                .into_response();
+            }
+            warp::reply::json(&serde_json::json!({
+                "source": format!("local:{model}"), "choices": []
+            }))
+            .into_response()
+        });
+        let (local_addr, local_server) = crate::bind_ephemeral!(local, ([127, 0, 0, 1], 0));
+        let local_task = tokio::spawn(local_server);
+        let challenger = warp::any().map(|| {
+            warp::reply::json(&serde_json::json!({
+                "source": "challenger", "choices": []
+            }))
+        });
+        let (challenger_addr, challenger_server) =
+            crate::bind_ephemeral!(challenger, ([127, 0, 0, 1], 0));
+        let challenger_task = tokio::spawn(challenger_server);
+
+        for prefer_local in [true, false] {
+            platform_exact_available.store(false, Ordering::SeqCst);
+            fail_local_exact.store(false, Ordering::SeqCst);
+            let mut config = default_config();
+            config.prefer_local_supply = prefer_local;
+            config.account_device_api_key = "test-device-key".to_string();
+            config.endpoints = vec![Endpoint {
+                server_id: String::new(),
+                name: "platform".to_string(),
+                base_url: format!("http://{platform_addr}"),
+                supplier_ws_url: String::new(),
+                supplier_quic_url: String::new(),
+                enabled: true,
+            }];
+            config.channels = [
+                ("sticky-challenger", "model-b", challenger_addr),
+                ("sticky-primary", "model-b", local_addr),
+                ("sticky-exact", "model-a", local_addr),
+            ]
+            .into_iter()
+            .map(|(id, model, addr)| {
+                let mut channel = local_model_channel(&[model], &format!("http://{addr}/v1"));
+                channel.id = id.to_string();
+                channel.node_id = format!("node-{id}");
+                channel
+            })
+            .collect();
+            configure_model_compatibility_pair(&mut config, "model-a", "model-b");
+            let config = normalize_config(config);
+            let readiness = Arc::new(StdMutex::new(HashMap::from([(
+                "sticky-primary".to_string(),
+                true,
+            )])));
+            let shared = Arc::new(ProxyShared::with_platform_api_key(
+                config.clone(),
+                Client::new(),
+                Arc::new(StdMutex::new("test-device-key".to_string())),
+                Arc::new(StdMutex::new(config)),
+                readiness.clone(),
+            ));
+            assert_eq!(
+                forward_chat_json(&shared, "model-a", "same-session").await["source"],
+                "local:model-b"
+            );
+
+            // A newly ready, earlier-listed compatible channel must not steal
+            // the established cache route within the compatibility stage.
+            readiness.lock().unwrap().insert("sticky-challenger".to_string(), true);
+            assert_eq!(
+                forward_chat_json(&shared, "model-a", "same-session").await["source"],
+                "local:model-b"
+            );
+
+            platform_exact_available.store(true, Ordering::SeqCst);
+            assert_eq!(
+                forward_chat_json(&shared, "model-a", "same-session").await["source"],
+                "platform-exact"
+            );
+
+            platform_exact_available.store(false, Ordering::SeqCst);
+            readiness.lock().unwrap().insert("sticky-challenger".to_string(), false);
+            assert_eq!(
+                forward_chat_json(&shared, "model-a", "same-session").await["source"],
+                "local:model-b"
+            );
+
+            // Readiness changes without editing the configuration must still
+            // restore exact-model priority over an existing compatible route.
+            readiness.lock().unwrap().insert("sticky-exact".to_string(), true);
+            assert_eq!(
+                forward_chat_json(&shared, "model-a", "same-session").await["source"],
+                "local:model-a"
+            );
+
+            // Exact-first does not disable safe fallback when that route fails.
+            fail_local_exact.store(true, Ordering::SeqCst);
+            assert_eq!(
+                forward_chat_json(&shared, "model-a", "same-session").await["source"],
+                "local:model-b"
+            );
+        }
+        platform_task.abort();
+        local_task.abort();
+        challenger_task.abort();
     }
 
     #[tokio::test]

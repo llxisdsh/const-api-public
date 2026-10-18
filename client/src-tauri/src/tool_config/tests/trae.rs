@@ -86,11 +86,15 @@ async fn all_editions_write_and_read_mixed_protocols_with_default_thinking() {
         config.commit(|_, _| {}).await.unwrap();
         let remote = vendor.state.lock().unwrap().models.clone();
         for (id, provider, url) in [
-            ("gpt-6-luna", "custom_responses_compatible", "/v1/responses"),
+            (
+                "gpt-6-luna",
+                "custom_openai_compatible",
+                "/v1/chat/completions",
+            ),
             (
                 "claude-opus-4-6",
-                "custom_anthropic_compatible",
-                "/anthropic/v1/messages",
+                "custom_responses_compatible",
+                "/v1/responses",
             ),
             (
                 "chat-only",

@@ -75,7 +75,7 @@ export type LanShareSelfStatus = LanShareUsageSnapshot & {
   output_weight: number;
 };
 
-export type CustomBrandIcon = "abacus" | "commandcode" | "groq" | "kilo" | "kiro" | "anythingllm" | "azure" | "bedrock" | "claude" | "claude-science" | "cline" | "codex" | "copilot" | "deepseek-harness" | "gemini" | "goose" | "grok" | "hermes" | "kimi" | "mimocode" | "minimax-code" | "mistral-vibe" | "omniroute" | "open-design" | "open-interpreter" | "openclaw" | "opencode" | "openscience" | "pi" | "qwen" | "raven" | "reasonix" | "trae" | "trae-work" | "vibe-trading" | "vscode" | "workbuddy" | "zcode";
+export type CustomBrandIcon = "abacus" | "codebuddy" | "commandcode" | "groq" | "kilo" | "kiro" | "anythingllm" | "azure" | "bedrock" | "claude" | "claude-science" | "cline" | "codex" | "copilot" | "deepseek-harness" | "gemini" | "goose" | "grok" | "hermes" | "kimi" | "mimocode" | "minimax-code" | "mistral-vibe" | "omniroute" | "open-design" | "open-interpreter" | "openclaw" | "opencode" | "openscience" | "octop" | "pi" | "qoder" | "qwen" | "raven" | "reasonix" | "toonflow" | "trae" | "trae-work" | "vibe-trading" | "vscode" | "workbuddy" | "zcode";
 
 export type CopyField =
   | "base-url"
@@ -84,10 +84,16 @@ export type CopyField =
   | "tool-config-path"
   | "guide-root-url"
   | "guide-openai-url"
+  | "guide-openai-responses-url"
   | "guide-openai-chat-url"
   | "guide-openai-models-url"
   | "guide-anthropic-url"
+  | "guide-anthropic-messages-url"
+  | "guide-anthropic-models-url"
   | "guide-gemini-url"
+  | "guide-gemini-generate-url"
+  | "guide-gemini-stream-url"
+  | "guide-gemini-models-url"
   | "guide-model-id"
   | "guide-models";
 
@@ -684,25 +690,11 @@ export type Toast = {
 export type ConfirmDialogState = {
   title: string;
   message: string;
+  hint?: string;
   confirmText?: string;
   cancelText?: string;
   tone?: "default" | "danger";
   mode?: "confirm" | "notice";
-};
-
-export type ChannelDuplicateCandidate = {
-  channel_id: string;
-  name: string;
-};
-
-export type ChannelDuplicateDecision =
-  | { action: "open_existing"; channelId: string }
-  | { action: "create_new" }
-  | { action: "cancel" };
-
-export type ChannelDuplicateDialogState = {
-  draftName: string;
-  candidates: ChannelDuplicateCandidate[];
 };
 
 export type AppLogEntry = {

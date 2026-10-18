@@ -438,7 +438,7 @@ mod tests {
             1
         );
         *payload.lock().unwrap() = json!({"error":{"message":"temporary"}});
-        assert!(crate::detection::snapshot_channel(channel).await.is_err());
+        assert!(crate::detection::refresh_channel(channel).await.is_err());
         server.abort();
     }
 

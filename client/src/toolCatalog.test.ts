@@ -26,13 +26,16 @@ describe("tool catalog", () => {
       "open-design.ai",
       "code.visualstudio.com",
       "www.codebuddy.cn",
+      "www.codebuddy.ai",
       "www.workbuddy.ai",
       "www.kimi.com",
       "zcode.z.ai",
       "www.trae.ai",
       "www.trae.cn",
+      "qoder.com",
+      "docs.qoder.com",
     ]);
-    expect(Object.keys(TOOL_CATALOG)).toHaveLength(35);
+    expect(Object.keys(TOOL_CATALOG)).toHaveLength(40);
     for (const entry of Object.values(TOOL_CATALOG)) {
       expect(entry.title).toBeTruthy();
       expect(entry.description.length).toBeGreaterThan(8);
@@ -79,7 +82,34 @@ describe("tool catalog", () => {
       ["copilot", "CLI"],
       ["trae-cn", "CN"],
       ["workbuddy-ai", "AI"],
+      ["qoder-cn", "CN"],
     ]);
+  });
+
+  test("shares CodeBuddy configuration across both installed editions", () => {
+    expect(TOOL_CATALOG.codebuddy.title).toBe("CodeBuddy");
+    expect(TOOL_CATALOG.codebuddy.officialLinks[0].url).toContain("codebuddy.ai");
+    expect(TOOL_CATALOG.codebuddy.officialLinks[1]).toEqual({
+      label: "Models documentation",
+      url: "https://www.codebuddy.ai/docs/cli/models",
+    });
+    expect(TOOL_CATALOG_ORDER.filter((id) => id === "codebuddy")).toHaveLength(1);
+  });
+
+  test("matches Qoder protocol defaults to the installed editions", () => {
+    expect(TOOL_CATALOG.qoder.defaultProtocol).toBe("openai_responses");
+    expect(TOOL_CATALOG["qoder-cn"].defaultProtocol).toBe("anthropic_messages");
+    for (const tool of ["qoder", "qoder-cn"] as const) {
+      expect(TOOL_CATALOG[tool].protocols).toEqual([
+        "openai_responses",
+        "openai_chat",
+        "anthropic_messages",
+      ]);
+      // Qoder stores one provider protocol for the whole model list; it does
+      // not have the per-model endpoint override used by Trae/OpenCode.
+      expect(toolCatalogEntry(tool)?.protocolScope).toBeUndefined();
+      expect(TOOL_CATALOG[tool].modelSyncPolicy).toBe("catalog");
+    }
   });
 
   test("does not resolve unknown or inherited object keys", () => {
@@ -154,7 +184,7 @@ describe("tool catalog", () => {
     expect(DEFAULT_VISIBLE_TOOL_IDS).not.toContain("cline");
     expect(DEFAULT_VISIBLE_TOOL_IDS).not.toContain("raven");
     expect(DEFAULT_VISIBLE_TOOL_IDS).not.toContain("pi");
-    expect(TOOL_CATALOG_ORDER.slice(-3)).toEqual(["zcode", "workbuddy-ai", "muse-code"]);
+    expect(TOOL_CATALOG_ORDER.slice(-5)).toEqual(["codebuddy", "qoder", "qoder-cn", "octop", "toonflow"]);
     expect(DEFAULT_VISIBLE_TOOL_IDS.every((tool) => TOOL_CATALOG_ORDER.includes(tool))).toBe(true);
   });
 

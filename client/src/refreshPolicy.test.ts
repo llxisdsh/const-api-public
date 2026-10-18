@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
 import {
+  startVisibilityPoll,
   UI_REFRESH_THROTTLE_MS,
   UI_SNAPSHOT_AUTO_REFRESH_MS,
   createRefreshGate,
@@ -36,5 +37,48 @@ describe("refresh policy", () => {
 
   test("uses a five-minute automatic refresh cadence for snapshots", () => {
     expect(UI_SNAPSHOT_AUTO_REFRESH_MS).toBe(300_000);
+  });
+
+  test("does not refresh a hidden window and refreshes once when it becomes visible", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    const stop = startVisibilityPoll({
+      intervalMs: 5_000,
+      initialDelayMs: 0,
+      hiddenRetryMs: 60_000,
+      refresh,
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refresh).not.toHaveBeenCalled();
+
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    stop();
+    visibility.mockRestore();
+    vi.useRealTimers();
+  });
+
+  test("does not overlap a slow refresh with the next poll", async () => {
+    vi.useFakeTimers();
+    const pending: { resolve: () => void } = { resolve: () => undefined };
+    const refresh = vi.fn(() => new Promise<void>((resolve) => {
+      pending.resolve = resolve;
+    }));
+    const stop = startVisibilityPoll({ intervalMs: 5_000, initialDelayMs: 0, refresh });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    stop();
+    vi.useRealTimers();
   });
 });

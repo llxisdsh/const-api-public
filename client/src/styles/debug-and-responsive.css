@@ -1129,7 +1129,7 @@ pre {
   .guidance-notice-stack {
     right: 12px;
     bottom: 70px;
-    width: calc(100vw - 24px);
+    width: min(390px, calc(100vw - 24px));
     max-height: 64vh;
   }
 

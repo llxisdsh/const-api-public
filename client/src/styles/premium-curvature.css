@@ -123,7 +123,6 @@ button.quiet,
 
 .guide-root-card,
 .guide-surface-section,
-.guide-compat-section,
 .guide-steps,
 .advanced-disclosure,
 .alias-preview-group,
@@ -154,7 +153,6 @@ button.quiet,
 .about-list,
 .copy-row,
 .program-candidate,
-.duplicate-channel-target,
 .wizard-operation-status {
   border-radius: var(--radius-panel) !important;
 }

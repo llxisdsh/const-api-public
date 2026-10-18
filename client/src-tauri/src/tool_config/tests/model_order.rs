@@ -20,7 +20,7 @@ fn apply_order_test_catalog(tool: &str, models: &[ToolModelInfo]) {
             models,
             protocol,
         ),
-        "workbuddy" | "workbuddy-ai" => apply_workbuddy_config_with_model_info_for_protocol(
+        "workbuddy" | "workbuddy-ai" | "codebuddy" | "codebuddy-cn" => apply_workbuddy_config_with_model_info_for_protocol(
             tool,
             TOOL_CONFIG_ROOT_URL,
             "mock",
@@ -62,6 +62,7 @@ fn injection_selection_replaces_managed_catalogs_without_leaving_excluded_models
             ("minimax-code", minimax_code_config_path()),
             ("workbuddy", workbuddy_models_path("workbuddy")),
             ("workbuddy-ai", workbuddy_models_path("workbuddy-ai")),
+            ("codebuddy", workbuddy_models_path("codebuddy")),
         ] {
             apply_order_test_catalog(tool, &all);
             assert!(fs::read_to_string(&path).unwrap().contains("drop-injection-model"), "{tool}");
@@ -160,6 +161,7 @@ fn array_and_toml_catalogs_write_admin_order_including_reconfiguration() {
                 "minimax-code",
                 "workbuddy",
                 "workbuddy-ai",
+                "codebuddy",
             ] {
                 apply_order_test_catalog(tool, &models);
             }
@@ -175,6 +177,7 @@ fn array_and_toml_catalogs_write_admin_order_including_reconfiguration() {
                 ("goose", goose_config_paths().0, "/models", "name"),
                 ("workbuddy", workbuddy_models_path("workbuddy"), "", "id"),
                 ("workbuddy-ai", workbuddy_models_path("workbuddy-ai"), "", "id"),
+                ("codebuddy", workbuddy_models_path("codebuddy"), "/models", "id"),
             ] {
                 let root: serde_json::Value =
                     serde_json::from_slice(&fs::read(path).unwrap()).unwrap();

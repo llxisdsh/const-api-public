@@ -568,7 +568,6 @@ button.model-rule-remove {
 
 .guide-root-card,
 .guide-surface-section,
-.guide-compat-section,
 .guide-steps {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -594,7 +593,8 @@ button.model-rule-remove {
 
 .guide-root-card small,
 .guide-surface-copy small,
-.guide-section-heading p {
+.guide-section-heading p,
+.guide-protocol-heading p {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
@@ -625,13 +625,28 @@ button.model-rule-remove {
   white-space: nowrap;
 }
 
-.guide-surface-section,
-.guide-compat-section {
+.guide-surface-section {
   overflow: hidden;
 }
 
-.guide-compat-section {
-  margin-top: 12px;
+.guide-protocol-group {
+  border-top: 1px solid var(--border);
+}
+
+.guide-protocol-heading {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-muted) 58%, var(--panel));
+}
+
+.guide-protocol-heading h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.guide-protocol-heading p {
+  margin: 3px 0 0;
 }
 
 .guide-section-heading {
@@ -657,7 +672,7 @@ button.model-rule-remove {
 
 .guide-surface-row {
   display: grid;
-  grid-template-columns: minmax(150px, 0.7fr) minmax(250px, 1fr) 34px;
+  grid-template-columns: minmax(150px, 0.45fr) minmax(0, 1fr) 34px;
   gap: 12px;
   align-items: center;
   min-width: 0;
@@ -669,12 +684,18 @@ button.model-rule-remove {
   border-top: 1px solid var(--border);
 }
 
+.guide-surface-row > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .guide-surface-row code {
-  overflow: hidden;
+  min-width: 0;
   color: var(--text);
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .guide-surface-row > button {
@@ -991,6 +1012,19 @@ button.model-rule-remove {
   white-space: pre-line;
 }
 
+.confirm-modal p.confirm-modal-hint {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--art-blue-soft) 72%, var(--surface-floating));
+  color: var(--blue-strong);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+  white-space: normal;
+}
+
 .confirm-actions {
   display: flex;
   justify-content: flex-end;
@@ -1100,44 +1134,6 @@ button.model-rule-remove {
   margin: -4px 0 0;
   color: var(--muted);
   font-size: 12px;
-}
-
-.duplicate-channel-modal {
-  width: min(620px, calc(100vw - 48px));
-}
-
-.duplicate-channel-modal label {
-  display: grid;
-  gap: 6px;
-  margin-top: 14px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.duplicate-channel-target {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 14px;
-  padding: 11px 12px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface-subtle);
-}
-
-.duplicate-channel-target span {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.duplicate-channel-target strong {
-  color: var(--text);
-  font-size: 14px;
-}
-
-.duplicate-channel-actions {
-  flex-wrap: wrap;
 }
 
 .modal-panel.call-log-panel {
@@ -1660,12 +1656,21 @@ textarea {
   cursor: not-allowed;
 }
 
-.model-equivalence-check span {
+.model-equivalence-check > span {
   display: grid;
+  flex: 1;
   gap: 2px;
   min-width: 0;
   color: inherit;
   font-size: inherit;
+}
+
+.model-equivalence-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 16px;
 }
 
 .model-equivalence-toggle .model-equivalence-check strong {

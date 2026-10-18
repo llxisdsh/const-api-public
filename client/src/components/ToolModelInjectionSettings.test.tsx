@@ -21,6 +21,22 @@ function Settings(props: Omit<ComponentProps<typeof ToolModelInjectionSettings>,
 describe("tool model injection settings", () => {
   beforeEach(() => vi.mocked(invoke).mockReset().mockResolvedValue({ patterns: ["gpt-*", "claude-*"], available_models: ["local-model", "extra-model"] }));
 
+  it("changes the setting only from the checkbox, not its title, description, or surrounding row", async () => {
+    const onSave = vi.fn().mockResolvedValue({ synced: 0, errors: [] });
+    const { container } = render(<Settings settings={DEFAULT_TOOL_MODEL_INJECTION} onSave={onSave} />);
+    const checkbox = screen.getByRole("checkbox", { name: /注入全部模型/ });
+    fireEvent.click(screen.getByText("注入全部模型"));
+    fireEvent.click(container.querySelector(".model-equivalence-check small")!);
+    fireEvent.click(container.querySelector(".model-equivalence-check")!);
+    expect(checkbox).toBeChecked();
+    expect(onSave).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(checkbox).not.toBeChecked());
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith({ all_models: false, extra_models: [] }, expect.any(Function), false);
+  });
+
   it("defaults to all; reads recommendations only when opened and only permits appending/removing additions", async () => {
     const onSave = vi.fn().mockResolvedValue({ synced: 2, errors: [] });
     render(<Settings settings={DEFAULT_TOOL_MODEL_INJECTION} onSave={onSave} />);
@@ -30,7 +46,7 @@ describe("tool model injection settings", () => {
     await waitFor(() => expect(screen.getByRole("checkbox")).not.toBeChecked());
     expect(onSave).toHaveBeenCalledWith({ all_models: false, extra_models: [] }, expect.any(Function), false);
     expect(screen.queryByRole("button", { name: "保存并同步" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "推荐列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "推荐模型" }));
     await screen.findByText("gpt-*");
     expect(screen.queryByRole("button", { name: /上移|下移|隐藏/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除追加项 gpt-*" })).not.toBeInTheDocument();
@@ -51,7 +67,7 @@ describe("tool model injection settings", () => {
   it("enables save only for real list changes and keeps each delete action in its model row", async () => {
     const onSave = vi.fn().mockResolvedValue({ synced: 1, errors: [] });
     render(<Settings settings={{ all_models: false, extra_models: ["mine"] }} onSave={onSave} />);
-    fireEvent.click(screen.getByRole("button", { name: "推荐列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "推荐模型" }));
     await screen.findByText("gpt-*");
     const save = screen.getByRole("button", { name: "保存并同步" });
     expect(save).toBeDisabled();
@@ -73,7 +89,7 @@ describe("tool model injection settings", () => {
   it("auto-saves only the switch, preserving unconfirmed additions for the editor", async () => {
     const onSave = vi.fn().mockResolvedValue({ synced: 0, errors: [] });
     render(<Settings settings={DEFAULT_TOOL_MODEL_INJECTION} onSave={onSave} />);
-    fireEvent.click(screen.getByRole("button", { name: "推荐列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "推荐模型" }));
     await screen.findByText("gpt-*");
     fireEvent.change(screen.getByRole("combobox", { name: "追加模型或前缀" }), { target: { value: "draft-only" } });
     fireEvent.click(screen.getByRole("button", { name: "追加" }));
@@ -82,7 +98,7 @@ describe("tool model injection settings", () => {
     fireEvent.click(screen.getByRole("checkbox"));
     await waitFor(() => expect(screen.getByRole("checkbox")).not.toBeChecked());
     expect(onSave).toHaveBeenCalledWith({ all_models: false, extra_models: [] }, expect.any(Function), false);
-    fireEvent.click(screen.getByRole("button", { name: "推荐列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "推荐模型" }));
     expect(screen.getByText("draft-only")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存并同步" })).toBeEnabled();
   });
@@ -103,7 +119,7 @@ describe("tool model injection settings", () => {
     vi.mocked(invoke).mockResolvedValue({ patterns: [], available_models: ["local-model"] });
     const onSave = vi.fn().mockResolvedValueOnce({ synced: 0, errors: ["TRAE: fixture failure"] }).mockResolvedValue({ synced: 1, errors: [] });
     render(<Settings settings={{ all_models: false, extra_models: ["local-model"] }} onSave={onSave} />);
-    fireEvent.click(screen.getByRole("button", { name: "推荐列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "推荐模型" }));
     await screen.findByText("暂无推荐规则，可在下方追加。");
     fireEvent.click(screen.getByRole("button", { name: "恢复默认" }));
     expect(screen.queryByRole("button", { name: "删除追加项 local-model" })).not.toBeInTheDocument();
@@ -119,7 +135,7 @@ describe("tool model injection settings", () => {
   it("keeps a load failure distinct from an empty list and can refresh without losing additions", async () => {
     vi.mocked(invoke).mockRejectedValueOnce(new Error("offline"));
     render(<Settings settings={{ all_models: false, extra_models: ["mine"] }} onSave={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "推荐列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "推荐模型" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("offline");
     expect(screen.queryByText("暂无推荐规则，可在下方追加。")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));

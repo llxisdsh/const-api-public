@@ -423,6 +423,8 @@
         assert_eq!(tool_program_commands("grok-build"), &["grok"]);
         assert_eq!(tool_program_commands("minimax-code"), &["mcode"]);
         assert_eq!(tool_program_commands("open-design"), &["od"]);
+        assert!(tool_program_commands("codebuddy").is_empty());
+        assert!(tool_program_commands("codebuddy-cn").is_empty());
 
         #[cfg(target_os = "windows")]
         {
@@ -475,6 +477,14 @@
                     "od.exe",
                 ]
             );
+            assert_eq!(
+                known_tool_process_names("codebuddy"),
+                &["CodeBuddy.exe", "CodeBuddy CN.exe"]
+            );
+            assert_eq!(
+                known_tool_process_names("codebuddy-cn"),
+                &["CodeBuddy.exe", "CodeBuddy CN.exe"]
+            );
         }
     }
 
@@ -498,6 +508,8 @@
             "hermes",
             "vscode",
             "workbuddy",
+            "codebuddy",
+            "codebuddy-cn",
             "kimicode",
             "mimocode",
             "qwencode",
@@ -963,6 +975,20 @@
             known_tool_process_names("workbuddy-ai"),
             &["WorkBuddyAI.exe", "workbuddy-ai.exe"]
         );
+        assert!(known_tool_program_paths("codebuddy")
+            .contains(&local_app_data.join("Programs/CodeBuddy/CodeBuddy.exe")));
+        assert_eq!(
+            known_tool_process_names("codebuddy"),
+            &["CodeBuddy.exe", "CodeBuddy CN.exe"]
+        );
+        assert!(known_tool_program_paths("codebuddy-cn")
+            .contains(&local_app_data.join("Programs/CodeBuddy CN/CodeBuddy CN.exe")));
+        assert_eq!(
+            known_tool_process_names("codebuddy-cn"),
+            &["CodeBuddy.exe", "CodeBuddy CN.exe"]
+        );
+        assert!(windows_installed_product_matches("CodeBuddy (User)", "CodeBuddy"));
+        assert!(windows_installed_product_matches("CodeBuddy CN (User)", "CodeBuddy CN"));
         assert!(windows_installed_product_matches("WorkBuddy AI 5.7.6", "WorkBuddy AI"));
         assert!(!windows_installed_product_matches("WorkBuddy AI 5.7.6", "WorkBuddy"));
         assert!(windows_installed_entry_paths(
@@ -1003,6 +1029,24 @@
                     "{sibling}: {path}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn codebuddy_variants_share_program_ownership() {
+        for path in [
+            "/tools/CodeBuddy.exe",
+            "/Applications/CodeBuddy.app",
+            "/usr/bin/codebuddy",
+            "/tools/CodeBuddy CN.exe",
+            "/Applications/CodeBuddy CN.app",
+            "/usr/bin/codebuddy-cn",
+        ] {
+            assert!(is_tool_owned_program_path("codebuddy", Path::new(path)), "{path}");
+            assert!(
+                is_tool_owned_program_path("codebuddy-cn", Path::new(path)),
+                "{path}"
+            );
         }
     }
 
@@ -1060,6 +1104,16 @@
                     "od.exe",
                 ][..],
             ),
+            (
+                "codebuddy",
+                "Programs/CodeBuddy/CodeBuddy.exe",
+                &["CodeBuddy.exe", "CodeBuddy CN.exe"][..],
+            ),
+            (
+                "codebuddy-cn",
+                "Programs/CodeBuddy CN/CodeBuddy CN.exe",
+                &["CodeBuddy.exe", "CodeBuddy CN.exe"][..],
+            ),
         ];
 
         for (tool, relative_path, process_names) in expected {
@@ -1068,7 +1122,7 @@
                 "missing {tool} Windows program candidate"
             );
             assert_eq!(known_tool_process_names(tool), process_names);
-            if matches!(tool, "zcode" | "trae-work") {
+            if matches!(tool, "zcode" | "trae-work" | "codebuddy" | "codebuddy-cn") {
                 assert!(tool_program_commands(tool).is_empty());
             } else {
                 assert!(!tool_program_commands(tool).is_empty());
@@ -1328,6 +1382,8 @@
             "hermes",
             "vscode",
             "workbuddy",
+            "codebuddy",
+            "codebuddy-cn",
             "kimicode",
             "mimocode",
             "qwencode",
@@ -1384,6 +1440,8 @@
             "openclaw",
             "vscode",
             "workbuddy",
+            "codebuddy",
+            "codebuddy-cn",
             "reasonix",
             "goose",
             "open-design",
@@ -1678,6 +1736,8 @@
             "openclaw",
             "vscode",
             "workbuddy",
+            "codebuddy",
+            "codebuddy-cn",
             "reasonix",
             "goose",
             "open-design",

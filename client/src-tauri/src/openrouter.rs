@@ -598,8 +598,11 @@ mod tests {
         );
         let saved = serde_json::to_value(&source).unwrap();
         *payload.lock().unwrap() = "{\"error\":{\"message\":\"temporary failure\"}}".into();
+        // Periodic snapshots reuse the short-lived catalog cache. An explicit
+        // information refresh is the path that must surface this upstream
+        // failure and leave the previously observed channel untouched.
         assert!(
-            crate::detection::snapshot_channel(source.clone())
+            crate::detection::refresh_channel(source.clone())
                 .await
                 .is_err()
         );

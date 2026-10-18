@@ -1656,7 +1656,7 @@ mod native_codex_endpoint_tests {
     {"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"search","format":{"type":"text"}}]}]}
   ],"client_metadata":{"future_field":"preserve"}
 }"#;
-        for version in ["0.159.2", "0.161.0", "0.999.0"] {
+        for version in ["0.159.2", "0.161.0", "0.162.1", "0.163.0", "0.999.0"] {
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert("originator", "codex_cli_rs".parse().unwrap());
             headers.insert("user-agent", format!("codex_cli_rs/{version} (Windows; x86_64)").parse().unwrap());

@@ -7,7 +7,9 @@ import {
   Copy,
   Plus,
   RotateCcw,
+  Search,
   type LucideIcon,
+  X,
 } from "lucide-react";
 import azureIconUrl from "../assets/tool-icons/azure.svg";
 import abacusIconUrl from "../assets/tool-icons/abacus.png";
@@ -22,6 +24,7 @@ import claudeScienceIconUrl from "../assets/tool-icons/claude-science.png";
 import codexIconUrl from "../assets/tool-icons/codex.svg";
 import copilotIconUrl from "../assets/tool-icons/copilot.svg";
 import clineIconUrl from "../assets/tool-icons/cline.svg";
+import codeBuddyIconUrl from "../assets/tool-icons/codebuddy.svg";
 import traeIconUrl from "../assets/tool-icons/trae.svg";
 import deepseekHarnessIconUrl from "../assets/tool-icons/deepseek-harness.svg";
 import geminiIconUrl from "../assets/tool-icons/gemini.svg";
@@ -40,7 +43,10 @@ import openCodeIconUrl from "../assets/tool-icons/opencode.svg";
 // Application mark from ai4s-research/open-science/apps/desktop/src/assets/logo.webp;
 // its favicon is a different illustration.
 import openScienceIconUrl from "../assets/tool-icons/open-science.webp";
+import octopIconUrl from "../assets/tool-icons/octop.svg";
+import toonflowIconUrl from "../assets/tool-icons/toonflow.svg";
 import qwenIconUrl from "../assets/tool-icons/qwen.svg";
+import qoderIconUrl from "../assets/tool-icons/qoder.svg";
 import piIconUrl from "../assets/tool-icons/pi.svg";
 import ravenIconUrl from "../assets/tool-icons/raven.svg";
 import reasonixIconUrl from "../assets/tool-icons/reasonix.svg";
@@ -74,8 +80,6 @@ import { modelDisplayName, modelInputOptions } from "../modelPresentation";
 import type {
   BrandIconData,
   ChannelCapabilityProfile,
-  ChannelDuplicateDecision,
-  ChannelDuplicateDialogState,
   ConfirmDialogState,
   CustomBrandIcon,
   ToolRemoveDecision,
@@ -86,9 +90,10 @@ import type {
 const TOOL_MENU_EDGE_INSET = 12;
 const TOOL_MENU_PRIMARY_WIDTH = 172;
 const TOOL_MENU_EXPANDED_WIDTH = 300;
-const HIDDEN_TOOL_MENU_WIDTH = 232;
+const HIDDEN_TOOL_MENU_WIDTH = 216;
 const HIDDEN_TOOL_MENU_GAP = 6;
 const HIDDEN_TOOL_MENU_MAX_HEIGHT = 460;
+const HIDDEN_TOOL_MENU_SEARCH_HEIGHT = 31;
 
 type AnchoredMenuPlacement = {
   left: number;
@@ -159,17 +164,23 @@ function resolveHiddenToolMenuPlacement(
   const dockRect = dock.getBoundingClientRect();
   const anchorRect = anchor.getBoundingClientRect();
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 720;
+  const scrollViewport = dock.closest("main > section")?.getBoundingClientRect();
+  const visibleTop = Math.max(TOOL_MENU_EDGE_INSET, scrollViewport?.top ?? 0);
+  const visibleBottom = Math.min(
+    viewportHeight - TOOL_MENU_EDGE_INSET,
+    scrollViewport?.bottom ?? viewportHeight,
+  );
   const availableBelow = Math.max(
     0,
-    viewportHeight - TOOL_MENU_EDGE_INSET - anchorRect.bottom - HIDDEN_TOOL_MENU_GAP,
+    visibleBottom - anchorRect.bottom - HIDDEN_TOOL_MENU_GAP,
   );
   const availableAbove = Math.max(
     0,
-    anchorRect.top - TOOL_MENU_EDGE_INSET - HIDDEN_TOOL_MENU_GAP,
+    anchorRect.top - visibleTop - HIDDEN_TOOL_MENU_GAP,
   );
   const desiredHeight = Math.min(
     HIDDEN_TOOL_MENU_MAX_HEIGHT,
-    46 + (cardCount > 0 ? 30 + cardCount * 38 + 8 : 0),
+    46 + (cardCount > 0 ? HIDDEN_TOOL_MENU_SEARCH_HEIGHT + cardCount * 38 + 8 : 0),
   );
   const opensAbove = availableBelow < desiredHeight && availableAbove > availableBelow;
   const availableHeight = opensAbove ? availableAbove : availableBelow;
@@ -870,18 +881,20 @@ export function BlockingConfirmDialog({
   const dialogId = useId().replace(/:/g, "");
   const titleId = `confirm-title-${dialogId}`;
   const messageId = `confirm-message-${dialogId}`;
+  const hintId = `confirm-hint-${dialogId}`;
   const noticeOnly = dialog.mode === "notice";
   useEscapeDismiss(() => onResolve(noticeOnly));
   return (
     <DialogBackdrop
       className="confirm-backdrop"
       aria-labelledby={titleId}
-      aria-describedby={messageId}
+      aria-describedby={dialog.hint ? `${messageId} ${hintId}` : messageId}
     >
       <div className="modal-panel confirm-modal">
         <div>
           <h2 id={titleId}>{dialog.title}</h2>
           <p id={messageId}>{dialog.message}</p>
+          {dialog.hint ? <p id={hintId} className="confirm-modal-hint">{dialog.hint}</p> : null}
         </div>
         <div className="confirm-actions">
           {!noticeOnly && (
@@ -990,98 +1003,6 @@ export function ToolRemoveDialog({
   );
 }
 
-export function ChannelDuplicateDialog({
-  dialog,
-  onResolve,
-}: {
-  dialog: ChannelDuplicateDialogState;
-  onResolve: (decision: ChannelDuplicateDecision) => void;
-}) {
-  const { t } = useTranslation();
-  const dialogId = useId().replace(/:/g, "");
-  const titleId = `duplicate-channel-title-${dialogId}`;
-  const messageId = `duplicate-channel-message-${dialogId}`;
-  const [selectedChannelId, setSelectedChannelId] = useState(
-    dialog.candidates[0]?.channel_id ?? "",
-  );
-  useEscapeDismiss(() => onResolve({ action: "cancel" }));
-  const effectiveSelectedChannelId = dialog.candidates.some(
-    (candidate) => candidate.channel_id === selectedChannelId,
-  )
-    ? selectedChannelId
-    : dialog.candidates[0]?.channel_id ?? "";
-  const selected = dialog.candidates.find(
-    (candidate) => candidate.channel_id === effectiveSelectedChannelId,
-  ) ?? dialog.candidates[0];
-  return (
-    <DialogBackdrop
-      className="confirm-backdrop"
-      aria-labelledby={titleId}
-      aria-describedby={messageId}
-    >
-      <div className="modal-panel confirm-modal duplicate-channel-modal">
-        <div>
-          <h2 id={titleId}>{t("supplier.duplicate.title")}</h2>
-          <p id={messageId}>
-            {t("supplier.duplicate.message", { name: dialog.draftName })}
-          </p>
-          {dialog.candidates.length > 1 ? (
-            <label>
-              {t("supplier.duplicate.chooseExisting")}
-              <select
-                value={effectiveSelectedChannelId}
-                onChange={(event) => setSelectedChannelId(event.target.value)}
-              >
-                {dialog.candidates.map((candidate) => (
-                  <option key={candidate.channel_id} value={candidate.channel_id}>
-                    {candidate.name || candidate.channel_id} · {candidate.channel_id}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : selected ? (
-            <div className="duplicate-channel-target">
-              <span>{t("supplier.duplicate.existingChannel")}</span>
-              <strong>{selected.name || selected.channel_id}</strong>
-            </div>
-          ) : null}
-        </div>
-        <div className="confirm-actions duplicate-channel-actions">
-          <button
-            type="button"
-            className="quiet"
-            onClick={() => onResolve({ action: "cancel" })}
-          >
-            {t("common.cancel")}
-          </button>
-          <button
-            type="button"
-            className="quiet"
-            onClick={() => onResolve({ action: "create_new" })}
-          >
-            {t("supplier.duplicate.createNew")}
-          </button>
-          <button
-            type="button"
-            className="primary"
-            disabled={!selected}
-            onClick={() => {
-              if (selected) {
-                onResolve({
-                  action: "open_existing",
-                  channelId: selected.channel_id,
-                });
-              }
-            }}
-          >
-            {t("supplier.duplicate.openExisting")}
-          </button>
-        </div>
-      </div>
-    </DialogBackdrop>
-  );
-}
-
 export function QuickCard({
   id,
   title,
@@ -1141,7 +1062,8 @@ export function QuickCard({
     left: 8,
     width: TOOL_MENU_PRIMARY_WIDTH,
   });
-  const progressMaskId = `tool-progress-${useId().replace(/:/g, "")}`;
+  const componentId = useId().replace(/:/g, "");
+  const progressMaskId = `tool-progress-${componentId}`;
   const progressValue = typeof progress === "number"
     ? Math.max(0, Math.min(1, progress))
     : 0;
@@ -1259,6 +1181,7 @@ export function QuickCard({
           style={{ "--tool-accent": tone } as React.CSSProperties}
           disabled={disabled}
           aria-label={title}
+          title={description || undefined}
           aria-expanded={menuOpen}
           aria-controls={id ? `${id}-tool-menu` : undefined}
           onClick={handleToolClick}
@@ -1321,9 +1244,14 @@ export function QuickCard({
               )}
             </svg>
           )}
-          <BrandBadge icon={icon} customIcon={customIcon} fallback={Fallback} tone={tone} />
+          <BrandBadge
+            icon={icon}
+            customIcon={customIcon}
+            fallback={Fallback}
+            tone={tone}
+            badge={badge}
+          />
         </button>
-        {badge && <span className="tool-edition-badge" aria-hidden="true">{badge}</span>}
       </div>
       <small
         className={`tool-dock-status-text ${busy ? `${statusTone ?? "pending"} is-live` : "idle"}`}
@@ -1387,16 +1315,15 @@ export function QuickCard({
               <button
                 type="button"
                 className="primary-menu-action"
-                title={actionLabel}
                 disabled={disabled}
                 onClick={() => runMenuAction(onConfigure)}
               >
                 {actionLabel}
               </button>
-              {onRemoveConfig && <button type="button" title={t("labels.toolMenu.removeConfiguration")} onClick={() => runMenuAction(onRemoveConfig)}>{t("labels.toolMenu.removeConfiguration")}</button>}
-              <button type="button" title={t("labels.toolMenu.locateProgram")} onClick={() => runMenuAction(onLocate)}>{t("labels.toolMenu.locateProgram")}</button>
+              {onRemoveConfig && <button type="button" onClick={() => runMenuAction(onRemoveConfig)}>{t("labels.toolMenu.removeConfiguration")}</button>}
+              <button type="button" onClick={() => runMenuAction(onLocate)}>{t("labels.toolMenu.locateProgram")}</button>
               {onHide && (
-                <button type="button" className="tool-dock-hide-action" title={t("labels.toolMenu.hide")} onClick={() => runMenuAction(onHide)}>
+                <button type="button" className="tool-dock-hide-action" onClick={() => runMenuAction(onHide)}>
                   {t("labels.toolMenu.hide")}
                 </button>
               )}
@@ -1404,7 +1331,6 @@ export function QuickCard({
                 <button
                   type="button"
                   className={`tool-dock-context-toggle ${activePanel ? "active" : ""}`}
-                  title={primaryPanel.label}
                   aria-label={activePanel
                     ? t("labels.toolMenu.collapsePanel", { panel: primaryPanel.label })
                     : `${title} ${primaryPanel.label}`}
@@ -1436,6 +1362,7 @@ export function QuickCard({
 type HiddenToolCard = {
   tool: ToolCatalogId;
   title: string;
+  description?: string;
   badge?: ToolCatalogEntry["badge"];
   icon: BrandIconData | null;
   customIcon?: CustomBrandIcon;
@@ -1461,6 +1388,7 @@ export function HiddenToolMenu({
   const longPressTimerRef = useRef<number | null>(null);
   const longPressStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
   const suppressNextClickRef = useRef(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [menuPlacement, setMenuPlacement] = useState<HiddenToolMenuPlacement>({
     left: 8,
     width: HIDDEN_TOOL_MENU_WIDTH,
@@ -1498,6 +1426,15 @@ export function HiddenToolMenu({
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) setSearchQuery("");
+  }, [menuOpen]);
+
+  const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
+  const filteredCards = normalizedSearchQuery
+    ? cards.filter((card) => `${card.title} ${card.tool}`.toLocaleLowerCase().includes(normalizedSearchQuery))
+    : cards;
 
   const toggleMenu = () => {
     updateMenuPlacement();
@@ -1614,17 +1551,37 @@ export function HiddenToolMenu({
           onContextMenu={(event) => event.stopPropagation()}
         >
           {cards.length > 0 && (
-            <div className="tool-hidden-menu-heading" role="presentation">
-              {t("labels.toolMenu.hiddenTools")}
+            <div className="tool-hidden-search" role="search">
+              <Search size={15} strokeWidth={1.8} aria-hidden="true" />
+              <input
+                type="search"
+                value={searchQuery}
+                placeholder={t("labels.toolMenu.searchPlaceholder")}
+                aria-label={t("labels.toolMenu.searchLabel")}
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
+              {searchQuery.length > 0 && (
+                <button
+                  type="button"
+                  className="tool-hidden-search-clear"
+                  aria-label={t("labels.toolMenu.clearSearch")}
+                  onClick={() => setSearchQuery("")}
+                >
+                  <X size={15} strokeWidth={1.8} aria-hidden="true" />
+                </button>
+              )}
             </div>
           )}
           <div className="tool-hidden-list">
-            {cards.map((card) => (
+            {filteredCards.length > 0 ? filteredCards.map((card) => (
               <button
                 key={card.tool}
                 type="button"
                 role="menuitem"
                 aria-label={t("labels.toolMenu.showTool", { tool: card.title })}
+                title={card.description
+                  ? t(`toolCatalog.${card.tool}.description`, { defaultValue: card.description })
+                  : undefined}
                 onClick={() => {
                   toolMenu.closeMenu();
                   onShow(card.tool);
@@ -1637,9 +1594,12 @@ export function HiddenToolMenu({
                   tone={card.tone}
                 />
                 <span>{card.title}</span>
-                {card.badge && <small className="tool-edition-label">{card.badge}</small>}
               </button>
-            ))}
+            )) : (
+              <div className="tool-hidden-empty" role="status">
+                {t("labels.toolMenu.noSearchResults")}
+              </div>
+            )}
             <button
               type="button"
               className="tool-hidden-reset-order"
@@ -1664,11 +1624,13 @@ export function BrandBadge({
   customIcon,
   fallback: Fallback,
   tone,
+  badge,
 }: {
   icon: BrandIconData | null;
   customIcon?: CustomBrandIcon;
   fallback: LucideIcon;
   tone: string;
+  badge?: ToolCatalogEntry["badge"];
 }) {
   const customIconUrl = customIcon ? customBrandIconUrl(customIcon) : "";
   const renderArtwork = (className?: string) => (
@@ -1688,6 +1650,7 @@ export function BrandBadge({
       style={{ color: tone }}
     >
       {renderArtwork()}
+      {badge && <span className="tool-edition-badge" aria-hidden="true">{badge}</span>}
     </div>
   );
 }
@@ -1714,6 +1677,8 @@ export function customBrandIconUrl(icon: CustomBrandIcon) {
       return claudeIconUrl;
     case "claude-science":
       return claudeScienceIconUrl;
+    case "codebuddy":
+      return codeBuddyIconUrl;
     case "codex":
       return codexIconUrl;
     case "copilot":
@@ -1751,8 +1716,14 @@ export function customBrandIconUrl(icon: CustomBrandIcon) {
       return openCodeIconUrl;
     case "openscience":
       return openScienceIconUrl;
+    case "octop":
+      return octopIconUrl;
+    case "toonflow":
+      return toonflowIconUrl;
     case "qwen":
       return qwenIconUrl;
+    case "qoder":
+      return qoderIconUrl;
     case "pi":
       return piIconUrl;
     case "raven":

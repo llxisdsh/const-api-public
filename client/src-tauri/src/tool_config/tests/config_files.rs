@@ -450,6 +450,8 @@
         for (tool, folder) in [
             ("workbuddy", ".workbuddy"),
             ("workbuddy-ai", ".workbuddy-ai"),
+            ("codebuddy", ".codebuddy"),
+            ("codebuddy-cn", ".codebuddy"),
         ] {
             assert_eq!(
                 workbuddy_models_path_from_config_dirs(tool, home, None, None),
@@ -462,7 +464,12 @@
                     Some("  workbuddy-config  "),
                     Some("codebuddy-config"),
                 ),
-                PathBuf::from("workbuddy-config").join("models.json")
+                PathBuf::from(if matches!(tool, "codebuddy" | "codebuddy-cn") {
+                    "codebuddy-config"
+                } else {
+                    "workbuddy-config"
+                })
+                .join("models.json")
             );
             assert_eq!(
                 workbuddy_models_path_from_config_dirs(
@@ -474,6 +481,51 @@
                 PathBuf::from("codebuddy-config").join("models.json")
             );
         }
+    }
+
+    #[test]
+    fn codebuddy_variants_share_models_file_and_restore_it() {
+        with_temp_home(|_| {
+            let path = workbuddy_models_path("codebuddy");
+            assert_eq!(path, workbuddy_models_path("codebuddy-cn"));
+            assert!(path.ends_with(Path::new(".codebuddy/models.json")));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let original = serde_json::json!({
+                "models": [{
+                    "id": "user-model",
+                    "name": "user-model",
+                    "vendor": "Custom",
+                    "url": "https://user.example/v1/chat/completions",
+                    "apiKey": "user-key"
+                }],
+                "availableModels": ["user-model"],
+                "customSetting": true
+            });
+            fs::write(&path, serde_json::to_vec_pretty(&original).unwrap()).unwrap();
+
+            let models = workbuddy_test_models();
+            apply_workbuddy_config_with_model_info_for_protocol(
+                "codebuddy-cn",
+                TOOL_CONFIG_OPENAI_BASE_URL,
+                "sk-test",
+                &models,
+                ToolProtocol::OpenAiChat,
+            )
+            .unwrap();
+            let configured = read_json_or_default(&path, serde_json::json!({})).unwrap();
+            assert_eq!(configured["customSetting"], true);
+            assert!(workbuddy_models(&configured)
+                .unwrap()
+                .iter()
+                .any(|entry| entry["constApiManaged"] == true));
+            assert!(check_workbuddy_config("codebuddy", TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
+                .unwrap()
+                .already_configured);
+
+            remove_workbuddy_config("codebuddy", TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
+                .unwrap();
+            assert_eq!(read_json_or_default(&path, serde_json::json!({})).unwrap(), original);
+        });
     }
 
     #[test]
@@ -560,6 +612,40 @@
                 }
             });
         }
+    }
+
+    #[test]
+    fn codebuddy_variants_are_idempotent_through_shared_file() {
+        with_temp_home(|_| {
+            let path = workbuddy_models_path("codebuddy");
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, br#"[{"id":"legacy-model","name":"legacy-model"}]"#).unwrap();
+            assert!(!check_workbuddy_config("codebuddy", TOOL_CONFIG_OPENAI_BASE_URL, "test-key")
+                .unwrap()
+                .already_configured);
+            let apply = |tool| {
+                apply_workbuddy_config_with_model_info_for_protocol(
+                    tool,
+                    TOOL_CONFIG_OPENAI_BASE_URL,
+                    "test-key",
+                    &workbuddy_test_models(),
+                    ToolProtocol::OpenAiChat,
+                )
+                .unwrap()
+            };
+            assert_eq!(apply("codebuddy").tool, "codebuddy");
+            let first = fs::read(&path).unwrap();
+            let configured: serde_json::Value = serde_json::from_slice(&first).unwrap();
+            assert!(configured["models"].is_array());
+            assert!(configured["models"].as_array().unwrap().iter().any(|entry| {
+                entry.get("constApiManaged") == Some(&serde_json::Value::Bool(true))
+            }));
+            assert!(check_workbuddy_config("codebuddy-cn", TOOL_CONFIG_OPENAI_BASE_URL, "test-key")
+                .unwrap()
+                .already_configured);
+            assert!(apply("codebuddy-cn").already_configured);
+            assert_eq!(fs::read(&path).unwrap(), first);
+        });
     }
 
     #[cfg(target_os = "windows")]
@@ -4403,6 +4489,11 @@
             "reasonix",
             "vscode",
             "workbuddy",
+            "codebuddy",
+            "codebuddy-cn",
+            "qoder",
+            "qoder-cn",
+            "toonflow",
             "zcode",
         ] {
             assert_eq!(
@@ -4423,7 +4514,7 @@
     #[test]
     fn tool_profiles_are_unique_and_self_consistent() {
         let mut ids = std::collections::BTreeSet::new();
-        assert_eq!(TOOL_PROFILES.len(), 35);
+        assert_eq!(TOOL_PROFILES.len(), 40);
         for profile in TOOL_PROFILES {
             assert!(ids.insert(profile.id), "duplicate tool={}", profile.id);
             assert!(

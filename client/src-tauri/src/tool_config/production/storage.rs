@@ -567,6 +567,10 @@ fn manifest_manages_tool(tool: &str) -> bool {
             | "vscode"
             | "workbuddy"
             | "workbuddy-ai"
+            | "codebuddy"
+            | "codebuddy-cn"
+            | "qoder"
+            | "qoder-cn"
             | "copilot"
             | "grok-build"
             | "minimax-code"
@@ -917,6 +921,28 @@ fn collect_tool_config_owned_fields(
             );
             path.pop();
         }
+        return;
+    }
+
+    // An empty array added by a tool is itself an owned field. Without this
+    // leaf, the named-array walk has no entries to record and cancellation
+    // would leave the newly-created container behind.
+    if (original.is_none()
+        && applied.is_some_and(|value| value.as_array().is_some_and(Vec::is_empty)))
+        || (applied.is_none()
+            && original.is_some_and(|value| value.as_array().is_some_and(Vec::is_empty)))
+    {
+        fields.push(ToolConfigOwnedField {
+            path: path.clone(),
+            original: original
+                .cloned()
+                .map(ToolConfigFieldValue::Value)
+                .unwrap_or(ToolConfigFieldValue::Missing),
+            applied: applied
+                .cloned()
+                .map(ToolConfigFieldValue::Value)
+                .unwrap_or(ToolConfigFieldValue::Missing),
+        });
         return;
     }
 

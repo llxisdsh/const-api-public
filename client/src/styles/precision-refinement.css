@@ -564,28 +564,26 @@ textarea:focus-visible,
   height: var(--tool-dock-icon-size, 32px);
 }
 
-/* Edition labels belong to the tool control, not to the vendor's artwork. */
+/* Edition labels share the artwork layer so they move with the logo. */
 .tool-edition-badge {
   position: absolute;
-  right: 10px;
-  bottom: 2px;
+  right: 1px;
+  bottom: 1px;
   z-index: 2;
-  padding: 0 3px;
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  border-radius: 3px;
-  background: var(--panel-muted);
-  color: var(--muted);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
   font-size: 8px;
-  font-weight: 600;
-  line-height: 10px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
   pointer-events: none;
 }
 
-.tool-edition-label {
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 650;
+:root[data-theme="dark"] .tool-edition-badge {
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
 }
 
 /*
@@ -647,6 +645,20 @@ textarea:focus-visible,
   filter: brightness(0.68) saturate(0.84);
 }
 
+:root[data-theme="dark"] .brand-badge-codebuddy img {
+  filter: brightness(0.78) saturate(0.88);
+}
+
+:root[data-theme="dark"] .brand-badge-qoder img {
+  filter: invert(1) brightness(0.76);
+  opacity: 0.94;
+}
+
+:root[data-theme="dark"] .brand-badge-toonflow img {
+  filter: invert(1) brightness(0.84);
+  opacity: 0.94;
+}
+
 /* Optical sizes account for visible artwork and stroke density, not just the
  * asset canvas. Keep dense solid marks smaller than thin or open outlines. */
 #codex-tool-button,
@@ -690,6 +702,12 @@ textarea:focus-visible,
 #copilot-tool-button,
 #copilot-desktop-tool-button,
 #zcode-tool-button {
+  --tool-dock-icon-size: 28px;
+}
+
+#codebuddy-tool-button,
+#qoder-tool-button,
+#qoder-cn-tool-button {
   --tool-dock-icon-size: 28px;
 }
 
@@ -858,21 +876,93 @@ textarea:focus-visible,
 }
 
 .tool-hidden-menu {
-  --tool-menu-primary-width: 232px;
+  --tool-menu-primary-width: 216px;
   display: flex;
   flex-direction: column;
-  width: min(232px, calc(100vw - 40px));
-  max-width: min(232px, calc(100vw - 40px));
+  width: min(216px, calc(100vw - 40px));
+  max-width: min(216px, calc(100vw - 40px));
   overflow: hidden;
 }
 
-.tool-hidden-menu-heading {
-  padding: 10px 11px 7px;
-  border-bottom: 1px solid var(--border);
+.tool-hidden-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 2px 10px 1px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+}
+
+.tool-hidden-search input {
+  min-width: 0;
+  width: 100%;
+  height: 23px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+.tool-hidden-search input:focus,
+.tool-hidden-search input:focus-visible {
+  border-color: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.tool-hidden-search input::placeholder {
+  color: var(--muted);
+  opacity: 0.92;
+}
+
+.tool-hidden-search input[type="search"]::-webkit-search-cancel-button {
+  display: none;
+}
+
+.tool-hidden-search > svg {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  padding: 5px;
+}
+
+.tool-hidden-menu .tool-hidden-search-clear {
+  display: inline-flex;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  max-width: 28px;
+  max-height: 28px;
+  margin-inline-start: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+}
+
+.tool-hidden-menu .tool-hidden-search-clear:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--panel-muted);
+  color: var(--muted);
+}
+
+.tool-hidden-menu .tool-hidden-search-clear:focus-visible {
+  outline: 1px solid var(--border-strong);
+  outline-offset: -1px;
+}
+
+.tool-hidden-empty {
+  padding: 10px 8px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .tool-hidden-list {
@@ -881,8 +971,8 @@ textarea:focus-visible,
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  padding: 4px;
+  scrollbar-gutter: auto;
+  padding: 2px 10px 4px;
 }
 
 .tool-hidden-list button {
@@ -890,7 +980,7 @@ textarea:focus-visible,
   min-height: 38px;
   align-items: center;
   gap: 9px;
-  padding: 6px 8px;
+  padding: 6px;
   border-radius: 2px;
   background: transparent;
 }
@@ -911,7 +1001,8 @@ textarea:focus-visible,
   width: 26px;
   height: 26px;
   border: 0;
-  background: transparent;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .tool-hidden-list .brand-badge img,
@@ -1293,8 +1384,13 @@ textarea:focus-visible,
 }
 
 .detail-drawer input,
-.detail-drawer select {
+.detail-drawer select,
+.detail-drawer .copy-input {
   margin-top: 5px;
+}
+
+.detail-drawer .copy-input > input {
+  margin-top: 0;
 }
 
 .detail-drawer .test-controls {
@@ -1734,9 +1830,11 @@ textarea:focus-visible,
 }
 
 .advanced-local-section .control-strip .actions {
-  flex: 0 0 auto;
-  flex-wrap: nowrap;
-  min-width: max-content;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-inline-start: auto;
+  min-width: 0;
 }
 
 .advanced-local-section .control-strip .actions button {
@@ -1920,7 +2018,6 @@ textarea:focus-visible,
 
 .guide-root-card,
 .guide-surface-section,
-.guide-compat-section,
 .guide-steps,
 .advanced-disclosure,
 .alias-preview-group,

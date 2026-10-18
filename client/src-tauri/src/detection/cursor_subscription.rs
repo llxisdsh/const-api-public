@@ -99,11 +99,7 @@ pub(super) async fn catalog(
     bool,
     Vec<String>,
 )> {
-    let key = format!(
-        "{}\0{}",
-        channel.id,
-        subscription_credential_path(channel)?.display()
-    );
+    let key = format!("cursor\0{}", subscription_catalog_cache_identity(channel)?);
     let slot = CATALOGS
         .get_or_init(Default::default)
         .lock()

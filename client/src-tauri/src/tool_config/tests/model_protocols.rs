@@ -44,7 +44,7 @@ fn per_model_protocol_uses_metadata_not_names_and_respects_tool_capabilities() {
 }
 
 #[test]
-fn all_per_model_tools_prefer_catalog_identity_only_with_native_support() {
+fn per_model_tools_prefer_channel_protocol_only_with_native_support() {
     let models = crate::tool_model_metadata::tool_models_from_response(
         &serde_json::json!({"data":[
             {"id":"claude-opus-4-6","const_api":{"native_protocols":["openai_chat","openai_responses","anthropic_messages"],"preferred_protocol":"openai_responses"}},
@@ -67,11 +67,7 @@ fn all_per_model_tools_prefer_catalog_identity_only_with_native_support() {
         "trae-work",
     ] {
         let fallback = ToolProtocol::OpenAiChat;
-        let claude_protocol = if tool_supports_protocol(tool, ToolProtocol::AnthropicMessages) {
-            ToolProtocol::AnthropicMessages
-        } else {
-            ToolProtocol::OpenAiResponses
-        };
+        let claude_protocol = ToolProtocol::OpenAiResponses;
         assert_eq!(
             tool_model_protocol(tool, find("claude-opus-4-6"), fallback),
             claude_protocol,
@@ -79,14 +75,10 @@ fn all_per_model_tools_prefer_catalog_identity_only_with_native_support() {
         );
         assert_eq!(
             tool_model_protocol(tool, find("gpt-6-luna"), fallback),
-            ToolProtocol::OpenAiResponses,
+            ToolProtocol::OpenAiChat,
             "{tool}"
         );
-        let google = if tool_supports_protocol(tool, ToolProtocol::GeminiNative) {
-            ToolProtocol::GeminiNative
-        } else {
-            fallback
-        };
+        let google = fallback;
         assert_eq!(
             tool_model_protocol(tool, find("gemini-3.1-pro-preview"), fallback),
             google,
@@ -112,6 +104,48 @@ fn all_per_model_tools_prefer_catalog_identity_only_with_native_support() {
         tool_model_protocol("trae", &disguised, ToolProtocol::OpenAiChat),
         ToolProtocol::OpenAiChat,
         "unknown names are not vendor evidence"
+    );
+}
+
+#[test]
+fn automatic_provider_protocol_uses_complete_channel_preferences() {
+    let models = crate::tool_model_metadata::tool_models_from_response(
+        &serde_json::json!({"data":[
+            {"id":"gpt-6-luna","const_api":{"native_protocols":["openai_chat","openai_responses"],"preferred_protocol":"openai_chat"}},
+            {"id":"gpt-6-sol","const_api":{"native_protocols":["openai_chat","openai_responses"],"preferred_protocol":"openai_chat"}}
+        ]}),
+    );
+    assert_eq!(
+        resolve_tool_protocol_for_models("qoder", None, &models).unwrap(),
+        ToolProtocol::OpenAiChat
+    );
+
+    let anthropic = crate::tool_model_metadata::tool_models_from_response(
+        &serde_json::json!({"data":[
+            {"id":"claude-opus-4-6","const_api":{"native_protocols":["anthropic_messages"],"preferred_protocol":"anthropic_messages"}}
+        ]}),
+    );
+    assert_eq!(
+        resolve_tool_protocol_for_models("qoder", None, &anthropic).unwrap(),
+        ToolProtocol::AnthropicMessages
+    );
+}
+
+#[test]
+fn automatic_provider_protocol_falls_back_when_models_do_not_share_a_wire_protocol() {
+    let models = crate::tool_model_metadata::tool_models_from_response(
+        &serde_json::json!({"data":[
+            {"id":"gpt-6-luna","const_api":{"native_protocols":["openai_responses"],"preferred_protocol":"openai_responses"}},
+            {"id":"claude-opus-4-6","const_api":{"native_protocols":["anthropic_messages"],"preferred_protocol":"anthropic_messages"}}
+        ]}),
+    );
+    assert_eq!(
+        resolve_tool_protocol_for_models("qoder", None, &models).unwrap(),
+        ToolProtocol::OpenAiResponses
+    );
+    assert_eq!(
+        resolve_tool_protocol_for_models("qoder", Some("openai_chat"), &models).unwrap(),
+        ToolProtocol::OpenAiChat
     );
 }
 

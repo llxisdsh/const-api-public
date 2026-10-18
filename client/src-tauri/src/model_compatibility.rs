@@ -1841,9 +1841,9 @@ mod tests {
                 );
             }
             if model.id == "gemini-4-argon" {
-                // The reviewed preview has no published API context limit.
-                // Keep it unknown instead of inventing one to satisfy a test.
-                assert_eq!(model.context_tokens, None);
+                // The refreshed provider metadata now declares the verified
+                // 1M context window; keep the generated capability visible.
+                assert_eq!(model.context_tokens, Some(1_048_576));
             } else {
                 assert!(
                     model.context_tokens.is_some_and(|tokens| tokens >= 128_000),

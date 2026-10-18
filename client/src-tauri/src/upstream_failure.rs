@@ -391,6 +391,7 @@ pub(crate) fn observe_value(status: u16, value: &Value, model: Option<&str>) -> 
             &message_lower,
             model,
         ),
+        "invalid_encrypted_content" => ("request_invalid", "request", "request.structured.v1"),
         "invalid_value"
         | "invalid_request"
         | "invalid_argument"
@@ -633,6 +634,33 @@ mod tests {
         assert_eq!(capacity.scope, "model");
         assert_eq!(capacity.retry_after_seconds, Some(1));
     }
+
+    #[test]
+    fn invalid_encrypted_content_is_request_invalid_even_when_http_500() {
+        let error = failure(
+            500,
+            r#"{"error":{"type":"invalid_request_error","code":"invalid_encrypted_content","message":"invalid encrypted content"}}"#,
+        );
+        assert_eq!(error.cause, "request_invalid");
+        assert_eq!(error.scope, "request");
+        assert_eq!(error.rule_id, "request.structured.v1");
+        assert!(!error.safe_to_retry());
+        let mut payload = Map::new();
+        error.attach(&mut payload);
+        assert_eq!(payload["safe_to_retry_other_channel"], false);
+    }
+
+    #[test]
+    fn server_is_overloaded_remains_a_retryable_provider_failure() {
+        let error = failure(
+            503,
+            r#"{"error":{"type":"server_error","code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}"#,
+        );
+        assert_eq!(error.cause, "provider_overload");
+        assert_eq!(error.scope, "request");
+        assert!(error.safe_to_retry());
+    }
+
     #[test]
     fn errors_are_not_searched_inside_assistant_content() {
         assert!(

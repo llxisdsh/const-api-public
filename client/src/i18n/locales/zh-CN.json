@@ -425,10 +425,28 @@
     "routingIntro": "工具连接本机 API 后即可调用你的模型。",
     "toolsTitle": "工具",
     "toolsIntro": "左键点击即可启动，首次使用会自动完成配置；右键可调整配置、取消配置、定位或隐藏，末尾 + 可恢复隐藏的工具。",
+    "batchActionsLabel": "批量工具操作",
+    "batchConfigure": "配置已定位工具",
+    "batchRemove": "取消已配置工具",
+    "batchProgress": "正在处理 {{current}}/{{total}}：{{tool}}",
+    "batchConfigureTitle": "配置已定位工具？",
+    "batchConfigureMessage": "将按顺序配置 {{count}} 个已定位工具；另外 {{skipped}} 个工具会跳过。此操作只写入配置，不会自动启动工具；正在运行的工具可能需要先关闭。",
+    "batchRemoveTitle": "取消已配置工具？",
+    "batchRemoveMessage": "将按顺序恢复 {{count}} 个工具在 CONST API 接管前的配置；另外 {{skipped}} 个工具会跳过。不会删除工具或用户数据；正在运行的工具可能需要先关闭。",
+    "batchConfirm": "开始处理",
+    "batchBusy": "已有工具操作正在进行，请稍后再试。",
+    "batchUnavailable": "本地 API 未运行，无法批量处理工具。",
+    "batchNoTargets": "没有找到可配置或取消配置的已定位工具。",
+    "batchStatusUnavailable": "暂时无法读取工具定位状态，请确认本地 API 正在运行后重试。",
+    "batchConfigureSummary": "批量配置完成：成功 {{succeeded}} 个，跳过 {{skipped}} 个，失败 {{failed}} 个。",
+    "batchRemoveSummary": "批量取消配置完成：成功 {{succeeded}} 个，跳过 {{skipped}} 个，失败 {{failed}} 个。",
     "localApi": "API 接入",
     "localApiIntro": "此 API 仅使用本机渠道。复制地址和 Key 可手动接入其他工具；详见",
     "running": "运行中",
     "advancedSettings": "设置",
+    "settingsTitle": "使用设置",
+    "apiRunning": "API 运行中",
+    "apiStopped": "API 未运行",
     "collapseAdvancedSettings": "收起设置",
     "connectionGuide": "接入说明",
     "platformUsageLog": "本机调用日志",
@@ -452,7 +470,7 @@
     "preferLocalHint": "登录后开启此项，会先使用本机模型渠道；本机没有可用渠道时，再使用模型市场。未登录或平台不可用时，无论是否开启，都只使用本机模型渠道。",
     "compatibleFallback": "兼容模型替代",
     "compatibleFallbackHint": "无论是否开启，同名模型始终优先。开启后，只有找不到可用的同名模型时，才会按兼容目录改用同能力档位或更高档位的模型；关闭后不会替代，找不到同名模型时可能返回模型不可用。使用日志会显示实际使用的模型。",
-    "customizeModels": "定制模型",
+    "customizeModels": "兼容模型",
     "restoreDefaults": "恢复默认 URL 和 Key",
     "messages": {
       "autoStartFailed": "本地接入自动启动失败：{{error}}",
@@ -488,7 +506,7 @@
     "copyApiKey": "复制本地 API Key",
     "notSet": "未设置",
     "saveAndRestart": "保存并重启",
-    "connectionGuideHint": "先确认工具要求 Base URL 还是完整请求 URL；仅在无法自动发现模型时手动填写模型 ID。",
+    "connectionGuideHint": "手动接入时，选择工具支持的协议，复制对应地址和本地 API Key；无法自动获取模型时，再填写模型 ID。",
     "copyAnthropicUrl": "复制 Anthropic Base URL",
     "copyGeminiUrl": "复制 Gemini Base URL",
     "toolDetail": {
@@ -521,20 +539,20 @@
     "guide": {
       "rootTitle": "运行入口",
       "rootHint": "用于查看本地 API 状态与接入入口；它不是模型请求的 Base URL。",
-      "surfaceTitle": "标准 Base URL",
-      "surfaceHint": "字段写着 Base URL、API Base 或 Server URL 时，按工具原生协议选择；SDK 会继续拼接请求路径。",
+      "protocolsTitle": "协议与接入地址",
+      "protocolsHint": "Base URL 用于基础地址字段；仅在工具要求完整请求地址时使用请求 URL。模型发现 URL 用于获取模型列表，不是聊天请求地址。",
       "apiKeyHint": "填写到工具的密钥字段；所有本地协议入口共用此 Key。",
-      "openaiHint": "OpenAI SDK、Codex、OpenCode 等",
-      "anthropicHint": "Anthropic SDK、Claude Code 等",
-      "geminiHint": "Gemini SDK、Gemini CLI 等",
-      "compatibilityTitle": "兼容接入",
-      "compatibilityHint": "用于不会自行拼接请求路径，或无法自动发现模型的工具。",
-      "openaiChatTitle": "OpenAI Chat Completions URL",
-      "openaiChatHint": "仅当字段明确写着 Chat URL、Endpoint 或 Chat Completions URL 时使用；Base URL 字段仍应填写 /v1。",
-      "copyOpenaiChatUrl": "复制 OpenAI Chat Completions URL",
-      "modelsUrlTitle": "OpenAI 模型发现 URL",
-      "modelsUrlHint": "支持自动发现的 OpenAI 兼容工具可请求此地址；它不是聊天请求地址。",
-      "copyModelsUrl": "复制 OpenAI 模型发现 URL",
+      "openaiProtocol": "OpenAI · Responses / Chat Completions",
+      "anthropicProtocol": "Anthropic · Messages",
+      "geminiProtocol": "Gemini · generateContent / streamGenerateContent",
+      "geminiModelHint": "请求地址中的 {model} 需替换为实际模型 ID。",
+      "baseUrl": "Base URL",
+      "responsesUrl": "Responses URL",
+      "chatUrl": "Chat Completions URL",
+      "messagesUrl": "Messages URL",
+      "requestUrl": "请求 URL",
+      "streamUrl": "流式请求 URL",
+      "modelsUrl": "模型发现 URL",
       "modelsTitle": "可填写的模型 ID",
       "modelsHint": "工具不能自动读取模型时，逐项复制所需模型；批量字段可复制全部，每行一个。",
       "modelsLoading": "正在读取当前可用模型…",
@@ -547,10 +565,10 @@
       "copyModel": "复制模型 {{model}}",
       "modelCopied": "模型 {{model}} 已复制",
       "stepsTitle": "三步接入",
-      "stepChooseSurface": "先确认工具使用 OpenAI、Anthropic 还是 Gemini 协议，再看地址字段要求 Base URL 还是完整 Endpoint。",
-      "stepConfigure": "优先使用标准 Base URL；只有字段明确要求 Chat URL 时，才使用兼容接入中的完整地址。",
-      "stepRequest": "让工具自动发现模型；若不支持，再复制上方模型 ID，发送一次请求确认返回正常。",
-      "authNote": "如果工具要求填写密钥，请复制上方本地 API Key。"
+      "stepChooseSurface": "在工具中选择 Responses、Chat Completions、Messages 或 Gemini 等受支持的协议。",
+      "stepConfigure": "按字段要求复制该协议的 Base URL 或完整请求 URL，并填写上方本地 API Key。",
+      "stepRequest": "获取模型列表；若工具不支持自动发现，复制上方模型 ID 手动添加，再发送一条消息确认接入。",
+      "authNote": "直接调用 API 时，模型发现使用 GET，请求生成内容使用 POST；密钥按对应协议的鉴权方式传入。"
     },
     "locator": {
       "title": "定位 {{tool}}",
@@ -635,7 +653,7 @@
     "usage": {
       "eyebrow": "配置工具",
       "title": "连接你的工具",
-      "body": "选择下方工具即可一键配置；如需手动接入，可直接复制“API 接入”中的地址和 Key。"
+      "body": "选择下方工具即可一键配置；需要手动接入时，请查看页面上方的“接入说明”。"
     },
     "supplier": {
       "eyebrow": "共享模型",
@@ -929,14 +947,6 @@
       "detectAndConnect": "检测并连接平台",
       "detectAndEnable": "检测并开启供应"
     },
-    "duplicate": {
-      "title": "发现已有渠道",
-      "message": "“{{name}}”与已有渠道使用相同账号或 API 连接。你可以打开已有渠道，也可以明确创建一个独立副本。",
-      "chooseExisting": "选择已有渠道",
-      "existingChannel": "已有渠道",
-      "createNew": "仍然创建新渠道",
-      "openExisting": "打开已有渠道"
-    },
     "messages": {
       "keepOneProtocol": "至少保留一个上游协议。",
       "allOperationsConfigured": "该 API 公开面的操作端点均已配置。",
@@ -944,7 +954,6 @@
       "freeSupplyTitle": "确认免费供应？",
       "freeSupplyMessage": "价格倍率为 0 时，平台会按免费渠道参与路由，成功调用不会产生供应收益。",
       "freeSupplyConfirm": "确认免费供应",
-      "duplicateCheckFailed": "检查重复渠道失败，未保存：{{error}}",
       "validatedAndSaved": "验证通过，渠道已保存。",
       "saved": "已保存。",
       "validationSaveFailed": "检测失败，渠道未保存：{{error}}",
@@ -1472,7 +1481,7 @@
     "restartUpdate": "重启更新",
     "waitingIdle": "等待空闲",
     "updating": "更新中",
-    "clientVersion": "客户端版本",
+    "clientVersion": "客户端",
     "updateSource": "更新来源",
     "checkFailed": "检查失败",
     "platformEndpoint": "服务器",
@@ -1490,7 +1499,7 @@
     "productionPresentationPreviewHint": "仅在本次 Dev 会话中模拟正式版界面。",
     "productionPresentationPreviewEnabled": "模拟中",
     "productionPresentationPreviewDisabled": "未模拟",
-    "catalogVersion": "模型目录版本",
+    "catalogVersion": "模型目录",
     "catalogSource": "目录来源",
     "startupAndUpdates": "启动",
     "preventSleepWhileSupplying": "供应时保持唤醒",
@@ -1761,10 +1770,13 @@
       "working": "处理中",
       "removeConfiguration": "取消配置",
       "locateProgram": "定位程序",
-      "hide": "不显示",
+      "hide": "隐藏",
       "add": "添加",
       "addTool": "显示更多工具",
-      "hiddenTools": "未显示的工具",
+      "searchPlaceholder": "搜索隐藏的工具",
+      "searchLabel": "搜索隐藏的工具",
+      "clearSearch": "清空搜索",
+      "noSearchResults": "没有匹配的工具",
       "showTool": "显示 {{tool}}",
       "resetOrder": "恢复默认顺序",
       "collapsePanel": "收起{{panel}}",
@@ -1901,122 +1913,138 @@
   },
   "toolCatalog": {
     "codex": {
-      "description": "OpenAI Codex，兼容新版 ChatGPT 与旧版 Codex 桌面应用"
+      "description": "OpenAI 的 Codex 是桌面优先的旗舰编程代理；它不只是补全代码，而是能并行管理多个智能体、理解大型代码库、修改文件、运行测试，并把长任务从桌面接续到 IDE、终端和云端。适合希望让 AI 真正推进项目的人。"
     },
     "claude": {
-      "description": "在终端中工作的 Anthropic 编码代理"
+      "description": "Anthropic 的 Claude Code 是处理复杂修复、测试和代码迁移的强力助手；它不仅能在终端、IDE、Slack 和网页中推进工作，也会用清晰、细腻的语言解释取舍，适合需要可靠协作和高质量表达的开发者。"
     },
     "claude-desktop": {
-      "description": "支持桌面扩展与本地工具连接的 Claude 应用"
+      "description": "Anthropic 的 Claude 桌面应用以自然对话为入口，通过扩展连接本地文件、应用与工具；它更像一位能读长文、写材料、做分析并理解你电脑上下文的通用工作伙伴。"
     },
     "claude-science": {
-      "description": "科研工作区；CONST API 接入尚未验证"
+      "description": "Anthropic 的 Claude Science 是面向科研的公测工作台，可连接科学数据库和计算环境，运行专业分析，并留下便于复核的证据链；适合重视方法、来源和可重复性的研究工作。"
     },
     "gemini": {
-      "description": "Google 开源、可扩展的终端 AI 代理"
+      "description": "Google 的 Gemini CLI 是开源终端代理，能理解代码库、编写功能、排查错误，并在同一段对话中完成构建与部署；如果你已经习惯 Google 的模型生态，它是很自然的命令行入口。"
     },
     "copilot": {
-      "description": "支持 OpenAI 兼容自带密钥渠道的 GitHub 终端编码代理"
+      "description": "GitHub Copilot CLI 把 GitHub 生态里的编码助手带进终端：你可以用自然语言探索仓库、解释陌生代码、修改文件并运行命令，适合边问边做，也适合已经在使用 Copilot 的团队。"
     },
     "copilot-desktop": {
-      "description": "自动配置自定义模型的 GitHub Copilot 桌面版，密钥保存在系统凭据库"
+      "description": "GitHub Copilot 桌面版提供面向项目的 Agent 会话，可使用 GitHub 托管模型，也能配置自己的模型密钥；如果你重视 GitHub 的工作流、审查习惯和团队协作，它比单纯的聊天窗口更顺手。"
     },
     "cline": {
-      "description": "桌面端与终端共用模型配置的 Cline 编码代理"
+      "description": "Cline 是开源编码代理，覆盖 IDE、桌面与终端；它把每次改文件、执行命令和运行测试都摊开给你审阅，适合想保留控制权、又希望 AI 亲自把任务做完的人。"
     },
     "trae": {
-      "description": "融合 Agent 与 IDE 模式的 TRAE 国际版；自动配置自定义模型，需先登录"
+      "description": "TRAE 国际版把 AI IDE 与自主 Agent/SOLO 模式结合起来，能理解项目、规划任务、调用工具并交付软件；它更适合希望从一句想法一路走到可运行成果的用户。"
     },
     "trae-cn": {
-      "description": "融合 Agent 与 IDE 模式的 TRAE 国内版；自动配置自定义模型，需先登录"
+      "description": "TRAE 中国版可在 IDE 与 Agent 模式之间切换，先理解项目，再协调工具，把想法推进成可运行的成果；中文环境和本地服务更顺手时，可以优先考虑这一版。"
     },
     "trae-work": {
-      "description": "已合并至 TRAE，2026 年 10 月 23 日停止服务；请在 TraeWork 内升级"
+      "description": "TraeWork 是 TRAE 的旧版办公与内容交付工作台，曾覆盖研究、文档和任务执行；如果你看到这个入口，通常应优先迁移到新版 TRAE。"
     },
     "opencode": {
-      "description": "覆盖终端、桌面与 IDE 的开源 AI 编码代理"
+      "description": "OpenCode 是开源 AI 编码代理，可在终端、桌面或 IDE 中工作，并连接你偏好的模型供应商；适合希望自由选择模型、又不想被单一平台绑定的开发者。"
     },
     "openclaw": {
-      "description": "运行在本机与聊天渠道中的个人 AI 助手"
+      "description": "OpenClaw 是开源个人 AI 助手，可在本机和聊天渠道中代办任务；它强调自托管、跨平台和数据由你掌握，适合想把助手真正放进自己工作环境的人。"
     },
     "goose": {
-      "description": "Block 开源的桌面与终端 AI 代理"
+      "description": "Block 的 Goose 是开源、可扩展的通用代理，可安装依赖、查看和编辑文件、执行命令、运行测试，并搭配你选择的大模型；喜欢自己组合工具链的人会更容易发挥它。"
     },
     "raven": {
-      "description": "EverMind 面向记忆与自我改进的智能体框架"
+      "description": "EverMind 的 Raven 是多智能体编排工作台，可按目标组合不同专家，让代理协作推进任务，并把每次交接清楚展示出来；适合复杂目标需要分工、复核和持续推进的场景。"
     },
     "reasonix": {
-      "description": "同时提供桌面端与终端端的开源推理编码代理"
+      "description": "Reasonix 是开源编程代理，支持终端、桌面、浏览器和编辑器，能够读写项目、执行命令并验证结果；它更像一套可以跨工作界面随身带着走的开发助手。"
     },
     "deepseek-harness": {
-      "description": "DeepSeek 开源的插件化智能体框架，支持桌面端与本地 Web 工作区"
+      "description": "DeepSeek Harness 是开源插件化智能体工作台，把工具都当作可替换插件，在桌面或 Web 中组合完成办公、分析与编程任务；适合想自己搭建 AI 工作台的人。"
     },
     "pi": {
-      "description": "pi-mono 提供的轻量、可扩展终端编码代理"
+      "description": "Pi 是轻量而可扩展的终端代理工具包，提供统一模型接口、交互式 TUI 和编码代理 CLI；它不替你规定工作方式，更适合喜欢自己编排模型、提示和工具的用户。"
     },
     "hermes": {
-      "description": "具备学习循环与持续记忆的 Nous Research 开源 AI 代理"
+      "description": "Nous Research 的 Hermes 是会持续成长的 AI 代理，能在终端、桌面和聊天渠道工作，保留长期记忆，并积累可复用的技能；适合希望助手越用越懂自己的长期工作流。"
     },
     "open-interpreter": {
-      "description": "通过自然语言操作电脑与编写代码的终端代理"
+      "description": "Open Interpreter 是面向开放模型的自然语言编码代理，让你在终端对话中读写文件、运行代码并完成开发任务；如果你想用自己的模型来操作电脑，它是很直接的起点。"
     },
     "anythingllm": {
-      "description": "支持本地知识库的桌面 AI 工作区；配置默认语言模型，保留各工作区的独立设置"
+      "description": "AnythingLLM 是本地优先的 AI 工作区，把文档整理成可检索知识库，再用代理、工作流和本地或云端模型继续处理；适合想把资料、问答和自动化放在一个私有空间里的人。"
     },
     "mistral-vibe": {
-      "description": "Mistral AI 开源的终端编码代理"
+      "description": "Mistral Vibe 是简洁的终端编码代理，直接在项目里理解需求、修改代码并完成开发；如果你不喜欢厚重界面，只想快速开始，它会很合适。"
     },
     "grok-build": {
-      "description": "xAI 终端编码工具；同步模型列表，并为每个模型选择匹配的 API 协议"
+      "description": "xAI 的 Grok Build 是全屏终端编码代理，能理解代码、修改文件、执行命令、搜索网页，并处理需要较长时间的任务；适合喜欢把开发过程交给一个持续工作的终端伙伴的人。"
     },
     "muse-code": {
-      "description": "Meta 终端编程工具；支持自定义模型、思考深度和上下文配置"
+      "description": "Meta 的 Muse Code 是终端与 CI 编码代理，带审批关卡和操作系统沙箱，面向长任务与并行开发流程；它更强调可控、可审计的自动化，而不是一次性的代码生成。"
     },
     "minimax-code": {
-      "description": "MiniMax 桌面端与终端共用模型配置；默认优先桌面版，统一使用工具菜单中选择的协议"
+      "description": "MiniMax Code 可以从一句需求出发生成可运行软件，再构建、测试并持续迭代；适合把模糊想法快速做成原型，也适合用自然语言持续打磨成产品。"
     },
     "open-design": {
-      "description": "通过官方 Codex 适配器接入的本地优先开源 AI 设计工作区"
+      "description": "OpenDesign 是本地优先的协作设计工作区，用 AI 制作原型、网站、幻灯片、图片和视频，并在同一项目中共享反馈；适合设计、内容和产品团队一起把想法做成看得见的成果。"
     },
     "vscode": {
-      "description": "在 VS Code Chat 与 Agent 中使用 CONST API，按模型匹配协议"
+      "description": "Microsoft 的 VS Code Chat 与 Agent 把 AI 放在最熟悉的编辑器里：理解代码、修改项目、调用工具、运行检查都在同一个工作区完成；适合不想频繁切换应用的开发者。"
     },
     "workbuddy": {
       "title": "WorkBuddy",
-      "description": "WorkBuddy 中国版桌面智能体，与国际版配置独立"
+      "description": "WorkBuddy 中国版让你只用一句话描述目标，就能让专业代理规划并处理本地文件，交付文档、表格或演示文稿；它更像会替你办事的数字同事，而不只是聊天机器人。"
+    },
+    "codebuddy": {
+      "description": "腾讯 CodeBuddy 是从写代码一路协助到部署的编程助手，支持切换模型、安装插件，并以 Agent 方式自动推进任务；适合希望把编码、调试和交付串成一条流程的开发者。"
+    },
+    "qoder": {
+      "description": "Qoder 是智能开发平台，先理解整个代码库，再从需求规划、编码、测试一路推进到交付；如果你面对的是大型项目或一整条开发任务，它比单点问答更有价值。"
+    },
+    "qoder-cn": {
+      "description": "Qoder CN 是面向中国环境的智能体工作台，提供 IDE、JetBrains 插件和终端入口，适合持续推进完整的编码任务；已有国内开发环境和工具链时，上手会更自然。"
+    },
+    "octop": {
+      "description": "腾讯云的 Octop 是开源自托管助手，支持多用户与多智能体协作，并连接 Web、终端、聊天平台、连接器和 MCP 工具；适合团队想拥有自己的 AI 工作中枢，而不是把数据交给单一 SaaS。"
+    },
+    "toonflow": {
+      "description": "Toonflow 是开源 AI 短剧与视频工作台，从画布剧本、分镜到素材管理和图片/视频生成，串起从创意到成片的流程；适合想把短剧、动态漫画或视频创作流程集中起来的人。"
     },
     "workbuddy-ai": {
       "title": "WorkBuddy AI",
-      "description": "WorkBuddy 国际版桌面智能体，独立管理模型配置"
+      "description": "WorkBuddy 国际版是一站式 AI 工作台，可规划并执行研究、文档、代码和日常文件任务，最后交付可直接使用的结果；适合希望把零散事务交给一个会规划、会执行的助手。"
     },
     "kimicode": {
-      "description": "桌面端与终端共用模型配置的 Kimi Code 编码代理"
+      "description": "Moonshot AI 的 Kimi Code 是面向桌面和终端的编码代理，会读写代码、执行命令、搜索文件与网页，适合把一个模糊问题直接推进到可审阅的改动。"
     },
     "mimocode": {
-      "description": "小米 MiMo 编码工具，优先桌面版，与命令行共用模型配置"
+      "description": "小米的 MiMo Code 是终端原生编码助手，支持读写代码、执行命令、管理 Git 和持久记忆，也为配套桌面版提供能力；适合偏爱命令行、又希望保留长期上下文的人。"
     },
     "qwencode": {
-      "description": "桌面端与终端共用模型配置的 Qwen Code 编码工具"
+      "description": "Qwen Code 是开源桌面和终端编码代理，支持编辑器、记忆、技能、子代理与多协议；如果你想把复杂开发拆成可复用的自动化流程，它的扩展空间很大。"
     },
     "openscience": {
-      "description": "面向科研工作的开源研究工作区与智能体"
+      "description": "Open Science 是本地优先、模型无关的科研工作台，把笔记、文件、MCP 工具、运行记录和可复现实验材料集中管理；适合重视隐私、复现和研究过程留痕的人。"
     },
     "vibe-trading": {
-      "description": "面向交易研究的开源 AI 智能体工作区"
+      "description": "Vibe-Trading 是个人交易研究代理，把行情数据、市场分析、回测和策略研究串成工作流；适合做研究和验证假设，不代表收益承诺，也不替代实盘判断。"
     },
     "zcode": {
-      "description": "支持自定义 OpenAI 兼容服务的 Z.ai 桌面编程智能体"
+      "description": "智谱的 ZCode 是面向 GLM-5.3 优化的桌面开发环境，支持目标驱动的长任务、多智能体协作和持续验证；适合希望让国产模型持续参与真实项目开发的用户。"
     },
     "links": {
       "download": "官方下载",
       "website": "官方网站",
+      "documentation": "模型文档",
       "github": "GitHub"
     }
   },
   "toolModelInjection": {
     "allModels": "注入全部模型",
     "hint": "关闭后，仅注入推荐列表中的模型，减少选择干扰。Claude、使用原生模型列表的 Codex，以及自行获取模型的工具不受影响。",
-    "editList": "推荐列表",
+    "editList": "推荐模型",
     "title": "工具推荐模型",
     "editorHint": "后台推荐在前，你的追加项在后。支持模型名或末尾 * 前缀。",
     "recommended": "后台推荐",
@@ -2324,7 +2352,8 @@
       "firstConfigurationExternalWarningMessage": "配置已生效，但外部环境设置可能覆盖它。请优先从 CONST API 启动 {{tool}}。",
       "firstConfigurationLaunchOnlyMessage": "以后请从 CONST API 启动 {{tool}}，这里配置的接入方式才会生效。直接从外部启动时，仍使用它原来的设置。",
       "firstConfigurationUnverifiedMessage": "配置已保存并用于本次启动，接入状态尚未确认。",
-      "configurationRecoveryMessage": "如果配置没有生效，请按顺序尝试：\n1. 完全退出 {{tool}}（包括托盘或后台进程），再从 CONST API 启动。\n2. 仍未生效时，右键该工具，选择“取消配置”，再选择恢复官方接入的选项；没有该选项时，恢复接管前状态。\n3. 打开 {{tool}}，确认恢复后的接入能正常使用，再回到 CONST API 重新配置并启动。\n\n恢复正常后，不用继续后面的步骤。"
+      "configurationRecoveryMessage": "如果没有生效：先完全退出 {{tool}}（包括托盘或后台进程），再从 CONST API 启动。仍无效时，右键工具选择“取消配置”，恢复官方接入后再重新配置。",
+      "runtimeReminder": "使用工具时请保持 CONST API 运行。"
     },
     "removeModes": {
       "title": "取消 {{tool}} 配置",

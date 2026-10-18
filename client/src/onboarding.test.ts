@@ -90,6 +90,11 @@ describe("new-user onboarding state", () => {
 
     expect(resolveOnboardingGuideState({ ...base, page: "access" })).toBe("choose_mode");
     expect(resolveOnboardingGuideState({ ...base, page: "access", localModeChosen: true })).toBe("local_setup");
+    expect(resolveOnboardingGuideState({
+      ...base,
+      page: "access",
+      localModelReady: true,
+    })).toBeNull();
     expect(resolveOnboardingGuideState({ ...base, page: "supplier" })).toBe("supplier_intro");
     expect(resolveOnboardingGuideState({ ...base, page: "account" })).toBeNull();
     expect(resolveOnboardingGuideState({ ...base, page: "about" })).toBeNull();

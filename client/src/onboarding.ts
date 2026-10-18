@@ -149,7 +149,7 @@ export function resolveOnboardingGuideState({
         : null;
     }
 
-    if (!localModeChosen) return "choose_mode";
+    if (!localModeChosen && !localModelReady) return "choose_mode";
     if (!localModelReady) {
       return supplierTotalCount > 0 ? "local_channel_setup" : "local_setup";
     }

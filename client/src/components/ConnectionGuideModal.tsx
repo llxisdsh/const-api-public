@@ -22,11 +22,16 @@ type ConnectionGuideModalProps = {
   onClose: () => void;
 };
 
-type SurfaceRow = {
-  field: CopyField;
-  label: string;
-  url: string;
-  hintKey: string;
+type ProtocolGroup = {
+  id: string;
+  provider: string;
+  title: string;
+  hint?: string;
+  addresses: {
+    field: CopyField;
+    label: string;
+    url: string;
+  }[];
 };
 
 export function ConnectionGuideModal({
@@ -46,27 +51,69 @@ export function ConnectionGuideModal({
 }: ConnectionGuideModalProps) {
   const { t } = useTranslation();
   const [copiedModelId, setCopiedModelId] = useState<string | null>(null);
-  const openaiModelsUrl = openaiBaseUrl ? `${openaiBaseUrl}/models` : "";
   const modelListText = availableModels.join("\n");
   const modelsLoading = modelStatus === "idle" || modelStatus === "loading";
-  const surfaces: SurfaceRow[] = [
+  const protocols: ProtocolGroup[] = [
     {
-      field: "guide-openai-url",
-      label: "OpenAI",
-      url: openaiBaseUrl,
-      hintKey: "access.guide.openaiHint",
+      id: "openai",
+      provider: "OpenAI",
+      title: t("access.guide.openaiProtocol"),
+      addresses: [
+        { field: "guide-openai-url", label: t("access.guide.baseUrl"), url: openaiBaseUrl },
+        {
+          field: "guide-openai-responses-url",
+          label: t("access.guide.responsesUrl"),
+          url: openaiBaseUrl ? `${openaiBaseUrl}/responses` : "",
+        },
+        { field: "guide-openai-chat-url", label: t("access.guide.chatUrl"), url: openaiChatUrl },
+        {
+          field: "guide-openai-models-url",
+          label: t("access.guide.modelsUrl"),
+          url: openaiBaseUrl ? `${openaiBaseUrl}/models` : "",
+        },
+      ],
     },
     {
-      field: "guide-anthropic-url",
-      label: "Anthropic",
-      url: anthropicBaseUrl,
-      hintKey: "access.guide.anthropicHint",
+      id: "anthropic",
+      provider: "Anthropic",
+      title: t("access.guide.anthropicProtocol"),
+      addresses: [
+        { field: "guide-anthropic-url", label: t("access.guide.baseUrl"), url: anthropicBaseUrl },
+        {
+          field: "guide-anthropic-messages-url",
+          label: t("access.guide.messagesUrl"),
+          url: anthropicBaseUrl ? `${anthropicBaseUrl}/v1/messages` : "",
+        },
+        {
+          field: "guide-anthropic-models-url",
+          label: t("access.guide.modelsUrl"),
+          url: anthropicBaseUrl ? `${anthropicBaseUrl}/v1/models` : "",
+        },
+      ],
     },
     {
-      field: "guide-gemini-url",
-      label: "Gemini",
-      url: geminiBaseUrl,
-      hintKey: "access.guide.geminiHint",
+      id: "gemini",
+      provider: "Gemini",
+      title: t("access.guide.geminiProtocol"),
+      hint: t("access.guide.geminiModelHint"),
+      addresses: [
+        { field: "guide-gemini-url", label: t("access.guide.baseUrl"), url: geminiBaseUrl },
+        {
+          field: "guide-gemini-generate-url",
+          label: t("access.guide.requestUrl"),
+          url: geminiBaseUrl ? `${geminiBaseUrl}/v1beta/models/{model}:generateContent` : "",
+        },
+        {
+          field: "guide-gemini-stream-url",
+          label: t("access.guide.streamUrl"),
+          url: geminiBaseUrl ? `${geminiBaseUrl}/v1beta/models/{model}:streamGenerateContent?alt=sse` : "",
+        },
+        {
+          field: "guide-gemini-models-url",
+          label: t("access.guide.modelsUrl"),
+          url: geminiBaseUrl ? `${geminiBaseUrl}/v1beta/models` : "",
+        },
+      ],
     },
   ];
 
@@ -94,8 +141,8 @@ export function ConnectionGuideModal({
 
         <section className="guide-surface-section">
           <div className="guide-section-heading">
-            <h3>{t("access.guide.surfaceTitle")}</h3>
-            <p>{t("access.guide.surfaceHint")}</p>
+            <h3>{t("access.guide.protocolsTitle")}</h3>
+            <p>{t("access.guide.protocolsHint")}</p>
           </div>
           <div className="guide-surface-list">
             <div className="guide-surface-row">
@@ -115,86 +162,42 @@ export function ConnectionGuideModal({
                 {copiedField === "api-key" ? <Check size={15} /> : <Copy size={15} />}
               </button>
             </div>
-            {surfaces.map((surface) => (
-              <div className="guide-surface-row" key={surface.field}>
-                <div className="guide-surface-copy">
-                  <strong>{surface.label}</strong>
-                  <small>{t(surface.hintKey)}</small>
-                </div>
-                <code>{surface.url}</code>
-                <button
-                  type="button"
-                  className={`copy-feedback-button${copiedField === surface.field ? " copied" : ""}`}
-                  onClick={() => onCopy(surface.field, `${surface.label} Base URL`, surface.url)}
-                  title={copiedField === surface.field
-                    ? t("common.copied")
-                    : t("access.copySurfaceUrl", { surface: surface.label })}
-                  aria-label={copiedField === surface.field
-                    ? t("common.copied")
-                    : t("access.copySurfaceUrl", { surface: surface.label })}
-                >
-                  {copiedField === surface.field ? <Check size={15} /> : <Copy size={15} />}
-                </button>
-              </div>
-            ))}
           </div>
-        </section>
-
-        <section className="guide-compat-section">
-          <div className="guide-section-heading">
-            <h3>{t("access.guide.compatibilityTitle")}</h3>
-            <p>{t("access.guide.compatibilityHint")}</p>
-          </div>
-          <div className="guide-surface-list">
-            <div className="guide-surface-row">
-              <div className="guide-surface-copy">
-                <strong>{t("access.guide.openaiChatTitle")}</strong>
-                <small>{t("access.guide.openaiChatHint")}</small>
+          {protocols.map((protocol) => (
+            <section
+              className="guide-protocol-group"
+              key={protocol.id}
+              aria-labelledby={`guide-protocol-${protocol.id}`}
+            >
+              <div className="guide-protocol-heading">
+                <h4 id={`guide-protocol-${protocol.id}`}>{protocol.title}</h4>
+                {protocol.hint && <p>{protocol.hint}</p>}
               </div>
-              <code title={openaiChatUrl}>{openaiChatUrl}</code>
-              <button
-                type="button"
-                className={`copy-feedback-button${copiedField === "guide-openai-chat-url" ? " copied" : ""}`}
-                onClick={() => onCopy(
-                  "guide-openai-chat-url",
-                  t("access.openaiChatUrl"),
-                  openaiChatUrl,
-                )}
-                title={copiedField === "guide-openai-chat-url"
-                  ? t("common.copied")
-                  : t("access.guide.copyOpenaiChatUrl")}
-                aria-label={copiedField === "guide-openai-chat-url"
-                  ? t("common.copied")
-                  : t("access.guide.copyOpenaiChatUrl")}
-              >
-                {copiedField === "guide-openai-chat-url" ? <Check size={15} /> : <Copy size={15} />}
-              </button>
-            </div>
-            <div className="guide-surface-row">
-              <div className="guide-surface-copy">
-                <strong>{t("access.guide.modelsUrlTitle")}</strong>
-                <small>{t("access.guide.modelsUrlHint")}</small>
+              <div className="guide-surface-list">
+                {protocol.addresses.map((address) => {
+                  const label = `${protocol.provider} ${address.label}`;
+                  const copied = copiedField === address.field;
+                  const copyLabel = copied ? t("common.copied") : t("access.copyConnectionValue", { value: label });
+                  return (
+                    <div className="guide-surface-row" key={address.field}>
+                      <span>{address.label}</span>
+                      <code title={address.url}>{address.url || t("access.notSet")}</code>
+                      <button
+                        type="button"
+                        className={`copy-feedback-button${copied ? " copied" : ""}`}
+                        disabled={!address.url}
+                        onClick={() => onCopy(address.field, label, address.url)}
+                        title={copyLabel}
+                        aria-label={copyLabel}
+                      >
+                        {copied ? <Check size={15} /> : <Copy size={15} />}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
-              <code title={openaiModelsUrl}>{openaiModelsUrl}</code>
-              <button
-                type="button"
-                className={`copy-feedback-button${copiedField === "guide-openai-models-url" ? " copied" : ""}`}
-                onClick={() => onCopy(
-                  "guide-openai-models-url",
-                  t("access.guide.modelsUrlTitle"),
-                  openaiModelsUrl,
-                )}
-                title={copiedField === "guide-openai-models-url"
-                  ? t("common.copied")
-                  : t("access.guide.copyModelsUrl")}
-                aria-label={copiedField === "guide-openai-models-url"
-                  ? t("common.copied")
-                  : t("access.guide.copyModelsUrl")}
-              >
-                {copiedField === "guide-openai-models-url" ? <Check size={15} /> : <Copy size={15} />}
-              </button>
-            </div>
-          </div>
+            </section>
+          ))}
 
           <div className="guide-models">
             <div className="guide-models-header">

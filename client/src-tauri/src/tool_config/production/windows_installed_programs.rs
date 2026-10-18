@@ -126,6 +126,9 @@ fn windows_installed_product_matches(display: &str, product: &str) -> bool {
     let display = display.trim().to_ascii_lowercase();
     let product = product.to_ascii_lowercase();
     display == product
+        || display
+            .strip_suffix(" (user)")
+            .is_some_and(|base| base == product)
         || display.strip_prefix(&product).is_some_and(|suffix| {
             suffix.starts_with(' ')
                 && suffix

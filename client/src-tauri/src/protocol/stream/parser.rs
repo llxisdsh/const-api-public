@@ -197,6 +197,17 @@ impl StreamParser {
         usage: Usage,
         events: &mut Vec<CanonicalStreamEvent>,
     ) {
+        self.finish_events_with_details(reason, original_reason, None, usage, events);
+    }
+
+    fn finish_events_with_details(
+        &mut self,
+        reason: FinishReason,
+        original_reason: Option<String>,
+        incomplete_details: Option<Value>,
+        usage: Usage,
+        events: &mut Vec<CanonicalStreamEvent>,
+    ) {
         if self.done {
             return;
         }
@@ -213,7 +224,7 @@ impl StreamParser {
         events.push(CanonicalStreamEvent::ResponseDone(FinishDetail {
             reason,
             original_reason,
-            incomplete_details: None,
+            incomplete_details,
         }));
         self.done = true;
     }
@@ -488,16 +499,18 @@ impl StreamParser {
                     .get("status")
                     .and_then(Value::as_str)
                     .unwrap_or(kind.strip_prefix("response.").unwrap_or("completed"));
+                let incomplete_details = response.get("incomplete_details").cloned();
                 let reason = match status {
-                    "incomplete" => FinishReason::Length,
+                    "incomplete" => finish_from_responses_incomplete(incomplete_details.as_ref()),
                     "cancelled" => FinishReason::Cancelled,
                     "failed" => FinishReason::Error,
                     _ if !self.tool_headers.is_empty() => FinishReason::ToolCalls,
                     _ => FinishReason::Stop,
                 };
-                self.finish_events(
+                self.finish_events_with_details(
                     reason,
                     Some(status.to_string()),
+                    incomplete_details,
                     usage_from_responses(response.get("usage")),
                     events,
                 );
@@ -1311,6 +1324,19 @@ fn finish_from_chat(reason: &str) -> FinishReason {
     }
 }
 
+fn finish_from_responses_incomplete(details: Option<&Value>) -> FinishReason {
+    match details
+        .and_then(|details| details.get("reason"))
+        .and_then(Value::as_str)
+    {
+        Some("content_filter") => FinishReason::ContentFilter,
+        Some("interrupted") => FinishReason::Cancelled,
+        // Keep the historical fallback for newer or provider-specific
+        // incomplete reasons that still mean the output was truncated.
+        _ => FinishReason::Length,
+    }
+}
+
 fn finish_from_anthropic(reason: Option<&str>) -> FinishReason {
     match reason {
         Some("tool_use") => FinishReason::ToolCalls,
@@ -1409,5 +1435,41 @@ mod usage_tests {
         })));
         assert_eq!(responses.cache_read_tokens.value, Some(12));
         assert_eq!(responses.cache_write_tokens.value, Some(9));
+    }
+
+    #[test]
+    fn responses_incomplete_preserves_reason_and_details() {
+        let raw = concat!(
+            "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp-1\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"content_filter\"},\"output\":[],\"usage\":{\"input_tokens\":4,\"output_tokens\":2,\"total_tokens\":6}}}\n\n"
+        );
+        let mut parser = StreamParser::new(ProtocolKind::OpenAiResponses, "model");
+        let events = parser.push(raw.as_bytes()).unwrap();
+        let finish = events.iter().find_map(|event| match event {
+            CanonicalStreamEvent::ResponseDone(finish) => Some(finish),
+            _ => None,
+        });
+        let finish = finish.expect("response.incomplete should finish the stream");
+        assert_eq!(finish.reason, FinishReason::ContentFilter);
+        assert_eq!(finish.original_reason.as_deref(), Some("incomplete"));
+        assert_eq!(
+            finish
+                .incomplete_details
+                .as_ref()
+                .and_then(|details| details.get("reason"))
+                .and_then(Value::as_str),
+            Some("content_filter")
+        );
+        assert_eq!(
+            finish_from_responses_incomplete(Some(&serde_json::json!({
+                "reason": "interrupted"
+            }))),
+            FinishReason::Cancelled
+        );
+        assert_eq!(
+            finish_from_responses_incomplete(Some(&serde_json::json!({
+                "reason": "future_provider_reason"
+            }))),
+            FinishReason::Length
+        );
     }
 }

@@ -150,6 +150,15 @@ fn qwencode_config_path() -> PathBuf {
     tool_home_override_or_default("QWEN_HOME", ".qwen").join("settings.json")
 }
 
+fn qoder_settings_path(tool: &str) -> Result<PathBuf> {
+    let (environment, fallback) = match tool {
+        "qoder" => ("QODER_HOME", ".qoder"),
+        "qoder-cn" => ("QODER_CN_HOME", ".qoder-cn"),
+        _ => return Err(anyhow!("unknown Qoder tool: {tool}")),
+    };
+    Ok(tool_home_override_or_default(environment, fallback).join("settings.json"))
+}
+
 fn openscience_config_path() -> Result<PathBuf> {
     // ai4s-research/open-science bundles an isolated OpenCode runtime. The
     // similarly named synthetic-sciences CLI's configuration is unrelated.
@@ -1186,9 +1195,9 @@ fn configure_copilot(
     );
     // A non-empty providers.json supersedes COPILOT_PROVIDER_* in newer CLIs.
     // Use a private empty registry only for our launch so the documented legacy
-    // environment remains effective on both old and new CLI versions. Never
-    // replace the user's own registry or guess the new provider entry schema.
-    let registry = serde_json::json!({ "providers": {}, "models": {} });
+    // environment remains effective without replacing the user's own registry.
+    // Copilot CLI 1.0.87 validates both registry collections as arrays.
+    let registry = serde_json::json!({ "providers": [], "models": [] });
     let configure = || -> Result<ToolApplyResult> {
         let mut result = ToolApplyBuilder::default();
         if selected_model.is_some() {
@@ -2604,6 +2613,214 @@ fn check_open_design_config(base_url: &str, api_key: &str) -> Result<ToolApplyRe
     Ok(result)
 }
 
+// Qoder stores custom models for the international and CN editions in separate
+// user settings files.  The schema is shared, but Qoder's protocol labels are
+// not the same as CONST API's internal labels: custom OpenAI endpoints use
+// `openai`/`openai-responses`, while the Anthropic-compatible endpoint uses
+// `anthropic` and an API-key auth type.
+fn qoder_protocol_fields(protocol: ToolProtocol) -> Result<(&'static str, &'static str, &'static str)> {
+    match protocol {
+        ToolProtocol::OpenAiChat => Ok(("openai-compatible", "openai", "bearer")),
+        ToolProtocol::OpenAiResponses => Ok((
+            "openai-compatible",
+            "openai-responses",
+            "bearer",
+        )),
+        ToolProtocol::AnthropicMessages => Ok(("openai-compatible", "anthropic", "api-key")),
+        ToolProtocol::GeminiNative => Err(anyhow!("Qoder does not support Gemini protocol")),
+    }
+}
+
+fn qoder_model_context_window(model: &ToolModelInfo) -> u64 {
+    model
+        .context_tokens
+        .or_else(|| model.supports_1m.then_some(1_000_000))
+        .unwrap_or(200_000)
+}
+
+fn qoder_reasoning_efforts(model: &ToolModelInfo, protocol: ToolProtocol) -> Vec<String> {
+    let supported: &[&str] = match protocol {
+        ToolProtocol::AnthropicMessages => &["low", "medium", "high", "xhigh", "max"],
+        ToolProtocol::OpenAiChat | ToolProtocol::OpenAiResponses => {
+            &["minimal", "low", "medium", "high", "xhigh", "max"]
+        }
+        ToolProtocol::GeminiNative => &[],
+    };
+    model
+        .reasoning_efforts
+        .iter()
+        .filter(|effort| supported.iter().any(|supported| *supported == effort.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn qoder_model_entry(model: &ToolModelInfo, protocol: ToolProtocol) -> serde_json::Value {
+    let efforts = qoder_reasoning_efforts(model, protocol);
+    let vision = model.attachment
+        || model
+            .input_modalities
+            .iter()
+            .any(|modality| modality.eq_ignore_ascii_case("image"));
+    let thinking_mode = (protocol == ToolProtocol::AnthropicMessages)
+        .then_some("adaptive")
+        .unwrap_or("enabled");
+    serde_json::json!({
+        "model": model.id.trim(),
+        "displayName": if model.display_name.trim().is_empty() { model.id.trim() } else { model.display_name.trim() },
+        "contextWindow": qoder_model_context_window(model),
+        "maxOutputTokens": model.output_tokens.unwrap_or(8192),
+        "capabilities": {
+            "vision": vision,
+            "thinking": {
+                "modes": if model.reasoning { serde_json::json!([thinking_mode]) } else { serde_json::json!([]) },
+                "supportsEffort": model.reasoning && !efforts.is_empty(),
+                "supportedEffortLevels": if model.reasoning { serde_json::json!(efforts) } else { serde_json::json!([]) },
+            }
+        }
+    })
+}
+
+fn qoder_provider_matches(
+    provider: &serde_json::Value,
+    base_url: &str,
+    api_key: Option<&str>,
+    protocol: Option<ToolProtocol>,
+) -> bool {
+    let Some(provider) = provider.as_object() else {
+        return false;
+    };
+    let endpoint_matches = provider
+        .get("baseUrl")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| value == base_url);
+    let key_matches = api_key.is_none_or(|key| {
+        provider
+            .get("apiKey")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| value == key)
+    });
+    let protocol_matches = protocol.is_none_or(|protocol| {
+        qoder_protocol_fields(protocol)
+            .ok()
+            .is_some_and(|(_, label, _)| provider.get("protocol").and_then(serde_json::Value::as_str) == Some(label))
+    });
+    endpoint_matches && key_matches && protocol_matches
+}
+
+fn qoder_provider_id(
+    tool: &str,
+    providers: &serde_json::Map<String, serde_json::Value>,
+    base_url: &str,
+    protocol: ToolProtocol,
+) -> String {
+    if let Some((id, _)) = providers
+        .iter()
+        .find(|(_, provider)| qoder_provider_matches(provider, base_url, None, Some(protocol)))
+    {
+        return id.clone();
+    }
+    let preferred = "const-api";
+    if !providers.contains_key(preferred)
+        || providers
+            .get(preferred)
+            .is_some_and(|provider| qoder_provider_matches(provider, base_url, None, None))
+    {
+        return preferred.to_string();
+    }
+    format!("const-api-{tool}")
+}
+
+fn apply_qoder_config(
+    tool: &str,
+    base_url: &str,
+    api_key: &str,
+    models: &[ToolModelInfo],
+    protocol: ToolProtocol,
+) -> Result<ToolApplyResult> {
+    let models = configured_additional_tool_models("Qoder", models)?;
+    let (provider_type, protocol_name, auth_type) = qoder_protocol_fields(protocol)?;
+    let endpoint = tool_surface_url(base_url, protocol.surface());
+    let path = qoder_settings_path(tool)?;
+    let mut root = read_json_or_default(&path, serde_json::json!({}))?;
+    ensure_json_object(&mut root);
+    ensure_json_object_field(&mut root, "providers");
+    let provider_id = root
+        .get("providers")
+        .and_then(serde_json::Value::as_object)
+        .map(|providers| qoder_provider_id(tool, providers, &endpoint, protocol))
+        .unwrap_or_else(|| "const-api".to_string());
+    let mut provider = root["providers"]
+        .get(&provider_id)
+        .cloned()
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    provider["baseUrl"] = serde_json::json!(endpoint);
+    provider["apiKey"] = serde_json::json!(api_key);
+    provider["type"] = serde_json::json!(provider_type);
+    provider["protocol"] = serde_json::json!(protocol_name);
+    provider["authType"] = serde_json::json!(auth_type);
+    provider["model"] = serde_json::json!(models[0].id.trim());
+    provider["models"] = serde_json::Value::Array(
+        models
+            .iter()
+            .map(|model| qoder_model_entry(model, protocol))
+            .collect(),
+    );
+    root["providers"][provider_id.clone()] = provider;
+
+    let mut result = ToolApplyBuilder::default();
+    write_json_with_backup(&path, &root, tool, &mut result)?;
+    let mut result = result.finish(tool);
+    result.details.insert("provider_id".to_string(), provider_id);
+    attach_tool_protocol(&mut result, protocol);
+    Ok(result)
+}
+
+fn check_qoder_config(tool: &str, base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
+    let path = qoder_settings_path(tool)?;
+    let root = read_json_or_default(&path, serde_json::json!({}))?;
+    let expected_endpoints = [
+        tool_surface_url(base_url, ToolProtocol::OpenAiResponses.surface()),
+        tool_surface_url(base_url, ToolProtocol::AnthropicMessages.surface()),
+    ];
+    let configured = root
+        .get("providers")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|providers| {
+            providers.values().any(|provider| {
+                let endpoint = provider.get("baseUrl").and_then(serde_json::Value::as_str);
+                let endpoint_matches = endpoint.is_some_and(|value| {
+                    expected_endpoints.iter().any(|expected| expected == value)
+                });
+                endpoint_matches
+                    && qoder_provider_matches(provider, endpoint.unwrap_or_default(), Some(api_key), None)
+                    && provider
+                        .get("models")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|models| {
+                            models.iter().any(|model| {
+                                model
+                                    .get("model")
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some_and(|id| !id.trim().is_empty())
+                            })
+                        })
+            })
+        });
+    let mut result = ToolApplyBuilder::default();
+    observe_json(&path, &root, &mut result)?;
+    let mut result = result.finish(tool);
+    result.already_configured &= configured;
+    result
+        .details
+        .insert("has_managed_config".to_string(), configured.to_string());
+    Ok(result)
+}
+
+fn remove_qoder_config(tool: &str) -> Result<ToolApplyResult> {
+    restore_tool_config_from_manifest(tool)
+}
+
 pub(crate) fn apply_additional_tool_config_with_model_info_for_protocol(
     tool: &str,
     base_url: &str,
@@ -2613,6 +2830,8 @@ pub(crate) fn apply_additional_tool_config_with_model_info_for_protocol(
 ) -> Result<ToolApplyResult> {
     resolve_tool_protocol(tool, Some(protocol.as_str()))?;
     match tool {
+        "octop" => apply_octop_config(base_url, api_key, models),
+        "toonflow" => apply_toonflow_config(base_url, api_key, models, protocol),
         "grok-build" => configure_grok_build(base_url, api_key, Some(models), protocol),
         "muse-code" => configure_muse_code(base_url, api_key, Some(models)),
         "minimax-code" => configure_minimax_code(base_url, api_key, Some(models), protocol),
@@ -2650,6 +2869,7 @@ pub(crate) fn apply_additional_tool_config_with_model_info_for_protocol(
         ),
         "vibe-trading" => apply_vibe_trading_config(base_url, api_key, models),
         "zcode" => apply_zcode_config(base_url, api_key, models),
+        "qoder" | "qoder-cn" => apply_qoder_config(tool, base_url, api_key, models, protocol),
         _ => Err(anyhow!("unknown additional tool: {tool}")),
     }
 }
@@ -2660,6 +2880,8 @@ pub(crate) fn check_additional_tool_config(
     api_key: &str,
 ) -> Result<ToolApplyResult> {
     match tool {
+        "octop" => check_octop_config(base_url, api_key),
+        "toonflow" => check_toonflow_config(base_url, api_key),
         "muse-code" => configure_muse_code(base_url, api_key, None),
         "grok-build" => {
             configure_grok_build(base_url, api_key, None, ToolProtocol::OpenAiResponses)
@@ -2697,17 +2919,21 @@ pub(crate) fn check_additional_tool_config(
         ),
         "vibe-trading" => check_vibe_trading_config(base_url, api_key),
         "zcode" => check_zcode_config(base_url, api_key),
+        "qoder" | "qoder-cn" => check_qoder_config(tool, base_url, api_key),
         _ => Err(anyhow!("unknown additional tool: {tool}")),
     }
 }
 
 pub(crate) fn remove_additional_tool_config(tool: &str) -> Result<ToolApplyResult> {
     match tool {
+        "octop" => remove_octop_config(),
+        "toonflow" => remove_toonflow_config(),
         "copilot-desktop" => copilot_desktop::remove(),
         "copilot" | "grok-build" | "minimax-code" | "muse-code" | "raven" | "pi" | "cline" | "reasonix"
         | "deepseek-harness" | "open-interpreter" | "anythingllm" | "goose" | "mistral-vibe"
         | "open-design" | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading"
         | "zcode" => restore_tool_config_from_manifest(tool),
+        "qoder" | "qoder-cn" => remove_qoder_config(tool),
         _ => Err(anyhow!("unknown additional tool: {tool}")),
     }
 }

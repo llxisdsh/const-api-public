@@ -265,7 +265,7 @@ fn supplier_supported_operations(config: &SupplierConfig) -> Vec<String> {
         crate::source_driver::SourceDriverId::OpenAiSubscription => true,
         crate::source_driver::SourceDriverId::OpenAiApi => {
             bound_surfaces.contains(&crate::surface::ApiSurface::OpenAi)
-                && crate::detection::responses_features::operation_support(&config.detection_checks, "openai.responses_websocket") != Some(false)
+                && crate::detection::responses_features::operation_support(&config.detection_checks, "openai.responses_websocket") == Some(true)
         }
         _ => bound_surfaces.contains(&crate::surface::ApiSurface::OpenAi)
             && crate::detection::responses_features::operation_support(&config.detection_checks, "openai.responses_websocket") == Some(true),
@@ -1292,6 +1292,28 @@ mod surface_operation_evidence_tests {
         let custom: Vec<_> = evidence.iter().filter(|e| e.feature == "custom_tool" && e.state == "supported").collect();
         assert_eq!(custom.len(), 1);
         assert_eq!(custom[0].model_pattern.as_deref(), Some("gpt-5.6-luna"));
+    }
+
+    #[test]
+    fn openai_api_requires_verified_responses_websocket_support() {
+        let mut channel = crate::channel_from_supplier("openai-api".into(), &crate::default_supplier_config());
+        channel.set_source_driver(crate::source_driver::SourceDriverId::OpenAiApi);
+        channel.surface_bindings = crate::source_driver_surface_bindings(
+            crate::source_driver::SourceDriverId::OpenAiApi,
+            "https://api.openai.com/v1",
+        );
+        channel.models = vec!["gpt-5.6-luna".into()];
+        let operations = supplier_supported_operations(&crate::supplier_from_channel(&channel));
+        assert!(!operations.contains(&"openai.responses_websocket".into()));
+
+        channel.detection_checks.push(ChannelDetectionCheck {
+            name: "responses_operation".into(),
+            capability: "openai.responses_websocket".into(),
+            status: "verified".into(),
+            ..Default::default()
+        });
+        let operations = supplier_supported_operations(&crate::supplier_from_channel(&channel));
+        assert!(operations.contains(&"openai.responses_websocket".into()));
     }
 
     #[test]

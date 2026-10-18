@@ -28,7 +28,6 @@ describe("channel refresh and inference command boundaries", () => {
     vi.mocked(invoke).mockReset().mockImplementation(async (command, args) => {
       const input = args as Record<string, unknown> | undefined;
       if (command === "get_config") return structuredClone(wire);
-      if (command === "find_duplicate_channels") return [];
       if (command === "save_supplier_config") {
         wire = { ...wire, channels: input?.channels as typeof wire.channels };
         return structuredClone(wire);
@@ -107,12 +106,36 @@ describe("channel refresh and inference command boundaries", () => {
     act(() => { result.current.setSubscriptionTokenJson('{"refresh_token":"fixture"}'); });
     vi.mocked(invoke).mockClear();
     await act(async () => { await result.current.importSubscriptionJson(); });
-    expect(invoke).not.toHaveBeenCalledWith("find_duplicate_channels", expect.anything());
     expect(invoke).toHaveBeenCalledWith("finalize_subscription_import", { channel: prepared, createDuplicate: true });
     expect(wire.channels).toHaveLength(2);
     expect(wire.channels[0]).toMatchObject(existing);
     expect(wire.channels[1]).toMatchObject({ id: "new-subscription", credential_ref: "new-managed.json", enabled: true });
     expect(result.current.subscriptionWizardOpen).toBe(false);
+  });
+
+  it("on-add presets use a fresh channel id without duplicate discovery", async () => {
+    const driver = sourceDriverById("ollama");
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "detect_channel_upstream") {
+        return {
+          models: ["local-fixture"], surface_results: [],
+          model_capability_evidence: [], detection_evidence: [], quota_status: "unknown",
+          remaining_ratio: 0, quota_windows: [], checks: ["catalog ok"], warnings: [],
+        };
+      }
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    vi.mocked(invoke).mockClear();
+    act(() => { result.current.addSubscriptionPreset(driver); });
+    await waitFor(() => expect(wire.channels).toHaveLength(2));
+    expect(wire.channels[1].id).toMatch(/^channel-/);
+    expect(wire.channels[1].id).not.toBe("refresh-channel");
+    expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
+      "detect_channel_upstream", "save_supplier_config",
+    ]);
   });
 
   it.each(["muse_code", "copilot_subscription"] as const)(
@@ -171,7 +194,7 @@ describe("channel refresh and inference command boundaries", () => {
       await act(async () => { await result.current.saveSupplierChanges(); });
       expect(wire.channels[0].max_concurrency).toBe(7);
       expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
-        "find_duplicate_channels", "save_supplier_config",
+        "save_supplier_config",
       ]);
       expect(invoke).not.toHaveBeenCalledWith("refresh_supplier_registration", expect.anything());
       expect(result.current.toast?.text).toContain("已保存");
@@ -235,7 +258,7 @@ describe("channel refresh and inference command boundaries", () => {
     await act(async () => { await result.current.saveSupplierChanges(); });
     expect(wire.channels[0].max_concurrency).toBe(7);
     expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
-      "find_duplicate_channels", "save_supplier_config",
+      "save_supplier_config",
     ]);
     expect(result.current.toast?.text).toContain("已保存");
     expect(invoke).not.toHaveBeenCalledWith("refresh_supplier_registration", expect.anything());

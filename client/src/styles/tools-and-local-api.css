@@ -57,6 +57,86 @@
   margin: 0;
 }
 
+.page-header-with-actions {
+  display: block;
+}
+
+.page-header-topline,
+.access-header-heading,
+.access-settings-connection-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+}
+
+.page-header-topline {
+  justify-content: space-between;
+}
+
+.page-header-topline > .actions {
+  margin-inline-start: auto;
+  justify-content: flex-end;
+}
+
+.access-api-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.access-api-status.stopped .local-entry-state-dot {
+  background: var(--status-danger);
+}
+
+.page-header-with-actions .access-connection-issue {
+  color: var(--danger-text);
+  overflow-wrap: anywhere;
+}
+
+.detail-drawer.access-settings-drawer {
+  width: min(680px, 100vw);
+  min-width: 0;
+}
+
+.access-settings-drawer .drawer-section {
+  display: grid;
+  gap: 14px;
+}
+
+.access-settings-drawer .drawer-section h2 {
+  margin: 0;
+  font-size: var(--page-section-title-size);
+}
+
+.access-settings-drawer .control-strip {
+  flex-wrap: wrap;
+}
+
+.access-settings-drawer .grid.advanced-local-fields {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.access-settings-drawer .advanced-routing-options .model-equivalence-toggle {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  margin: 0;
+  padding: 12px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.access-settings-drawer .model-alias-preview-button {
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
 .access-principle {
   max-width: 980px;
 }
@@ -69,7 +149,7 @@
   padding: 0 2px;
   border: 0;
   background: transparent;
-  color: inherit;
+  color: var(--muted);
   font: inherit;
   font-weight: var(--weight-medium);
   line-height: inherit;
@@ -117,6 +197,7 @@
 .access-section-intro {
   display: flex;
   align-items: baseline;
+  flex-wrap: wrap;
   gap: 10px;
   max-width: 1120px;
   margin: 0 0 14px;
@@ -142,6 +223,52 @@
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.access-tools-hint {
+  display: block;
+  max-width: 1120px;
+  margin: -10px 0 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.access-tools-hint-copy,
+.access-tools-batch-actions,
+.access-tools-batch-progress {
+  vertical-align: baseline;
+}
+
+.access-tools-hint-copy {
+  display: inline;
+}
+
+.access-tools-batch-actions {
+  display: inline-flex;
+  align-items: center;
+  margin-inline-start: 0.35em;
+}
+
+.access-tools-batch-progress {
+  display: block;
+  margin-top: 3px;
+  color: var(--subtle);
+}
+
+.access-tools-action {
+  margin: 0;
+  font-weight: 400;
+}
+
+.access-tools-action:disabled {
+  color: var(--subtle);
+  text-decoration: none;
+  cursor: default;
+}
+
+.access-tools-action-separator {
+  color: var(--subtle);
 }
 
 .local-entry-heading {

@@ -5,10 +5,10 @@
 //! Keep the values below together so a future compatibility update cannot
 //! accidentally mix several Claude Code releases in one request.
 
-// Version pinned by the official Claude Agent SDK 0.2.165 (_cli_version.py).
-pub(crate) const CLAUDE_CODE_VERSION: &str = "2.1.296";
-pub(crate) const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.296 (external, sdk-cli)";
-pub(crate) const CLAUDE_CODE_CONTROL_USER_AGENT: &str = "claude-code/2.1.296";
+// Version pinned by the official Claude Agent SDK 0.2.168 (_cli_version.py).
+pub(crate) const CLAUDE_CODE_VERSION: &str = "2.1.302";
+pub(crate) const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.302 (external, sdk-cli)";
+pub(crate) const CLAUDE_CODE_CONTROL_USER_AGENT: &str = "claude-code/2.1.302";
 pub(crate) const CLAUDE_CODE_ENTRYPOINT: &str = "sdk-cli";
 pub(crate) const CLAUDE_CODE_STAINLESS_PACKAGE_VERSION: &str = "0.112.1";
 pub(crate) const CLAUDE_CODE_STAINLESS_RUNTIME_VERSION: &str = "v26.3.0";

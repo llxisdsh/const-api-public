@@ -120,6 +120,7 @@ const SUBSCRIPTION_OAUTH_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const OPENAI_MODEL_CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const CLAUDE_MODEL_CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const GROK_MODEL_CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const ANTIGRAVITY_MODEL_CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SubscriptionCatalogPolicy {
@@ -182,6 +183,21 @@ type GrokSubscriptionCatalogCacheSlot =
 
 static GROK_SUBSCRIPTION_CATALOG_CACHE: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<String, GrokSubscriptionCatalogCacheSlot>>,
+> = std::sync::OnceLock::new();
+
+#[derive(Clone)]
+struct AntigravitySubscriptionCatalogCacheEntry {
+    catalog: serde_json::Value,
+    models: Vec<String>,
+    checked_at_unix: i64,
+    refresh_after: Instant,
+}
+
+type AntigravitySubscriptionCatalogCacheSlot =
+    std::sync::Arc<tokio::sync::Mutex<Option<AntigravitySubscriptionCatalogCacheEntry>>>;
+
+static ANTIGRAVITY_SUBSCRIPTION_CATALOG_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, AntigravitySubscriptionCatalogCacheSlot>>,
 > = std::sync::OnceLock::new();
 
 static OPENAI_MODEL_ETAG_HINTS: std::sync::OnceLock<
@@ -1215,6 +1231,7 @@ async fn catalog_snapshot(
                 } else {
                     let models = crate::coding_gateway::cached_catalog(
                         context.source_driver,
+                        cache_surface,
                         &context.credential_ref,
                         &cache_url,
                         subscription_policy == SubscriptionCatalogPolicy::Fresh,
@@ -1240,8 +1257,9 @@ async fn catalog_snapshot(
                 // execution. Retain the old list/evidence instead of deleting
                 // models whose absence could not be established by this refresh.
                 partial_models.extend(context.models.iter().cloned());
+                let detail = crate::upstream_failure::safe_excerpt(&format!("{error:#}"));
                 partial_warnings.push(format!(
-                    "{} catalog was not refreshed; previous models retained: {error:#}",
+                    "{} catalog was not refreshed; previous models retained: {detail}",
                     context.binding.surface.as_str()
                 ));
             }
@@ -3572,16 +3590,78 @@ pub(crate) async fn fetch_openai_compatible_catalog(
         crate::source_driver::SourceDriverId::PoeApi => ModelCatalogKind::Poe,
         _ => ModelCatalogKind::OpenAI,
     };
-    fetch_model_catalog(client, url, headers, kind).await
+    let models = fetch_model_catalog(client, url, headers, kind).await?;
+    if channel.source_driver() == crate::source_driver::SourceDriverId::OpencodeZen {
+        return Ok(models
+            .into_iter()
+            .filter(|model| {
+                !crate::coding_gateway::is_non_conversational_model(
+                    channel.source_driver(),
+                    &model.id,
+                )
+            })
+            .collect());
+    }
+    Ok(models)
+}
+
+pub(super) fn subscription_catalog_cache_identity(channel: &ChannelConfig) -> Result<String> {
+    let credential_path = subscription_credential_path(channel)?;
+    Ok(subscription_account_identity(channel)
+        .map(|identity| format!("account:{identity}"))
+        .unwrap_or_else(|| format!("path:{}", credential_path.to_string_lossy())))
+}
+
+#[cfg(test)]
+mod subscription_catalog_cache_identity_tests {
+    use super::*;
+
+    #[test]
+    fn catalog_cache_identity_is_account_scoped_not_channel_id_scoped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let credential_path = dir.path().join("account.json");
+        std::fs::write(
+            &credential_path,
+            br#"{"provider":"openai","account_id":"account-a","refresh_token":"refresh-a"}"#,
+        )
+        .expect("credential");
+
+        let credential_ref = credential_path.to_string_lossy().to_string();
+        let mut first =
+            crate::channel_from_supplier("channel-a".into(), &crate::default_supplier_config());
+        first.set_source_driver(crate::source_driver::SourceDriverId::OpenAiSubscription);
+        first.subscription.credential_ref = credential_ref.clone();
+        first.v2.credential_ref = credential_ref.clone();
+        let mut second = first.clone();
+        second.id = "channel-b".into();
+
+        let before = openai_subscription_catalog_cache_key(&first).unwrap();
+        assert_eq!(
+            before,
+            openai_subscription_catalog_cache_key(&second).unwrap()
+        );
+
+        std::fs::write(
+            &credential_path,
+            br#"{"provider":"openai","account_id":"account-b","refresh_token":"refresh-b"}"#,
+        )
+        .expect("replacement credential");
+        assert_ne!(
+            before,
+            openai_subscription_catalog_cache_key(&first).unwrap()
+        );
+    }
+}
+
+fn subscription_catalog_cache_key(channel: &ChannelConfig, provider: &str) -> Result<String> {
+    Ok(format!(
+        "{provider}\u{0}{}",
+        subscription_catalog_cache_identity(channel)?
+    ))
 }
 
 fn openai_subscription_catalog_cache_key(channel: &ChannelConfig) -> Result<String> {
-    let credential_path = subscription_credential_path(channel)?;
-    Ok(format!(
-        "{}\u{0}{}",
-        channel.id.trim(),
-        credential_path.to_string_lossy()
-    ))
+    subscription_catalog_cache_key(channel, "openai")
 }
 
 fn openai_subscription_catalog_cache_slot(key: &str) -> Result<OpenAiSubscriptionCatalogCacheSlot> {
@@ -3945,8 +4025,9 @@ async fn fetch_openai_subscription_catalog_with_policy(
                     return Err(error);
                 };
                 entry.model_refresh_after = now + OPENAI_MODEL_CATALOG_REFRESH_INTERVAL;
+                let detail = crate::upstream_failure::safe_excerpt(&format!("{error:#}"));
                 log::warn!(
-                    "[const-api][codex-catalog] using stale model catalog after refresh error: {error:#}"
+                    "[const-api][codex-catalog] using stale model catalog after refresh error: {detail}"
                 );
             }
             Err(error) => return Err(error),
@@ -4150,12 +4231,7 @@ async fn fetch_codex_manifest_model_observations_for_identity(
 }
 
 fn claude_subscription_catalog_cache_key(channel: &ChannelConfig) -> Result<String> {
-    let credential_path = subscription_credential_path(channel)?;
-    Ok(format!(
-        "{}\u{0}{}",
-        channel.id.trim(),
-        credential_path.to_string_lossy()
-    ))
+    subscription_catalog_cache_key(channel, "claude")
 }
 
 fn claude_subscription_catalog_cache_slot(key: &str) -> Result<ClaudeSubscriptionCatalogCacheSlot> {
@@ -4251,11 +4327,12 @@ async fn fetch_claude_subscription_catalog_with_policy(
                     return Err(error);
                 };
                 entry.model_refresh_after = now + CLAUDE_MODEL_CATALOG_REFRESH_INTERVAL;
+                let detail = crate::upstream_failure::safe_excerpt(&format!("{error:#}"));
                 warnings.push(format!(
-                    "Claude model catalog refresh unavailable; using the last catalog: {error}"
+                    "Claude model catalog refresh unavailable; using the last catalog: {detail}"
                 ));
                 log::warn!(
-                    "[const-api][claude-catalog] preserving cached models after refresh error: {error:#}"
+                    "[const-api][claude-catalog] preserving cached models after refresh error: {detail}"
                 );
             }
             Err(error) => return Err(error),
@@ -4412,12 +4489,7 @@ pub(crate) fn claude_quota_windows_from_usage(value: &serde_json::Value) -> Vec<
 }
 
 fn grok_subscription_catalog_cache_key(channel: &ChannelConfig) -> Result<String> {
-    let credential_path = subscription_credential_path(channel)?;
-    Ok(format!(
-        "{}\u{0}{}",
-        channel.id.trim(),
-        credential_path.to_string_lossy()
-    ))
+    subscription_catalog_cache_key(channel, "grok")
 }
 
 fn grok_subscription_catalog_cache_slot(key: &str) -> Result<GrokSubscriptionCatalogCacheSlot> {
@@ -4487,11 +4559,12 @@ async fn fetch_grok_subscription_catalog_with_policy(
                 return Err(error);
             };
             entry.model_refresh_after = now + GROK_MODEL_CATALOG_REFRESH_INTERVAL;
+            let detail = crate::upstream_failure::safe_excerpt(&format!("{error:#}"));
             warnings.push(format!(
-                "Grok model catalog refresh unavailable; using the last account catalog: {error}"
+                "Grok model catalog refresh unavailable; using the last account catalog: {detail}"
             ));
             log::warn!(
-                "[const-api][grok-catalog] preserving cached models after transient refresh error: {error:#}"
+                "[const-api][grok-catalog] preserving cached models after transient refresh error: {detail}"
             );
         }
         Err(error) => return Err(error),
@@ -5006,6 +5079,56 @@ pub(crate) async fn ensure_openai_subscription_access_token_with_options(
     }).await
 }
 
+fn antigravity_subscription_catalog_cache_key(
+    channel: &ChannelConfig,
+    project_id: &str,
+    tier_id: &str,
+    endpoints: &[&str],
+) -> Result<String> {
+    let mut endpoints = endpoints
+        .iter()
+        .map(|endpoint| endpoint.trim().trim_end_matches('/'))
+        .filter(|endpoint| !endpoint.is_empty())
+        .collect::<Vec<_>>();
+    endpoints.sort_unstable();
+    endpoints.dedup();
+    Ok(format!(
+        "antigravity\0{}\0{}\0{}\0{}",
+        subscription_catalog_cache_identity(channel)?,
+        project_id.trim(),
+        tier_id.trim(),
+        endpoints.join("\0")
+    ))
+}
+
+fn antigravity_subscription_catalog_cache_slot(
+    key: &str,
+) -> Result<AntigravitySubscriptionCatalogCacheSlot> {
+    let mut slots = ANTIGRAVITY_SUBSCRIPTION_CATALOG_CACHE
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .map_err(|_| anyhow!("Antigravity subscription catalog cache registry poisoned"))?;
+    Ok(slots
+        .entry(key.to_string())
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(None)))
+        .clone())
+}
+
+fn antigravity_catalog_error_allows_stale(error: &anyhow::Error) -> bool {
+    if subscription_catalog_error_allows_stale(error) {
+        return true;
+    }
+    error.chain().any(|cause| {
+        cause.to_string().split(" returned ").skip(1).any(|suffix| {
+            suffix
+                .split_whitespace()
+                .next()
+                .and_then(|status| status.parse::<u16>().ok())
+                .is_some_and(|status| status == 429 || (500..=599).contains(&status))
+        })
+    })
+}
+
 async fn check_antigravity_subscription_with_policy(
     client: &Client,
     channel: &ChannelConfig,
@@ -5054,6 +5177,25 @@ pub(crate) async fn check_antigravity_subscription_with_endpoints(
         daily_api_base_url,
         token_url,
         SubscriptionCatalogPolicy::Fresh,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn check_antigravity_subscription_with_endpoints_cached(
+    client: &Client,
+    channel: &ChannelConfig,
+    api_base_url: &str,
+    daily_api_base_url: &str,
+    token_url: &str,
+) -> Result<AntigravitySubscriptionHealth> {
+    check_antigravity_subscription_with_endpoints_and_policy(
+        client,
+        channel,
+        api_base_url,
+        daily_api_base_url,
+        token_url,
+        SubscriptionCatalogPolicy::Cached,
     )
     .await
 }
@@ -5153,15 +5295,75 @@ async fn check_antigravity_subscription_with_endpoints_and_policy(
     // Sending the project here is not part of the current request schema and can
     // make stricter deployments reject the otherwise valid catalog request.
     let catalog_body = serde_json::json!({});
-    let (catalog_value, models, catalog_refreshed, _) = fetch_antigravity_model_catalog(
-        client,
+    let cache_key = antigravity_subscription_catalog_cache_key(
         channel,
+        &detected_project,
+        &detected_tier,
         &[daily_api_base_url, api_base_url],
-        active_access_token.clone(),
-        &catalog_body,
-        token_url,
-    )
-    .await?;
+    )?;
+    let cache_slot = antigravity_subscription_catalog_cache_slot(&cache_key)?;
+    let mut catalog_cache = cache_slot.lock().await;
+    let mut warnings = Vec::new();
+    let cached_catalog = if policy == SubscriptionCatalogPolicy::Cached {
+        catalog_cache
+            .as_ref()
+            .filter(|entry| Instant::now() < entry.refresh_after)
+            .cloned()
+    } else {
+        None
+    };
+    let (catalog_value, models, catalog_refreshed, catalog_checked_at_unix) = if let Some(entry) =
+        cached_catalog
+    {
+        (entry.catalog, entry.models, false, entry.checked_at_unix)
+    } else {
+        match fetch_antigravity_model_catalog(
+            client,
+            channel,
+            &[daily_api_base_url, api_base_url],
+            active_access_token.clone(),
+            &catalog_body,
+            token_url,
+        )
+        .await
+        {
+            Ok((catalog, models, refreshed, _)) => {
+                let checked_at_unix = now_unix();
+                *catalog_cache = Some(AntigravitySubscriptionCatalogCacheEntry {
+                    catalog: catalog.clone(),
+                    models: models.clone(),
+                    checked_at_unix,
+                    refresh_after: Instant::now() + ANTIGRAVITY_MODEL_CATALOG_REFRESH_INTERVAL,
+                });
+                (catalog, models, refreshed, checked_at_unix)
+            }
+            Err(error)
+                if policy == SubscriptionCatalogPolicy::Cached
+                    && antigravity_catalog_error_allows_stale(&error)
+                    && catalog_cache.is_some() =>
+            {
+                let entry = catalog_cache
+                    .as_mut()
+                    .expect("cached Antigravity catalog exists after the guard");
+                entry.refresh_after = Instant::now() + Duration::from_secs(60);
+                let detail = crate::upstream_failure::safe_excerpt(&format!("{error:#}"));
+                warnings.push(format!(
+                    "Antigravity model refresh unavailable; keeping the last account catalog: {detail}"
+                ));
+                log::warn!(
+                    "[const-api][antigravity-catalog] preserving cached models after transient refresh error: {detail}"
+                );
+                (
+                    entry.catalog.clone(),
+                    entry.models.clone(),
+                    false,
+                    entry.checked_at_unix,
+                )
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    drop(catalog_cache);
     refreshed_any |= catalog_refreshed;
     let model_routes = crate::antigravity_models::model_routes_from_catalog(&catalog_value);
     persist_antigravity_subscription_model_routes(channel, &model_routes)
@@ -5175,8 +5377,8 @@ async fn check_antigravity_subscription_with_endpoints_and_policy(
         .0;
     }
 
-    let warnings = Vec::new();
-    let catalog_quota = antigravity_quota_windows_from_model_catalog(&catalog_value);
+    let catalog_quota =
+        antigravity_quota_windows_from_model_catalog_at(&catalog_value, catalog_checked_at_unix);
     let quota_body = serde_json::json!({"project": detected_project});
     let live_quota = refresh_subscription_quota(channel, policy, async {
         let (status, value, quota_refreshed, quota_url) = send_antigravity_operation_json(
@@ -5248,10 +5450,17 @@ pub(crate) fn antigravity_models_from_catalog(value: &serde_json::Value) -> Vec<
     crate::antigravity_models::public_models_from_catalog(value)
 }
 
+#[allow(dead_code)]
 pub(crate) fn antigravity_quota_windows_from_model_catalog(
     value: &serde_json::Value,
 ) -> Vec<QuotaWindow> {
-    let checked_at_unix = now_unix();
+    antigravity_quota_windows_from_model_catalog_at(value, now_unix())
+}
+
+fn antigravity_quota_windows_from_model_catalog_at(
+    value: &serde_json::Value,
+    checked_at_unix: i64,
+) -> Vec<QuotaWindow> {
     let windows = value
         .get("models")
         .and_then(serde_json::Value::as_object)
@@ -5320,8 +5529,8 @@ pub(crate) fn merge_antigravity_quota_windows(
     if live.is_empty() {
         return catalog;
     }
-    // Catalog quota is a fresh observation even when the dedicated usage RPC
-    // is cached. A cached RPC result must not overwrite newer catalog values.
+    // Keep the catalog observation time when the directory itself came from the
+    // runtime cache. A cached RPC result must not overwrite a newer observation.
     let live = live
         .into_iter()
         .filter(|window| {

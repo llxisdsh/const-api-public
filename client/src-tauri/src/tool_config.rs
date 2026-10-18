@@ -106,6 +106,8 @@ include!("tool_config/production/codex.rs");
 include!("tool_config/production/codex_catalog.rs");
 include!("tool_config/production/tool_writers.rs");
 include!("tool_config/production/additional_tools.rs");
+include!("tool_config/production/octop.rs");
+include!("tool_config/production/toonflow.rs");
 include!("tool_config/production/zcode.rs");
 include!("tool_config/production/deepseek_harness_settings.rs");
 include!("tool_config/production/open_interpreter.rs");
@@ -142,4 +144,7 @@ mod tests {
     include!("tool_config/tests/grok_minimax.rs");
     include!("tool_config/tests/muse_code.rs");
     include!("tool_config/tests/zcode.rs");
+    include!("tool_config/tests/qoder.rs");
+    include!("tool_config/tests/octop.rs");
+    include!("tool_config/tests/toonflow.rs");
 }

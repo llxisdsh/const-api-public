@@ -155,6 +155,78 @@ describe("shared tool program selection", () => {
     expect(result.current.codexModelSource).toBe("const");
   });
 
+  it("continues batch configuration after one located tool fails", async () => {
+    setVisibleTools([]);
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "check_tool_config") {
+        const tool = (args as { tool: string }).tool;
+        return configStatus(tool, false, {
+          program_located: String(tool === "mimocode" || tool === "cline"),
+          tool_protocol: "openai_chat",
+        });
+      }
+      if (command === "execute_tool_config_operation") {
+        const tool = (args as { tool: string }).tool;
+        if (tool === "cline") throw new Error("first tool failed");
+        return { result: configStatus(tool, false, { has_managed_config: "true" }) };
+      }
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("program-fixture"));
+    vi.mocked(invoke).mockClear();
+
+    let batchPromise!: Promise<void>;
+    act(() => { batchPromise = result.current.configureLocatedTools(); });
+    await waitFor(() => expect(checkedTools()).toHaveLength(result.current.toolCards.length));
+    act(() => result.current.resolveConfirmDialog(true));
+    await act(async () => { await batchPromise; });
+
+    const operations = vi.mocked(invoke).mock.calls
+      .filter(([command]) => command === "execute_tool_config_operation")
+      .map(([, args]) => (args as { tool: string }).tool);
+    expect(operations).toEqual(["cline", "mimocode"]);
+    expect(result.current.visibleToolCards.map(({ tool }) => tool)).toEqual(["cline", "mimocode"]);
+  });
+
+  it("continues batch removal after one configured tool fails", async () => {
+    setVisibleTools([]);
+    const removed = new Set<string>();
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "check_tool_config") {
+        const tool = (args as { tool: string }).tool;
+        return configStatus(tool, false, {
+          program_located: String(tool === "mimocode" || tool === "cline"),
+          has_managed_config: String(!removed.has(tool) && (tool === "mimocode" || tool === "cline")),
+          tool_protocol: "openai_chat",
+        });
+      }
+      if (command === "execute_tool_config_operation") {
+        const tool = (args as { tool: string }).tool;
+        if (tool === "cline") throw new Error("first tool failed");
+        removed.add(tool);
+        return { result: configStatus(tool, false) };
+      }
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("program-fixture"));
+    vi.mocked(invoke).mockClear();
+
+    let batchPromise!: Promise<void>;
+    act(() => { batchPromise = result.current.removeConfiguredTools(); });
+    await waitFor(() => expect(checkedTools()).toHaveLength(result.current.toolCards.length));
+    act(() => result.current.resolveConfirmDialog(true));
+    await act(async () => { await batchPromise; });
+
+    const operations = vi.mocked(invoke).mock.calls
+      .filter(([command]) => command === "execute_tool_config_operation")
+      .map(([, args]) => (args as { tool: string }).tool);
+    expect(operations).toEqual(["cline", "mimocode"]);
+  });
+
   it("keeps a pending visible batch busy when a newly shown tool finishes first", async () => {
     const base = vi.mocked(invoke).getMockImplementation()!;
     let releaseCodex!: (status: ToolApplyResult) => void;

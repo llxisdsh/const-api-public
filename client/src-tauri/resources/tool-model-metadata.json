@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_revision": "e5db66df92cc1955978c6254ba2719869e9e72ac",
+  "source_revision": "9c958aff349680503a5d9785b3ef507eb9822002",
   "compatibility_version_id": "compat-v27-2026-10-13",
   "compatibility_groups": [
     {
@@ -2491,7 +2491,7 @@
         "max"
       ],
       "tool_call": true,
-      "source_key": "claude-haiku-5-5"
+      "source_key": "provider-registry/claude/claude-haiku-5-5"
     },
     "claude-mythos-5": {
       "display_name": "Claude Mythos 5",
@@ -3645,7 +3645,7 @@
         "high"
       ],
       "tool_call": true,
-      "source_key": "provider-registry/aistudio/gemini-3.7-flash"
+      "source_key": "gemini-3.7-flash"
     },
     "gemini-3.8-flash": {
       "display_name": "Gemini 3.8 Flash",
@@ -3733,9 +3733,12 @@
     "gemini-4-argon": {
       "display_name": "Gemini 4 Argon",
       "family": "gemini-argon",
+      "context_tokens": 1048576,
       "output_tokens": 1000000,
       "input_modalities": [
+        "audio",
         "image",
+        "pdf",
         "text",
         "video"
       ],
@@ -3743,7 +3746,13 @@
         "text"
       ],
       "reasoning": true,
-      "tool_call": true
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "provider-registry/gemini/gemini-4-argon"
     },
     "gemini-nano-banana-2.1": {
       "display_name": "gemini-nano-banana-2.1",
@@ -6945,7 +6954,7 @@
       "source_key": "provider-registry/meta/muse-spark-1.3-contributor"
     },
     "muse-wonder-1.0": {
-      "display_name": "Muse Wonder",
+      "display_name": "Muse Wonder 1.0",
       "family": "muse-wonder",
       "context_tokens": 1048576,
       "output_tokens": 131072,
@@ -6968,12 +6977,13 @@
         "max"
       ],
       "tool_call": true,
-      "source_key": "meta/muse-wonder-1.0"
+      "source_key": "provider-registry/meta/muse-wonder-1.0"
     },
     "muse-wonder-full-1.0": {
-      "display_name": "Muse Wonder Full",
+      "display_name": "Muse Wonder Full 1.0",
       "family": "muse-wonder",
       "context_tokens": 1048576,
+      "output_tokens": 128000,
       "input_modalities": [
         "image",
         "text",
@@ -6983,7 +6993,16 @@
         "text"
       ],
       "reasoning": true,
-      "tool_call": true
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "tool_call": true,
+      "source_key": "provider-registry/meta/muse-wonder-full-1.0"
     },
     "mythomax-l2-13b": {
       "display_name": "mythomax-l2-13b",

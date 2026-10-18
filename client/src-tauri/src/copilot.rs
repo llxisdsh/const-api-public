@@ -123,10 +123,10 @@ fn client_headers(headers: &mut HeaderMap) {
         HeaderValue::from_static(concat!("const-api/", env!("CARGO_PKG_VERSION"))),
     );
     // Keep this pair aligned with the same stable VS Code release.
-    headers.insert("editor-version", HeaderValue::from_static("vscode/1.141.0"));
+    headers.insert("editor-version", HeaderValue::from_static("vscode/1.142.0"));
     headers.insert(
         "editor-plugin-version",
-        HeaderValue::from_static("copilot-chat/0.69.0"),
+        HeaderValue::from_static("copilot-chat/0.70.0"),
     );
     headers.insert(
         "copilot-integration-id",
@@ -630,10 +630,10 @@ mod tests {
         );
         assert_eq!(request.headers()["x-initiator"], "user");
         assert_eq!(request.headers()["anthropic-beta"], "future-beta");
-        assert_eq!(request.headers()["editor-version"], "vscode/1.141.0");
+        assert_eq!(request.headers()["editor-version"], "vscode/1.142.0");
         assert_eq!(
             request.headers()["editor-plugin-version"],
-            "copilot-chat/0.69.0"
+            "copilot-chat/0.70.0"
         );
         assert_eq!(request.headers()["copilot-integration-id"], "vscode-chat");
         assert_eq!(request.headers()["x-github-api-version"], "2026-01-09");
@@ -919,8 +919,8 @@ mod tests {
                             .unwrap()
                             .starts_with("token github-test-")
                     );
-                    assert_eq!(headers["editor-version"], "vscode/1.141.0");
-                    assert_eq!(headers["editor-plugin-version"], "copilot-chat/0.69.0");
+                    assert_eq!(headers["editor-version"], "vscode/1.142.0");
+                    assert_eq!(headers["editor-plugin-version"], "copilot-chat/0.70.0");
                     assert_eq!(headers["x-github-api-version"], "2025-04-01");
                     seen.fetch_add(1, Ordering::SeqCst);
                     warp::reply::json(

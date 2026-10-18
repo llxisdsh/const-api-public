@@ -136,7 +136,9 @@ describe("tool config operation IPC", () => {
     expect(tauriMainSource).toMatch(
       /async fn execute_trae_tool_config_operation[\s\S]*?execute_atomic_tool_config_operation_with_preview/,
     );
-    expect(tauriMainSource).toContain('matches!(tool, "workbuddy" | "workbuddy-ai")');
+    expect(tauriMainSource).toMatch(
+      /matches!\(\s*tool,\s*"workbuddy"\s*\|\s*"workbuddy-ai"\s*\|\s*"codebuddy"\s*\|\s*"codebuddy-cn"\s*\)/,
+    );
     expect(tauriMainSource).toMatch(
       /"copilot"[\s\S]*?"raven"[\s\S]*?"pi"[\s\S]*?"cline"[\s\S]*?"reasonix"[\s\S]*?"deepseek-harness"[\s\S]*?"open-design"/,
     );
@@ -235,6 +237,7 @@ describe("tool config operation IPC", () => {
     })).toEqual({
       title: "VS Code 已配置并启动",
       message: expect.stringContaining("以后直接打开 VS Code，也可使用 CONST API。"),
+      hint: "使用工具时请保持 CONST API 运行。",
       confirmText: "我知道了",
       mode: "notice",
     });

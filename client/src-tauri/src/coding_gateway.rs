@@ -5,7 +5,7 @@ use crate::{
     model_catalog::ModelObservation,
     protocol::kind::ProtocolKind,
     source_driver::SourceDriverId,
-    surface::ApiOperation,
+    surface::{ApiOperation, ApiSurface},
 };
 use anyhow::{Result, ensure};
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -19,15 +19,19 @@ use std::{
 struct CachedCatalog {
     models: Vec<ModelObservation>,
     loaded_at: Instant,
+    retry_after: Instant,
 }
 type CatalogSlot = Arc<tokio::sync::Mutex<Option<CachedCatalog>>>;
-type CatalogKey = (SourceDriverId, String, String);
+type CatalogKey = (SourceDriverId, ApiSurface, String, String);
 static CATALOGS: OnceLock<Mutex<HashMap<CatalogKey, CatalogSlot>>> = OnceLock::new();
+const API_MODEL_CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const CATALOG_STALE_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Share free metadata between health ticks. Explicit refreshes remain fresh;
-/// account and endpoint changes never reuse another account's catalog.
+/// account, API surface, and endpoint changes never reuse another catalog.
 pub(crate) async fn cached_catalog<F>(
     driver: SourceDriverId,
+    surface: ApiSurface,
     credential: &str,
     base: &str,
     fresh: bool,
@@ -41,11 +45,40 @@ where
         SourceDriverId::CopilotSubscription | SourceDriverId::AbacusRoutellm => {
             Duration::from_secs(5 * 60)
         }
+        // API model directories are metadata, not a request capability probe.
+        // Periodic snapshots use this short cache; explicit refreshes bypass it.
+        // OpenRouter is included because its account catalog may be paginated.
+        SourceDriverId::Openrouter
+        | SourceDriverId::OpenAiApi
+        | SourceDriverId::AnthropicApi
+        | SourceDriverId::GeminiApi
+        | SourceDriverId::XaiApi
+        | SourceDriverId::MistralApi
+        | SourceDriverId::DeepseekApi
+        | SourceDriverId::DashscopeApi
+        | SourceDriverId::MoonshotApi
+        | SourceDriverId::ZhipuApi
+        | SourceDriverId::MinimaxApi
+        | SourceDriverId::StepfunApi
+        | SourceDriverId::AzureOpenAi
+        | SourceDriverId::BedrockMantle
+        | SourceDriverId::GroqApi
+        | SourceDriverId::TogetherApi
+        | SourceDriverId::FireworksApi
+        | SourceDriverId::PerplexityApi
+        | SourceDriverId::HuggingfaceApi
+        | SourceDriverId::NvidiaApi
+        | SourceDriverId::SiliconflowApi
+        | SourceDriverId::VolcengineArkApi
+        | SourceDriverId::BaiduQianfanApi
+        | SourceDriverId::TencentHunyuanApi
+        | SourceDriverId::CustomEndpoint => API_MODEL_CATALOG_REFRESH_INTERVAL,
         _ => return fetch.await,
     };
     let started = Instant::now();
     let key = (
         driver,
+        surface,
         hex::encode(Sha256::digest(credential.trim().as_bytes())),
         base.to_string(),
     );
@@ -58,7 +91,7 @@ where
         .clone();
     let mut cached = slot.lock().await;
     if let Some(entry) = cached.as_ref() {
-        if entry.loaded_at >= started || (!fresh && entry.loaded_at.elapsed() < ttl) {
+        if entry.loaded_at >= started || (!fresh && started < entry.retry_after) {
             return Ok(entry.models.clone());
         }
     }
@@ -67,13 +100,32 @@ where
             *cached = Some(CachedCatalog {
                 models: models.clone(),
                 loaded_at: Instant::now(),
+                retry_after: Instant::now() + ttl,
             });
             Ok(models)
         }
+        Err(error)
+            if !fresh
+                && crate::detection::subscription_catalog_error_allows_stale(&error)
+                && cached.is_some() =>
+        {
+            let entry = cached
+                .as_mut()
+                .expect("cached catalog exists after the guard");
+            entry.retry_after = Instant::now() + CATALOG_STALE_RETRY_INTERVAL;
+            let detail = crate::upstream_failure::safe_excerpt(&format!("{error:#}"));
+            log::warn!(
+                "[const-api][catalog] preserving cached model directory after transient refresh error: {detail}"
+            );
+            Ok(entry.models.clone())
+        }
         Err(error) => {
-            // A failed explicit refresh must not be concealed by a later health tick.
-            // The existing lifecycle owns retaining persisted models and recovery.
-            *cached = None;
+            // Surface the refresh failure, but keep the last complete snapshot
+            // available for a later periodic retry. Mark it due immediately so
+            // a health tick cannot silently reuse it without attempting recovery.
+            if let Some(entry) = cached.as_mut() {
+                entry.retry_after = Instant::now();
+            }
             Err(error)
         }
     }
@@ -127,6 +179,15 @@ pub(crate) fn is_opencode(driver: SourceDriverId) -> bool {
         driver,
         SourceDriverId::OpencodeGo | SourceDriverId::OpencodeZen
     )
+}
+
+/// Zen's Jev/System One entries are decision endpoints, not text-generation
+/// models. They must not enter the normal conversational model pool.
+pub(crate) fn is_non_conversational_model(driver: SourceDriverId, model: &str) -> bool {
+    driver == SourceDriverId::OpencodeZen
+        && crate::config::without_context_hint(model)
+            .to_ascii_lowercase()
+            .starts_with("jev-")
 }
 
 pub(crate) fn default_user_agent(driver: SourceDriverId) -> Option<&'static str> {
@@ -188,6 +249,9 @@ pub(crate) fn model_supports_protocol(
     model: &str,
     protocol: ProtocolKind,
 ) -> bool {
+    if is_non_conversational_model(driver, model) {
+        return false;
+    }
     if matches!(
         driver,
         SourceDriverId::CopilotSubscription | SourceDriverId::PoeApi
@@ -274,6 +338,9 @@ pub(crate) fn upgrade_legacy_zen_surfaces(channel: &mut ChannelConfig) {
 /// The published Go/Zen catalogs contain IDs only. Their endpoint table defines
 /// family-specific dialects, with Chat as the default (see docs/coding-gateways.md).
 pub(crate) fn model_protocol(driver: SourceDriverId, model: &str) -> Option<ProtocolKind> {
+    if is_non_conversational_model(driver, model) {
+        return None;
+    }
     if driver == SourceDriverId::AbacusRoutellm {
         return Some(
             if model_supports_protocol(driver, model, ProtocolKind::AnthropicMessages) {
@@ -324,6 +391,9 @@ pub(crate) fn model_protocol(driver: SourceDriverId, model: &str) -> Option<Prot
 }
 
 pub(crate) fn channel_model_protocol(channel: &ChannelConfig, model: &str) -> Option<ProtocolKind> {
+    if is_non_conversational_model(channel.source_driver(), model) {
+        return None;
+    }
     if matches!(
         channel.source_driver(),
         SourceDriverId::CopilotSubscription
@@ -592,6 +662,15 @@ pub(crate) mod tests {
                 Some(zen)
             );
         }
+        assert_eq!(
+            model_protocol(SourceDriverId::OpencodeZen, "jev-1.13"),
+            None
+        );
+        assert!(!model_supports_protocol(
+            SourceDriverId::OpencodeZen,
+            "jev-1.13",
+            OpenAiChat
+        ));
         assert_eq!(
             model_protocol(SourceDriverId::Openrouter, "gpt-5.6-luna"),
             None
@@ -869,6 +948,7 @@ pub(crate) mod tests {
             assert_eq!(
                 cached_catalog(
                     SourceDriverId::PoeApi,
+                    ApiSurface::OpenAi,
                     &key,
                     "https://api.poe.com/v1/models",
                     false,
@@ -883,6 +963,7 @@ pub(crate) mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         cached_catalog(
             SourceDriverId::PoeApi,
+            ApiSurface::OpenAi,
             &key,
             "https://api.poe.com/v1/models",
             true,
@@ -893,6 +974,7 @@ pub(crate) mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         let failed = cached_catalog(
             SourceDriverId::PoeApi,
+            ApiSurface::OpenAi,
             &key,
             "https://api.poe.com/v1/models",
             true,
@@ -902,6 +984,7 @@ pub(crate) mod tests {
         assert!(failed.is_err());
         cached_catalog(
             SourceDriverId::PoeApi,
+            ApiSurface::OpenAi,
             &key,
             "https://api.poe.com/v1/models",
             false,
@@ -911,6 +994,7 @@ pub(crate) mod tests {
         .unwrap();
         cached_catalog(
             SourceDriverId::PoeApi,
+            ApiSurface::OpenAi,
             &format!("{key}-other"),
             "https://api.poe.com/v1/models",
             false,
@@ -919,6 +1003,183 @@ pub(crate) mod tests {
         .await
         .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn api_catalog_cache_reuses_periodic_snapshots_but_explicit_refreshes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = AtomicUsize::new(0);
+        let key = format!("api-catalog-test-{}", rand::random::<u64>());
+        let fetch = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![ModelObservation {
+                id: "api-model".into(),
+                ..Default::default()
+            }])
+        };
+
+        cached_catalog(
+            SourceDriverId::Openrouter,
+            ApiSurface::OpenAi,
+            &key,
+            "https://openrouter.ai/api/v1/models/user",
+            false,
+            fetch(),
+        )
+        .await
+        .unwrap();
+        cached_catalog(
+            SourceDriverId::Openrouter,
+            ApiSurface::OpenAi,
+            &key,
+            "https://openrouter.ai/api/v1/models/user",
+            false,
+            fetch(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        cached_catalog(
+            SourceDriverId::Openrouter,
+            ApiSurface::OpenAi,
+            &key,
+            "https://openrouter.ai/api/v1/models/user",
+            true,
+            fetch(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn catalog_cache_keeps_same_endpoint_surfaces_separate() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = AtomicUsize::new(0);
+        let key = format!("surface-cache-test-{}", rand::random::<u64>());
+        let fetch = |id: &'static str| async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![ModelObservation {
+                id: id.into(),
+                ..Default::default()
+            }])
+        };
+
+        let openai = cached_catalog(
+            SourceDriverId::CustomEndpoint,
+            ApiSurface::OpenAi,
+            &key,
+            "https://example.test/v1",
+            false,
+            fetch("openai-model"),
+        )
+        .await
+        .unwrap();
+        let anthropic = cached_catalog(
+            SourceDriverId::CustomEndpoint,
+            ApiSurface::Anthropic,
+            &key,
+            "https://example.test/v1",
+            false,
+            fetch("anthropic-model"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(openai[0].id, "openai-model");
+        assert_eq!(anthropic[0].id, "anthropic-model");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn periodic_catalog_refresh_keeps_last_complete_snapshot_after_transient_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use warp::Filter;
+
+        let key = format!("stale-catalog-test-{}", rand::random::<u64>());
+        let base = "https://api.example.test/v1/models";
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let models = vec![ModelObservation {
+            id: "complete-model".into(),
+            ..Default::default()
+        }];
+        cached_catalog(
+            SourceDriverId::Openrouter,
+            ApiSurface::OpenAi,
+            &key,
+            base,
+            false,
+            async { Ok(models.clone()) },
+        )
+        .await
+        .unwrap();
+
+        let failed = cached_catalog(
+            SourceDriverId::Openrouter,
+            ApiSurface::OpenAi,
+            &key,
+            base,
+            true,
+            async { Err::<Vec<ModelObservation>, _>(anyhow::anyhow!("explicit refresh failed")) },
+        )
+        .await;
+        assert!(failed.is_err());
+
+        let cache_key = (
+            SourceDriverId::Openrouter,
+            ApiSurface::OpenAi,
+            hex::encode(Sha256::digest(key.trim().as_bytes())),
+            base.to_string(),
+        );
+        let slot = CATALOGS
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .get(&cache_key)
+            .unwrap()
+            .clone();
+        {
+            let mut cached = slot.lock().await;
+            let entry = cached.as_mut().unwrap();
+            entry.loaded_at = Instant::now() - Duration::from_secs(301);
+            entry.retry_after = Instant::now() - Duration::from_secs(1);
+        }
+
+        let seen = calls.clone();
+        let failure = warp::any().map(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+            warp::reply::with_status(
+                "temporary upstream failure",
+                warp::http::StatusCode::SERVICE_UNAVAILABLE,
+            )
+        });
+        let (addr, server) = crate::bind_ephemeral!(failure, ([127, 0, 0, 1], 0));
+        let task = tokio::spawn(server);
+        let failed_url = format!("http://{addr}/v1/models");
+        let retained = cached_catalog(
+            SourceDriverId::Openrouter,
+            ApiSurface::OpenAi,
+            &key,
+            base,
+            false,
+            async move {
+                let error = reqwest::get(failed_url)
+                    .await
+                    .unwrap()
+                    .error_for_status()
+                    .unwrap_err();
+                Err::<Vec<ModelObservation>, _>(anyhow::Error::new(error))
+            },
+        )
+        .await
+        .unwrap();
+        task.abort();
+
+        assert_eq!(retained, models);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

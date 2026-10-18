@@ -121,9 +121,6 @@ import type {
   BrandIconData,
   ChannelConfig,
   ChannelDetectionResult,
-  ChannelDuplicateCandidate,
-  ChannelDuplicateDecision,
-  ChannelDuplicateDialogState,
   ChannelSurfaceBinding,
   ChannelUpstreamTestResult,
   ClientConfig,
@@ -208,15 +205,14 @@ import {
 import { localizedError, tr } from "./i18n";
 import type { LanShareConnectionInfo } from "./lanShareConnectionInfo";
 import {
-  DEFAULT_LOCAL_API_CONNECTION_ID,
   localApiConnectionById,
   localApiSurfaceById,
-  type LocalApiConnectionId,
 } from "./localApiSurfaces";
 import { DEVELOPMENT_PROFILE, RELEASE_UPDATES_ENABLED } from "./runtimeProfile";
 import {
   UI_SNAPSHOT_AUTO_REFRESH_MS,
   createRefreshGate,
+  startVisibilityPoll,
   type RefreshGate,
   type RefreshOptions,
 } from "./refreshPolicy";
@@ -316,6 +312,15 @@ const DEBUG_EXPERIMENT_CLAUDE_SERVER_SIDE_COMPACTION = "claude_server_side_compa
 export const SUPPLIER_QUOTA_SNAPSHOTS_KEY = "const-api:supplier-quota-snapshots";
 
 export const TOOL_STATUS_TIMEOUT_MS = 10_000;
+
+type ToolBatchAction = "configure" | "remove";
+
+type ToolBatchProgress = {
+  action: ToolBatchAction;
+  current: number;
+  total: number;
+  currentTool: string;
+};
 
 const NATIVE_ROUTE_REMOVE_TOOLS = new Set([
   "codex",
@@ -739,6 +744,7 @@ export function toolFirstConfigurationNotice({
   return {
     title: tr("toolOperations.dialogs.firstConfigurationTitle", { tool: title }),
     message: `${tr(messageKey, { tool: title })}\n\n${tr("toolOperations.dialogs.configurationRecoveryMessage", { tool: title })}`,
+    hint: tr("toolOperations.dialogs.runtimeReminder"),
     confirmText: tr("toolOperations.actions.acknowledge"),
     mode: "notice",
   };
@@ -923,6 +929,7 @@ export function useAppController({
   const [platformSupplierNodes, setPlatformSupplierNodes] = useState<PlatformSupplierNode[]>([]);
 
   const [toolConfigStatuses, setToolConfigStatuses] = useState<Record<string, ToolApplyResult | null>>({});
+  const toolConfigStatusesRef = useRef<Record<string, ToolApplyResult | null>>({});
 
   const [hiddenToolIds, setHiddenToolIds] = useState<Set<ToolCatalogId>>(readHiddenToolIds);
 
@@ -962,6 +969,10 @@ export function useAppController({
   const [toolOperationLabels, setToolOperationLabels] = useState<Record<string, string>>({});
 
   const [toolOperationProgress, setToolOperationProgress] = useState<Record<string, ToolOperationProgress>>({});
+
+  const [toolBatchRunning, setToolBatchRunning] = useState(false);
+  const [toolBatchOperation, setToolBatchOperation] = useState<ToolBatchProgress | null>(null);
+  const toolBatchRunningRef = useRef(false);
 
   const [codexSessionScan, setCodexSessionScan] = useState<CodexSessionScanResult | null>(null);
 
@@ -1028,9 +1039,6 @@ export function useAppController({
   const [showAccessAdvanced, setShowAccessAdvanced] = useState(false);
 
   const [accessGuideOpen, setAccessGuideOpen] = useState(false);
-
-  const [localApiConnectionId, setLocalApiConnectionId] =
-    useState<LocalApiConnectionId>(DEFAULT_LOCAL_API_CONNECTION_ID);
 
   const [modelAliasPreviewOpen, setModelAliasPreviewOpen] = useState(false);
 
@@ -1134,12 +1142,6 @@ export function useAppController({
   const toolRemoveResolverRef =
     useRef<((decision: ToolRemoveDecision) => void) | null>(null);
 
-  const [channelDuplicateDialog, setChannelDuplicateDialog] =
-    useState<ChannelDuplicateDialogState | null>(null);
-
-  const channelDuplicateResolverRef =
-    useRef<((decision: ChannelDuplicateDecision) => void) | null>(null);
-
   const [appLogs, setAppLogs] = useState<AppLogEntry[]>([]);
 
   const [logOpen, setLogOpen] = useState(false);
@@ -1235,8 +1237,6 @@ export function useAppController({
     && Boolean(updateState.version);
 
   const localApiListen = status.running ? status.listen : config.listen;
-
-  const selectedLocalApiConnection = localApiConnectionById(localApiConnectionId, localApiListen);
 
   const localApiRootBase = localLoopbackApiRoot(localApiListen) ?? "";
 
@@ -1543,6 +1543,11 @@ export function useAppController({
       "open-design": { icon: null, customIcon: "open-design", fallback: Bot, tone: "#202020" },
       workbuddy: { icon: null, customIcon: "workbuddy", fallback: Bot, tone: "#0bc89f" },
       "workbuddy-ai": { icon: null, customIcon: "workbuddy", fallback: Bot, tone: "#0bc89f" },
+      codebuddy: { icon: null, customIcon: "codebuddy", fallback: Bot, tone: "#2ea99d" },
+      qoder: { icon: null, customIcon: "qoder", fallback: Bot, tone: "#171717" },
+      "qoder-cn": { icon: null, customIcon: "qoder", fallback: Bot, tone: "#171717" },
+      octop: { icon: null, customIcon: "octop", fallback: Bot, tone: "#ef3340" },
+      toonflow: { icon: null, customIcon: "toonflow", fallback: Bot, tone: "#111827" },
       "vibe-trading": { icon: null, customIcon: "vibe-trading", fallback: Bot, tone: "#ef5a46" },
       zcode: { icon: null, customIcon: "zcode", fallback: Code2, tone: "#111315" },
     };
@@ -1569,7 +1574,7 @@ export function useAppController({
       });
     }
 
-  function showToolCard(tool: ToolCatalogId) {
+  function showToolCard(tool: ToolCatalogId, refresh = true) {
       setHiddenToolIds((current) => {
         const next = new Set(current);
         next.delete(tool);
@@ -1581,7 +1586,9 @@ export function useAppController({
         writeToolOrder(next);
         return next;
       });
-      void refreshToolConfigStatuses(false, toolCards.filter((card) => card.tool === tool));
+      if (refresh) {
+        void refreshToolConfigStatuses(false, toolCards.filter((card) => card.tool === tool));
+      }
     }
 
   function resetToolOrder() {
@@ -1635,18 +1642,23 @@ export function useAppController({
 
   useEffect(() => {
       if (tab !== "about" || !isTauriRuntime()) return;
-      void invoke<ProxyStatus>("refresh_platform_status")
-        .then((next) => {
-          setStatus((current) => keepPreviousIfStructurallyEqual(current, next));
-        })
-        .catch(() => {
-          // The regular native status loop keeps the last healthy snapshot.
-        });
-      void refreshModelCatalogVersionInfo();
-      const timer = window.setInterval(() => {
-        void refreshModelCatalogVersionInfo();
-      }, 30_000);
-      return () => window.clearInterval(timer);
+      const refreshAbout = async () => {
+        await Promise.allSettled([
+          invoke<ProxyStatus>("refresh_platform_status")
+            .then((next) => {
+              setStatus((current) => keepPreviousIfStructurallyEqual(current, next));
+            })
+            .catch(() => {
+              // The regular native status loop keeps the last healthy snapshot.
+            }),
+          refreshModelCatalogVersionInfo(),
+        ]);
+      };
+      return startVisibilityPoll({
+        intervalMs: 30_000,
+        initialDelayMs: 0,
+        refresh: refreshAbout,
+      });
     }, [tab, account.status.state]);
 
   useEffect(() => {
@@ -1728,7 +1740,12 @@ export function useAppController({
     }, [config.listen, config.api_key, claudeModelSettings]);
 
   const refreshToolConfigOnReturn = useEffectEvent(() => {
-      if (!config.listen || toolConfigChecking || Object.values(toolOperationRunningRef.current).some(Boolean)) return;
+      if (
+        !config.listen
+        || toolConfigChecking
+        || toolBatchRunningRef.current
+        || Object.values(toolOperationRunningRef.current).some(Boolean)
+      ) return;
       void refreshToolConfigStatuses(true);
     });
 
@@ -1775,7 +1792,6 @@ export function useAppController({
   useEffect(() => {
       if (!isTauriRuntime()) return;
       let cancelled = false;
-      let timer: number | undefined;
       const refreshSupplierStatus = async () => {
         try {
           const next = await invoke<SupplierStatus>("supplier_status");
@@ -1784,21 +1800,22 @@ export function useAppController({
           }
         } catch {
           // Keep the last known UI state; explicit actions still surface errors.
-        } finally {
-          if (!cancelled) timer = window.setTimeout(refreshSupplierStatus, 5000);
         }
       };
-      timer = window.setTimeout(refreshSupplierStatus, 750);
+      const stopPolling = startVisibilityPoll({
+        intervalMs: 5000,
+        initialDelayMs: 750,
+        refresh: refreshSupplierStatus,
+      });
       return () => {
         cancelled = true;
-        if (timer !== undefined) window.clearTimeout(timer);
+        stopPolling();
       };
     }, []);
 
   useEffect(() => {
       if (!isTauriRuntime()) return;
       let cancelled = false;
-      let timer: number | undefined;
       const refreshProxyStatus = async () => {
         try {
           // Startup owns the initial status. A timer is not evidence that the
@@ -1812,34 +1829,38 @@ export function useAppController({
           }
         } catch {
           // Keep the last known local status; explicit proxy actions report errors.
-        } finally {
-          if (!cancelled) timer = window.setTimeout(refreshProxyStatus, 5000);
         }
       };
-      timer = window.setTimeout(refreshProxyStatus, 1000);
+      const stopPolling = startVisibilityPoll({
+        intervalMs: 5000,
+        initialDelayMs: 1000,
+        refresh: refreshProxyStatus,
+      });
       return () => {
         cancelled = true;
-        if (timer !== undefined) window.clearTimeout(timer);
+        stopPolling();
       };
     }, []);
 
   useEffect(() => {
       if (!isTauriRuntime()) return;
       let cancelled = false;
-      let timer: number | undefined;
       const refresh = async () => {
+        if (cancelled) return;
         try {
           await account.actions.readStatus();
         } catch {
           // Account actions surface explicit errors; background status stays quiet.
-        } finally {
-          if (!cancelled) timer = window.setTimeout(refresh, 30000);
         }
       };
-      timer = window.setTimeout(refresh, 30000);
+      const stopPolling = startVisibilityPoll({
+        intervalMs: 30_000,
+        initialDelayMs: 30_000,
+        refresh,
+      });
       return () => {
         cancelled = true;
-        if (timer !== undefined) window.clearTimeout(timer);
+        stopPolling();
       };
     }, []);
 
@@ -3566,66 +3587,18 @@ export function useAppController({
       return channelDetectionInputChanged(saved, channel);
     }
 
-  async function decideDuplicateChannel(
-      channel: ChannelConfigV5,
-    ): Promise<ChannelDuplicateDecision | null> {
-      const candidates = await invoke<ChannelDuplicateCandidate[]>(
-        "find_duplicate_channels",
-        { channel },
-      );
-      if (candidates.length === 0) return null;
-      return askChannelDuplicate({
-        draftName: channel.name || channel.id,
-        candidates,
-      });
-    }
-
-  function restoreDraftAndOpenExisting(draftId: string, existingId: string) {
-      const persisted = savedConfigRef.current;
-      setConfig((current) => {
-        const persistedDraft = persisted.channels.find((channel) => channel.id === draftId);
-        let nextChannels = current.channels;
-        if (persistedDraft) {
-          nextChannels = current.channels.map(
-            (channel) => channel.id === draftId ? persistedDraft : channel,
-          );
-        } else {
-          nextChannels = current.channels.filter((channel) => channel.id !== draftId);
-        }
-        const firstChannel = nextChannels[0]
-          ?? channelFromSupplier("channel-1", persisted.supplier);
-        return {
-          ...current,
-          channels: nextChannels,
-          supplier: supplierFromChannel(firstChannel),
-        };
-      });
-      setSelectedChannelId(existingId);
-      setShowSupplierAdvanced(false);
-      setSupplierAddOpen(false);
-      setSupplierDetailOpen(true);
-      const existing = persisted.channels.find((channel) => channel.id === existingId);
-      setSupplierModels(existing?.models ?? []);
-    }
-
-  function duplicateDraftChannel(channel: ChannelConfig) {
-      const persisted = savedConfigRef.current.channels.find(
-        (candidate) => candidate.id === channel.id,
-      );
-      if (!persisted) return channel;
-      let suffix = Date.now().toString(36);
-      let id = `channel-${suffix}`;
+  function newChannelId(existingChannels: readonly ChannelConfig[]) {
+      // Presets are independent channel instances, even when their credentials match.
+      const random = typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
+      let id = `channel-${random}`;
       let attempt = 0;
-      while (configRef.current.channels.some((candidate) => candidate.id === id)) {
+      while (existingChannels.some((candidate) => candidate.id === id)) {
         attempt += 1;
-        suffix = `${Date.now().toString(36)}-${attempt}`;
-        id = `channel-${suffix}`;
+        id = `channel-${random}-${attempt}`;
       }
-      return {
-        ...channel,
-        id,
-        created_at_unix_ms: Date.now(),
-      };
+      return id;
     }
 
   async function saveSupplierChanges(channelArg = selectedChannel, forceDetection = false) {
@@ -3642,27 +3615,12 @@ export function useAppController({
         });
         if (!confirmed) return;
       }
+      // Channel IDs represent local channel instances. The same account or API
+      // connection may intentionally exist in multiple instances; edits always
+      // stay on the selected ID and never redirect to another channel.
       let channelToSave = channelArg;
-      try {
-        if (channelToSave.source_driver === "lan_share") {
-          channelToSave = normalizeRendererChannel(channelToSave);
-        }
-        const duplicateDecision = await decideDuplicateChannel(
-          channelV5FromRenderer(channelToSave),
-        );
-        if (duplicateDecision?.action === "cancel") return;
-        if (duplicateDecision?.action === "open_existing") {
-          restoreDraftAndOpenExisting(channelArg.id, duplicateDecision.channelId);
-          return;
-        }
-        if (duplicateDecision?.action === "create_new") {
-          channelToSave = duplicateDraftChannel(channelToSave);
-        }
-      } catch (error) {
-        showToast(tr("supplier.messages.duplicateCheckFailed", {
-          error: localizedError(error),
-        }), "error", 5200);
-        return;
+      if (channelToSave.source_driver === "lan_share") {
+        channelToSave = normalizeRendererChannel(channelToSave);
       }
       const needsDetection = forceDetection || supplierChannelNeedsDetection(channelToSave);
       await runSupplierChannelOperation(channelToSave.id, "saving", async () => {
@@ -4306,7 +4264,10 @@ export function useAppController({
       ));
     }
 
-  async function refreshToolConfigStatuses(background = false, cards = visibleToolCards) {
+  async function refreshToolConfigStatuses(
+      background = false,
+      cards = visibleToolCards,
+    ) {
       if (!isTauriRuntime() || !config.listen || cards.length === 0) return;
       const epochs = Object.fromEntries(cards.map(({ tool }) => [tool, nextToolConfigStatusEpoch(tool)]));
       for (const { tool } of cards) {
@@ -4330,6 +4291,10 @@ export function useAppController({
           }
         }));
         const currentEntries = entries.filter(([tool]) => epochs[tool] === toolConfigStatusEpochRef.current[tool]);
+        toolConfigStatusesRef.current = {
+          ...toolConfigStatusesRef.current,
+          ...Object.fromEntries(currentEntries),
+        };
         setToolConfigStatuses((current) => {
           const next = { ...current };
           for (const [tool, status] of currentEntries) {
@@ -4409,6 +4374,10 @@ export function useAppController({
         throw error;
       }
       if (epoch === toolConfigStatusEpochRef.current[tool]) {
+        toolConfigStatusesRef.current = {
+          ...toolConfigStatusesRef.current,
+          [tool]: status,
+        };
         setToolConfigStatuses((current) => ({ ...current, [tool]: status }));
         if (syncSelections && tool === "codex") {
           codexModelSourceTouchedRef.current = false;
@@ -4500,21 +4469,6 @@ export function useAppController({
         title: tr(`toolOperations.removeModes.nativeOptions.${key}.title`),
         description: tr(`toolOperations.removeModes.nativeOptions.${key}.description`),
       };
-    }
-
-  function askChannelDuplicate(dialog: ChannelDuplicateDialogState) {
-      channelDuplicateResolverRef.current?.({ action: "cancel" });
-      return new Promise<ChannelDuplicateDecision>((resolve) => {
-        channelDuplicateResolverRef.current = resolve;
-        setChannelDuplicateDialog(dialog);
-      });
-    }
-
-  function resolveChannelDuplicateDialog(decision: ChannelDuplicateDecision) {
-      const resolve = channelDuplicateResolverRef.current;
-      channelDuplicateResolverRef.current = null;
-      setChannelDuplicateDialog(null);
-      resolve?.(decision);
     }
 
   function beginToolOperation(tool: string) {
@@ -4654,7 +4608,8 @@ export function useAppController({
             ? tr("toolOperations.actions.configureOnly")
             : tr("toolOperations.actions.removeConfiguration");
         const processCloseAlreadyConfirmed =
-          action === "remove" && closeRunningProcessConfirmed;
+          (action === "remove" && closeRunningProcessConfirmed)
+          || (action === "configure" && closeRunningProcessConfirmed);
         const confirmed = processCloseAlreadyConfirmed
           ? true
           : await askConfirm({
@@ -4756,9 +4711,14 @@ export function useAppController({
       title: string,
       restartAfterConfig: boolean,
       claudeSettings?: ClaudeModelSettings,
+      closeRunningProcessConfirmed = false,
+      showNotices = true,
+      statusOverride?: ToolApplyResult,
+      appliedSelections?: { protocol?: ToolProtocolId; codexModelSource: CodexModelSource },
     ) {
       if (!beginToolOperation(tool)) return false;
-      const wasConfiguredBefore = Boolean(toolConfigStatuses[tool]?.already_configured);
+      const currentStatus = statusOverride ?? toolConfigStatuses[tool] ?? undefined;
+      const wasConfiguredBefore = Boolean(currentStatus?.already_configured);
       const effectiveClaudeSettings = tool === "claude"
         ? { ...(claudeSettings ?? claudeModelDraft) }
         : undefined;
@@ -4768,6 +4728,9 @@ export function useAppController({
           title,
           restartAfterConfig ? "launch" : "configure",
           effectiveClaudeSettings,
+          undefined,
+          closeRunningProcessConfirmed,
+          appliedSelections,
         );
         if (!result) return false;
         const restartCommand = result.details?.restart_command;
@@ -4809,14 +4772,14 @@ export function useAppController({
         });
         if (firstConfigurationNotice) {
           await askConfirm(firstConfigurationNotice);
-        } else if (operationNotice) {
+        } else if (showNotices && operationNotice) {
           showConfiguredResult(
             operationNotice.text,
             operationNotice.tone,
             operationNotice.duration,
             operationNotice.restoreHint,
           );
-        } else if (restartCommand && restartLauncherPath) {
+        } else if (showNotices && restartCommand && restartLauncherPath) {
           const manualStart = restartLauncherPath.startsWith("manual start required");
           showConfiguredResult(
             manualStart
@@ -4824,7 +4787,7 @@ export function useAppController({
               : tr("toolOperations.restartCommand", { tool: title, command: restartCommand }),
             manualStart ? "info" : "success",
           );
-        } else if (sessionChanged > 0) {
+        } else if (showNotices && sessionChanged > 0) {
           showConfiguredResult(tr("toolOperations.sessionMigrationComplete", {
             tool: title,
             config: changedCount > 0
@@ -4836,9 +4799,9 @@ export function useAppController({
             files: migratedFiles,
             rows: migratedRows,
           }));
-        } else if (result.already_configured) {
+        } else if (showNotices && result.already_configured) {
           showConfiguredResult(tr("toolOperations.alreadyConfigured", { tool: title }));
-        } else {
+        } else if (showNotices) {
           showConfiguredResult(tr("toolOperations.configured", {
             tool: title,
             changed: changedCount,
@@ -4847,8 +4810,8 @@ export function useAppController({
           }));
         }
         const capabilityWarning = toolConfigCapabilityWarning(refreshedStatus) ?? toolConfigCapabilityWarning(result);
-        if (capabilityWarning) showToast(capabilityWarning, "info", 9000);
-        if (statusRefreshWarning) showToast(statusRefreshWarning, "error", 5200);
+        if (showNotices && capabilityWarning) showToast(capabilityWarning, "info", 9000);
+        if (showNotices && statusRefreshWarning) showToast(statusRefreshWarning, "error", 5200);
         if (effectiveClaudeSettings) {
           storeAppliedClaudeModelSettings(effectiveClaudeSettings);
         }
@@ -4894,13 +4857,15 @@ export function useAppController({
             return false;
           }
         }
-        showToast(tr("toolOperations.configureFailed", {
-          tool: title,
-          action: restartAfterConfig
-            ? tr("toolOperations.actions.configureOrLaunch")
-            : tr("common.configure"),
-          error: localizedError(error),
-        }), "error", 5200);
+        if (showNotices) {
+          showToast(tr("toolOperations.configureFailed", {
+            tool: title,
+            action: restartAfterConfig
+              ? tr("toolOperations.actions.configureOrLaunch")
+              : tr("common.configure"),
+            error: localizedError(error),
+          }), "error", 5200);
+        }
         return false;
       } finally {
         finishToolOperation(tool);
@@ -5115,6 +5080,143 @@ export function useAppController({
         finishToolOperation(tool);
       }
     }
+
+  async function runToolBatch(action: ToolBatchAction) {
+      if (toolBatchRunningRef.current || Object.values(toolOperationRunningRef.current).some(Boolean)) {
+        showToast(tr("access.batchBusy"), "info");
+        return;
+      }
+      if (!isTauriRuntime() || !config.listen) {
+        showToast(tr("access.batchUnavailable"), "error", 5200);
+        return;
+      }
+      toolBatchRunningRef.current = true;
+      setToolBatchRunning(true);
+      try {
+        await refreshToolConfigStatuses(false, toolCards);
+        const statuses = { ...toolConfigStatusesRef.current };
+        const locatedCards = toolCards.filter((card) => (
+          // Keep the active Codex session untouched while testing the dev build.
+          !(DEVELOPMENT_PROFILE && card.tool === "codex")
+          &&
+          statuses[card.tool]?.details?.program_located === "true"
+        ));
+        for (const card of locatedCards) {
+          if (hiddenToolIds.has(card.tool)) showToolCard(card.tool, false);
+        }
+        const targets = locatedCards.filter((card) => action === "configure"
+          ? !statuses[card.tool]?.already_configured
+          : toolHasManagedConfig(statuses[card.tool]));
+        const skipped = toolCards.length - targets.length;
+        if (targets.length === 0) {
+          const hasReadableStatus = Object.values(statuses).some(Boolean);
+          showToast(
+            tr(hasReadableStatus ? "access.batchNoTargets" : "access.batchStatusUnavailable"),
+            hasReadableStatus ? "info" : "error",
+            5200,
+          );
+          return;
+        }
+        const confirmed = await askConfirm({
+          title: tr(action === "configure"
+            ? "access.batchConfigureTitle"
+            : "access.batchRemoveTitle"),
+          message: tr(action === "configure"
+            ? "access.batchConfigureMessage"
+            : "access.batchRemoveMessage", {
+              count: targets.length,
+              skipped,
+            }),
+          confirmText: tr("access.batchConfirm"),
+          tone: action === "remove" ? "danger" : "default",
+        });
+        if (!confirmed) return;
+
+        let succeeded = 0;
+        let failed = 0;
+        for (const [index, card] of targets.entries()) {
+          setToolBatchOperation({
+            action,
+            current: index + 1,
+            total: targets.length,
+            currentTool: card.title,
+          });
+          const status = statuses[card.tool] ?? undefined;
+          try {
+            if (action === "configure") {
+              const configured = await configureTool(
+                card.tool,
+                card.title,
+                false,
+                undefined,
+                true,
+                false,
+                status ?? undefined,
+                {
+                  protocol: toolProtocolId(status?.details?.tool_protocol) ?? undefined,
+                  codexModelSource: codexModelSourceFromStatus(status),
+                },
+              );
+              if (!configured) throw new Error("TOOL_BATCH_ITEM_FAILED");
+            } else {
+              if (!beginToolOperation(card.tool)) throw new Error("TOOL_CONFIG_BUSY");
+              try {
+                const result = await executeToolConfigOperation(
+                  card.tool,
+                  card.title,
+                  "remove",
+                  undefined,
+                  "restore_pre_const",
+                  true,
+                  undefined,
+                );
+                if (!result) throw new Error("TOOL_BATCH_ITEM_FAILED");
+                if (card.tool === "claude") {
+                  storeAppliedClaudeModelSettings({ ...DEFAULT_CLAUDE_MODEL_SETTINGS });
+                }
+                updateToolOperationLabel(card.tool, tr("toolOperations.progress.refreshStatus"));
+                const checked = await refreshSingleToolConfigStatus(
+                  card.tool,
+                  card.tool === "claude" ? { ...DEFAULT_CLAUDE_MODEL_SETTINGS } : undefined,
+                );
+                if (toolHasManagedConfig(checked)) throw new Error("TOOL_BATCH_REMOVE_INCOMPLETE");
+              } finally {
+                finishToolOperation(card.tool);
+              }
+            }
+            succeeded += 1;
+          } catch (error) {
+            failed += 1;
+            console.warn("[const-api][tool-batch] operation failed", card.tool, error);
+            continue;
+          }
+        }
+        showToast(
+          tr(action === "configure"
+            ? "access.batchConfigureSummary"
+            : "access.batchRemoveSummary", {
+              succeeded,
+              skipped,
+              failed,
+            }),
+          failed > 0 ? "error" : "success",
+          failed > 0 ? 9000 : 6200,
+        );
+        void refreshToolConfigStatuses(true, toolCards);
+      } finally {
+        toolBatchRunningRef.current = false;
+        setToolBatchRunning(false);
+        setToolBatchOperation(null);
+      }
+    }
+
+  function configureLocatedTools() {
+    return runToolBatch("configure");
+  }
+
+  function removeConfiguredTools() {
+    return runToolBatch("remove");
+  }
 
   async function openToolLocator(tool: string, title: string, continueWithLaunch = false) {
       // Rescanning the same chooser must retain the original action (opening
@@ -5524,7 +5626,7 @@ export function useAppController({
     }
 
   async function addPresetChannelWithConnection(driver: SourceDriver, connection?: LanShareConnectionInfo) {
-      const id = `channel-${Date.now().toString(36)}`;
+      const id = newChannelId(configRef.current.channels);
       const firstEndpoint = config.endpoints.find((endpoint) => endpoint.enabled && endpoint.base_url.trim());
       const serverWsUrl = firstEndpoint ? supplierWsFromEndpoint(firstEndpoint) : config.supplier.server_ws_url;
       const serverQuicUrl = firstEndpoint ? supplierQuicFromEndpoint(firstEndpoint) : config.supplier.server_quic_url;
@@ -5552,14 +5654,6 @@ export function useAppController({
 
       if (driver.detection.creation === "on_add") {
         try {
-          const duplicateDecision = await decideDuplicateChannel(
-            channelV5FromRenderer(channel),
-          );
-          if (duplicateDecision?.action === "cancel") return;
-          if (duplicateDecision?.action === "open_existing") {
-            restoreDraftAndOpenExisting(channel.id, duplicateDecision.channelId);
-            return;
-          }
           const detection = await invoke<ChannelDetectionResult>("detect_channel_upstream", { channel });
           channel = applyChannelDetection(channel, detection);
           rememberDetectedQuota(channel.id, detection);
@@ -5705,8 +5799,6 @@ export function useAppController({
     setShowAccessAdvanced,
     accessGuideOpen,
     setAccessGuideOpen,
-    localApiConnectionId,
-    setLocalApiConnectionId,
     modelAliasPreviewOpen,
     setModelAliasPreviewOpen,
     modelCompatibilityPolicy,
@@ -5765,7 +5857,6 @@ export function useAppController({
     dismissGuidanceNotice: dismissGuidanceNoticeByKey,
     confirmDialog,
     toolRemoveDialog,
-    channelDuplicateDialog,
     appLogs,
     setAppLogs,
     logOpen,
@@ -5778,7 +5869,6 @@ export function useAppController({
     localEntryIssue,
     brandVersion,
     updateReady,
-    selectedLocalApiConnection,
     localApiRoot,
     localBaseUrl,
     localOpenAiChatUrl,
@@ -5875,8 +5965,11 @@ export function useAppController({
     askConfirm,
     resolveConfirmDialog,
     resolveToolRemoveDialog,
-    resolveChannelDuplicateDialog,
     applyToolConfig,
+    toolBatchRunning,
+    toolBatchOperation,
+    configureLocatedTools,
+    removeConfiguredTools,
     startToolProgram,
     useTool,
     launchToolConfig,

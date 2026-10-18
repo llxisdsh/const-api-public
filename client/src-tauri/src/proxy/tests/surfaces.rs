@@ -335,6 +335,12 @@
             &format!("http://{upstream_address}/v1"),
         );
         channel.upstream_api_key = "sk-upstream-secret".to_string();
+        channel.detection_checks.push(ChannelDetectionCheck {
+            name: "responses_operation".to_string(),
+            capability: "openai.responses_websocket".to_string(),
+            status: "verified".to_string(),
+            ..Default::default()
+        });
         config.channels = vec![channel];
         let shared = Arc::new(ProxyShared::from_config(
             normalize_config(config),
@@ -445,6 +451,12 @@
             let mut channel = openai_api_channel("wire-ws-channel", wire, &format!("http://{address}/v1"));
             channel.set_source_driver(driver);
             channel.upstream_api_key = "mock-upstream".into();
+            channel.detection_checks.push(ChannelDetectionCheck {
+                name: "responses_operation".to_string(),
+                capability: "openai.responses_websocket".to_string(),
+                status: "verified".to_string(),
+                ..Default::default()
+            });
             let mut config = default_config();
             config.api_key = "mock-local-key".into();
             config.account_device_api_key.clear();

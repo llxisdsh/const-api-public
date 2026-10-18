@@ -590,6 +590,123 @@ const TOOL_PROFILES: &[ToolProfile] = &[
         ],
     },
     ToolProfile {
+        id: "codebuddy",
+        display_name: "CodeBuddy",
+        protocols: &[ToolProtocol::OpenAiChat],
+        default_protocol: ToolProtocol::OpenAiChat,
+        model_sync_policy: ToolModelSyncPolicy::Catalog,
+        runtime: desktop_and_command_manifest(
+            &[],
+            &["CodeBuddy.exe", "CodeBuddy CN.exe"],
+            &["CodeBuddy", "CodeBuddy CN", "codebuddy", "codebuddy-cn"],
+            &["codebuddy", "codebuddy-cn"],
+        ),
+        command_launch: ToolCommandLaunch::Desktop,
+        launch_args: &[],
+        desktop_preferred: true,
+        identity_aliases: &["CodeBuddy IDE", "CodeBuddy CN"],
+        external_environment_names: &["CODEBUDDY_CONFIG_DIR"],
+        macos_app_names: &["CodeBuddy.app", "CodeBuddy CN.app"],
+        windows_program_paths: &[
+            ("CodeBuddy", "CodeBuddy.exe"),
+            ("CodeBuddy CN", "CodeBuddy CN.exe"),
+        ],
+    },
+    ToolProfile {
+        id: "qoder",
+        display_name: "Qoder",
+        protocols: &[
+            ToolProtocol::OpenAiResponses,
+            ToolProtocol::OpenAiChat,
+            ToolProtocol::AnthropicMessages,
+        ],
+        default_protocol: ToolProtocol::OpenAiResponses,
+        model_sync_policy: ToolModelSyncPolicy::Catalog,
+        runtime: desktop_and_command_manifest(
+            &[],
+            &["Qoder.exe"],
+            &["Qoder"],
+            &["qoder"],
+        ),
+        command_launch: ToolCommandLaunch::Desktop,
+        launch_args: &[],
+        desktop_preferred: true,
+        identity_aliases: &["Qoder IDE"],
+        external_environment_names: &[],
+        macos_app_names: &["Qoder.app"],
+        windows_program_paths: &[("Qoder", "Qoder.exe")],
+    },
+    ToolProfile {
+        id: "qoder-cn",
+        display_name: "Qoder CN",
+        protocols: &[
+            ToolProtocol::OpenAiResponses,
+            ToolProtocol::OpenAiChat,
+            ToolProtocol::AnthropicMessages,
+        ],
+        default_protocol: ToolProtocol::AnthropicMessages,
+        model_sync_policy: ToolModelSyncPolicy::Catalog,
+        runtime: desktop_and_command_manifest(
+            &[],
+            &["Qoder CN.exe"],
+            &["Qoder CN"],
+            &["qoder-cn"],
+        ),
+        command_launch: ToolCommandLaunch::Desktop,
+        launch_args: &[],
+        desktop_preferred: true,
+        identity_aliases: &["Qoder CN IDE"],
+        external_environment_names: &[],
+        macos_app_names: &["Qoder CN.app"],
+        windows_program_paths: &[("Qoder CN", "Qoder CN.exe")],
+    },
+    ToolProfile {
+        id: "octop",
+        display_name: "Octop",
+        protocols: &[ToolProtocol::OpenAiChat],
+        default_protocol: ToolProtocol::OpenAiChat,
+        model_sync_policy: ToolModelSyncPolicy::Catalog,
+        runtime: desktop_and_command_manifest(
+            &[],
+            &["Octop.exe", "octop.exe"],
+            &["Octop", "octop"],
+            &["octop"],
+        ),
+        command_launch: ToolCommandLaunch::Desktop,
+        launch_args: &[],
+        desktop_preferred: true,
+        identity_aliases: &[],
+        external_environment_names: &["OCTOP_HOME", "OCTOP_PORT", "OCTOP_DATABASE_URL"],
+        macos_app_names: &["Octop.app"],
+        windows_program_paths: &[("Octop", "Octop.exe")],
+    },
+    ToolProfile {
+        id: "toonflow",
+        display_name: "Toonflow",
+        protocols: &[ToolProtocol::OpenAiResponses, ToolProtocol::OpenAiChat],
+        default_protocol: ToolProtocol::OpenAiResponses,
+        model_sync_policy: ToolModelSyncPolicy::Catalog,
+        // Toonflow's Windows desktop wrapper starts the real app through this
+        // launcher; the app stores its settings below the install root's data
+        // directory. Do not include bun.exe: it may belong to another app.
+        runtime: desktop_and_command_manifest(
+            &[],
+            &["startupLauncher.exe", "launcher.exe"],
+            &["Toonflow", "toonflow"],
+            &["toonflow"],
+        ),
+        command_launch: ToolCommandLaunch::Desktop,
+        launch_args: &[],
+        desktop_preferred: true,
+        identity_aliases: &[],
+        external_environment_names: &["TOONFLOW_DATA_DIR"],
+        macos_app_names: &["Toonflow.app"],
+        windows_program_paths: &[(
+            "Toonflow",
+            "app\\Resources\\app\\startupLauncher.exe",
+        )],
+    },
+    ToolProfile {
         id: "kimicode",
         display_name: "Kimi Code",
         protocols: &[ToolProtocol::OpenAiResponses, ToolProtocol::OpenAiChat],
@@ -821,7 +938,11 @@ const TOOL_PROFILES: &[ToolProfile] = &[
 ];
 
 fn tool_profile(tool: &str) -> Option<&'static ToolProfile> {
-    TOOL_PROFILES.iter().find(|profile| profile.id == tool)
+    // CodeBuddy CN shares CodeBuddy's model file and runtime contract. Keep
+    // the old ID as a compatibility alias for persisted operations while the
+    // UI exposes one canonical tool entry.
+    let canonical = (tool == "codebuddy-cn").then_some("codebuddy").unwrap_or(tool);
+    TOOL_PROFILES.iter().find(|profile| profile.id == canonical)
 }
 
 pub(crate) fn tool_model_sync_policy(tool: &str) -> ToolModelSyncPolicy {

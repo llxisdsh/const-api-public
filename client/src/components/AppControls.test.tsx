@@ -198,6 +198,24 @@ describe("BlockingConfirmDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "我知道了" }));
     expect(onResolve).toHaveBeenCalledWith(true);
   });
+
+  test("renders an optional notice hint separately from the main message", () => {
+    render(
+      <BlockingConfirmDialog
+        dialog={{
+          title: "OpenCode 已配置并启动",
+          message: "以后可以直接打开 OpenCode。",
+          hint: "使用工具时请保持 CONST API 运行。",
+          confirmText: "我知道了",
+          mode: "notice",
+        }}
+        onResolve={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("使用工具时请保持 CONST API 运行。"))
+      .toHaveClass("confirm-modal-hint");
+  });
 });
 
 describe("ToolRemoveDialog", () => {
@@ -301,17 +319,36 @@ describe("QuickCard", () => {
     expect(container.querySelector(".brand-badge img")?.getAttribute("src")).toBe(assetUrl);
   });
 
+  test("uses a native tooltip for the tool explanation", () => {
+    render(<ToolDockMenuProvider><QuickCard
+      id="tip-tool"
+      title="Tip Tool"
+      description="A short explanation of what this tool does."
+      icon={null}
+      fallback={Circle}
+      tone="#111827"
+      actionLabel="Configure"
+      onAction={vi.fn()}
+    /></ToolDockMenuProvider>);
+
+    expect(screen.getByRole("button", { name: "Tip Tool" })).toHaveAttribute(
+      "title",
+      "A short explanation of what this tool does.",
+    );
+  });
+
   test.each([
+    ["copilot", "GitHub Copilot CLI", "copilot", "CLI"],
     ["trae-cn", "TRAE CN", "trae", "CN"],
     ["workbuddy-ai", "WorkBuddy AI", "workbuddy", "AI"],
-  ] as const)("shows the %s edition badge separately from the original logo", (id, title, customIcon, badge) => {
+  ] as const)("places the %s edition badge in the logo layer", (id, title, customIcon, badge) => {
     const { container } = render(<ToolDockMenuProvider><QuickCard
       id={id} title={title} icon={null} customIcon={customIcon}
       badge={badge} fallback={Circle} tone="#171717" actionLabel="配置"
       onAction={vi.fn()}
     /></ToolDockMenuProvider>);
-    expect(container.querySelector(".tool-edition-badge")).toHaveTextContent(badge);
-    expect(container.querySelector(".brand-badge .tool-edition-badge")).toBeNull();
+    expect(container.querySelector(".tool-dock-button .brand-badge .tool-edition-badge")).toHaveTextContent(badge);
+    expect(container.querySelector(".tool-dock-icon-wrap > .tool-edition-badge")).toBeNull();
     expect(container.querySelector(".brand-badge img")?.getAttribute("src")).toBe(customBrandIconUrl(customIcon));
     expect(customBrandIconUrl("trae-work")).toBe(customBrandIconUrl("trae"));
   });
@@ -450,7 +487,7 @@ describe("QuickCard", () => {
     expect(reservedStatusArea).toHaveAttribute("aria-hidden", "true");
     expect(screen.queryByText("需写入配置")).toBeNull();
     expect(document.querySelector(".tool-dock-status")).toBeNull();
-    expect(logo).not.toHaveAttribute("title");
+    expect(logo).toHaveAttribute("title", "OpenAI Codex，兼容新版 ChatGPT 与旧版 Codex 桌面应用");
     fireEvent.pointerEnter(reservedStatusArea as Element);
     expect(container.querySelector(".quick-card-menu-panel")).toBeNull();
     fireEvent.click(logo);
@@ -477,7 +514,7 @@ describe("QuickCard", () => {
     expect(onAction).toHaveBeenCalledTimes(1);
 
     fireEvent.contextMenu(logo, { button: 2 });
-    fireEvent.click(screen.getByRole("button", { name: "不显示" }));
+    fireEvent.click(screen.getByRole("button", { name: "隐藏" }));
     expect(onHide).toHaveBeenCalledTimes(1);
   });
 
@@ -704,14 +741,20 @@ describe("QuickCard", () => {
     }
   });
 
-  test("restores a hidden tool from the dock-end add menu", () => {
+  test.each([
+    ["copilot", "GitHub Copilot CLI", "CLI"],
+    ["trae-cn", "TRAE CN", "CN"],
+    ["workbuddy-ai", "WorkBuddy AI", "AI"],
+  ] as const)("restores hidden %s without repeating its edition badge", (tool, title, badge) => {
     const onShow = vi.fn();
     render(
       <ToolDockMenuProvider>
         <HiddenToolMenu
           cards={[{
-            tool: "raven",
-            title: "Raven",
+            tool,
+            title,
+            description: "A short explanation of this hidden tool.",
+            badge,
             icon: null,
             fallback: Circle,
             tone: "#0153e5",
@@ -723,11 +766,56 @@ describe("QuickCard", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "显示更多工具" }));
-    expect(screen.getByText("未显示的工具")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("menuitem", { name: "显示 Raven" }));
+    expect(screen.getByRole("searchbox", { name: "搜索隐藏的工具" })).toHaveAttribute(
+      "placeholder",
+      "搜索隐藏的工具",
+    );
+    const item = screen.getByRole("menuitem", { name: `显示 ${title}` });
+    expect(item.textContent).toBe(title);
+    expect(item.querySelector("small")).toBeNull();
+    expect(item).toHaveAttribute("title");
+    fireEvent.click(item);
 
-    expect(onShow).toHaveBeenCalledWith("raven");
+    expect(onShow).toHaveBeenCalledWith(tool);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  test("filters hidden tools by title or tool id and keeps order recovery available", () => {
+    const onShow = vi.fn();
+    const onResetOrder = vi.fn();
+    render(
+      <ToolDockMenuProvider>
+        <HiddenToolMenu
+          cards={[
+            { tool: "raven", title: "Raven", icon: null, fallback: Circle, tone: "#0153e5" },
+            { tool: "kimicode", title: "Kimi Code", icon: null, fallback: Circle, tone: "#0153e5" },
+          ]}
+          onShow={onShow}
+          onResetOrder={onResetOrder}
+        />
+      </ToolDockMenuProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "显示更多工具" }));
+    const search = screen.getByRole("searchbox", { name: "搜索隐藏的工具" });
+    fireEvent.change(search, { target: { value: "kimicode" } });
+    expect(screen.queryByRole("menuitem", { name: "显示 Raven" })).toBeNull();
+    const kimi = screen.getByRole("menuitem", { name: "显示 Kimi Code" });
+    expect(kimi).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清空搜索" }));
+    expect(search).toHaveValue("");
+    expect(screen.getByRole("menuitem", { name: "显示 Raven" })).toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "kimicode" } });
+    fireEvent.click(kimi);
+    expect(onShow).toHaveBeenCalledWith("kimicode");
+
+    fireEvent.click(screen.getByRole("button", { name: "显示更多工具" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索隐藏的工具" }), {
+      target: { value: "does-not-exist" },
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("没有匹配的工具");
+    fireEvent.click(screen.getByRole("menuitem", { name: "恢复默认顺序" }));
+    expect(onResetOrder).toHaveBeenCalledTimes(1);
   });
 
   test("keeps add and default-order recovery available when no tools are hidden", () => {
@@ -745,7 +833,7 @@ describe("QuickCard", () => {
     const addButton = screen.getByRole("button", { name: "显示更多工具" });
     expect(addButton).toBeEnabled();
     fireEvent.click(addButton);
-    expect(screen.queryByText("未显示的工具")).toBeNull();
+    expect(screen.queryByRole("searchbox")).toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "恢复默认顺序" }));
     expect(onResetOrder).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("menu")).toBeNull();
@@ -799,12 +887,12 @@ describe("QuickCard", () => {
 
       fireEvent.click(addButton);
       const menu = screen.getByRole("menu") as HTMLDivElement;
-      expect(menu).toHaveStyle({ left: "-10px", width: "232px" });
+      expect(menu).toHaveStyle({ left: "6px", width: "216px" });
 
       viewportWidth = 700;
       mainRight = 700;
       fireEvent(window, new Event("resize"));
-      await waitFor(() => expect(menu).toHaveStyle({ left: "8px", width: "232px" }));
+      await waitFor(() => expect(menu).toHaveStyle({ left: "8px", width: "216px" }));
     } finally {
       if (originalInnerWidth) {
         Object.defineProperty(window, "innerWidth", originalInnerWidth);
@@ -877,6 +965,75 @@ describe("QuickCard", () => {
       expect(menu).toHaveStyle({ top: "auto", bottom: "50px", maxHeight: "86px" });
       const menuItems = screen.getAllByRole("menuitem");
       expect(menuItems[menuItems.length - 1]).toHaveTextContent("恢复默认顺序");
+    } finally {
+      if (originalInnerHeight) {
+        Object.defineProperty(window, "innerHeight", originalInnerHeight);
+      }
+    }
+  });
+
+  test("keeps the search header below the visible content boundary when opening above", () => {
+    const originalInnerHeight = Object.getOwnPropertyDescriptor(window, "innerHeight");
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: 900,
+    });
+    const rect = ({
+      top,
+      bottom,
+      left = 0,
+      right = 0,
+    }: {
+      top: number;
+      bottom: number;
+      left?: number;
+      right?: number;
+    }): DOMRect => ({
+      top,
+      bottom,
+      left,
+      right,
+      height: bottom - top,
+      width: right - left,
+      x: left,
+      y: top,
+      toJSON: () => ({}),
+    });
+    const hiddenTools = [
+      "raven", "kimicode", "mimocode", "qwencode", "mistral-vibe", "open-interpreter",
+      "anythingllm", "openscience", "open-design", "vibe-trading", "grok-build", "minimax-code",
+    ] as const;
+
+    try {
+      const { container } = render(
+        <main>
+          <section>
+            <ToolDockMenuProvider>
+              <HiddenToolMenu
+                cards={hiddenTools.map((tool) => ({
+                  tool,
+                  title: tool,
+                  icon: null,
+                  fallback: Circle,
+                  tone: "#0153e5",
+                }))}
+                onShow={vi.fn()}
+                onResetOrder={vi.fn()}
+              />
+            </ToolDockMenuProvider>
+          </section>
+        </main>,
+      );
+
+      const section = container.querySelector("main > section") as HTMLElement;
+      const dock = container.querySelector(".tool-dock-add") as HTMLDivElement;
+      const addButton = screen.getByRole("button", { name: "显示更多工具" });
+      vi.spyOn(section, "getBoundingClientRect").mockReturnValue(rect({ top: 54, bottom: 900 }));
+      vi.spyOn(dock, "getBoundingClientRect").mockReturnValue(rect({ top: 480, bottom: 528, left: 100, right: 164 }));
+      vi.spyOn(addButton, "getBoundingClientRect").mockReturnValue(rect({ top: 484, bottom: 524, left: 108, right: 156 }));
+
+      fireEvent.click(addButton);
+      expect(screen.getByRole("menu")).toHaveStyle({ top: "auto", bottom: "50px", maxHeight: "424px" });
     } finally {
       if (originalInnerHeight) {
         Object.defineProperty(window, "innerHeight", originalInnerHeight);

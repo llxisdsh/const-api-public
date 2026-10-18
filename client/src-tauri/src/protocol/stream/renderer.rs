@@ -1125,6 +1125,14 @@ fn append_artifact_delta(
 }
 
 fn response_item_id(index: u32, header: &BlockHeader) -> String {
+    if header.tool_kind == Some(ToolKind::Custom) {
+        return header
+            .source_item_id
+            .as_deref()
+            .filter(|id| id.starts_with("ctc_"))
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("ctc_{index}"));
+    }
     header
         .source_item_id
         .clone()
@@ -1173,10 +1181,10 @@ fn responses_usage(usage: &Usage) -> Value {
         "output_tokens":usage_value(&usage.output_tokens),
         "total_tokens":usage_value(&usage.total_tokens),
         "input_tokens_details":{
-            "cached_tokens":usage.cache_read_tokens.value,
-            "cache_write_tokens":usage.cache_write_tokens.value
+            "cached_tokens":usage_value(&usage.cache_read_tokens),
+            "cache_write_tokens":usage_value(&usage.cache_write_tokens)
         },
-        "output_tokens_details":{"reasoning_tokens":usage.reasoning_tokens.value}
+        "output_tokens_details":{"reasoning_tokens":usage_value(&usage.reasoning_tokens)}
     })
 }
 
@@ -1240,5 +1248,46 @@ fn anthropic_id(id: &str) -> String {
         id.to_string()
     } else {
         format!("msg_{id}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_header(tool_kind: ToolKind, source_item_id: Option<&str>) -> BlockHeader {
+        BlockHeader {
+            tool_kind: Some(tool_kind),
+            tool_namespace: None,
+            kind: ContentBlockKind::ToolCall,
+            source_item_id: source_item_id.map(str::to_owned),
+            call_id: Some("call_test".to_string()),
+            name: Some("test_tool".to_string()),
+            artifacts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn custom_responses_items_use_the_custom_tool_id_prefix() {
+        assert_eq!(
+            response_item_id(3, &tool_header(ToolKind::Custom, Some("fc_3"))),
+            "ctc_3"
+        );
+        assert_eq!(
+            response_item_id(3, &tool_header(ToolKind::Custom, Some("ctc_upstream"))),
+            "ctc_upstream"
+        );
+        assert_eq!(
+            response_item_id(3, &tool_header(ToolKind::Function, Some("fc_upstream"))),
+            "fc_upstream"
+        );
+    }
+
+    #[test]
+    fn responses_usage_details_are_always_numeric() {
+        let value = responses_usage(&Usage::default());
+        assert_eq!(value["input_tokens_details"]["cached_tokens"], 0);
+        assert_eq!(value["input_tokens_details"]["cache_write_tokens"], 0);
+        assert_eq!(value["output_tokens_details"]["reasoning_tokens"], 0);
     }
 }

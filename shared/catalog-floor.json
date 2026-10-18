@@ -1,7 +1,7 @@
 {
-  "sequence": 45,
-  "release_id": "catalog-v45-2026-10-13",
-  "model_version_id": "models-v34-2026-10-13",
+  "sequence": 46,
+  "release_id": "catalog-v46-2026-10-19",
+  "model_version_id": "models-v35-2026-10-19",
   "compatibility_version_id": "compat-v27-2026-10-13",
-  "pricing_version_id": "pricing-20261013-cursor-catalog-v15"
+  "pricing_version_id": "pricing-20261019-litellm-refresh-v16"
 }

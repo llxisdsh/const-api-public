@@ -74,14 +74,20 @@ export function ToolModelInjectionSettings({ settings, open, onOpenChange, onSav
     onClick={() => void save()}><Save size={14} />{t("toolModelInjection.saveAndSync")}</button>;
   return <>
     <div className="model-equivalence-toggle advanced-strategy-toggle">
-      <label className="model-equivalence-check">
+      <div className="model-equivalence-check">
         <input type="checkbox" checked={value.all_models} disabled={saving}
+          aria-label={t("toolModelInjection.allModels")}
           onChange={(event) => void toggleAllModels(event.target.checked)} />
-        <span><strong>{t("toolModelInjection.allModels")}</strong><small>{t("toolModelInjection.hint")}</small></span>
-      </label>
-      <button type="button" className="quiet model-alias-preview-button" onClick={() => onOpenChange(true)}>
-        {t("toolModelInjection.editList")}
-      </button>
+        <span>
+          <span className="model-equivalence-heading">
+            <strong>{t("toolModelInjection.allModels")}</strong>
+            <button type="button" className="inline-text-link model-alias-preview-button" onClick={() => onOpenChange(true)}>
+              {t("toolModelInjection.editList")}
+            </button>
+          </span>
+          <small>{t("toolModelInjection.hint")}</small>
+        </span>
+      </div>
     </div>
     {!open && <InlineActionFeedback feedback={status} />}
     {open && createPortal(<InjectionEditor value={value} onChange={change} saving={saving} feedback={status}

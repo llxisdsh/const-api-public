@@ -135,7 +135,6 @@ mod upstream_failure;
 mod upstream_transport;
 
 use account::*;
-use channel_identity::*;
 use claude_client_profile::*;
 use client_toasts::*;
 use codex_identity::*;
@@ -260,10 +259,10 @@ const GROK_MODELS_URL: &str = "https://cli-chat-proxy.grok.com/v1/models";
 const GROK_RESPONSES_URL: &str = "https://cli-chat-proxy.grok.com/v1/responses";
 const GROK_BILLING_WEEKLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const GROK_BILLING_MONTHLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing";
-// Official https://x.ai/cli/stable, checked 2026-10-11.
-const GROK_CLI_VERSION: &str = "1.0.50";
-const GROK_CLI_USER_AGENT: &str = "xai-grok-workspace/1.0.50";
-const GROK_BILLING_USER_AGENT: &str = "grok-pager/1.0.50 grok-shell/1.0.50 (macos; aarch64)";
+// Official https://x.ai/cli/stable, checked 2026-10-19.
+const GROK_CLI_VERSION: &str = "1.0.62";
+const GROK_CLI_USER_AGENT: &str = "xai-grok-workspace/1.0.62";
+const GROK_BILLING_USER_AGENT: &str = "grok-pager/1.0.62 grok-shell/1.0.62 (macos; aarch64)";
 const ANTIGRAVITY_OAUTH_CLIENT_ID: &str = match option_env!("CONST_LOCAL_ANTIGRAVITY_CLIENT_ID") { Some(value) => value, None => "" };
 const ANTIGRAVITY_OAUTH_CLIENT_SECRET: &str = match option_env!("CONST_LOCAL_ANTIGRAVITY_CLIENT_SECRET") { Some(value) => value, None => "" };
 const ANTIGRAVITY_OAUTH_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -273,8 +272,9 @@ const ANTIGRAVITY_API_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_DAILY_API_BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_REDIRECT_URI: &str = "http://localhost:51121/oauth-callback";
 const ANTIGRAVITY_SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs";
-// Official Antigravity Hub updater manifest, checked 2026-10-11.
-const ANTIGRAVITY_DEFAULT_USER_AGENT_VERSION: &str = "2.22.0";
+// Current Antigravity Hub version used when an updater override is absent;
+// checked against the official updater manifest on 2026-10-19.
+const ANTIGRAVITY_DEFAULT_USER_AGENT_VERSION: &str = "2.24.0";
 const ANTIGRAVITY_GOOG_API_CLIENT: &str = "gl-node/22.21.1";
 const SKIP_LOCAL_SHORT_CIRCUIT_HEADER: &str = "x-const-api-skip-local";
 const USE_LOCAL_SHORT_CIRCUIT_HEADER: &str = "x-const-api-use-local";
@@ -1121,7 +1121,6 @@ async fn run_desktop_host(
             cancel_subscription_oauth_callback,
             exchange_subscription_oauth_code,
             import_subscription_token_json,
-            find_duplicate_channels,
             finalize_subscription_import,
             discard_subscription_import,
             test_local_proxy,
@@ -2353,15 +2352,6 @@ async fn import_subscription_token_json(
 }
 
 #[tauri::command]
-async fn find_duplicate_channels(
-    state: State<'_, AppState>,
-    channel: ChannelConfig,
-) -> Result<Vec<ChannelDuplicateCandidate>, String> {
-    let config = load_config_from_path(&state.config_path).map_err(|err| err.to_string())?;
-    Ok(duplicate_channel_candidates(&config.channels, &channel))
-}
-
-#[tauri::command]
 async fn finalize_subscription_import(
     channel: ChannelConfig,
     create_duplicate: bool,
@@ -2981,13 +2971,14 @@ async fn execute_trae_tool_config_operation(
     } else {
         require_config_api_key(&cfg)?
     };
-    let protocol =
-        resolve_tool_protocol(tool, protocol.as_deref()).map_err(|err| err.to_string())?;
+    let requested_protocol = protocol.as_deref();
     let models = if removing {
         Vec::new()
     } else {
         require_tool_model_snapshot_for_operation(&cfg, &operation, tool, tool).await?
     };
+    let protocol = resolve_tool_protocol_for_models(tool, requested_protocol, &models)
+        .map_err(|err| err.to_string())?;
     let prepared = prepare_trae_config(tool, &urls.openai, &api_key, &models, protocol, removing)
         .await
         .map_err(|err| err.to_string())?;
@@ -3188,12 +3179,13 @@ async fn execute_tool_config_operation_inner(
         return Ok(tool_config_operation_response(outcome));
     }
 
-    let protocol =
-        resolve_tool_protocol(tool, protocol.as_deref()).map_err(|err| err.to_string())?;
+    let requested_protocol = protocol.as_deref();
     let outcome = if tool == "claude" {
         let settings = claude_model_settings.unwrap_or_default();
         validate_claude_model_settings(&settings).map_err(|err| err.to_string())?;
         let models = fetch_local_platform_models_for_operation(&cfg, operation, tool).await?;
+        let protocol = resolve_tool_protocol_for_models(tool, requested_protocol, &models)
+            .map_err(|err| err.to_string())?;
         let settings = claude_settings_with_context(&cfg, &settings, &models);
         let context_digest = tool_config_operation_context_digest(
             &state.config_path,
@@ -3229,6 +3221,8 @@ async fn execute_tool_config_operation_inner(
     } else if tool == "opencode" {
         let models =
             require_tool_model_snapshot_for_operation(&cfg, operation, tool, "OpenCode").await?;
+        let protocol = resolve_tool_protocol_for_models(tool, requested_protocol, &models)
+            .map_err(|err| err.to_string())?;
         let context_digest = tool_config_operation_context_digest(
             &state.config_path,
             &api_key,
@@ -3253,6 +3247,8 @@ async fn execute_tool_config_operation_inner(
         )
     } else if tool == "openclaw" {
         let models = openclaw_tool_model_snapshot_for_operation(&cfg, operation).await?;
+        let protocol = resolve_tool_protocol_for_models(tool, requested_protocol, &models)
+            .map_err(|err| err.to_string())?;
         let root_url = tool_config_root_for_tool(&urls, tool);
         let context_digest = tool_config_operation_context_digest(
             &state.config_path,
@@ -3276,6 +3272,8 @@ async fn execute_tool_config_operation_inner(
     } else if tool == "vscode" {
         let models =
             require_tool_model_snapshot_for_operation(&cfg, operation, tool, "VS Code").await?;
+        let protocol = resolve_tool_protocol_for_models(tool, requested_protocol, &models)
+            .map_err(|err| err.to_string())?;
         let context_digest = tool_config_operation_context_digest(
             &state.config_path,
             &api_key,
@@ -3298,9 +3296,19 @@ async fn execute_tool_config_operation_inner(
             },
             |launch_context| launch_tool_program_for_atomic_operation(tool, launch_context),
         )
-    } else if matches!(tool, "workbuddy" | "workbuddy-ai") {
+    } else if matches!(
+        tool,
+        "workbuddy" | "workbuddy-ai" | "codebuddy" | "codebuddy-cn"
+    ) {
+        let tool_label = if matches!(tool, "codebuddy" | "codebuddy-cn") {
+            "CodeBuddy"
+        } else {
+            "WorkBuddy"
+        };
         let models =
-            require_tool_model_snapshot_for_operation(&cfg, operation, tool, "WorkBuddy").await?;
+            require_tool_model_snapshot_for_operation(&cfg, operation, tool, tool_label).await?;
+        let protocol = resolve_tool_protocol_for_models(tool, requested_protocol, &models)
+            .map_err(|err| err.to_string())?;
         let context_digest = tool_config_operation_context_digest(
             &state.config_path,
             &api_key,
@@ -3347,6 +3355,10 @@ async fn execute_tool_config_operation_inner(
             | "openscience"
             | "vibe-trading"
             | "zcode"
+            | "qoder"
+            | "qoder-cn"
+            | "octop"
+            | "toonflow"
     ) {
         let tool_label = match tool {
             "copilot" => "GitHub Copilot CLI",
@@ -3370,10 +3382,16 @@ async fn execute_tool_config_operation_inner(
             "openscience" => "OpenScience",
             "vibe-trading" => "Vibe-Trading",
             "zcode" => "ZCode",
+            "qoder" => "Qoder",
+            "qoder-cn" => "Qoder CN",
+            "octop" => "Octop",
+            "toonflow" => "Toonflow",
             _ => tool,
         };
         let models =
             additional_tool_model_snapshot_for_operation(&cfg, operation, tool, tool_label).await?;
+        let protocol = resolve_tool_protocol_for_models(tool, requested_protocol, &models)
+            .map_err(|err| err.to_string())?;
         let context_digest = tool_config_operation_context_digest(
             &state.config_path,
             &api_key,
@@ -3415,6 +3433,8 @@ async fn execute_tool_config_operation_inner(
         let models =
             require_tool_model_snapshot_for_operation(&cfg, operation, tool, "Claude Desktop")
                 .await?;
+        let protocol = resolve_tool_protocol_for_models(tool, requested_protocol, &models)
+            .map_err(|err| err.to_string())?;
         let context_digest = tool_config_operation_context_digest(
             &state.config_path,
             &api_key,
@@ -3440,6 +3460,8 @@ async fn execute_tool_config_operation_inner(
             |launch_context| launch_tool_program_for_atomic_operation(tool, launch_context),
         )
     } else {
+        let protocol =
+            resolve_tool_protocol(tool, requested_protocol).map_err(|err| err.to_string())?;
         let root_url = tool_config_root_for_tool(&urls, tool);
         let context_digest = tool_config_operation_context_digest(
             &state.config_path,

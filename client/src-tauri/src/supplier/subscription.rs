@@ -2558,7 +2558,7 @@ mod buffered_response_tests {
             assert_eq!(request.headers()["user-agent"], user_agent);
             assert_eq!(request.headers()["openai-beta"], "tools=future-v9");
         }
-        for version in ["2.1.220", "2.1.285", "3.0.0"] {
+        for version in ["2.1.220", "2.1.285", "2.1.300", "2.1.301", "2.1.302", "3.0.0"] {
             let model = "claude-sonnet-5-5";
             let body = serde_json::json!({"model":model, "stream":true,
                 "system":[{"type":"text","text":format!("x-anthropic-billing-header: cc_version={version}; cc_entrypoint=cli;")}],

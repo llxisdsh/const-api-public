@@ -735,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "const-api-local"
-version = "0.1.59"
+version = "0.1.60"
 dependencies = [
  "aes 0.9.3",
  "anyhow",

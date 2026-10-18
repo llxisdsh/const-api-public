@@ -729,14 +729,20 @@ fn workbuddy_models_path_from_config_dirs(
     workbuddy_config_dir: Option<&str>,
     codebuddy_config_dir: Option<&str>,
 ) -> PathBuf {
-    // Both editions use the same schema and overrides, but different product
-    // dataFolderName defaults. Never discover one edition from the other's files.
-    let data_folder = if tool == "workbuddy-ai" {
-        ".workbuddy-ai"
-    } else {
-        ".workbuddy"
+    // CodeBuddy and CodeBuddy CN share the product's ~/.codebuddy/models.json
+    // file. Keep the legacy CN ID pointed at the same location so an older
+    // persisted operation cannot silently write an unused .codebuddycn file.
+    let data_folder = match tool {
+        "workbuddy-ai" => ".workbuddy-ai",
+        "codebuddy" | "codebuddy-cn" => ".codebuddy",
+        _ => ".workbuddy",
     };
-    [workbuddy_config_dir, codebuddy_config_dir]
+    let config_dir_candidates = if matches!(tool, "codebuddy" | "codebuddy-cn") {
+        [codebuddy_config_dir, workbuddy_config_dir]
+    } else {
+        [workbuddy_config_dir, codebuddy_config_dir]
+    };
+    config_dir_candidates
         .into_iter()
         .flatten()
         .map(str::trim)
@@ -744,6 +750,34 @@ fn workbuddy_models_path_from_config_dirs(
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(data_folder))
         .join("models.json")
+}
+
+fn codebuddy_tool(tool: &str) -> bool {
+    matches!(tool, "codebuddy" | "codebuddy-cn")
+}
+
+fn codebuddy_storage_tool(tool: &str) -> &str {
+    if codebuddy_tool(tool) {
+        "codebuddy"
+    } else {
+        tool
+    }
+}
+
+fn workbuddy_empty_models_root(tool: &str) -> serde_json::Value {
+    if codebuddy_tool(tool) {
+        serde_json::json!({"models": []})
+    } else {
+        serde_json::json!([])
+    }
+}
+
+fn normalize_codebuddy_models_root(tool: &str, root: &mut serde_json::Value) {
+    if !codebuddy_tool(tool) || !root.is_array() {
+        return;
+    }
+    let models = root.take();
+    *root = serde_json::json!({"models": models});
 }
 
 pub(crate) fn workbuddy_models_path(tool: &str) -> PathBuf {
@@ -1174,7 +1208,11 @@ pub(crate) fn apply_workbuddy_config_with_model_info_for_protocol(
     }
     let endpoint_url = workbuddy_endpoint_url(base_url, protocol)?;
     let path = workbuddy_models_path(tool);
-    let mut root = read_json_or_default(&path, serde_json::json!([]))?;
+    let mut root = read_json_or_default(&path, workbuddy_empty_models_root(tool))?;
+    // CodeBuddy's loader rejects the legacy bare-array form. Migrate it in
+    // memory before the normal additive writer preserves user fields and
+    // creates the object-shaped schema it actually reads.
+    normalize_codebuddy_models_root(tool, &mut root);
     // WorkBuddy stores all custom models in one additive array. Replace models
     // marked by another CONST profile; the two legacy loopback ports migrate
     // entries written before the explicit ownership marker existed.
@@ -1205,7 +1243,7 @@ pub(crate) fn apply_workbuddy_config_with_model_info_for_protocol(
     include_workbuddy_available_models(&mut root, &model_ids);
     normalize_workbuddy_managed_model_ids(&mut root, &endpoint_url, api_key, &model_ids)?;
     let mut result = ToolApplyBuilder::default();
-    write_json_with_backup(&path, &root, tool, &mut result)?;
+    write_json_with_backup(&path, &root, codebuddy_storage_tool(tool), &mut result)?;
     let mut result = result.finish(tool);
     attach_tool_protocol(&mut result, protocol);
     Ok(result)
@@ -1333,11 +1371,15 @@ pub(crate) fn check_workbuddy_config(tool: &str, base_url: &str, api_key: &str) 
     let protocol = ToolProtocol::OpenAiChat;
     let endpoint_url = workbuddy_endpoint_url(base_url, protocol)?;
     let path = workbuddy_models_path(tool);
-    let root = read_json_or_default(&path, serde_json::json!([]))?;
-    let models_configured = workbuddy_models(&root)?.iter().any(|entry| {
-        workbuddy_model_is_configured(entry, &endpoint_url, api_key)
-            && workbuddy_model_is_available(&root, entry)
-    });
+    let root = read_json_or_default(&path, workbuddy_empty_models_root(tool))?;
+    // CodeBuddy ignores the legacy bare-array root. Treat it as not configured
+    // so the next explicit setup migrates it to {"models":[...]} instead of
+    // showing a green status for a file the app will not load.
+    let models_configured = (!codebuddy_tool(tool) || root.is_object())
+        && workbuddy_models(&root)?.iter().any(|entry| {
+            workbuddy_model_is_configured(entry, &endpoint_url, api_key)
+                && workbuddy_model_is_available(&root, entry)
+        });
     let mut builder = ToolApplyBuilder::default();
     observe_json(&path, &root, &mut builder)?;
     let mut result = builder.finish(tool);
@@ -1371,15 +1413,17 @@ fn cleanup_unmanaged_workbuddy_models(
 }
 
 pub(crate) fn remove_workbuddy_config(tool: &str, base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
-    let mut result = restore_tool_config_from_manifest(tool)?;
+    let storage_tool = codebuddy_storage_tool(tool);
+    let mut result = restore_tool_config_from_manifest(storage_tool)?;
     if result
         .details
         .get("manifest_entries_restored")
         .map(String::as_str)
         == Some("0")
     {
-        cleanup_unmanaged_workbuddy_models(tool, &mut result, base_url, api_key)?;
+        cleanup_unmanaged_workbuddy_models(storage_tool, &mut result, base_url, api_key)?;
     }
+    result.tool = tool.to_string();
     Ok(result)
 }
 
@@ -1999,12 +2043,14 @@ pub(crate) fn apply_tool_config_by_name_for_protocol(
         "vscode" => {
             apply_vscode_config_with_model_info_for_protocol(base_url, api_key, &[], protocol)
         }
-        "workbuddy" | "workbuddy-ai" => {
+        "workbuddy" | "workbuddy-ai" | "codebuddy" | "codebuddy-cn" => {
             apply_workbuddy_config_with_model_info_for_protocol(tool, base_url, api_key, &[], protocol)
         }
+        "octop" => apply_octop_config(base_url, api_key, &[]),
         "copilot" | "copilot-desktop" | "raven" | "pi" | "cline" | "reasonix"
         | "deepseek-harness" | "open-interpreter" | "goose" | "mistral-vibe" | "open-design"
         | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading" | "zcode"
+        | "qoder" | "qoder-cn" | "toonflow"
         | "anythingllm" | "grok-build" | "minimax-code" | "muse-code" => {
             apply_additional_tool_config_with_model_info_for_protocol(
                 tool,
@@ -2065,11 +2111,15 @@ pub(crate) fn check_tool_config_by_name(
         "openclaw" => check_openclaw_config(root_url, api_key),
         "hermes" => check_hermes_config(root_url, api_key),
         "vscode" => check_vscode_config(base_url, api_key),
-        "workbuddy" | "workbuddy-ai" => check_workbuddy_config(tool, base_url, api_key),
+        "workbuddy" | "workbuddy-ai" | "codebuddy" | "codebuddy-cn" => {
+            check_workbuddy_config(tool, base_url, api_key)
+        }
+        "octop" => check_octop_config(base_url, api_key),
         "trae" | "trae-cn" | "trae-work" => check_trae_config(tool, base_url, api_key),
         "copilot" | "copilot-desktop" | "raven" | "pi" | "cline" | "reasonix"
         | "deepseek-harness" | "open-interpreter" | "goose" | "mistral-vibe" | "open-design"
         | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading" | "zcode"
+        | "qoder" | "qoder-cn" | "toonflow"
         | "anythingllm" | "grok-build" | "minimax-code" | "muse-code" => {
             check_additional_tool_config(tool, base_url, api_key)
         }
@@ -2121,10 +2171,14 @@ pub(crate) fn remove_tool_config_by_name_with_mode(
         "openclaw" => remove_openclaw_config(root_url, api_key),
         "hermes" => remove_hermes_config(root_url, api_key),
         "vscode" => remove_vscode_config(),
-        "workbuddy" | "workbuddy-ai" => remove_workbuddy_config(tool, base_url, api_key),
+        "workbuddy" | "workbuddy-ai" | "codebuddy" | "codebuddy-cn" => {
+            remove_workbuddy_config(tool, base_url, api_key)
+        }
+        "octop" => remove_octop_config(),
         "copilot" | "copilot-desktop" | "raven" | "pi" | "cline" | "reasonix"
         | "deepseek-harness" | "open-interpreter" | "goose" | "mistral-vibe" | "open-design"
         | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading" | "zcode"
+        | "qoder" | "qoder-cn" | "toonflow"
         | "anythingllm" | "grok-build" | "minimax-code" | "muse-code" => remove_additional_tool_config(tool),
         _ => Err(anyhow!("unknown tool: {tool}")),
     }?;

@@ -1150,8 +1150,11 @@ fn select_responses_websocket_local_route(
             if selection.source_driver() == crate::source_driver::SourceDriverId::CopilotSubscription {
                 return ResponsesWebsocketLocalRoute::HttpBridge("local_websocket_unsupported");
             }
-            if crate::detection::responses_features::operation_support(&selection.detection_checks, "openai.responses_websocket") == Some(false) {
-                return ResponsesWebsocketLocalRoute::HttpBridge("local_websocket_unsupported");
+            if crate::detection::responses_features::operation_support(&selection.detection_checks, "openai.responses_websocket") != Some(true) {
+                // Native HTTP-surface WebSockets are opt-in: an unknown probe
+                // result must keep the HTTP bridge available instead of
+                // turning an unverified capability into a failed request.
+                return ResponsesWebsocketLocalRoute::HttpBridge("local_websocket_unverified");
             }
             let Some(target) = crate::channel_surface::channel_surface_target(
                 &selection,
@@ -6096,6 +6099,40 @@ mod responses_websocket_tests {
                 panic!("unexpected HTTP bridge route: {reason}")
             }
             ResponsesWebsocketRoute::Platform => panic!("expected a native local route"),
+        }
+    }
+
+    #[test]
+    fn websocket_route_bridges_an_unverified_openai_api_channel() {
+        let mut channel =
+            channel_from_supplier("local-openai-api".to_string(), &default_supplier_config());
+        channel.set_source_driver(crate::source_driver::SourceDriverId::OpenAiApi);
+        channel.surface_bindings = crate::source_driver_surface_bindings(
+            crate::source_driver::SourceDriverId::OpenAiApi,
+            "https://api.openai.com/v1",
+        );
+        channel.enabled = true;
+        channel.models = vec!["gpt-test".to_string()];
+        channel.public_model = "gpt-test".to_string();
+        channel.upstream_model = "gpt-test".to_string();
+
+        let mut config = default_config();
+        config.account_device_api_key = "platform-device-key".to_string();
+        config.prefer_local_supply = true;
+        config.channels = vec![channel];
+        let shared = ProxyShared::from_config(normalize_config(config), Client::new());
+
+        match select_responses_websocket_route(
+            &shared,
+            &warp::http::HeaderMap::new(),
+            br#"{"model":"gpt-test","input":[]}"#,
+        ) {
+            ResponsesWebsocketRoute::HttpBridge("local_websocket_unverified") => {}
+            ResponsesWebsocketRoute::HttpBridge(reason) => {
+                panic!("unexpected HTTP bridge reason: {reason}")
+            }
+            ResponsesWebsocketRoute::Native(_) => panic!("unverified route must not use native WebSocket"),
+            ResponsesWebsocketRoute::Platform => panic!("expected a local HTTP bridge route"),
         }
     }
 

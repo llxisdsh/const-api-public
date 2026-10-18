@@ -216,7 +216,7 @@
   font-size: 12px;
 }
 
-main > section > header.page-header-with-actions {
+main > section > header.about-page-header {
   display: grid;
   grid-template-areas:
     "title ."
@@ -227,11 +227,11 @@ main > section > header.page-header-with-actions {
   row-gap: 0;
 }
 
-main > section > header.page-header-with-actions > h1 {
+main > section > header.about-page-header > h1 {
   grid-area: title;
 }
 
-main > section > header.page-header-with-actions > p {
+main > section > header.about-page-header > p {
   grid-area: description;
 }
 
@@ -322,7 +322,7 @@ main > section > header.page-header-with-actions > p {
     width: 100%;
   }
 
-  main > section > header.page-header-with-actions {
+  main > section > header.about-page-header {
     grid-template-areas:
       "title"
       "description"

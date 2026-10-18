@@ -1553,8 +1553,8 @@ mod tests {
         }
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::Relaxed),
-            3,
-            "one free catalog GET per refresh"
+            2,
+            "one free catalog GET per explicit refresh; periodic snapshots reuse the cache"
         );
         server.abort();
         store().lock().unwrap().channels.remove(&channel.id);

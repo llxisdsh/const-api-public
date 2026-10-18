@@ -41,6 +41,7 @@ import titlebarLogo from "../src-tauri/icons/20x20.png";
 import titlebarLogo2x from "../src-tauri/icons/40x40.png";
 import { AppErrorBoundary, RendererFailure } from "./AppErrorBoundary";
 import { DialogBackdrop } from "./DialogBackdrop";
+import { AccessPageHeader } from "./components/AccessPageHeader";
 import {
   LegalNotice,
   LegalNoticeLoading,
@@ -151,10 +152,8 @@ import { useClientModePolicy, type ClientModePolicy } from "./clientModePolicy";
 import {
   BlockingConfirmDialog,
   CapabilityProfileList,
-  ChannelDuplicateDialog,
   ClaudeModelSettingsPanel,
   CodexModelSourcePanel,
-  CompactChoiceMenu,
   HiddenToolMenu,
   ModelInput,
   QuickCard,
@@ -180,10 +179,6 @@ import {
   localizedError,
   type SupportedLanguage,
 } from "./i18n";
-import {
-  LOCAL_API_CONNECTIONS,
-  type LocalApiConnectionId,
-} from "./localApiSurfaces";
 import { useNativeToasts } from "./nativeToasts";
 import {
   dismissPlatformAnnouncement,
@@ -430,8 +425,6 @@ function ProductApp({
     setShowAccessAdvanced,
     accessGuideOpen,
     setAccessGuideOpen,
-    localApiConnectionId,
-    setLocalApiConnectionId,
     modelAliasPreviewOpen,
     setModelAliasPreviewOpen,
     modelCompatibilityPolicy,
@@ -489,7 +482,6 @@ function ProductApp({
     dismissGuidanceNotice,
     confirmDialog,
     toolRemoveDialog,
-    channelDuplicateDialog,
     appLogs,
     setAppLogs,
     logOpen,
@@ -502,7 +494,6 @@ function ProductApp({
     localEntryIssue,
     brandVersion,
     updateReady,
-    selectedLocalApiConnection,
     localApiRoot,
     localBaseUrl,
     localOpenAiChatUrl,
@@ -596,8 +587,11 @@ function ProductApp({
     askConfirm,
     resolveConfirmDialog,
     resolveToolRemoveDialog,
-    resolveChannelDuplicateDialog,
     applyToolConfig,
+    toolBatchRunning,
+    toolBatchOperation,
+    configureLocatedTools,
+    removeConfiguredTools,
     useTool,
     removeToolConfig,
     openToolLocator,
@@ -619,6 +613,9 @@ function ProductApp({
     initialAccountAuthMode,
     showDevelopmentPresentation: clientModePolicy.presentation.showDevelopmentTools,
   });
+
+  const toolBatchBusy = toolBatchRunning
+    || Object.values(toolLaunching).some(Boolean);
 
   const selectedChannelProtocolLatency = supplierProtocolLatencyParts(
     selectedChannelProtocolLatencyHealth,
@@ -756,7 +753,7 @@ function ProductApp({
   };
 
   const prepareToolUse = () => {
-    if (!signedIn && !localModeChosen) {
+    if (!signedIn && !localModelReady && !localModeChosen) {
       setOnboardingGuideCollapsed(false);
       setTab("access");
       focusOnboardingGuide(true);
@@ -890,10 +887,6 @@ function ProductApp({
       return catalogById.get(normalized)?.tool_call !== false;
     });
   }, [connectionGuideModels, modelCompatibilityPolicy.catalogModels]);
-  const selectedLocalApiValueLabel = selectedLocalApiConnection.kind === "request-url"
-    ? t("access.openaiChatUrl")
-    : t("access.surfaceBaseUrl", { surface: selectedLocalApiConnection.label });
-
   const selectedSourceDriver = sourceDriverById(selectedChannel.source_driver);
   const [legalDocumentOpen, setLegalDocumentOpen] = useState<LegalDocumentId | null>(null);
   const [resetLocalDataConfirmOpen, setResetLocalDataConfirmOpen] = useState(false);
@@ -927,6 +920,9 @@ function ProductApp({
     if (tab !== "supplier") setLanSharingOpen(false);
   }, [tab]);
   useEffect(() => {
+    if (tab !== "access") setShowAccessAdvanced(false);
+  }, [tab, setShowAccessAdvanced]);
+  useEffect(() => {
     if (!clientModePolicy.presentation.showDebugConsole && debugConsoleOpen) {
       setDebugConsoleOpen(false);
     }
@@ -951,6 +947,7 @@ function ProductApp({
   ]);
   const inlineOverlayOpen = Boolean(
     accessGuideOpen
+    || showAccessAdvanced
     || marketPricesContext
     || toolLocator
     || supplierAddOpen
@@ -967,7 +964,6 @@ function ProductApp({
     || confirmDialog
     || toolRemoveDialog
     || resetLocalDataConfirmOpen
-    || channelDuplicateDialog
     || legalDocumentOpen,
   );
   const visibleGuidanceNotice = activeGuidanceNotice(guidanceNotices, tab);
@@ -993,10 +989,27 @@ function ProductApp({
       setToolLocator(null);
     } else if (accessGuideOpen) {
       setAccessGuideOpen(false);
+    } else if (showAccessAdvanced) {
+      setShowAccessAdvanced(false);
     }
   }, inlineOverlayOpen);
 
   const locatorCatalogEntry = toolLocator ? toolCatalogEntry(toolLocator.tool) : null;
+  const localizeToolLinkLabel = (label: string) => {
+    switch (label) {
+      case "Official download":
+        return t("toolCatalog.links.download");
+      case "Official website":
+        return t("toolCatalog.links.website");
+      case "GitHub":
+        return t("toolCatalog.links.github");
+      case "Documentation":
+      case "Models documentation":
+        return t("toolCatalog.links.documentation");
+      default:
+        return label;
+    }
+  };
   const updateCheckedAt = updateState.checkedAt || appMeta.updateLastCheckedAt;
   const aboutEndpointSourceNote = endpointRegistrySourceNote(appMeta);
   const aboutModelCatalogSourceNote = modelCatalogSourceNote(appMeta);
@@ -1055,28 +1068,21 @@ function ProductApp({
         <section>
           {tab === "access" ? (
             <>
-              <header className="access-page-header">
-                <div>
-                  <h1>{t("access.title")}</h1>
-                  <p className="access-principle">
-                    <span>{t("access.principleIntro")}</span>{" "}
-                    <span>{t("access.routingIntro")}</span>{" "}
-                    <span className="page-intro-links">
-                      <button
-                        className="inline-text-link"
-                        type="button"
-                        onClick={() => void openLocalSupplierCallLog()}
-                      >
-                        {t("access.platformUsageLog")}
-                      </button>
-                    </span>
-                  </p>
-                </div>
-              </header>
+              <AccessPageHeader
+                running={status.running}
+                issue={localEntryIssue?.message}
+                settingsOpen={showAccessAdvanced}
+                onOpenGuide={() => {
+                  if (!prepareToolUse()) return;
+                  setAccessGuideOpen(true);
+                }}
+                onOpenSettings={() => setShowAccessAdvanced(true)}
+                onOpenMarketPrices={() => setMarketPricesContext({ initialView: "catalog" })}
+                onOpenUsageLog={() => void openLocalSupplierCallLog()}
+              />
 
               <div className="access-section-intro">
                 <h2>{t("access.toolsTitle")}</h2>
-                <p>{t("access.toolsIntro")}</p>
               </div>
               <div className="quick-grid">
                 <ToolDockMenuProvider>
@@ -1230,95 +1236,54 @@ function ProductApp({
                 />
                 </ToolDockMenuProvider>
               </div>
-              <div className={`local-entry-panel ${status.running ? "running" : "error"}`}>
-                <div className="local-entry-topline">
-                  <div className="local-entry-heading">
-                    <div
-                      className="local-entry-status"
-                      title={status.running
-                        ? t("access.runningStatus")
-                        : localEntryIssue?.message || t("access.stoppedStatus")}
-                    >
-                      <h2>{t("access.localApi")}</h2>
-                      <span className="local-entry-state-dot" aria-hidden="true" />
-                      <span>{status.running ? t("access.running") : t("access.notRunning")}</span>
-                    </div>
-                    <p>
-                      {t("access.localApiIntro")}
-                      <span className="inline-link-separator" aria-hidden="true">·</span>
-                      <button
-                        className="inline-text-link"
-                        type="button"
-                        onClick={() => {
-                          if (!prepareToolUse()) return;
-                          setAccessGuideOpen(true);
-                        }}
-                      >
-                        {t("access.connectionGuide")}
-                      </button>
-                    </p>
-                  </div>
-                </div>
-                <div className="local-entry-fields">
-                  <div className="local-entry-surface-field">
-                    <CompactChoiceMenu
-                      className="local-entry-surface-select"
-                      ariaLabel={t("access.connectionValueAria")}
-                      value={localApiConnectionId}
-                      options={LOCAL_API_CONNECTIONS.map((connection) => ({
-                        value: connection.id,
-                        label: connection.label,
-                      }))}
-                      onChange={(connection) => setLocalApiConnectionId(connection as LocalApiConnectionId)}
-                    />
-                    <code title={selectedLocalApiConnection.url}>{selectedLocalApiConnection.url}</code>
-                    <button
-                      type="button"
-                      className={`copy-feedback-button${copiedField === "base-url" ? " copied" : ""}`}
-                      onClick={() => copyValue("base-url", selectedLocalApiValueLabel, selectedLocalApiConnection.url)}
-                      title={copiedField === "base-url"
-                        ? t("common.copied")
-                        : t("access.copyConnectionValue", { value: selectedLocalApiValueLabel })}
-                      aria-label={copiedField === "base-url"
-                        ? t("common.copied")
-                        : t("access.copyConnectionValue", { value: selectedLocalApiValueLabel })}
-                    >
-                      {copiedField === "base-url" ? <Check size={15} /> : <Copy size={15} />}
-                    </button>
-                  </div>
-                  <div className="local-entry-key-field" aria-label={t("access.apiKey")}>
-                    <span>Key</span>
-                    <code title={config.api_key || t("access.notSet")}>{config.api_key || t("access.notSet")}</code>
-                    <button
-                      type="button"
-                      className={`copy-feedback-button${copiedField === "api-key" ? " copied" : ""}`}
-                      onClick={() => copyValue("api-key", t("access.localApiKey"), config.api_key)}
-                      title={copiedField === "api-key" ? t("common.copied") : t("access.copyApiKey")}
-                      aria-label={copiedField === "api-key" ? t("common.copied") : t("access.copyApiKey")}
-                    >
-                      {copiedField === "api-key" ? <Check size={15} /> : <Copy size={15} />}
-                    </button>
-                  </div>
-                </div>
-                <div className="local-entry-footer">
+              <p className="access-tools-hint">
+                <span className="access-tools-hint-copy">{t("access.toolsIntro")}</span>
+                <span className="access-tools-batch-actions page-intro-links" aria-label={t("access.batchActionsLabel")}>
                   <button
-                    className="quiet advanced-panel-toggle local-entry-advanced-toggle"
                     type="button"
-                    aria-expanded={showAccessAdvanced}
-                    onClick={() => setShowAccessAdvanced((value) => !value)}
+                    className="inline-text-link access-tools-action"
+                    disabled={toolBatchBusy}
+                    onClick={() => void configureLocatedTools()}
                   >
-                    {showAccessAdvanced ? <EyeOff size={16} /> : <Eye size={16} />}
-                    {showAccessAdvanced ? t("access.collapseAdvancedSettings") : t("access.advancedSettings")}
+                    {t("access.batchConfigure")}
                   </button>
-                </div>
-              </div>
-
+                  <span className="access-tools-action-separator" aria-hidden="true">·</span>
+                  <button
+                    type="button"
+                    className="inline-text-link access-tools-action"
+                    disabled={toolBatchBusy}
+                    onClick={() => void removeConfiguredTools()}
+                  >
+                    {t("access.batchRemove")}
+                  </button>
+                </span>
+                {toolBatchOperation && (
+                  <span className="access-tools-batch-progress" role="status" aria-live="polite">
+                    {t("access.batchProgress", {
+                      current: toolBatchOperation.current,
+                      total: toolBatchOperation.total,
+                      tool: toolBatchOperation.currentTool,
+                    })}
+                  </span>
+                )}
+              </p>
               {showAccessAdvanced && (
-                <div className="advanced-panel">
-                  <div className="advanced-section advanced-local-section">
+                <DialogBackdrop aria-labelledby="access-settings-title" variant="drawer">
+                <div className="detail-drawer access-settings-drawer" id="access-settings-panel">
+                  <div className="drawer-header">
+                    <h2 id="access-settings-title">{t("access.settingsTitle")}</h2>
+                    <ModalCloseButton onClick={() => setShowAccessAdvanced(false)} />
+                  </div>
+                  <div className="drawer-section advanced-local-section">
                     <div className="control-strip">
                       <div className="advanced-section-copy">
-                        <h2>{t("access.localConnection")}</h2>
+                        <div className="access-settings-connection-heading">
+                          <h2>{t("access.localConnection")}</h2>
+                          <span className={`access-api-status ${status.running ? "running" : "stopped"}`}>
+                            <span className="local-entry-state-dot" aria-hidden="true" />
+                            {t(status.running ? "access.running" : "access.notRunning")}
+                          </span>
+                        </div>
                         <p>{t("access.localConnectionHint")}</p>
                       </div>
                       <div className="actions">
@@ -1383,7 +1348,7 @@ function ProductApp({
                       </label>
                     </div>
                   </div>
-                  <div className="advanced-section advanced-routing-section">
+                  <div className="drawer-section advanced-routing-section">
                     <h2>{t("access.accessAndRouting")}</h2>
                     <div className="advanced-routing-options">
                       <div className="model-equivalence-toggle advanced-strategy-toggle">
@@ -1409,17 +1374,19 @@ function ProductApp({
                             aria-label={t("access.compatibleFallback")}
                           />
                           <span>
-                            <strong>{t("access.compatibleFallback")}</strong>
+                            <span className="model-equivalence-heading">
+                              <strong>{t("access.compatibleFallback")}</strong>
+                              <button
+                                type="button"
+                                className="inline-text-link model-alias-preview-button"
+                                onClick={() => setModelAliasPreviewOpen(true)}
+                              >
+                                {t("access.customizeModels")}
+                              </button>
+                            </span>
                             <small>{t("access.compatibleFallbackHint")}</small>
                           </span>
                         </div>
-                        <button
-                          type="button"
-                          className="quiet model-alias-preview-button"
-                          onClick={() => setModelAliasPreviewOpen(true)}
-                        >
-                          <Eye size={14} />{t("access.customizeModels")}
-                        </button>
                       </div>
                       <React.Suspense fallback={null}><ToolModelInjectionSettings
                         settings={config.tool_model_injection ?? DEFAULT_TOOL_MODEL_INJECTION}
@@ -1430,6 +1397,7 @@ function ProductApp({
                     </div>
                   </div>
                 </div>
+                </DialogBackdrop>
               )}
 
               {accessGuideOpen && (
@@ -1511,11 +1479,7 @@ function ProductApp({
                                 onClick={() => void openExternalUrl(link.url)}
                               >
                                 <ExternalLink size={15} />
-                                {link.url.includes("github.com")
-                                  ? t("toolCatalog.links.github")
-                                  : link.url.includes("/download") || link.url.includes("Download")
-                                    ? t("toolCatalog.links.download")
-                                    : t("toolCatalog.links.website")}
+                                {localizeToolLinkLabel(link.label)}
                               </button>
                             ))}
                           </div>
@@ -2845,7 +2809,7 @@ function ProductApp({
             </React.Suspense>
           ) : (
             <>
-              <header className="page-header-with-actions">
+              <header className="about-page-header">
                 <h1>{t("about.title")}</h1>
                 <p>{t("about.subtitle")}</p>
                 <div className="actions page-header-actions about-legal-links" aria-label={t("about.legalFiles")}>
@@ -3550,12 +3514,6 @@ function ProductApp({
               busy={resetLocalDataBusy}
               onCancel={() => setResetLocalDataConfirmOpen(false)}
               onConfirm={() => void resetLocalAppData()}
-            />
-          )}
-          {channelDuplicateDialog && (
-            <ChannelDuplicateDialog
-              dialog={channelDuplicateDialog}
-              onResolve={resolveChannelDuplicateDialog}
             />
           )}
           {legalDocumentOpen && (

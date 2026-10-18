@@ -1780,7 +1780,6 @@ async fn forward_model_request_by_fidelity(
     );
     let preferred_local_route =
         shared.preferred_local_model_route(&affinity_key, preference_context, now_unix());
-    let mut preferred_local_route_attempted = false;
 
     for match_mode in [ModelMatchMode::ExactOnly, ModelMatchMode::CompatibleOnly] {
         if match_mode == ModelMatchMode::CompatibleOnly && !config.allow_model_equivalence {
@@ -1793,12 +1792,11 @@ async fn forward_model_request_by_fidelity(
             if !budget.available() {
                 return failures.finish();
             }
-            if scope == ModelSupplyScope::Local && !preferred_local_route_attempted {
-                preferred_local_route_attempted = true;
+            if scope == ModelSupplyScope::Local {
                 // Keep a stable session on its last successful local channel
-                // for cache affinity, but only when routing reaches the local
-                // supply stage selected by `prefer_local`. A sticky route must
-                // not silently turn platform-first back into local-first.
+                // within the current match/supply stage. A compatible sticky
+                // route must not skip exact models, and a local sticky route
+                // must not turn platform-first into local-first.
                 if let Some(preferred_route) = preferred_local_route.as_deref() {
                     let preferred_attempt = attempt_local_model_route(
                         config,
@@ -1809,7 +1807,7 @@ async fn forward_model_request_by_fidelity(
                         &headers,
                         &body,
                         shared,
-                        ModelMatchMode::Configured,
+                        match_mode,
                         Some(preferred_route),
                         &affinity_key,
                         preference_context,
