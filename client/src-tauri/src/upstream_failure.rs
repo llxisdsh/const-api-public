@@ -163,6 +163,12 @@ pub(crate) fn error_object(value: &Value) -> Option<(&Value, &Value)> {
         if let Some(error) = response.get("error").filter(|v| v.is_object()) {
             return Some((response, error));
         }
+        if let Some(error) = response
+            .pointer("/status_details/error")
+            .filter(|v| v.is_object())
+        {
+            return Some((response, error));
+        }
     }
     value
         .get("choices")
@@ -365,6 +371,8 @@ pub(crate) fn observe_value(status: u16, value: &Value, model: Option<&str>) -> 
         }
         "provider_overloaded"
         | "overloaded_error"
+        | "server_is_overloaded"
+        | "server_overloaded"
         | "server_error"
         | "server"
         | "internal"
@@ -690,6 +698,16 @@ mod tests {
     fn terminal_skin_errors_override_lossy_native_codes() {
         assert_eq!(failure(200, r#"{"type":"response.failed","response":{"error_type":"authentication","error":{"code":"server_error"}}}"#).cause, "provider_auth_error");
         assert_eq!(failure(200, r#"{"choices":[{"finish_reason":"error","error":{"code":502,"metadata":{"error_type":"provider_unavailable"}}}]}"#).cause, "provider_overload");
+    }
+
+    #[test]
+    fn response_failed_status_details_error_is_observed() {
+        let error = failure(
+            200,
+            r#"{"type":"response.failed","response":{"status_details":{"error":{"type":"server_error","code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}}"#,
+        );
+        assert_eq!(error.cause, "provider_overload");
+        assert_eq!(error.effective_status(), 502);
     }
     #[test]
     fn retry_after_has_units_and_zero_semantics() {

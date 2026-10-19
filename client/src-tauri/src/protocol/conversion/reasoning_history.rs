@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::protocol::ir::{
-    ArtifactKind, CanonicalRequestV2, ContentBlock, ReasoningBlock, ReplayPolicy,
+    ArtifactAffinity, ArtifactKind, CanonicalRequestV2, ContentBlock, ReasoningBlock, ReplayPolicy,
 };
 use crate::protocol::kind::ProtocolKind;
 
@@ -31,6 +31,7 @@ pub(super) fn reasoning_history_omissions(
             &instruction.blocks,
             &format!("instructions[{index}]"),
             request,
+            source,
             target,
             target_issuer,
             &mut omissions,
@@ -41,6 +42,7 @@ pub(super) fn reasoning_history_omissions(
             &turn.blocks,
             &format!("turns[{index}]"),
             request,
+            source,
             target,
             target_issuer,
             &mut omissions,
@@ -53,6 +55,7 @@ fn collect_omissions(
     blocks: &[ContentBlock],
     base_path: &str,
     request: &CanonicalRequestV2,
+    source: ProtocolKind,
     target: ProtocolKind,
     target_issuer: &IssuerIdentity,
     omissions: &mut Vec<String>,
@@ -61,7 +64,7 @@ fn collect_omissions(
         let path = format!("{base_path}.blocks[{index}]");
         match block {
             ContentBlock::Reasoning(reasoning)
-                if !reasoning_can_replay(reasoning, request, target, target_issuer) =>
+                if !reasoning_can_replay(reasoning, request, source, target, target_issuer) =>
             {
                 omissions.push(path)
             }
@@ -69,6 +72,7 @@ fn collect_omissions(
                 &result.content,
                 &path,
                 request,
+                source,
                 target,
                 target_issuer,
                 omissions,
@@ -81,9 +85,24 @@ fn collect_omissions(
 fn reasoning_can_replay(
     reasoning: &ReasoningBlock,
     request: &CanonicalRequestV2,
+    source: ProtocolKind,
     target: ProtocolKind,
     target_issuer: &IssuerIdentity,
 ) -> bool {
+    // A Chat request can carry CONST's continuation envelope, but the Chat
+    // wire has no issuer/session binding for Responses encrypted reasoning.
+    // Replaying that opaque state into a Responses account can produce
+    // invalid_encrypted_content (notably for WorkBuddy), so prefer a fresh
+    // turn while retaining visible text and tool calls.
+    if source == ProtocolKind::OpenAiChat
+        && target == ProtocolKind::OpenAiResponses
+        && !reasoning
+            .artifacts
+            .iter()
+            .any(|artifact| matches!(artifact.affinity, ArtifactAffinity::ExactIssuer { .. }))
+    {
+        return false;
+    }
     let required_kind = match target {
         // Chat compatibility APIs have no portable signed reasoning-history
         // envelope. Preserve the visible assistant answer and tool calls only.

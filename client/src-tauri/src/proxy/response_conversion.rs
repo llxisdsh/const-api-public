@@ -437,7 +437,7 @@ pub(crate) fn sse_body_from_target_body_as_inbound_with_report_with_tools(
         model,
     );
     Ok(ReportedResponseConversion {
-        body: render_events(&events, inbound, model)?,
+        body: render_events_with_source(&events, target, inbound, model)?,
         faults,
     })
 }
@@ -486,6 +486,17 @@ pub(crate) fn sse_from_canonical_stream_events(
     render_events(events, inbound, model)
 }
 
+pub(crate) fn sse_from_canonical_stream_events_with_source(
+    events: &[crate::protocol::ir::CanonicalStreamEvent],
+    source_protocol: &str,
+    inbound_protocol: &str,
+    model: &str,
+) -> Result<String> {
+    let source = crate::protocol::kind::ProtocolKind::parse(source_protocol)?;
+    let inbound = crate::protocol::kind::ProtocolKind::parse(inbound_protocol)?;
+    render_events_with_source(events, source, inbound, model)
+}
+
 fn convert_complete_sse(
     raw: &[u8],
     source: &str,
@@ -498,7 +509,7 @@ fn convert_complete_sse(
         return String::from_utf8(raw.to_vec()).map_err(Into::into);
     }
     let events = parse_stream_events(raw, source, model)?;
-    render_events(&events, target, model)
+    render_events_with_source(&events, source, target, model)
 }
 
 fn parse_stream_events(
@@ -544,7 +555,19 @@ fn render_events(
     protocol: crate::protocol::kind::ProtocolKind,
     model: &str,
 ) -> Result<String> {
+    render_events_with_source(events, None, protocol, model)
+}
+
+fn render_events_with_source(
+    events: &[crate::protocol::ir::CanonicalStreamEvent],
+    source: impl Into<Option<crate::protocol::kind::ProtocolKind>>,
+    protocol: crate::protocol::kind::ProtocolKind,
+    model: &str,
+) -> Result<String> {
     let mut renderer = crate::protocol::stream::StreamRenderer::new(protocol, model);
+    if let Some(source) = source.into() {
+        renderer = renderer.with_source_protocol(source);
+    }
     let mut output = Vec::new();
     for event in events {
         output.extend_from_slice(&renderer.push(event)?);

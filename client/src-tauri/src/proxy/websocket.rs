@@ -1667,7 +1667,9 @@ impl SupplierResponsesUpstreamSender {
                     && responses_ws_pool_error_requires_full_replay(&error) =>
             {
                 let config = subscription_config.expect("guarded subscription config");
-                let Some(replay) = prepare_codex_websocket_subscription_replay(config, text)? else {
+                let Some(replay) =
+                    prepare_codex_websocket_subscription_replay_after_pre_send_loss(config, text)?
+                else {
                     return Err(error.context(
                         "Responses WebSocket continuation replay context is unavailable",
                     ));

@@ -243,6 +243,21 @@ fn unknown_stream_metadata_and_semantic_payloads_do_not_abort_cross_protocol_str
 }
 
 #[test]
+fn anthropic_unknown_content_block_stop_is_reported_without_aborting() {
+    let mut parser = StreamParser::new(ProtocolKind::AnthropicMessages, "model");
+    parser
+        .push(b"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":9}\n\n")
+        .expect("unknown block stop should remain recoverable");
+    parser.finish().expect("stream finish");
+
+    let notices = parser.take_notices();
+    assert!(notices.iter().any(|notice| {
+        notice.code == "stream_block_stop_unknown"
+            && notice.path == "$.stream.content_block_stop[9]"
+    }));
+}
+
+#[test]
 fn tool_call_identity_and_partial_arguments_roundtrip_across_every_target() {
     let raw = concat!(
         "event: message_start\n",

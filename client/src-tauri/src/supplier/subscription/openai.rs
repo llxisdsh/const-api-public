@@ -887,7 +887,12 @@ pub(crate) async fn forward_openai_subscription_buffered_request_with_capacity(
                 &model,
             )?;
             improvement_faults.extend(converted.faults);
-            sse_from_canonical_stream_events(&converted.events, &inbound_protocol, &model)?
+            sse_from_canonical_stream_events_with_source(
+                &converted.events,
+                &target_protocol,
+                &inbound_protocol,
+                &model,
+            )?
         }
     } else if inbound_protocol == target_protocol && target_protocol == "openai_responses" {
         match openai_responses_completed_body_from_sse(&response_raw) {

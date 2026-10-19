@@ -257,6 +257,7 @@ main > section > header.about-page-header > p {
   font-size: 13px;
   font-weight: var(--weight-medium);
   line-height: 1.5;
+  white-space: nowrap;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -273,6 +274,31 @@ main > section > header.about-page-header > p {
   text-decoration-line: underline;
   text-decoration-thickness: 1.25px;
   text-underline-offset: 3px;
+}
+
+/* Keep the About actions in a stable column when translated labels are longer. */
+.about-status-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: start;
+  gap: 18px;
+}
+
+.about-status-header > :first-child {
+  min-width: 0;
+}
+
+.about-status-actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  justify-content: flex-end;
+  min-width: max-content;
+}
+
+.about-status-actions button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 @media (max-width: 760px) {
@@ -337,5 +363,15 @@ main > section > header.about-page-header > p {
   .about-legal-links {
     align-self: flex-start;
     margin-top: 12px;
+  }
+
+  .about-status-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .about-status-actions {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 }

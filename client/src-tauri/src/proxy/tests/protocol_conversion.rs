@@ -305,6 +305,49 @@
     }
 
     #[test]
+    fn chat_to_responses_drops_opaque_reasoning_carrier_from_prior_session() {
+        let artifact = crate::protocol::continuation::stream_artifact(
+            crate::protocol::ir::ArtifactKind::OpenAiEncryptedReasoning,
+            serde_json::json!("opaque-prior-session"),
+            crate::protocol::ir::ContentBlockKind::Reasoning,
+            Some("gpt-5.6-luna"),
+        );
+        let carrier = crate::protocol::continuation::encode_carrier(
+            crate::protocol::continuation::reasoning_entries(&[artifact]),
+        )
+        .expect("reasoning carrier");
+        let body = serde_json::json!({
+            "model": "gpt-5.6-luna",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "visible answer",
+                    "extra_fields": {"const_api": {"continuation": carrier}}
+                },
+                {"role": "user", "content": "continue"}
+            ]
+        })
+        .to_string();
+
+        let conversion = upstream_request_for_api_format_with_profiles_report(
+            "openai_responses",
+            "/v1/chat/completions",
+            &body,
+            "gpt-5.6-luna",
+            &[],
+        )
+        .expect("Chat to Responses conversion");
+        assert!(conversion.body.contains("visible answer"));
+        assert!(!conversion.body.contains("opaque-prior-session"));
+        assert!(conversion.faults.iter().any(|fault| {
+            serde_json::to_value(fault)
+                .ok()
+                .and_then(|value| value.get("code").cloned())
+                == Some(serde_json::json!("reasoning_history_omitted"))
+        }));
+    }
+
+    #[test]
     fn same_protocol_chat_omits_unsigned_history_without_touching_effort() {
         for effort in [None, Some("medium")] {
             let mut body = serde_json::json!({

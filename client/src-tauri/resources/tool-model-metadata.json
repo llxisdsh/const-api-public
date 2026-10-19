@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "source_revision": "9c958aff349680503a5d9785b3ef507eb9822002",
-  "compatibility_version_id": "compat-v27-2026-10-13",
+  "source_revision": "7ef92689da786029f532c101fceae9703fe39ade",
+  "compatibility_version_id": "compat-v28-2026-10-19",
   "compatibility_groups": [
     {
       "id": "apex",
@@ -126,6 +126,7 @@
       ],
       "models": [
         "gemini-3.8-flash",
+        "deepseek-v4.1-flash-1017",
         "deepseek-v4.1-flash",
         "claude-opus-4-6",
         "gemini-3.1-pro-preview",
@@ -134,6 +135,9 @@
       ],
       "match_models": [
         "google/gemini-3.8-flash",
+        "deepseek/deepseek-v4.1-flash-1017",
+        "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        "accounts/fireworks/models/deepseek-v4p1-flash-1017",
         "deepseek/deepseek-v4.1-flash",
         "anthropic/claude-opus-4.6",
         "claude-opus-4.6",
@@ -485,6 +489,11 @@
     {
       "id": "deepseek-v4.1-flash",
       "display_name": "deepseek-v4.1-flash",
+      "vendor": "deepseek"
+    },
+    {
+      "id": "deepseek-v4.1-flash-1017",
+      "display_name": "DeepSeek V4.1 Flash 1017",
       "vendor": "deepseek"
     },
     {
@@ -3149,6 +3158,22 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "openrouter/deepseek/deepseek-v4.1-flash"
+    },
+    "deepseek-v4.1-flash-1017": {
+      "display_name": "DeepSeek V4.1 Flash 1017",
+      "family": "deepseek-v4",
+      "context_tokens": 1000000,
+      "output_tokens": 393216,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017"
     },
     "devstral-2512": {
       "display_name": "devstral-2512",
@@ -8705,6 +8730,7 @@
     }
   },
   "model_aliases": {
+    "accounts/fireworks/models/deepseek-v4p1-flash-1017": "deepseek-v4.1-flash-1017",
     "aion-labs/aion-2.0": "aion-2.0",
     "aion-labs/aion-3.0": "aion-3.0",
     "aion-labs/aion-3.0-mini": "aion-3.0-mini",
@@ -8765,6 +8791,7 @@
     "cohere/embed-v5.0-fast": "embed-v5.0-fast",
     "cohere/embed-v5.0-pro": "embed-v5.0-pro",
     "dashscope/qwen3.8-omni-flash": "qwen3.8-omni-flash",
+    "deepseek-ai/deepseek-v4.1-flash-1017": "deepseek-v4.1-flash-1017",
     "deepseek-v4-flash-0731": "deepseek-v4-flash",
     "deepseek-v4-pro:0813": "deepseek-v4-pro-0813",
     "deepseek/deepseek-chat-v3-0324": "deepseek-chat-v3-0324",
@@ -8782,6 +8809,7 @@
     "deepseek/deepseek-v4-pro": "deepseek-v4-pro",
     "deepseek/deepseek-v4-pro-0813": "deepseek-v4-pro-0813",
     "deepseek/deepseek-v4.1-flash": "deepseek-v4.1-flash",
+    "deepseek/deepseek-v4.1-flash-1017": "deepseek-v4.1-flash-1017",
     "gemini-3-flash": "gemini-3-flash-preview",
     "gemini-3.1-pro": "gemini-3.1-pro-preview",
     "gemini-3.1-pro-preview-customtools": "gemini-3.1-pro-preview",

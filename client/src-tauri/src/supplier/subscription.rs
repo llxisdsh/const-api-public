@@ -599,43 +599,10 @@ fn subscription_wire_error_response(
 fn subscription_terminal_wire_error_payload(
     raw: &str,
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let mut last_event = String::new();
-    for line in raw.lines() {
-        if let Some(event) = line.strip_prefix("event:") {
-            last_event = event.trim().to_ascii_lowercase();
-            continue;
-        }
-        if !last_event.contains("error") {
-            continue;
-        }
-        let Some(data) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let body = data.trim();
-        if body.is_empty() || body == "[DONE]" {
-            continue;
-        }
-        let lower = body.to_ascii_lowercase();
-        let status = if lower.contains("usage_limit")
-            || lower.contains("resource_exhausted")
-            || lower.contains("rate")
-            || lower.contains("quota")
-        {
-            429
-        } else if lower.contains("auth") || lower.contains("unauthorized") {
-            401
-        } else if lower.contains("captcha") || lower.contains("verification") {
-            403
-        } else {
-            500
-        };
-        return Some(subscription_wire_response_payload(
-            status,
-            "text/event-stream",
-            body.to_string(),
-        ));
-    }
-    None
+    // Inspect each bounded SSE event through the same fixed-envelope observer
+    // used by buffered subscription failures. This covers response.failed and
+    // status_details.error even when the provider omits an `event: error` line.
+    subscription_sse_terminal_error_payload(raw)
 }
 
 fn subscription_wire_body_text(payload: &serde_json::Map<String, serde_json::Value>) -> String {
@@ -1877,6 +1844,19 @@ mod buffered_response_tests {
         let wire = crate::surface_wire::SurfaceEnvelope::from_payload(&payload).unwrap();
         assert_eq!(wire.status, Some(429));
         assert!(wire.body.utf8().unwrap().contains("usage_limit_reached"));
+    }
+
+    #[test]
+    fn subscription_terminal_error_detects_response_failed_without_error_event() {
+        let payload = subscription_terminal_wire_error_payload(
+            "data: {\"type\":\"response.failed\",\"response\":{\"status_details\":{\"error\":{\"type\":\"server_error\",\"code\":\"server_is_overloaded\",\"message\":\"Selected model is at capacity. Please try a different model.\"}}}}\n\n",
+        )
+        .expect("response.failed terminal error");
+        assert_only_v2_wire(&payload);
+        let wire = crate::surface_wire::SurfaceEnvelope::from_payload(&payload).unwrap();
+        assert_eq!(wire.status, Some(502));
+        assert_eq!(payload["error_kind"], "provider_overload");
+        assert_eq!(payload["failure_observation_v1"]["cause"], "provider_overload");
     }
 
     #[test]

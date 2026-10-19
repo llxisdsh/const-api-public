@@ -772,6 +772,17 @@ impl StreamParser {
                 let wire_index = value.get("index").and_then(Value::as_u64).unwrap_or(0);
                 if let Some(index) = self.blocks.get(&format!("anthropic:{wire_index}")).copied() {
                     self.close_block(index, events);
+                } else {
+                    let path = format!("$.stream.content_block_stop[{wire_index}]");
+                    if !self.notices.iter().any(|notice| {
+                        notice.code == "stream_block_stop_unknown" && notice.path == path
+                    }) {
+                        self.notices.push(StreamConversionNotice {
+                            code: "stream_block_stop_unknown",
+                            path,
+                            summary: "Anthropic content_block_stop referenced an unknown block; it was ignored so the response could continue".to_string(),
+                        });
+                    }
                 }
             }
             "message_delta" => {

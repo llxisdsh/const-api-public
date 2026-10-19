@@ -598,6 +598,25 @@ pub(crate) fn prepare_codex_websocket_subscription_replay(
     config: &SupplierConfig,
     body: &str,
 ) -> Result<Option<String>> {
+    prepare_codex_websocket_subscription_replay_with_recovery(config, body, false)
+}
+
+/// Builds a self-contained replacement after the Responses WebSocket pool lost
+/// affinity before it accepted the frame. In that narrow case the original
+/// request was never handed to an upstream writer, so starting a new turn is
+/// safe and avoids turning a recoverable reconnect into a user-visible 400.
+pub(crate) fn prepare_codex_websocket_subscription_replay_after_pre_send_loss(
+    config: &SupplierConfig,
+    body: &str,
+) -> Result<Option<String>> {
+    prepare_codex_websocket_subscription_replay_with_recovery(config, body, true)
+}
+
+fn prepare_codex_websocket_subscription_replay_with_recovery(
+    config: &SupplierConfig,
+    body: &str,
+    allow_missing_context_recovery: bool,
+) -> Result<Option<String>> {
     let mut value: serde_json::Value = serde_json::from_str(body)?;
     let Some(object) = value.as_object_mut() else {
         return Ok(None);
@@ -617,15 +636,27 @@ pub(crate) fn prepare_codex_websocket_subscription_replay(
     else {
         return Ok(None);
     };
-    let Some(state) = codex_http_continuation_state(config, &previous_response_id) else {
+    let state = codex_http_continuation_state(config, &previous_response_id);
+    if state.is_none() && !allow_missing_context_recovery {
         let cache = codex_http_continuation_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         log::warn!(
             "[const-api][upstream-ws] continuation_replay_skipped code=codex_ws_replay_context_missing action=fail_closed channel_id={} cache_key={} cache_entries={} cache_bytes={} active_pins={}",
             config.channel_id, codex_http_continuation_key(config, &previous_response_id), cache.entries.len(), cache.bytes, cache.websocket_pins.len()
         );
         return Ok(None);
+    }
+    let (history_len, current_len) = if let Some(state) = state {
+        apply_codex_continuation_state(object, state)
+    } else {
+        let recovery = repair_unresolved_codex_continuation(object);
+        log::warn!(
+            "[const-api][upstream-ws] continuation_replay_degraded code=codex_ws_replay_context_missing action=start_new_turn kept_items={} dropped_orphan_tool_items={} fallback_message={}",
+            recovery.kept_items,
+            recovery.dropped_orphan_tool_items,
+            recovery.fallback_message,
+        );
+        (0, recovery.kept_items)
     };
-    let (history_len, current_len) = apply_codex_continuation_state(object, state);
     let Some(input) = object
         .get("input")
         .and_then(serde_json::Value::as_array)
@@ -1569,5 +1600,43 @@ mod codex_http_continuation_collector_tests {
         assert!(prepare_codex_websocket_subscription_replay(&config, &next)
             .expect("missing replay is not an encoding error")
             .is_none());
+    }
+
+    #[test]
+    fn websocket_pre_send_loss_starts_a_self_contained_turn_without_cached_parent() {
+        let mut config = default_supplier_config();
+        config.channel_id = "ws-reconnect-pre-send-recovery".to_string();
+        config.credential_ref = "ws-reconnect-pre-send-account".to_string();
+        let next = serde_json::json!({
+            "type": "response.create",
+            "model": "gpt-5.6-sol",
+            "previous_response_id": "resp_ws_lost_parent",
+            "input": [
+                {"type": "message", "role": "user", "content": "continue"},
+                {"type": "function_call_output", "call_id": "orphan", "output": "stale"}
+            ],
+            "store": false,
+            "stream": true
+        })
+        .to_string();
+
+        let replay = prepare_codex_websocket_subscription_replay_after_pre_send_loss(
+            &config, &next,
+        )
+        .expect("pre-send recovery should not fail to encode")
+        .expect("pre-send recovery should produce a self-contained request");
+        let replay: serde_json::Value = serde_json::from_str(&replay).expect("replay JSON");
+
+        assert!(replay.get("previous_response_id").is_none());
+        assert_eq!(
+            replay["input"][0]["content"],
+            serde_json::json!("continue")
+        );
+        assert_eq!(replay["input"].as_array().map(Vec::len), Some(1));
+        assert!(replay["include"].as_array().is_some_and(|include| {
+            include
+                .iter()
+                .any(|item| item.as_str() == Some("reasoning.encrypted_content"))
+        }));
     }
 }

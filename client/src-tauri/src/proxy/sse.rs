@@ -16,7 +16,7 @@ fn convert_complete_sse_text(
     model: &str,
 ) -> Result<String> {
     let events = canonical_stream_events_from_target_sse(raw, source, model)?;
-    sse_from_canonical_stream_events(&events, target, model)
+    sse_from_canonical_stream_events_with_source(&events, source, target, model)
 }
 
 #[cfg(test)]

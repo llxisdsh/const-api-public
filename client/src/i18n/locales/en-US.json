@@ -1476,6 +1476,7 @@
     "appStatusAndSettingsHint": "View version, connection, and model catalog status, and manage app preferences and local data.",
     "runtimeLog": "Runtime Log",
     "checkUpdate": "Check for Updates",
+    "devUpdateCheckHint": "Dev builds do not check or install updates.",
     "checking": "Checking",
     "downloading": "Downloading",
     "restartUpdate": "Restart to Update",

@@ -186,7 +186,7 @@ pub(crate) fn stream_converter(
     StreamConverter {
         tool_mapper: None,
         parser: StreamParser::new(source, &model),
-        renderer: StreamRenderer::new(target, model),
+        renderer: StreamRenderer::new(target, model).with_source_protocol(source),
         target_protocol: target,
         failure: None,
         notices: Vec::new(),

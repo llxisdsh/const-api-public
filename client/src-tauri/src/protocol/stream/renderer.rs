@@ -1,14 +1,14 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bytes::Bytes;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::protocol::continuation::{
     encode_carrier, previous_part_entries, reasoning_entries, stream_artifact, tool_call_entries,
 };
 use crate::protocol::ir::{
     ArtifactKind, BlockHeader, CanonicalError, CanonicalStreamEvent, ContentBlockKind,
-    FinishDetail, FinishReason, ResponseMeta, ToolKind, Usage,
+    FinishDetail, FinishReason, ResponseMeta, ToolKind, Usage, UsageValue,
 };
 use crate::protocol::kind::ProtocolKind;
 
@@ -16,6 +16,7 @@ use super::{StreamError, merge_usage};
 
 pub(crate) struct StreamRenderer {
     protocol: ProtocolKind,
+    source_protocol: Option<ProtocolKind>,
     model: String,
     response_id: String,
     started: bool,
@@ -39,6 +40,7 @@ impl StreamRenderer {
     pub(crate) fn new(protocol: ProtocolKind, model: impl Into<String>) -> Self {
         Self {
             protocol,
+            source_protocol: None,
             model: model.into(),
             response_id: "resp_const_api_stream".to_string(),
             started: false,
@@ -66,6 +68,11 @@ impl StreamRenderer {
         self
     }
 
+    pub(crate) fn with_source_protocol(mut self, source: ProtocolKind) -> Self {
+        self.source_protocol = Some(source);
+        self
+    }
+
     pub(crate) fn set_estimated_token_usage(&mut self, estimated: bool) {
         self.estimated_token_usage = estimated;
     }
@@ -75,6 +82,12 @@ impl StreamRenderer {
             value["const_api_usage_source"] = json!("estimated");
         }
         value
+    }
+
+    fn target_usage(&self) -> Usage {
+        self.source_protocol
+            .map(|source| self.usage.translated_for_protocol(source, self.protocol))
+            .unwrap_or_else(|| self.usage.clone())
     }
 
     pub(crate) fn push(&mut self, event: &CanonicalStreamEvent) -> Result<Bytes, StreamError> {
@@ -183,11 +196,7 @@ impl StreamRenderer {
                         "id":anthropic_id(&self.response_id),"type":"message","role":"assistant",
                         "model":self.model,"content":[],"stop_reason":Value::Null,
                         "stop_sequence":Value::Null,
-                        "usage":self.wire_usage(json!({
-                            "input_tokens":usage_value(&self.usage.input_tokens),"output_tokens":0,
-                            "cache_read_input_tokens":self.usage.cache_read_tokens.value,
-                            "cache_creation_input_tokens":self.usage.cache_write_tokens.value.or(self.usage.cache_creation_tokens.value)
-                        }))
+                        "usage":self.wire_usage(anthropic_start_usage(&self.target_usage()))
                     }
                 }),
             ),
@@ -999,7 +1008,21 @@ impl StreamRenderer {
         }
     }
 
-    fn render_error(&self, error: &CanonicalError, output: &mut Vec<u8>) {
+    fn render_error(&mut self, error: &CanonicalError, output: &mut Vec<u8>) {
+        // A parser-level error can arrive after content_block_start but before
+        // the provider's terminal event. Close those Anthropic blocks before
+        // emitting the error so consumers do not retain an unterminated block.
+        if self.protocol == ProtocolKind::AnthropicMessages {
+            for index in self
+                .blocks
+                .keys()
+                .copied()
+                .filter(|index| !self.done_blocks.contains(index))
+                .collect::<Vec<_>>()
+            {
+                self.block_done(index, output);
+            }
+        }
         let payload = json!({
             "error":{"type":error.code,"message":error.message,"code":error.provider_code}
         });
@@ -1033,6 +1056,7 @@ impl StreamRenderer {
                 self.block_done(index, output);
             }
         }
+        let usage = self.target_usage();
         match self.protocol {
             ProtocolKind::OpenAiChat => {
                 data_event(
@@ -1040,7 +1064,7 @@ impl StreamRenderer {
                     json!({
                         "id":chat_id(&self.response_id),"object":"chat.completion.chunk","model":self.model,
                         "choices":[{"index":0,"delta":{},"finish_reason":chat_finish(finish.reason)}],
-                        "usage":self.wire_usage(chat_usage(&self.usage))
+                        "usage":self.wire_usage(chat_usage(&usage))
                     }),
                 );
                 output.extend_from_slice(b"data: [DONE]\n\n");
@@ -1064,13 +1088,7 @@ impl StreamRenderer {
                     "message_delta",
                     json!({
                         "type":"message_delta","delta":{"stop_reason":anthropic_finish(finish.reason),"stop_sequence":Value::Null},
-                        "usage":self.wire_usage(json!({
-                            "input_tokens":self.usage.input_tokens.value,
-                            "output_tokens":usage_value(&self.usage.output_tokens),
-                            "cache_read_input_tokens":self.usage.cache_read_tokens.value,
-                            "cache_creation_input_tokens":self.usage.cache_write_tokens.value.or(self.usage.cache_creation_tokens.value),
-                            "output_tokens_details":{"thinking_tokens":self.usage.reasoning_tokens.value}
-                        }))
+                        "usage":self.wire_usage(anthropic_delta_usage(&usage))
                     }),
                 );
                 named_event(output, "message_stop", json!({"type":"message_stop"}));
@@ -1080,7 +1098,7 @@ impl StreamRenderer {
                 json!({
                     "modelVersion":self.model,
                     "candidates":[{"finishReason":gemini_finish(finish.reason)}],
-                    "usageMetadata":self.wire_usage(gemini_usage(&self.usage))
+                    "usageMetadata":self.wire_usage(gemini_usage(&usage))
                 }),
             ),
         }
@@ -1089,9 +1107,10 @@ impl StreamRenderer {
 
     fn responses_response(&self, status: &str) -> Value {
         let output = self.response_output.values().cloned().collect::<Vec<_>>();
+        let usage = self.target_usage();
         json!({
             "id":responses_id(&self.response_id),"object":"response","created_at":0,
-            "status":status,"model":self.model,"output":output,"usage":self.wire_usage(responses_usage(&self.usage))
+            "status":status,"model":self.model,"output":output,"usage":self.wire_usage(responses_usage(&usage))
         })
     }
 }
@@ -1160,6 +1179,64 @@ fn data_event(output: &mut Vec<u8>, value: Value) {
 
 fn usage_value(value: &crate::protocol::ir::UsageValue) -> u64 {
     value.value.unwrap_or(0)
+}
+
+fn insert_optional_usage(target: &mut Map<String, Value>, name: &str, value: Option<u64>) {
+    if let Some(value) = value {
+        target.insert(name.to_string(), json!(value));
+    }
+}
+
+fn anthropic_start_usage(usage: &Usage) -> Value {
+    let mut value = Map::new();
+    value.insert(
+        "input_tokens".to_string(),
+        json!(usage_value(&usage.input_tokens)),
+    );
+    value.insert("output_tokens".to_string(), json!(0));
+    insert_optional_usage(
+        &mut value,
+        "cache_read_input_tokens",
+        usage.cache_read_tokens.value,
+    );
+    insert_optional_usage(
+        &mut value,
+        "cache_creation_input_tokens",
+        usage
+            .cache_write_tokens
+            .value
+            .or(usage.cache_creation_tokens.value),
+    );
+    Value::Object(value)
+}
+
+fn anthropic_delta_usage(usage: &Usage) -> Value {
+    let mut value = Map::new();
+    insert_optional_usage(&mut value, "input_tokens", usage.input_tokens.value);
+    value.insert(
+        "output_tokens".to_string(),
+        json!(usage_value(&usage.output_tokens)),
+    );
+    insert_optional_usage(
+        &mut value,
+        "cache_read_input_tokens",
+        usage.cache_read_tokens.value,
+    );
+    insert_optional_usage(
+        &mut value,
+        "cache_creation_input_tokens",
+        usage
+            .cache_write_tokens
+            .value
+            .or(usage.cache_creation_tokens.value),
+    );
+    if let Some(thinking_tokens) = usage.reasoning_tokens.value {
+        value.insert(
+            "output_tokens_details".to_string(),
+            json!({"thinking_tokens":thinking_tokens}),
+        );
+    }
+    Value::Object(value)
 }
 
 fn chat_usage(usage: &Usage) -> Value {
@@ -1289,5 +1366,91 @@ mod tests {
         assert_eq!(value["input_tokens_details"]["cached_tokens"], 0);
         assert_eq!(value["input_tokens_details"]["cache_write_tokens"], 0);
         assert_eq!(value["output_tokens_details"]["reasoning_tokens"], 0);
+    }
+
+    #[test]
+    fn stream_usage_uses_the_target_protocol_cache_convention() {
+        let usage = Usage {
+            input_tokens: UsageValue::reported(60).unwrap(),
+            output_tokens: UsageValue::reported(20).unwrap(),
+            total_tokens: UsageValue::reported(80).unwrap(),
+            cache_read_tokens: UsageValue::reported(30).unwrap(),
+            cache_write_tokens: UsageValue::reported(10).unwrap(),
+            ..Usage::default()
+        };
+        let mut renderer = StreamRenderer::new(ProtocolKind::OpenAiChat, "target")
+            .with_source_protocol(ProtocolKind::AnthropicMessages);
+        renderer
+            .push(&CanonicalStreamEvent::UsageUpdate(Box::new(usage)))
+            .unwrap();
+        let wire = String::from_utf8(
+            renderer
+                .push(&CanonicalStreamEvent::ResponseDone(FinishDetail::stop()))
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(wire.contains("\"prompt_tokens\":100"));
+        assert!(wire.contains("\"total_tokens\":120"));
+    }
+
+    #[test]
+    fn anthropic_stream_usage_omits_unavailable_optional_fields() {
+        let start = anthropic_start_usage(&Usage::default());
+        assert_eq!(start["input_tokens"], 0);
+        assert_eq!(start["output_tokens"], 0);
+        assert!(start.get("cache_read_input_tokens").is_none());
+        assert!(start.get("cache_creation_input_tokens").is_none());
+
+        let delta = anthropic_delta_usage(&Usage::default());
+        assert!(delta.get("input_tokens").is_none());
+        assert_eq!(delta["output_tokens"], 0);
+        assert!(delta.get("output_tokens_details").is_none());
+    }
+
+    #[test]
+    fn anthropic_error_closes_open_content_blocks() {
+        let mut renderer = StreamRenderer::new(ProtocolKind::AnthropicMessages, "claude");
+        renderer
+            .push(&CanonicalStreamEvent::ResponseStart(ResponseMeta {
+                id: Some("msg_error".to_string()),
+                model: Some("claude".to_string()),
+                status: crate::protocol::ir::ResponseStatus::InProgress,
+                provider_event_id: None,
+            }))
+            .unwrap();
+        renderer
+            .push(&CanonicalStreamEvent::BlockStart {
+                index: 0,
+                block: BlockHeader {
+                    tool_kind: None,
+                    tool_namespace: None,
+                    kind: ContentBlockKind::Text,
+                    source_item_id: None,
+                    call_id: None,
+                    name: None,
+                    artifacts: Vec::new(),
+                },
+            })
+            .unwrap();
+        renderer
+            .push(&CanonicalStreamEvent::TextDelta {
+                index: 0,
+                text: "partial".to_string(),
+            })
+            .unwrap();
+        let error = renderer
+            .push(&CanonicalStreamEvent::Error(CanonicalError {
+                code: "upstream_error".to_string(),
+                message: "failed".to_string(),
+                retryable: false,
+                provider_code: None,
+                details: None,
+            }))
+            .unwrap();
+        let wire = String::from_utf8(error.to_vec()).unwrap();
+        assert!(wire.contains("content_block_stop"));
+        assert!(wire.contains("event: error"));
+        assert!(wire.find("content_block_stop") < wire.find("event: error"));
     }
 }

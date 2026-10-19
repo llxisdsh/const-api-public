@@ -150,7 +150,14 @@ pub(crate) fn encode_response(
     plan: &ConversionPlan,
     context: &AdapterContext,
 ) -> Result<Value, ProtocolFacadeError> {
-    Ok(adapter(protocol).encode_response(response, plan, context)?)
+    // Usage counters have protocol-specific cache semantics. Keep the IR in
+    // the source convention until the target encoder boundary so billing and
+    // upstream evidence continue to see the original provider values.
+    let mut response = response.clone();
+    response.usage = response
+        .usage
+        .translated_for_protocol(plan.report().source_protocol, plan.report().target_protocol);
+    Ok(adapter(protocol).encode_response(&response, plan, context)?)
 }
 
 pub(crate) fn plan_request(

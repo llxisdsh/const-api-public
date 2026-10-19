@@ -974,17 +974,18 @@ fn request_and_response_text_tools_status_and_usage_cross_all_sixteen_pairs() {
                 decoded_response.finish.reason, response.finish.reason,
                 "{source} -> {target} finish reason"
             );
+            let expected_usage = response.usage.translated_for_protocol(source, target);
             assert_eq!(
-                decoded_response.usage.input_tokens,
-                response.usage.input_tokens
+                decoded_response.usage.input_tokens.value, expected_usage.input_tokens.value,
+                "{source} -> {target} input token convention"
             );
             assert_eq!(
-                decoded_response.usage.output_tokens,
-                response.usage.output_tokens
+                decoded_response.usage.output_tokens.value, expected_usage.output_tokens.value,
+                "{source} -> {target} output tokens"
             );
             assert_eq!(
-                decoded_response.usage.total_tokens,
-                response.usage.total_tokens
+                decoded_response.usage.total_tokens.value, expected_usage.total_tokens.value,
+                "{source} -> {target} total tokens"
             );
 
             if source == target {

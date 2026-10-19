@@ -127,7 +127,7 @@ export function CallLogModal({
               >
                 <span className={`call-status-dot ${callRecordOK(record) ? "ok" : "bad"}`} />
                 <div className="call-row-main">
-                  <strong>{callRecordModel(record)}</strong>
+                  <strong title={callRecordModel(record)}>{callRecordModel(record)}</strong>
                   <small>{formatCallTime(record)} · {callRecordProtocol(record)}</small>
                 </div>
                 <div className="call-row-meta">
@@ -144,7 +144,7 @@ export function CallLogModal({
             {selected ? (
               <>
                 <div className="call-detail-title">
-                  <h3>{callRecordModel(selected)}</h3>
+                  <h3 title={callRecordModel(selected)}>{callRecordModel(selected)}</h3>
                   <span className={`status-pill ${callRecordOK(selected) ? "running" : "error"}`}>{callRecordStatus(selected)}</span>
                 </div>
                 {selected.details_compacted === true && <p className="subtle">{t("callLogs.detailsCompactedHint")}</p>}

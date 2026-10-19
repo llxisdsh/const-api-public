@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::protocol::kind::ProtocolKind;
+
 use super::IrError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -91,6 +93,64 @@ pub(crate) fn output_tokens_with_reasoning(
 }
 
 impl Usage {
+    /// Translate the input-token convention carried by the canonical usage into
+    /// the target protocol's wire convention. OpenAI-compatible and Gemini
+    /// protocols include cache tokens in their total input count, while
+    /// Anthropic reports uncached input separately from cache reads/writes.
+    pub(crate) fn translated_for_protocol(
+        &self,
+        source: ProtocolKind,
+        target: ProtocolKind,
+    ) -> Self {
+        if source == target {
+            return self.clone();
+        }
+
+        let source_includes_cache = source != ProtocolKind::AnthropicMessages;
+        let target_includes_cache = target != ProtocolKind::AnthropicMessages;
+        if source_includes_cache == target_includes_cache {
+            return self.clone();
+        }
+
+        let cache_tokens = self
+            .cache_read_tokens
+            .value
+            .unwrap_or_default()
+            .saturating_add(
+                self.cache_write_tokens
+                    .value
+                    .or(self.cache_creation_tokens.value)
+                    .unwrap_or_default(),
+            );
+        if cache_tokens == 0 {
+            return self.clone();
+        }
+
+        let mut translated = self.clone();
+        let adjust = |value: &UsageValue| {
+            value.value.map(|value| {
+                if target_includes_cache {
+                    value.saturating_add(cache_tokens)
+                } else {
+                    value.saturating_sub(cache_tokens)
+                }
+            })
+        };
+        if let Some(value) = adjust(&self.input_tokens) {
+            translated.input_tokens = UsageValue {
+                value: Some(value),
+                source: UsageProvenance::Derived,
+            };
+        }
+        if let Some(value) = adjust(&self.total_tokens) {
+            translated.total_tokens = UsageValue {
+                value: Some(value),
+                source: UsageProvenance::Derived,
+            };
+        }
+        translated
+    }
+
     pub(crate) fn with_separate_reasoning_output(mut self) -> Self {
         if let (Some(output), Some(reasoning)) =
             (self.output_tokens.value, self.reasoning_tokens.value)
@@ -130,7 +190,8 @@ impl Usage {
 
 #[cfg(test)]
 mod tests {
-    use super::output_tokens_with_reasoning;
+    use super::{Usage, UsageProvenance, UsageValue, output_tokens_with_reasoning};
+    use crate::protocol::kind::ProtocolKind;
 
     #[test]
     fn reasoning_totals_require_complete_consistent_evidence() {
@@ -162,5 +223,33 @@ mod tests {
             output_tokens_with_reasoning(Some(u64::MAX), Some(9), Some(8), Some(1)),
             Some(9)
         );
+    }
+
+    #[test]
+    fn cache_input_semantics_are_translated_between_anthropic_and_public_protocols() {
+        let usage = Usage {
+            input_tokens: UsageValue::reported(100).unwrap(),
+            output_tokens: UsageValue::reported(20).unwrap(),
+            total_tokens: UsageValue::reported(120).unwrap(),
+            cache_read_tokens: UsageValue::reported(30).unwrap(),
+            cache_write_tokens: UsageValue::reported(10).unwrap(),
+            ..Usage::default()
+        };
+
+        let anthropic = usage.translated_for_protocol(
+            ProtocolKind::OpenAiResponses,
+            ProtocolKind::AnthropicMessages,
+        );
+        assert_eq!(anthropic.input_tokens.value, Some(60));
+        assert_eq!(anthropic.total_tokens.value, Some(80));
+        assert_eq!(anthropic.input_tokens.source, UsageProvenance::Derived);
+
+        let openai = anthropic.translated_for_protocol(
+            ProtocolKind::AnthropicMessages,
+            ProtocolKind::OpenAiResponses,
+        );
+        assert_eq!(openai.input_tokens.value, Some(100));
+        assert_eq!(openai.total_tokens.value, Some(120));
+        assert_eq!(openai.total_tokens.source, UsageProvenance::Derived);
     }
 }

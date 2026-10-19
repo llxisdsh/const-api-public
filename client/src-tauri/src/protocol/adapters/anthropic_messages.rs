@@ -2372,18 +2372,48 @@ fn encode_usage(usage: &Usage) -> Value {
         .cache_creation_tokens
         .value
         .or(usage.cache_write_tokens.value);
-    json!({
-        "input_tokens":usage.input_tokens.value,
-        "output_tokens":usage.output_tokens.value,
-        "output_tokens_details":{"thinking_tokens":usage.reasoning_tokens.value},
-        "cache_read_input_tokens":usage.cache_read_tokens.value,
-        "cache_creation_input_tokens":cache_creation,
-        "cache_creation":{
-            "ephemeral_5m_input_tokens":usage.cache_expiry_5m_tokens.value,
-            "ephemeral_1h_input_tokens":usage.cache_expiry_1h_tokens.value,
-        },
-        "server_tool_use":{"requests":usage.server_tool_calls.value},
-    })
+    let mut value = Map::new();
+    if let Some(input_tokens) = usage.input_tokens.value {
+        value.insert("input_tokens".to_string(), json!(input_tokens));
+    }
+    if let Some(output_tokens) = usage.output_tokens.value {
+        value.insert("output_tokens".to_string(), json!(output_tokens));
+    }
+    if let Some(thinking_tokens) = usage.reasoning_tokens.value {
+        value.insert(
+            "output_tokens_details".to_string(),
+            json!({"thinking_tokens":thinking_tokens}),
+        );
+    }
+    if let Some(cache_read_tokens) = usage.cache_read_tokens.value {
+        value.insert(
+            "cache_read_input_tokens".to_string(),
+            json!(cache_read_tokens),
+        );
+    }
+    if let Some(cache_creation) = cache_creation {
+        value.insert(
+            "cache_creation_input_tokens".to_string(),
+            json!(cache_creation),
+        );
+    }
+    let mut cache_creation_details = Map::new();
+    if let Some(value) = usage.cache_expiry_5m_tokens.value {
+        cache_creation_details.insert("ephemeral_5m_input_tokens".to_string(), json!(value));
+    }
+    if let Some(value) = usage.cache_expiry_1h_tokens.value {
+        cache_creation_details.insert("ephemeral_1h_input_tokens".to_string(), json!(value));
+    }
+    if !cache_creation_details.is_empty() {
+        value.insert(
+            "cache_creation".to_string(),
+            Value::Object(cache_creation_details),
+        );
+    }
+    if let Some(requests) = usage.server_tool_calls.value {
+        value.insert("server_tool_use".to_string(), json!({"requests":requests}));
+    }
+    Value::Object(value)
 }
 
 #[cfg(test)]
@@ -2401,7 +2431,7 @@ mod tests {
     use crate::protocol::ir::{
         ArtifactAffinity, ArtifactKind, CachePolicy, ContentBlock, FinishReason, InstructionRole,
         ReasoningConfig, ReasoningEffort, ReasoningMode, ReasoningSummaryMode, ResponseFormat,
-        ToolChoice, ToolDefinition, TurnRole,
+        ToolChoice, ToolDefinition, TurnRole, Usage, UsageValue,
     };
     use crate::protocol::kind::ProtocolKind;
 
@@ -3029,6 +3059,27 @@ mod tests {
             error.error.unwrap().provider_code.as_deref(),
             Some("rate_limit_error")
         );
+    }
+
+    #[test]
+    fn omits_unavailable_optional_usage_fields_in_buffered_responses() {
+        let usage = Usage {
+            input_tokens: UsageValue::reported(4).unwrap(),
+            output_tokens: UsageValue::reported(2).unwrap(),
+            ..Usage::default()
+        };
+        let encoded = super::encode_usage(&usage);
+        assert_eq!(encoded["input_tokens"], 4);
+        assert_eq!(encoded["output_tokens"], 2);
+        for field in [
+            "output_tokens_details",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "cache_creation",
+            "server_tool_use",
+        ] {
+            assert!(encoded.get(field).is_none(), "field={field}");
+        }
     }
 
     #[test]

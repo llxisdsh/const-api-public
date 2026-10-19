@@ -1,7 +1,10 @@
+import { render, screen } from "@testing-library/react";
+import { createElement } from "react";
 import { describe, expect, test } from "vitest";
 
 import { changeAppLanguage } from "./i18n";
 import {
+  CallLogModal,
   callLogRefreshErrorText,
   callLogStatsForRefresh,
   callLogCursorForRefresh,
@@ -34,6 +37,28 @@ describe("call log cursor compatibility", () => {
     expect(callSyncIsIncremental({ incremental: true }, false)).toBe(false);
     expect(callSyncState({ cursor: "opaque", history: { older_records_removed: true }, has_more: false }))
       .toEqual({ cursor: "opaque", history: { older_records_removed: true }, hasMore: false });
+  });
+});
+
+describe("CallLogModal model visibility", () => {
+  test("keeps the complete model name available when the row is visually truncated", () => {
+    const model = "provider/claude-sonnet-5.5:extended[1m]";
+    render(createElement(CallLogModal, {
+      log: {
+        source: "platform",
+        title: "Calls",
+        subtitle: "Recent",
+        records: [{ id: "call-1", model, status: "success", created_at: "2026-10-19T00:00:00Z" }],
+        stats: [],
+        cursorMs: 0,
+        refreshedAt: 0,
+      },
+      selected: null,
+      onSelect: () => undefined,
+      onClose: () => undefined,
+    }));
+
+    expect(screen.getByText(model)).toHaveAttribute("title", model);
   });
 });
 

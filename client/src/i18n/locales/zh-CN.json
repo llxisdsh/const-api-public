@@ -1476,6 +1476,7 @@
     "appStatusAndSettingsHint": "查看版本、连接和模型目录状态，并管理应用偏好与本机数据。",
     "runtimeLog": "运行日志",
     "checkUpdate": "检查更新",
+    "devUpdateCheckHint": "dev 版不会检查或安装更新。",
     "checking": "检查中",
     "downloading": "下载中",
     "restartUpdate": "重启更新",

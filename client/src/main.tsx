@@ -1021,6 +1021,14 @@ function ProductApp({
       ? updateCheckedAt ? t("about.latest") : t("about.notChecked")
       : updateStatusLabel(updateState);
   const aboutUpdateDetail = aboutUpdateHint(updateState, appMeta.updateLastCheckedAt);
+  const showUpdateAction = clientModePolicy.runtime.developmentProfile
+    || clientModePolicy.capabilities.releaseUpdates;
+  const showInstallUpdateAction = clientModePolicy.capabilities.releaseUpdates
+    && (updateState.status === "ready" || updateState.status === "ready_waiting_idle" || updateState.status === "installing");
+  const handleUpdateCheck = () => {
+    if (clientModePolicy.runtime.developmentProfile) return;
+    void checkAndDownloadUpdate(false);
+  };
   const activeLanguage = currentAppLanguage();
 
   const resetLocalAppData = async () => {
@@ -2824,16 +2832,16 @@ function ProductApp({
 
               <div className="about-panel">
                 <div className="about-section">
-                  <div className="section-title-row compact-title-row">
+                  <div className="section-title-row compact-title-row about-status-header">
                     <div>
                       <h2>{t("about.appStatusAndSettings")}</h2>
                       <p className="section-hint">{t("about.appStatusAndSettingsHint")}</p>
                     </div>
-                    <div className="actions">
+                    <div className="actions about-status-actions">
                       <button className="quiet" onClick={() => setLogOpen(true)}>
                         <Terminal size={16} />{t("about.runtimeLog")}
                       </button>
-                      {clientModePolicy.capabilities.releaseUpdates && (updateState.status === "ready" || updateState.status === "ready_waiting_idle" || updateState.status === "installing" ? (
+                      {showUpdateAction && (showInstallUpdateAction ? (
                         <button
                           className="start"
                           onClick={installPreparedUpdate}
@@ -2850,8 +2858,9 @@ function ProductApp({
                       ) : (
                         <button
                           className="quiet"
-                          onClick={() => checkAndDownloadUpdate(false)}
+                          onClick={handleUpdateCheck}
                           disabled={updateState.status === "checking" || updateState.status === "downloading"}
+                          title={clientModePolicy.runtime.developmentProfile ? t("about.devUpdateCheckHint") : undefined}
                         >
                           <Download size={16} />
                           {updateState.status === "checking"
