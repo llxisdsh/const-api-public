@@ -1226,7 +1226,7 @@ mod surface_operation_evidence_tests {
             let config = crate::supplier_from_channel(&channel);
             let operations = supplier_supported_operations(&config);
             for operation in ["gemini.generate_content", "gemini.stream_generate_content"] {
-                assert_eq!(operations.iter().any(|item| item == operation), driver == SourceDriverId::OpencodeZen);
+                assert_eq!(operations.iter().any(|item| item == operation), true);
             }
             assert!(!operations.iter().any(|item| item == "gemini.live_websocket" || item == "gemini.files_create"));
             let protocols = supplier_native_protocols(&config);

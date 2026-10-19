@@ -791,11 +791,13 @@
       "protocols": [
         {"protocol":"openai_chat","preferred":true},
         {"protocol":"openai_responses","preferred":false},
-        {"protocol":"anthropic_messages","preferred":false}
+        {"protocol":"anthropic_messages","preferred":false},
+        {"protocol":"gemini_native","preferred":false}
       ],
       "surfaces": [
         {"surface":"open_ai","base_url":"https://opencode.ai/zen/go/v1","endpoint_profile":"openai_compatible","auth_scheme":"bearer","protocols":["openai_chat","openai_responses"],"preferred_protocol":"openai_chat"},
-        {"surface":"anthropic","base_url":"https://opencode.ai/zen/go/v1","endpoint_profile":"anthropic_compatible","auth_scheme":"bearer","protocols":["anthropic_messages"],"preferred_protocol":"anthropic_messages"}
+        {"surface":"anthropic","base_url":"https://opencode.ai/zen/go/v1","endpoint_profile":"anthropic_compatible","auth_scheme":"x_api_key","protocols":["anthropic_messages"],"preferred_protocol":"anthropic_messages"},
+        {"surface":"gemini","base_url":"https://opencode.ai/inference/go","endpoint_profile":"gemini_native","auth_scheme":"x_goog_api_key","protocols":["gemini_native"],"preferred_protocol":"gemini_native"}
       ],
       "creation": {"trigger":"on_save","basic_verification":"surface_preferred","advanced_conversational":"driver_preferred_only"},
       "periodic": {"catalog":true,"quota":false,"metadata":true,"conversational_probe":false}
@@ -824,7 +826,7 @@
       ],
       "surfaces": [
         {"surface":"open_ai","base_url":"https://opencode.ai/zen/v1","endpoint_profile":"openai_compatible","auth_scheme":"bearer","protocols":["openai_chat","openai_responses"],"preferred_protocol":"openai_chat"},
-        {"surface":"anthropic","base_url":"https://opencode.ai/zen/v1","endpoint_profile":"anthropic_compatible","auth_scheme":"bearer","protocols":["anthropic_messages"],"preferred_protocol":"anthropic_messages"},
+        {"surface":"anthropic","base_url":"https://opencode.ai/zen/v1","endpoint_profile":"anthropic_compatible","auth_scheme":"x_api_key","protocols":["anthropic_messages"],"preferred_protocol":"anthropic_messages"},
         {"surface":"gemini","base_url":"https://opencode.ai/zen/v1","endpoint_profile":"gemini_native","auth_scheme":"x_goog_api_key","protocols":["gemini_native"],"preferred_protocol":"gemini_native"}
       ],
       "creation": {"trigger":"on_save","basic_verification":"surface_preferred","advanced_conversational":"driver_preferred_only"},

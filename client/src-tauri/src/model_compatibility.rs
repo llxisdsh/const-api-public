@@ -2037,7 +2037,7 @@ mod tests {
             ("gemini-3.5-flash-lite", "claude-haiku-4-5"),
             ("gemini-3.1-flash-lite", "claude-haiku-4-5"),
             ("gemini-2.5-flash-lite", "claude-haiku-4-5"),
-            ("gemini-3.8-flash", "deepseek-v4.1-flash"),
+            ("gemini-3.8-flash", "deepseek-v4.1-flash-1017"),
             ("gemma-4-31b-it", "claude-haiku-4-5"),
             ("gemma-4-26b-a4b-it", "claude-haiku-4-5"),
         ] {

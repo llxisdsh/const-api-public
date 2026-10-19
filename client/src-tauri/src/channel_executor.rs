@@ -1556,10 +1556,22 @@ mod tests {
                 let captured = captured.await.unwrap();
                 assert_eq!(captured.target, path);
                 assert_eq!(captured.body, body.as_bytes());
-                assert_eq!(
-                    captured_header(&captured, "authorization"),
-                    Some(format!("Bearer {}", channel.v2.credential_ref).as_str())
-                );
+                if protocol == "anthropic_messages"
+                    && matches!(
+                        driver,
+                        SourceDriverId::OpencodeGo | SourceDriverId::OpencodeZen
+                    )
+                {
+                    assert_eq!(
+                        captured_header(&captured, "x-api-key"),
+                        Some(channel.v2.credential_ref.as_str())
+                    );
+                } else {
+                    assert_eq!(
+                        captured_header(&captured, "authorization"),
+                        Some(format!("Bearer {}", channel.v2.credential_ref).as_str())
+                    );
+                }
                 if protocol == "anthropic_messages" {
                     assert_eq!(
                         captured_header(&captured, "anthropic-version"),

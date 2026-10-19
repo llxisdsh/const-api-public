@@ -590,6 +590,19 @@ describe("source drivers", () => {
     expect(sourceDriverById("bedrock_mantle").surfaceBindings.map((binding) => binding.surface)).toEqual(["open_ai", "anthropic"]);
   });
 
+  test("keeps OpenCode family authentication and Go Gemini routing explicit", () => {
+    expect(sourceDriverById("opencode_go")).toEqual(expect.objectContaining({
+      supportedProtocols: ["openai_chat", "openai_responses", "anthropic_messages", "gemini_native"],
+    }));
+    expect(sourceDriverById("opencode_go").surfaceBindings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ surface: "anthropic", authScheme: "x_api_key" }),
+      expect.objectContaining({ surface: "gemini", baseUrl: "https://opencode.ai/inference/go", authScheme: "x_goog_api_key", protocols: ["gemini_native"] }),
+    ]));
+    expect(sourceDriverById("opencode_zen").surfaceBindings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ surface: "anthropic", authScheme: "x_api_key" }),
+    ]));
+  });
+
   test("keeps researched provider endpoints and preferred protocols explicit", () => {
     expect(sourceDriverById("xai_api")).toEqual(expect.objectContaining({
       defaultTarget: { surface: "open_ai", protocol: "openai_responses" },
@@ -713,7 +726,7 @@ describe("source drivers", () => {
     expect(reloadChannelV5(serializeChannelV5(upgraded))).toEqual(upgraded);
     old.surfaces[0].base_url = "https://proxy.example.test/v1";
     expect(() => reloadChannelV5(old)).toThrow("fixed official endpoints and protocols");
-    expect(sourceDriverById("opencode_go").supportedProtocols).not.toContain("gemini_native");
+    expect(sourceDriverById("opencode_go").supportedProtocols).toContain("gemini_native");
   });
 
   test("keeps manifest execution, target, discovery, protocols, and surfaces as V2 truth", () => {

@@ -1284,6 +1284,7 @@ pub(crate) fn normalize_channel(
     fallback_quic_url: Option<&str>,
 ) -> ChannelConfig {
     crate::coding_gateway::upgrade_legacy_zen_surfaces(&mut channel);
+    crate::coding_gateway::upgrade_legacy_go_surfaces(&mut channel);
     crate::channel_surface::repair_channel_surface_contract(&mut channel);
     crate::openrouter::normalize_channel(&mut channel);
     crate::cursor::models::normalize_channel(&mut channel);

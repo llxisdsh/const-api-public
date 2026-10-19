@@ -3412,6 +3412,7 @@ exports[`source drivers > encodes the complete V2 defaults used to create every 
       "openai_chat",
       "openai_responses",
       "anthropic_messages",
+      "gemini_native",
     ],
     "surfaceBindings": [
       {
@@ -3447,7 +3448,7 @@ exports[`source drivers > encodes the complete V2 defaults used to create every 
         },
       },
       {
-        "auth_scheme": "bearer",
+        "auth_scheme": "x_api_key",
         "base_url": "https://opencode.ai/zen/go/v1",
         "endpoint_profile": "anthropic_compatible",
         "operation_overrides": [],
@@ -3463,6 +3464,29 @@ exports[`source drivers > encodes the complete V2 defaults used to create every 
           },
         ],
         "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "x_goog_api_key",
+        "base_url": "https://opencode.ai/inference/go",
+        "endpoint_profile": "gemini_native",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "gemini_native",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "gemini",
         "verification": {
           "checked_at_unix": 0,
           "state": "declared",
@@ -3504,7 +3528,7 @@ exports[`source drivers > encodes the complete V2 defaults used to create every 
         },
       },
       {
-        "auth_scheme": "bearer",
+        "auth_scheme": "x_api_key",
         "base_url": "https://opencode.ai/zen/go/v1",
         "endpoint_profile": "anthropic_compatible",
         "operation_overrides": [],
@@ -3520,6 +3544,29 @@ exports[`source drivers > encodes the complete V2 defaults used to create every 
           },
         ],
         "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "x_goog_api_key",
+        "base_url": "https://opencode.ai/inference/go",
+        "endpoint_profile": "gemini_native",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "gemini_native",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "gemini",
         "verification": {
           "checked_at_unix": 0,
           "state": "declared",
@@ -3589,7 +3636,7 @@ exports[`source drivers > encodes the complete V2 defaults used to create every 
         },
       },
       {
-        "auth_scheme": "bearer",
+        "auth_scheme": "x_api_key",
         "base_url": "https://opencode.ai/zen/v1",
         "endpoint_profile": "anthropic_compatible",
         "operation_overrides": [],
@@ -3669,7 +3716,7 @@ exports[`source drivers > encodes the complete V2 defaults used to create every 
         },
       },
       {
-        "auth_scheme": "bearer",
+        "auth_scheme": "x_api_key",
         "base_url": "https://opencode.ai/zen/v1",
         "endpoint_profile": "anthropic_compatible",
         "operation_overrides": [],
@@ -7645,7 +7692,7 @@ exports[`source drivers > round-trips every source driver through the V5-only ch
         },
       },
       {
-        "auth_scheme": "bearer",
+        "auth_scheme": "x_api_key",
         "base_url": "https://opencode.ai/zen/go/v1",
         "endpoint_profile": "anthropic_compatible",
         "operation_overrides": [],
@@ -7661,6 +7708,29 @@ exports[`source drivers > round-trips every source driver through the V5-only ch
           },
         ],
         "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "x_goog_api_key",
+        "base_url": "https://opencode.ai/inference/go",
+        "endpoint_profile": "gemini_native",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "gemini_native",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "gemini",
         "verification": {
           "checked_at_unix": 0,
           "state": "declared",
@@ -7734,7 +7804,7 @@ exports[`source drivers > round-trips every source driver through the V5-only ch
         },
       },
       {
-        "auth_scheme": "bearer",
+        "auth_scheme": "x_api_key",
         "base_url": "https://opencode.ai/zen/v1",
         "endpoint_profile": "anthropic_compatible",
         "operation_overrides": [],

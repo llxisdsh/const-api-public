@@ -1016,6 +1016,7 @@ impl<'de> Deserialize<'de> for ChannelConfig {
     {
         let mut channel = ChannelConfig::from(ChannelConfigV2::deserialize(deserializer)?);
         crate::coding_gateway::upgrade_legacy_zen_surfaces(&mut channel);
+        crate::coding_gateway::upgrade_legacy_go_surfaces(&mut channel);
         crate::channel_surface::repair_channel_surface_contract(&mut channel);
         crate::channel_surface::validate_channel_v2(&channel).map_err(serde::de::Error::custom)?;
         crate::channel_surface::validate_channel_source_policy(&channel)

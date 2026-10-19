@@ -711,7 +711,7 @@ mod tests {
             crate::detection::SurfaceProbeMode::Creation,
         )
         .unwrap();
-        assert_eq!(contexts.len(), 3);
+        assert_eq!(contexts.len(), 4);
         let custom = driver_channel("custom_endpoint", "openai_chat", "http://localhost:1234/v1");
         validate_channel_source_policy(&custom).unwrap();
         serde_json::from_value::<ChannelConfig>(serde_json::to_value(&custom).unwrap()).unwrap();
@@ -1362,5 +1362,50 @@ mod tests {
                 "unsafe override was accepted: {unsafe_url}"
             );
         }
+    }
+
+    #[test]
+    fn fixed_gateway_legacy_go_upgrades_only_the_official_preset() {
+        use crate::source_driver::SourceDriverId;
+        let mut channel = crate::coding_gateway::tests::channel(
+            SourceDriverId::OpencodeGo,
+            "https://opencode.ai/zen/go/v1",
+        );
+        channel
+            .surface_bindings
+            .retain(|binding| binding.surface != ApiSurface::Gemini);
+        channel.models = vec!["gemini-4-argon-contributor".into()];
+        let old = serde_json::to_value(&channel).unwrap();
+        let upgraded: ChannelConfig = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(upgraded.surface_bindings.len(), 3);
+        assert_eq!(
+            upgraded
+                .surface_bindings
+                .iter()
+                .find(|binding| binding.surface == ApiSurface::Anthropic)
+                .unwrap()
+                .auth_scheme,
+            "x_api_key"
+        );
+        let gemini = upgraded
+            .surface_bindings
+            .iter()
+            .find(|binding| binding.surface == ApiSurface::Gemini)
+            .unwrap();
+        assert_eq!(gemini.base_url, "https://opencode.ai/inference/go");
+        assert_eq!(gemini.auth_scheme, "x_goog_api_key");
+        assert_eq!(
+            crate::coding_gateway::gemini_url(
+                SourceDriverId::OpencodeGo,
+                &gemini.base_url,
+                "/v1beta/models/gemini-4-argon-contributor:generateContent",
+            )
+            .unwrap(),
+            "https://opencode.ai/inference/go/google/v1beta/models/gemini-4-argon-contributor:generateContent"
+        );
+
+        let mut altered = old;
+        altered["surfaces"][0]["base_url"] = "https://proxy.example.test/v1".into();
+        assert!(serde_json::from_value::<ChannelConfig>(altered).is_err());
     }
 }

@@ -296,8 +296,9 @@ pub(crate) fn model_supports_protocol(
     model_protocol(driver, model).is_none_or(|native| native == protocol)
 }
 
-/// Zen speaks Gemini under its own /zen/v1 root, not Google's /v1beta root.
-/// Other Gemini providers retain their existing URL policy.
+/// Zen keeps a legacy Gemini-compatible /zen/v1 root. Go's current native
+/// endpoint uses the shared /inference/go root with an additional /google
+/// family segment; other Gemini providers retain their existing URL policy.
 pub(crate) fn gemini_url(driver: SourceDriverId, base: &str, path: &str) -> Result<String> {
     if driver == SourceDriverId::OpencodeZen {
         let relative = path.strip_prefix("/v1beta/").ok_or_else(|| {
@@ -307,6 +308,14 @@ pub(crate) fn gemini_url(driver: SourceDriverId, base: &str, path: &str) -> Resu
             base,
             &format!("/v1/{relative}"),
         ))
+    } else if driver == SourceDriverId::OpencodeGo {
+        let base = base.trim_end_matches('/');
+        let family_base = if base.ends_with("/google") {
+            base.to_string()
+        } else {
+            format!("{base}/google")
+        };
+        Ok(format!("{family_base}{path}"))
     } else {
         crate::detection::join_gemini_native_url(base, path)
     }
@@ -325,6 +334,43 @@ pub(crate) fn upgrade_legacy_zen_surfaces(channel: &mut ChannelConfig) {
     {
         return;
     }
+    let legacy_base = "https://opencode.ai/zen/v1";
+    let official = channel.surface_bindings.iter().all(|binding| {
+        let (endpoint_profile, expected_protocols): (&str, &[&str]) = match binding.surface {
+            crate::surface::ApiSurface::OpenAi => {
+                ("openai_compatible", &["openai_chat", "openai_responses"])
+            }
+            crate::surface::ApiSurface::Anthropic => {
+                ("anthropic_compatible", &["anthropic_messages"])
+            }
+            crate::surface::ApiSurface::Gemini => return false,
+        };
+        binding.base_url.trim_end_matches('/') == legacy_base
+            && binding.endpoint_profile == endpoint_profile
+            && binding.operation_overrides.is_empty()
+            && binding.protocols.len() == expected_protocols.len()
+            && binding
+                .protocols
+                .iter()
+                .enumerate()
+                .all(|(index, protocol)| {
+                    protocol.protocol == expected_protocols[index]
+                        && protocol.preferred == (index == 0)
+                })
+            && (binding.auth_scheme == "bearer"
+                || (binding.surface == crate::surface::ApiSurface::Anthropic
+                    && binding.auth_scheme == "x_api_key"))
+    });
+    if !official {
+        return;
+    }
+    if let Some(binding) = channel
+        .surface_bindings
+        .iter_mut()
+        .find(|binding| binding.surface == crate::surface::ApiSurface::Anthropic)
+    {
+        binding.auth_scheme = "x_api_key".to_string();
+    }
     let binding = crate::source_driver_surface_bindings(SourceDriverId::OpencodeZen, "")
         .into_iter()
         .find(|binding| binding.surface == crate::surface::ApiSurface::Gemini)
@@ -333,6 +379,63 @@ pub(crate) fn upgrade_legacy_zen_surfaces(channel: &mut ChannelConfig) {
     if crate::channel_surface::validate_channel_source_policy(channel).is_err() {
         channel.surface_bindings.pop();
     }
+}
+
+/// Upgrade an untouched official Go preset from its former two-surface
+/// declaration. Altered endpoints remain invalid and are never silently
+/// repaired.
+pub(crate) fn upgrade_legacy_go_surfaces(channel: &mut ChannelConfig) {
+    if channel.source_driver() != SourceDriverId::OpencodeGo
+        || channel.surface_bindings.len() != 2
+        || channel
+            .surface_bindings
+            .iter()
+            .any(|binding| binding.surface == crate::surface::ApiSurface::Gemini)
+    {
+        return;
+    }
+    let legacy_base = "https://opencode.ai/zen/go/v1";
+    let official = channel.surface_bindings.iter().all(|binding| {
+        let (endpoint_profile, expected_protocols): (&str, &[&str]) = match binding.surface {
+            crate::surface::ApiSurface::OpenAi => {
+                ("openai_compatible", &["openai_chat", "openai_responses"])
+            }
+            crate::surface::ApiSurface::Anthropic => {
+                ("anthropic_compatible", &["anthropic_messages"])
+            }
+            crate::surface::ApiSurface::Gemini => return false,
+        };
+        binding.base_url.trim_end_matches('/') == legacy_base
+            && binding.endpoint_profile == endpoint_profile
+            && binding.operation_overrides.is_empty()
+            && binding.protocols.len() == expected_protocols.len()
+            && binding
+                .protocols
+                .iter()
+                .enumerate()
+                .all(|(index, protocol)| {
+                    protocol.protocol == expected_protocols[index]
+                        && protocol.preferred == (index == 0)
+                })
+            && (binding.auth_scheme == "bearer"
+                || (binding.surface == crate::surface::ApiSurface::Anthropic
+                    && binding.auth_scheme == "x_api_key"))
+    });
+    if !official {
+        return;
+    }
+    if let Some(binding) = channel
+        .surface_bindings
+        .iter_mut()
+        .find(|binding| binding.surface == crate::surface::ApiSurface::Anthropic)
+    {
+        binding.auth_scheme = "x_api_key".to_string();
+    }
+    let binding = crate::source_driver_surface_bindings(SourceDriverId::OpencodeGo, "")
+        .into_iter()
+        .find(|binding| binding.surface == crate::surface::ApiSurface::Gemini)
+        .expect("Go manifest declares Gemini");
+    channel.surface_bindings.push(binding);
 }
 
 /// The published Go/Zen catalogs contain IDs only. Their endpoint table defines
@@ -382,7 +485,11 @@ pub(crate) fn model_protocol(driver: SourceDriverId, model: &str) -> Option<Prot
             || (driver == SourceDriverId::OpencodeGo && model.starts_with("minimax-"))
         {
             ProtocolKind::AnthropicMessages
-        } else if driver == SourceDriverId::OpencodeZen && model.starts_with("gemini-") {
+        } else if matches!(
+            driver,
+            SourceDriverId::OpencodeGo | SourceDriverId::OpencodeZen
+        ) && model.starts_with("gemini-")
+        {
             ProtocolKind::GeminiNative
         } else {
             ProtocolKind::OpenAiChat
@@ -654,7 +761,7 @@ pub(crate) mod tests {
             ("claude-sonnet-5", AnthropicMessages, AnthropicMessages),
             ("deepseek-v4.1-flash", OpenAiChat, OpenAiChat),
             ("kimi-k3", OpenAiChat, OpenAiChat),
-            ("gemini-3.8-flash", OpenAiChat, GeminiNative),
+            ("gemini-3.8-flash", GeminiNative, GeminiNative),
         ] {
             assert_eq!(model_protocol(SourceDriverId::OpencodeGo, model), Some(go));
             assert_eq!(
@@ -799,6 +906,17 @@ pub(crate) mod tests {
                 )
                 .unwrap(),
                 format!("https://opencode.ai/zen/v1/models/gemini-3.8-flash:{action}")
+            );
+            assert_eq!(
+                gemini_url(
+                    SourceDriverId::OpencodeGo,
+                    "https://opencode.ai/inference/go",
+                    &path
+                )
+                .unwrap(),
+                format!(
+                    "https://opencode.ai/inference/go/google/v1beta/models/gemini-3.8-flash:{action}"
+                )
             );
             assert_eq!(
                 gemini_url(
