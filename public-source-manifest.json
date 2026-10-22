@@ -565,11 +565,10 @@
     "shared/catalog-floor.json": "900cd8cb927358b2ad2b81f64c7eded9b579c8f2396f324a706a58f72af7d536",
     "shared/endpoints.json": "c5d44d71c8116841100fd3f91efbc2f0ff765d8d0b16ca8588fcc4ddcaecd5af",
     "client/src/account/AccountPage.tsx": "9f788f1bf4c91b5db0d7db3eee012ee0d425ab2e4e095fd380b27ea48779ecb7",
-    "SOURCE.md": "2ac1ceabbdd049bc295239f4c8339d80d5b74b3e689004fca92ca85a3b566be0",
-    "SOURCE.zh-CN.md": "e45bf641885fcc72215c3e4f6f45214dd8596a44f158c7ebc2bcd1dd710a5318",
+    "SOURCE.md": "1f564f353e37262d70f6c483230c9fa01d1e28e247935ac6a018dcf1ffa83e3f",
+    "SOURCE.zh-CN.md": "83bcbf243a146d38b97bc0a492c2b6b64b06e56ae20208e4eff0f9c41b221761",
     "LICENSE": "5d89be6297e11f5c7b9513fa2681581cdd197eeb74465d0c5661995e9ad7ceea",
     "THIRD_PARTY_NOTICES.md": "9f318e1857b2ad809910b549a0d078d704a5b63ec411dda81c59a79eedda4fa4",
-    ".github/workflows/check-source.yml": "704133051b8a6904fb12e816e7e11b118bb0e4200356791c42de9e4704c3db4b",
     ".gitignore": "47b00324cd21e54031a71c0ab69d526272d6c3a235917caad55ce19d9d9c0f5b",
     ".gitattributes": "d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c"
   }

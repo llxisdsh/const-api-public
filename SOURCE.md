@@ -36,8 +36,9 @@ npm run build
 By default, the output is `client/src-tauri/target/release/const-api-local`
 (`const-api-local.exe` on Windows). `npm run build -- --debug` produces a faster
 development build under `target/debug`. A custom `CARGO_TARGET_DIR` changes
-these locations. The build uses `--no-bundle`: it does not create a signed
-installer, updater artifact, or GitHub release.
+these locations. The build uses `--no-bundle`: it does not create an installer,
+updater artifact, or GitHub release. This repository provides source only and
+runs no hosted build; packaging and signing are the builder's responsibility.
 
 The application needs a graphical session. Launch it normally; use the tray or
 menu-bar **Quit** action to stop it. Unsupported legacy CLI modes are not part
@@ -52,8 +53,8 @@ source. For Antigravity browser sign-in and token refresh, supply compatible
 application credentials through `CONST_LOCAL_ANTIGRAVITY_CLIENT_ID` and
 `CONST_LOCAL_ANTIGRAVITY_CLIENT_SECRET` in the build process environment. Restart
 the build after changing them. They are compiled into that binary; this is not a
-secure store for a confidential server application secret. Do not commit them,
-place them in public CI, or distribute credentials you are not entitled to share.
+secure store for a confidential server application secret. Do not commit them or
+distribute credentials you are not entitled to share.
 
 Without this optional configuration, Antigravity sign-in and refresh fail locally
 with an actionable message. An imported access token alone does not ensure it can
@@ -94,10 +95,9 @@ cargo test --manifest-path src-tauri/Cargo.toml local_policy::tests -- --test-th
 The boundary tests check persisted configuration isolation, refusal of hosted
 transports even with injected endpoints/tokens, and local forwarding for four
 protocols, plus the missing OAuth-application error. They use local mocks, not paid
-provider accounts. Public CI builds on
-Windows, Linux, and macOS and runs the checks configured in its workflow.
-Some retained native tests describe the platform edition, so public CI selects
-the local-edition boundary tests rather than claiming the entire private suite.
+provider accounts. Run the checks you need locally; there is no hosted CI.
+Some retained native tests describe the platform edition, so select the
+local-edition boundary tests rather than claiming the entire private suite.
 
 ## Platform boundary
 
@@ -120,9 +120,9 @@ it does not include private history. The manifest is provenance metadata, not a
 runtime authorization credential or signed release attestation.
 
 Official installers are still built and published through the existing private
-pipeline. Public CI has read-only repository permissions and never publishes
-applications or update feeds. Accepted contributions are integrated upstream
-before a new snapshot is exported.
+pipeline. This repository contains source only: it has no hosted CI, does not
+build or package applications, and never publishes update feeds. Accepted
+contributions are integrated upstream before a new snapshot is exported.
 
 Write commit subjects and bodies in English in this public repository.
 

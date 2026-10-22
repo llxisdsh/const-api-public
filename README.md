@@ -24,9 +24,10 @@ They are different editions:
 | Configuration directory | `~/.const-api-local` | `~/.const-api` |
 | Updates | Rebuild from a newer source snapshot | Official update channel |
 
-Public CI checks the local source build; it does **not** publish installers.
+This repository publishes local-edition source snapshots only and runs no hosted CI.
 Official releases continue to be built and published from the main private
-repository. This source is not a reproducible build of the official application.
+repository; packaging, signing, and updates for local builds are the builder's
+responsibility. This source is not a reproducible build of the official application.
 
 ## What you can do locally
 
@@ -123,7 +124,6 @@ an arbitrary modified client; hosted services enforce their own authorization.
 | `client/src-tauri/` | Rust runtime, local gateway, adapters, tool configuration |
 | `shared/` | Public API contracts and bundled metadata |
 | `testdata/` | Protocol fixtures |
-| `.github/workflows/check-source.yml` | Build and boundary checks; no publishing |
 
 Source snapshots are synchronized from the main repository. Contributions should
 be small and focused; include a reproduction and relevant tests. Maintainers

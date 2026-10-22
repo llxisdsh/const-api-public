@@ -34,7 +34,8 @@ npm run build
 `npm run build -- --debug` 可更快生成开发构建，输出在 `target/debug`。
 设置了 `CARGO_TARGET_DIR` 时以该目录为准。
 
-构建使用 `--no-bundle`，不生成带签名的安装包、自动更新产物或 GitHub Release。
+构建使用 `--no-bundle`，不生成安装包、自动更新产物或 GitHub Release。
+本仓库只提供源码，不运行托管构建；安装包、签名和更新产物由构建者自行负责。
 运行需要图形会话，正常打开程序即可；彻底退出请使用托盘或菜单栏中的**退出**。
 已经移除的旧命令行模式不再是程序接口。
 
@@ -43,8 +44,8 @@ npm run build
 公开源码不内置 Google OAuth 应用凭据。Antigravity 的浏览器授权和令牌刷新需要构建者在
 构建进程环境中提供 `CONST_LOCAL_ANTIGRAVITY_CLIENT_ID` 和
 `CONST_LOCAL_ANTIGRAVITY_CLIENT_SECRET`，修改后重新启动构建。
-这些值会编入生成的程序，不是机密服务端应用 Secret 的安全存储方案；不要提交到仓库、
-放进公开 CI，或分发你无权共享的凭据。
+这些值会编入生成的程序，不是机密服务端应用 Secret 的安全存储方案；不要提交到仓库，
+或分发你无权共享的凭据。
 
 未配置时，这两条授权路径会直接返回明确的本地错误。仅导入 Access Token 不保证后续能刷新。
 其他 API 渠道不需要这些值。仍须有兼容的 OAuth 应用注册与上游权益，不能保证任意自行创建的
@@ -77,9 +78,9 @@ cargo test --manifest-path src-tauri/Cargo.toml local_policy::tests -- --test-th
 
 隔离测试覆盖配置加载、手动注入端点和 Token 后仍拒绝平台传输、四种协议的本机转发，
 以及缺少 OAuth 应用配置时的明确报错。
-测试使用本地 mock，不调用付费模型。公开 CI 对 Windows、Linux、macOS 执行工作流中列出的检查。
+测试使用本地 mock，不调用付费模型。仓库不运行托管 CI，请按需在本地执行检查。
 
-保留的部分 Rust 测试描述的是平台版契约，因此公开 CI 选择本机版隔离测试，
+保留的部分 Rust 测试描述的是平台版契约，因此应选择本机版隔离测试，
 不把它表述为私有版本全量测试通过。
 
 ## 平台隔离
@@ -96,8 +97,8 @@ cargo test --manifest-path src-tauri/Cargo.toml local_policy::tests -- --test-th
 源码由私有主仓库单向同步。`public-source-manifest.json` 记录源提交和导出文件哈希，
 不携带私有 Git 历史。该文件是来源记录，不是运行时授权凭据，也不是带签名的发布证明。
 
-官方安装包仍通过原来的私有构建和发布流程产生。公开 CI 只有仓库读取权限，
-不发布应用或更新源。通过审查的社区贡献先合入主仓库，再进入下一次公开快照。
+官方安装包仍通过原来的私有构建和发布流程产生。本仓库只包含源码：不运行托管 CI，
+不构建或打包应用，也不发布更新源。通过审查的社区贡献先合入主仓库，再进入下一次公开快照。
 
 本公开仓库的提交标题和正文统一使用英文。
 
