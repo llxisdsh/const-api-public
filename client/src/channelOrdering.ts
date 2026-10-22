@@ -34,24 +34,35 @@ export function configuredModelMarketChannelCount<T extends ModelMarketChannel>(
   return channels.filter((channel) => !isLegacyLocalSupplierPlaceholder(channel)).length;
 }
 
-export function moveChannelInVisibleOrder<T extends { id: string }>(
-  channels: readonly T[],
-  visibleChannelIds: readonly string[],
-  channelId: string,
-  direction: -1 | 1,
-): T[] | null {
-  const visibleIndex = visibleChannelIds.indexOf(channelId);
-  const targetId = visibleChannelIds[visibleIndex + direction];
-  if (visibleIndex < 0 || !targetId) return null;
+export const MAX_LOCAL_PRIORITY = 0xffff_ffff;
 
-  const channelIndex = channels.findIndex((channel) => channel.id === channelId);
-  const targetIndex = channels.findIndex((channel) => channel.id === targetId);
-  if (channelIndex < 0 || targetIndex < 0) return null;
+export function isValidLocalPriority(value: number): boolean {
+  return Number.isInteger(value) && value >= 1 && value <= MAX_LOCAL_PRIORITY;
+}
 
-  const reordered = [...channels];
-  [reordered[channelIndex], reordered[targetIndex]] = [
-    reordered[targetIndex],
-    reordered[channelIndex],
-  ];
-  return reordered;
+/** Preserve legacy order; newly discovered channels join after the existing tiers. */
+export function withLocalPriorities<T extends { id: string; local_priority?: number }>(channels: readonly T[]): (T & { local_priority: number })[] {
+  let last = channels.reduce((max, channel) => Math.max(max, channel.local_priority ?? 0), 0);
+  return channels.map((channel) => {
+    if (channel.local_priority !== undefined) return { ...channel, local_priority: channel.local_priority };
+    last = Math.min(last + 1, MAX_LOCAL_PRIORITY);
+    return { ...channel, local_priority: last };
+  });
+}
+
+export function channelsByLocalPriority<T extends { id: string; local_priority?: number }>(channels: readonly T[]) {
+  return withLocalPriorities(channels).sort((a, b) => a.local_priority - b.local_priority);
+}
+
+/** Patch the latest channels, not the dialog's snapshot of credentials or observations. */
+export function applyLocalPriorities<T extends { id: string; local_priority?: number }>(
+  channels: readonly T[], priorities: Readonly<Record<string, number>>,
+) {
+  if (Object.values(priorities).some((value) => !isValidLocalPriority(value))) {
+    throw new Error("Local priority must be a positive 32-bit integer");
+  }
+  return withLocalPriorities(channels)
+    .map((channel) => ({ ...channel, local_priority: priorities[channel.id] ?? channel.local_priority }))
+    // Also retain a sensible fallback order for adjacent older clients.
+    .sort((a, b) => a.local_priority - b.local_priority);
 }

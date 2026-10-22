@@ -1577,6 +1577,13 @@ fn responses_ws_pool_shared_headers(
         }
         return shared;
     }
+    if matches!(route, ResponsesWebsocketNativeRoute::OpenAiSubscription { .. }) {
+        // The adapter keeps only a native caller's beta negotiation, as over HTTP.
+        return codex_subscription_model_request_context_headers(
+            Some(headers),
+            &active_codex_identity(),
+        );
+    }
     let mut shared = codex_model_request_context_headers(Some(headers), &active_codex_identity());
     if let Some(beta) = headers.get("openai-beta") {
         shared.insert("openai-beta", beta.clone());
@@ -1996,13 +2003,16 @@ mod responses_ws_pool_tests {
             responses_ws_pool_protocol_mode(&route, &channel),
             ResponsesWsPoolProtocolMode::Exclusive
         );
-        assert_eq!(shared["originator"], "codex_vscode");
+        assert_eq!(shared["originator"], active_codex_identity().originator);
         assert_eq!(shared["x-codex-routing-hint"], "sticky-owner");
         assert_eq!(shared["session-id"], "session-secret");
         assert_eq!(shared["x-client-request-id"], "request-secret");
         assert_eq!(shared["x-responsesapi-include-timing-metrics"], "true");
 
         let baseline = responses_ws_pool_header_fingerprint(&shared);
+        input.insert("user-agent", "codex_vscode/9.9.9".parse().unwrap());
+        input.insert("version", "9.9.9".parse().unwrap());
+        assert_eq!(baseline, responses_ws_pool_header_fingerprint(&responses_ws_pool_shared_headers(&route, &input)));
         let mut changed = shared.clone();
         changed.insert(
             "x-responsesapi-include-timing-metrics",

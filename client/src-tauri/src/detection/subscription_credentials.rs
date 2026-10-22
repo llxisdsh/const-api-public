@@ -170,6 +170,7 @@ fn subscription_channel_from_managed_credential(
         "grok" => crate::source_driver::SourceDriverId::GrokSubscription,
         "kiro" => crate::source_driver::SourceDriverId::KiroSubscription,
         "cursor" => crate::source_driver::SourceDriverId::CursorSubscription,
+        "opencode" => crate::source_driver::SourceDriverId::OpencodeConsole,
         _ => crate::source_driver::SourceDriverId::ClaudeSubscription,
     };
     let mut v2 = channel_v2_contract_for_source(source_driver);
@@ -1302,6 +1303,9 @@ pub(crate) fn normalize_subscription_provider(value: &str) -> Option<String> {
     if matches!(value.as_str(), "kiro" | "cursor") {
         return Some(value);
     }
+    if value.contains("opencode") {
+        return Some("opencode".to_string());
+    }
     if value.contains("antigravity") {
         return Some("antigravity".to_string());
     }
@@ -1360,6 +1364,7 @@ pub(crate) fn subscription_provider_label(provider: &str) -> &'static str {
         "grok" => "Grok Account Subscription",
         "kiro" => "Kiro Account Subscription",
         "cursor" => "Cursor Account Subscription",
+        "opencode" => "OpenCode Console Subscription",
         _ => "Account Authorization",
     }
 }
@@ -1372,6 +1377,7 @@ pub(crate) fn subscription_channel_name(provider: &str) -> &'static str {
         "grok" => "Grok Account Subscription",
         "kiro" => "Kiro Account Subscription",
         "cursor" => "Cursor Account Subscription",
+        "opencode" => "OpenCode Console Subscription",
         _ => "Account Subscription",
     }
 }

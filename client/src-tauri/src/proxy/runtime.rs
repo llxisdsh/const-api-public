@@ -75,7 +75,7 @@ struct LocalRetryForbidden;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalAdmissionFailure {
-    ConcurrencyFull,
+    ConcurrencyFull { before_dispatch: bool },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1461,6 +1461,13 @@ enum LocalRouteRetryScope {
     Model,
     Channel,
     Capacity,
+    AdmissionCapacity,
+}
+
+impl LocalRouteRetryScope {
+    fn is_capacity(self) -> bool {
+        matches!(self, Self::Capacity | Self::AdmissionCapacity)
+    }
 }
 
 struct LocalChannelExecution {
@@ -1598,11 +1605,9 @@ fn local_model_route_affinity_key(
             root
         ));
     }
-    Some(format!(
-        "{}\0{}",
-        normalize_model_name(&requested_model),
-        path.trim()
-    ))
+    // A model/path is not a session: sharing this key pins unrelated callers
+    // to one account and defeats equal-priority balancing.
+    None
 }
 
 fn local_model_route_preference_context(
@@ -1638,6 +1643,7 @@ fn local_model_route_preference_context(
     }
     for channel in &config.channels {
         std::hash::Hash::hash(&channel.id, &mut fingerprint);
+        std::hash::Hash::hash(&channel.v2.local_priority, &mut fingerprint);
         std::hash::Hash::hash(&channel.enabled, &mut fingerprint);
         std::hash::Hash::hash(&channel.source_driver(), &mut fingerprint);
         std::hash::Hash::hash(&channel.api_format, &mut fingerprint);
@@ -1708,9 +1714,25 @@ fn attach_local_model_failure_evidence(
         .and_then(serde_json::Value::as_str)
         .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("concurrency_full"))
     {
+        let before_dispatch = payload
+            .get(crate::supplier::EXECUTION_EVIDENCE_FIELD)
+            .and_then(|value| {
+                serde_json::from_value::<crate::supplier::ExecutionEvidence>(value.clone()).ok()
+            })
+            .is_some_and(|evidence| {
+                evidence.version == 1
+                    && evidence.outcome == "failure"
+                    && evidence.stage == "local_admission"
+                    && evidence.error_code == "concurrency_full"
+                    && evidence.fault_domain_hint == "capacity"
+                    && !evidence.upstream_attempted
+                    && !evidence.upstream_response_received
+                    && !evidence.response_started
+                    && !evidence.usable_output_produced
+            });
         response
             .extensions_mut()
-            .insert(LocalAdmissionFailure::ConcurrencyFull);
+            .insert(LocalAdmissionFailure::ConcurrencyFull { before_dispatch });
     }
     if let Some(evidence) = local_model_failure_evidence_from_payload(payload) {
         response.extensions_mut().insert(evidence);
@@ -1969,18 +1991,21 @@ async fn attempt_local_model_route(
         }
         // A proven pre-dispatch failure did not spend an upstream attempt.
         // Still exclude that route below so each configured route is tried once.
-        if execution.retry_scope != LocalRouteRetryScope::Preflight {
+        if !matches!(
+            execution.retry_scope,
+            LocalRouteRetryScope::Preflight | LocalRouteRetryScope::AdmissionCapacity
+        ) {
             budget.consume(1);
         }
         attempted_route_keys.insert(execution.route_key.clone());
-        if execution.retry_scope == LocalRouteRetryScope::Capacity {
+        if execution.retry_scope.is_capacity() {
             if let Some(channel_id) = execution.channel_id.as_ref() {
                 capacity_excluded_channel_ids.insert(channel_id.clone());
             }
         }
         match execution.result {
             Ok(response) if execution.retry_scope != LocalRouteRetryScope::None => {
-                if execution.retry_scope != LocalRouteRetryScope::Capacity {
+                if !execution.retry_scope.is_capacity() {
                     shared.forget_local_model_route(affinity_key, &execution.route_key);
                 }
                 last_response = Some(response);
@@ -1997,7 +2022,9 @@ async fn attempt_local_model_route(
                 return ModelRouteAttempt::CompleteResponse(response);
             }
             Err(error) if execution.retry_scope != LocalRouteRetryScope::None => {
-                shared.forget_local_model_route(affinity_key, &execution.route_key);
+                if !execution.retry_scope.is_capacity() {
+                    shared.forget_local_model_route(affinity_key, &execution.route_key);
+                }
                 last_error = Some(error);
             }
             Err(error) => return ModelRouteAttempt::CompleteError(error),
@@ -2223,25 +2250,40 @@ async fn forward_ready_local_channel(
     ready_local_channel_ids: &HashSet<String>,
     shared: &Arc<ProxyShared>,
 ) -> Option<Result<warp::reply::Response>> {
-    let excluded_routes = HashSet::new();
-    let excluded_channels = HashSet::new();
-    forward_ready_local_channel_with_match(
-        config,
-        path,
-        raw_query,
-        has_query,
-        method,
-        headers,
-        body,
-        ready_local_channel_ids,
-        shared,
-        ModelMatchMode::Configured,
-        None,
-        &excluded_routes,
-        &excluded_channels,
-    )
-    .await
-    .map(|execution| execution.result)
+    let mut excluded_routes = HashSet::new();
+    let mut excluded_channels = HashSet::new();
+    let mut capacity_rejection = None;
+    loop {
+        let Some(execution) = forward_ready_local_channel_with_match(
+            config,
+            path,
+            raw_query,
+            has_query,
+            method,
+            headers,
+            body,
+            ready_local_channel_ids,
+            shared,
+            ModelMatchMode::Configured,
+            None,
+            &excluded_routes,
+            &excluded_channels,
+        )
+        .await
+        else {
+            return capacity_rejection;
+        };
+        // A full channel rejected this one-shot request before dispatch, so
+        // another channel or tier may run it; any other outcome is final.
+        if execution.retry_scope != LocalRouteRetryScope::AdmissionCapacity {
+            return Some(execution.result);
+        }
+        excluded_routes.insert(execution.route_key);
+        if let Some(channel_id) = execution.channel_id {
+            excluded_channels.insert(channel_id);
+        }
+        capacity_rejection = Some(execution.result);
+    }
 }
 
 async fn forward_ready_local_channel_with_match(
@@ -2394,10 +2436,10 @@ async fn forward_ready_local_channel_with_match(
                 .extensions()
                 .get::<LocalDeclaredFailureScope>()
                 .copied();
-            let capacity_scoped = response
+            let capacity_failure = response
                 .extensions()
                 .get::<LocalAdmissionFailure>()
-                .is_some_and(|failure| *failure == LocalAdmissionFailure::ConcurrencyFull);
+                .copied();
             let model_scoped = model_operation
                 && shared.record_local_model_response(
                     &channel_id,
@@ -2450,8 +2492,12 @@ async fn forward_ready_local_channel_with_match(
                 // Explicit terminal failures and owner-bound requests cannot
                 // be replayed, even if their health scope is model/channel.
                 LocalRouteRetryScope::None
-            } else if capacity_scoped {
-                LocalRouteRetryScope::Capacity
+            } else if let Some(LocalAdmissionFailure::ConcurrencyFull { before_dispatch }) = capacity_failure {
+                if before_dispatch {
+                    LocalRouteRetryScope::AdmissionCapacity
+                } else {
+                    LocalRouteRetryScope::Capacity
+                }
             } else if model_scoped {
                 LocalRouteRetryScope::Model
             } else if channel_scoped {
@@ -2507,6 +2553,13 @@ async fn forward_ready_local_channel_with_match(
 }
 
 fn proxy_execution_error_response(error: &anyhow::Error) -> warp::reply::Response {
+    let evidence = crate::supplier::execution_evidence_for_error(error);
+    if evidence.error_code == "concurrency_full" && !evidence.upstream_attempted {
+        return error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "channel concurrency limit reached locally",
+        );
+    }
     if crate::upstream_transport::is_ambiguous_transport_error(error) {
         let payload = serde_json::json!({
             "error_kind": "ambiguous_transport",
@@ -3979,36 +4032,29 @@ fn select_direct_http_surface_channel_where<'a>(
             .copied()
             .filter(|channel| channel_supports_model(channel, &requested_model))
             .collect::<Vec<_>>();
-        if let Some((_, channel)) = matching
-            .iter()
-            .copied()
-            .enumerate()
-            .min_by_key(|(index, channel)| (evidence_rank(channel), *index))
+        if let Some(channel) = select_local_priority_channel(cfg, matching
+            .iter().copied().map(|channel| (channel, evidence_rank(channel), 0)))
         {
             return Some(channel);
         }
     }
 
-    candidates
-        .iter()
-        .copied()
-        .enumerate()
-        .min_by_key(|(index, channel)| (evidence_rank(channel), *index))
-        .map(|(_, channel)| channel)
+    select_local_priority_channel(cfg, candidates
+        .iter().copied().map(|channel| (channel, evidence_rank(channel), 0)))
 }
 
 fn select_openai_subscription_image_channel_where<'a>(
     cfg: &'a ClientConfig,
     predicate: impl Fn(&ChannelConfig) -> bool,
 ) -> Option<&'a ChannelConfig> {
-    local_channels(cfg).find(|channel| {
+    select_local_priority_channel(cfg, local_channels(cfg).filter(|channel| {
         predicate(channel)
                 && crate::channel_executor::execution_kind_for_source(channel.source_driver())
                     .is_ok_and(|kind| {
                         kind == crate::source_driver::ExecutionKind::OpenAiSubscription
                     })
                 && channel_can_execute_protocol(channel, "openai_responses")
-    })
+    }).map(|channel| (channel, 0, 0)))
 }
 
 fn select_openai_realtime_call_channel_where<'a>(
@@ -4036,15 +4082,16 @@ fn select_openai_realtime_call_channel_where<'a>(
     };
     // A public Realtime model with a native API channel must not be silently
     // mapped to private GPT-Live just because a subscription appears first.
-    local_channels(cfg)
+    select_local_priority_channel(cfg, local_channels(cfg)
         .filter(eligible)
-        .find(|channel| {
+        .filter(|channel| {
             !model.is_empty()
                 && channel_supports_model(channel, model)
                 && crate::channel_executor::execution_kind_for_source(channel.source_driver())
                     .is_ok_and(|kind| kind == crate::source_driver::ExecutionKind::HttpSurface)
-        })
-        .or_else(|| local_channels(cfg).find(eligible))
+        }).map(|channel| (channel, 0, 0)))
+        .or_else(|| select_local_priority_channel(cfg, local_channels(cfg)
+            .filter(eligible).map(|channel| (channel, 0, 0))))
 }
 
 #[cfg(test)]
@@ -4102,7 +4149,7 @@ fn select_local_channel_route_where_with_model_and_match<'a>(
         ModelMatchMode::CompatibleOnly => compatibility(),
     };
     for route_model in route_models {
-        if let Some((channel, _, _)) = local_channels(cfg)
+        if let Some(channel) = select_local_priority_channel(cfg, local_channels(cfg)
             .filter_map(|channel| {
                 if !predicate(channel, &route_model)
                     || !crate::detection::responses_features::channel_allows_path(channel, path)
@@ -4134,12 +4181,8 @@ fn select_local_channel_route_where_with_model_and_match<'a>(
                     )
                 })
             })
-            // Capability evidence protects request semantics first. Protocol
-            // fidelity then avoids an unnecessary conversion; the stable
-            // iterator order remains the user's manual priority for ties.
-            .min_by_key(|(_, evidence_rank, protocol_rank)| {
-                (*evidence_rank, *protocol_rank)
-            })
+            // Capability and protocol fidelity still precede user tiers.
+        )
         {
             return Some(LocalChannelSelection {
                 channel,
@@ -4344,6 +4387,9 @@ fn local_execution_error_retry_scope(
         || crate::upstream_transport::is_ambiguous_transport_error(error)
     {
         return LocalRouteRetryScope::None;
+    }
+    if !evidence.upstream_attempted && evidence.error_code == "concurrency_full" {
+        return LocalRouteRetryScope::AdmissionCapacity;
     }
     // Match the platform's pre-upstream retry contract, independently of channel
     // health. Failed conversion/binding resolution must not disable the account.

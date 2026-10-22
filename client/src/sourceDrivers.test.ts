@@ -20,6 +20,15 @@ import {
 } from "./sourceDrivers";
 
 describe("source drivers", () => {
+  test("round trips explicit local priority and rejects invalid wire values", () => {
+    const channel = sourceDriverInitialChannelV5(sourceDriverById("custom_endpoint"), { id: "priority", name: "Priority" });
+    expect(serializeChannelV5(channel).local_priority).toBeUndefined();
+    channel.local_priority = 2;
+    expect(reloadChannelV5(JSON.parse(JSON.stringify(serializeChannelV5(channel)))).local_priority).toBe(2);
+    for (const priority of [0, -1, 1.5, 0x1_0000_0000]) {
+      expect(() => reloadChannelV5({ ...channel, local_priority: priority })).toThrow(/local priority/);
+    }
+  });
   test("defaults Claude Fast off and persists an explicit opt-in", () => {
     const channel = sourceDriverInitialChannelV5(sourceDriverById("claude_subscription"), {
       id: "claude-fast", name: "Claude Fast", credentialRef: "credential://test",
@@ -65,6 +74,7 @@ describe("source drivers", () => {
       grok_subscription: "https://grok.com/",
       kiro_subscription: "https://kiro.dev/",
       cursor_subscription: "https://cursor.com/",
+      opencode_console: "https://opencode.ai/console",
       openai_api: "https://developers.openai.com/",
       anthropic_api: "https://docs.anthropic.com/",
       gemini_api: "https://ai.google.dev/",
@@ -278,6 +288,12 @@ describe("source drivers", () => {
           "category": "subscription",
           "iconKey": "kiro",
           "id": "kiro_subscription",
+          "order": 45,
+        },
+        {
+          "category": "subscription",
+          "iconKey": "opencode",
+          "id": "opencode_console",
           "order": 45,
         },
         {
@@ -561,6 +577,7 @@ describe("source drivers", () => {
       ["gemini_subscription", ["gemini_native"]],
       ["grok_subscription", ["openai_responses"]],
       ["kiro_subscription", ["anthropic_messages"]],
+      ["opencode_console", ["openai_chat", "openai_responses", "anthropic_messages", "gemini_native"]],
       ["cursor_subscription", ["anthropic_messages"]],
     ]);
     expect(subscriptions.map((driver) => driver.executor)).toEqual([
@@ -569,9 +586,11 @@ describe("source drivers", () => {
       { type: "retained_subscription", provider: "antigravity" },
       { type: "retained_subscription", provider: "grok" },
       { type: "retained_subscription", provider: "kiro" },
+      { type: "http_surface" },
       { type: "retained_subscription", provider: "cursor" },
     ]);
-    expect(subscriptions.flatMap((driver) => driver.surfaceBindings.map((binding) => binding.baseUrl)))
+    expect(subscriptions.filter((driver) => driver.executor.type === "retained_subscription")
+      .flatMap((driver) => driver.surfaceBindings.map((binding) => binding.baseUrl)))
       .toEqual([undefined, undefined, undefined, undefined, undefined, undefined]);
     expect(sourceDriverById("copilot_subscription")).toMatchObject({
       category: "subscription", fixedConnection: true, executor: { type: "http_surface" },

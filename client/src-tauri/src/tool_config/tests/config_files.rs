@@ -2896,6 +2896,44 @@
                 .and_then(Item::as_bool),
             Some(true)
         );
+        assert!(
+            providers["CONST_API"].get("model_catalog_url").is_none(),
+            "the local CONST surface does not serve a Codex model catalog URL"
+        );
+    }
+
+    #[test]
+    fn codex_writer_retires_only_the_unserved_generated_catalog_url() {
+        for (configured, expected) in [
+            (
+                "model_catalog_url = \"http://127.0.0.1:38787/v1/backend-api/codex/models\"\n",
+                None,
+            ),
+            (
+                "model_catalog_url = \"http://127.0.0.1:19432/v1/backend-api/codex/models/\"\n",
+                None,
+            ),
+            (
+                "model_catalog_url = \"https://gateway.example/codex/models\"\n",
+                Some("https://gateway.example/codex/models"),
+            ),
+        ] {
+            let raw = format!("[model_providers.CONST_API]\n{configured}");
+            let output = upsert_codex_toml(&raw, TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
+                .expect("upsert Codex config");
+            let doc = output.parse::<DocumentMut>().expect("parse Codex config");
+            let provider = doc
+                .get("model_providers")
+                .and_then(Item::as_table)
+                .and_then(|providers| providers.get("CONST_API"))
+                .and_then(Item::as_table)
+                .expect("CONST API provider");
+            assert_eq!(
+                provider.get("model_catalog_url").and_then(Item::as_str),
+                expected,
+                "configured catalog URL: {configured}"
+            );
+        }
     }
 
     #[test]

@@ -42,6 +42,8 @@ pub(crate) enum SourceDriverId {
     Openrouter,
     OpencodeGo,
     OpencodeZen,
+    #[serde(rename = "opencode_console")]
+    OpencodeConsole,
     KiloGateway,
     ClineApi,
     CommandCode,
@@ -69,7 +71,7 @@ pub(crate) enum SourceDriverId {
     CursorSubscription,
 }
 
-pub(crate) const ALL_SOURCE_DRIVER_IDS: [SourceDriverId; 49] = [
+pub(crate) const ALL_SOURCE_DRIVER_IDS: [SourceDriverId; 50] = [
     SourceDriverId::OpenAiApi,
     SourceDriverId::AnthropicApi,
     SourceDriverId::GeminiApi,
@@ -96,6 +98,7 @@ pub(crate) const ALL_SOURCE_DRIVER_IDS: [SourceDriverId; 49] = [
     SourceDriverId::Openrouter,
     SourceDriverId::OpencodeGo,
     SourceDriverId::OpencodeZen,
+    SourceDriverId::OpencodeConsole,
     SourceDriverId::KiloGateway,
     SourceDriverId::ClineApi,
     SourceDriverId::CommandCode,
@@ -626,7 +629,8 @@ fn validate_source_driver_manifest(manifest: &SourceDriverManifest) -> Result<()
 fn validate_executor_locator(driver: &SourceDriver) -> Result<()> {
     match (driver.execution_kind, &driver.executor) {
         (ExecutionKind::HttpSurface, ChannelExecutorLocator::HttpSurface)
-            if driver.subscription_provider.is_none() =>
+            if driver.subscription_provider.is_none()
+                || driver.subscription_provider.as_deref() == Some("opencode") =>
         {
             Ok(())
         }

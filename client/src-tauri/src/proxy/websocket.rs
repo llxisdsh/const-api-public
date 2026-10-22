@@ -801,6 +801,27 @@ impl ResponsesWebsocketNativeRoute {
     }
 }
 
+/// An HTTP-surface Responses turn shares its channel's request admission with
+/// HTTP calls. Only an in-flight turn holds a slot, never an idle or pooled
+/// socket; subscription turns are admitted by `NativeSubscriptionWebsocketRequest`.
+fn http_surface_turn_admission(
+    channel: Option<&ChannelConfig>,
+    subscription: Option<&SupplierConfig>,
+    frame: &str,
+) -> Result<Option<crate::channel_concurrency::Guard>> {
+    let Some(channel) = channel.filter(|_| subscription.is_none()) else {
+        return Ok(None);
+    };
+    if crate::supplier::top_level_json_raw_token(frame.as_bytes(), "generate") == Some("false") {
+        return Ok(None);
+    }
+    crate::channel_executor::enter_channel_capacity(
+        channel,
+        crate::surface::ApiOperation::ResponsesWebSocket,
+    )
+    .map(Some)
+}
+
 struct NativeSubscriptionWebsocketRequest {
     config: SupplierConfig,
     request_body: String,
@@ -812,7 +833,7 @@ struct NativeSubscriptionWebsocketRequest {
     first_meaningful_event_ms: Option<u64>,
     upstream_usage: Option<SupplierUpstreamUsageAccumulator>,
     terminal_metadata: Option<ResponsesWebsocketTerminalMetadata>,
-    safety_guard: Option<SubscriptionSafetyGuard>,
+    safety_guard: Option<crate::channel_concurrency::Guard>,
     billable: bool,
     local_model_observation: Option<LocalModelOutcomeGuard>,
 }
@@ -1945,7 +1966,11 @@ pub(crate) async fn run_supplier_responses_duplex(
     let mut active_request: Option<NativeSubscriptionWebsocketRequest> = None;
     let mut active_continuation: Option<CodexHttpContinuationCollector> = None;
     let continuation_pin = CodexWebsocketContinuationPin::new();
-    let mut active_update_guard: Option<crate::update_activity::UpdateActivityGuard> = None;
+    // The update guard and an HTTP-surface admission slot both last one turn.
+    let mut active_update_guard: Option<(
+        crate::update_activity::UpdateActivityGuard,
+        Option<crate::channel_concurrency::Guard>,
+    )> = None;
     let mut active_turn_id: Option<String> = None;
     let mut active_turn_sequence = 0u64;
     let mut active_response_started = false;
@@ -2011,6 +2036,11 @@ pub(crate) async fn run_supplier_responses_duplex(
                             ),
                             None => None,
                         };
+                        let turn_capacity = http_surface_turn_admission(
+                            Some(route.channel()),
+                            subscription_config.as_ref(),
+                            &outbound_text,
+                        )?;
                         let Some(next_update_guard) =
                             crate::update_activity::try_begin_supplier_request(&open.id)
                         else {
@@ -2084,7 +2114,7 @@ pub(crate) async fn run_supplier_responses_duplex(
                         if let Some(request) = pending.as_mut() {
                             request.request_body = actual_outbound_text.clone();
                         }
-                        active_update_guard = Some(next_update_guard);
+                        active_update_guard = Some((next_update_guard, turn_capacity));
                         if let Some(request) = pending.as_mut() {
                             request.mark_sent();
                         }
@@ -2759,6 +2789,24 @@ async fn run_responses_websocket_proxy(
         },
         None => None,
     };
+    // Nothing was sent yet: a channel filled since routing hands the turn to
+    // the HTTP router, which fails over like the subscription path above.
+    let mut active_turn_capacity =
+        match http_surface_turn_admission(channel.as_ref(), subscription_config.as_ref(), &first_text) {
+            Ok(capacity) => capacity,
+            Err(_) => {
+                run_responses_websocket_http_bridge(
+                    client_sender,
+                    client_receiver,
+                    client_headers,
+                    shared,
+                    first_value,
+                    active_activity_guard.take(),
+                )
+                .await;
+                return;
+            }
+        };
     let (mut upstream_sender, mut upstream_receiver) = upstream_connection.split();
     if !first_frame_sent
         && upstream_sender
@@ -2983,6 +3031,20 @@ async fn run_responses_websocket_proxy(
                         },
                         None => None,
                     };
+                    let pending_turn_capacity = match http_surface_turn_admission(
+                        channel.as_ref(),
+                        subscription_config.as_ref(),
+                        text,
+                    ) {
+                        Ok(capacity) => capacity,
+                        Err(_) => {
+                            bridge_handoff = Some(value);
+                            if let Some(diagnostics) = upstream_diagnostics.as_mut() {
+                                diagnostics.set_close_reason("http_bridge_handoff");
+                            }
+                            break;
+                        }
+                    };
                     let Some(next_activity_guard) = crate::update_activity::try_begin_proxy_request() else {
                         let _ = client_sender
                             .send(warp::ws::Message::close_with(1012u16, "client update"))
@@ -3015,6 +3077,7 @@ async fn run_responses_websocket_proxy(
                         request.mark_sent();
                     }
                     active_subscription_request = pending_subscription_request;
+                    active_turn_capacity = pending_turn_capacity;
                     turn_active = true;
                 } else if client_message.is_ping() {
                     if upstream_sender
@@ -3201,6 +3264,7 @@ async fn run_responses_websocket_proxy(
                             channel,
                         );
                     }
+                    drop(active_turn_capacity.take());
                     drop(active_activity_guard.take());
                 }
             }
@@ -3395,8 +3459,8 @@ async fn run_openai_live_websocket_proxy(
             }
         }
     }
-    let channel = match local {
-        Ok(channel) => channel,
+    let (channel, _capacity) = match local.and_then(|channel| native_duplex_admission(channel, kind)) {
+        Ok(admitted) => admitted,
         Err((code, message)) => {
             let _ = send_native_duplex_error(&mut client_sender, kind, code, message).await;
             return;
@@ -3558,8 +3622,8 @@ async fn run_openai_native_duplex_websocket_proxy(
             }
         }
     }
-    let channel = match local {
-        Ok(channel) => channel,
+    let (channel, _capacity) = match local.and_then(|channel| native_duplex_admission(channel, kind)) {
+        Ok(admitted) => admitted,
         Err((code, message)) => {
             let _ = send_native_duplex_error(
                 &mut client_sender,
@@ -3704,8 +3768,8 @@ async fn run_gemini_live_websocket_proxy(
             }
         }
     }
-    let channel = match local {
-        Ok(channel) => channel,
+    let (channel, _capacity) = match local.and_then(|channel| native_duplex_admission(channel, NativeDuplexKind::GeminiLive)) {
+        Ok(admitted) => admitted,
         Err((code, message)) => {
             let _ = send_native_duplex_error(
                 &mut client_sender,
@@ -3820,6 +3884,20 @@ fn parse_gemini_live_setup(
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     Ok((model, resumption_handle))
+}
+
+/// A live duplex session is one active request on its channel for its whole
+/// lifetime. Admit it only after a platform session was ruled out.
+fn native_duplex_admission(
+    channel: ChannelConfig,
+    kind: NativeDuplexKind,
+) -> std::result::Result<
+    (ChannelConfig, crate::channel_concurrency::Guard),
+    (&'static str, &'static str),
+> {
+    let guard = crate::channel_executor::enter_channel_capacity(&channel, kind.operation())
+        .map_err(|_| ("concurrency_full", "channel concurrency limit reached locally"))?;
+    Ok((channel, guard))
 }
 
 fn select_native_duplex_channel(
@@ -5282,7 +5360,8 @@ fn openai_subscription_websocket_request(
     let url = responses_websocket_url(responses_url)?;
     let mut request = url.as_str().into_client_request()?;
     let identity = active_codex_identity();
-    let context_headers = codex_model_request_context_headers(Some(client_headers), &identity);
+    let context_headers =
+        codex_subscription_model_request_context_headers(Some(client_headers), &identity);
     for (name, value) in context_headers {
         if let Some(name) = name {
             request.headers_mut().insert(name, value);
@@ -5292,14 +5371,14 @@ fn openai_subscription_websocket_request(
         reqwest::header::AUTHORIZATION,
         reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))?,
     );
-    let beta = client_headers
-        .get("openai-beta")
-        .filter(|value| value.to_str().is_ok())
-        .cloned()
-        .unwrap_or_else(|| {
-            reqwest::header::HeaderValue::from_static(RESPONSES_WEBSOCKET_BETA)
-        });
-    request.headers_mut().insert("openai-beta", beta);
+    // The native context above keeps a first-party caller's negotiation; any
+    // other caller uses the official Codex handshake, as over HTTP.
+    if !request.headers().contains_key("openai-beta") {
+        request.headers_mut().insert(
+            "openai-beta",
+            reqwest::header::HeaderValue::from_static(RESPONSES_WEBSOCKET_BETA),
+        );
+    }
     if let Some(account_id) = json_string(credential, &["account_id"])
         .or_else(|| json_string(credential, &["accountID"]))
         .or_else(|| json_string(credential, &["chatgpt_account_id"]))
@@ -6276,7 +6355,7 @@ mod responses_websocket_tests {
     }
 
     #[test]
-    fn openai_subscription_websocket_request_uses_native_codex_identity() {
+    fn openai_subscription_websocket_request_uses_adapter_identity_and_native_context() {
         let mut headers = warp::http::HeaderMap::new();
         headers.insert("originator", "codex_vscode".parse().unwrap());
         headers.insert("user-agent", "codex_vscode/1.2.3".parse().unwrap());
@@ -6296,9 +6375,10 @@ mod responses_websocket_tests {
         assert_eq!(request.uri().scheme_str(), Some("ws"));
         assert_eq!(request.headers()["authorization"], "Bearer subscription-token");
         assert_eq!(request.headers()["chatgpt-account-id"], "account-1");
-        assert_eq!(request.headers()["originator"], "codex_vscode");
-        assert_eq!(request.headers()["user-agent"], "codex_vscode/1.2.3");
-        assert_eq!(request.headers()["version"], "1.2.3");
+        let identity = active_codex_identity();
+        assert_eq!(request.headers()["originator"], identity.originator);
+        assert_eq!(request.headers()["user-agent"], identity.user_agent);
+        assert_eq!(request.headers()["version"], identity.version);
         assert_eq!(request.headers()["session-id"], "session-1");
         assert_eq!(
             request.headers()["openai-beta"],
@@ -6313,10 +6393,111 @@ mod responses_websocket_tests {
                 "http://127.0.0.1:18080/backend-api/codex/responses",
                 "subscription-token", &serde_json::json!({}), &headers,
             ).unwrap();
-            assert_eq!(request.headers()["user-agent"], user_agent);
-            assert_eq!(request.headers()["version"], version);
+            assert_eq!(request.headers()["user-agent"], identity.user_agent);
+            assert_eq!(request.headers()["version"], identity.version);
             assert_eq!(request.headers()["openai-beta"], "responses=future-v9");
         }
+        headers.insert("originator", "custom_gateway".parse().unwrap());
+        headers.insert("user-agent", "custom_gateway/1".parse().unwrap());
+        let request = openai_subscription_websocket_request(
+            "http://127.0.0.1:18080/backend-api/codex/responses",
+            "subscription-token", &serde_json::json!({}), &headers,
+        ).unwrap();
+        assert_eq!(request.headers()["openai-beta"], RESPONSES_WEBSOCKET_BETA);
+    }
+
+    #[tokio::test]
+    async fn subscription_identity_codex_websocket_wire_preserves_context_and_tool_calls() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::{Message, handshake::server::{Request, Response}};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let call = r#"{"type":"response.function_call_arguments.done","name":"probe","arguments":"{}","call_id":"fixture-call"}"#;
+        let input = r#"{"type":"response.create","input":"fixture","tools":[{"type":"function","name":"probe","parameters":{"type":"object","properties":{}}}],"tool_choice":"required"}"#;
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_hdr_async(socket, move |request: &Request, response: Response| {
+                tx.send(request.headers().clone()).unwrap();
+                Ok(response)
+            }).await.unwrap();
+            assert_eq!(socket.next().await.unwrap().unwrap().into_text().unwrap(), input);
+            socket.send(Message::Text(call.into())).await.unwrap();
+        });
+        let mut inbound = warp::http::HeaderMap::new();
+        inbound.insert("originator", "codex_vscode".parse().unwrap());
+        inbound.insert("user-agent", "codex_vscode/9.9.9".parse().unwrap());
+        inbound.insert("session-id", "fixture-session".parse().unwrap());
+        inbound.insert("x-codex-turn-state", "fixture-state".parse().unwrap());
+        inbound.insert("authorization", "Bearer must-not-forward".parse().unwrap());
+        let request = openai_subscription_websocket_request(&format!("http://{address}/responses"),
+            "fixture-token", &serde_json::json!({"account_id":"fixture-account"}), &inbound).unwrap();
+        let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), tokio_tungstenite::connect_async(request)).await.unwrap().unwrap();
+        socket.send(Message::Text(input.into())).await.unwrap();
+        let reply = tokio::time::timeout(Duration::from_secs(5), socket.next()).await.unwrap().unwrap().unwrap();
+        assert_eq!(reply.into_text().unwrap(), call);
+        let received = rx.await.unwrap();
+        let identity = active_codex_identity();
+        assert_eq!(received["originator"], identity.originator);
+        assert_eq!(received["user-agent"], identity.user_agent);
+        assert_eq!(received["version"], identity.version);
+        assert_eq!(received["session-id"], "fixture-session");
+        assert_eq!(received["x-codex-turn-state"], "fixture-state");
+        assert_eq!(received["authorization"], "Bearer fixture-token");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "uses one short response on the existing Dev Codex subscription over WebSocket"]
+    async fn live_dev_codex_subscription_identity_websocket_smoke() -> Result<()> {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        let root = crate::home_dir().join(".const-api-dev").canonicalize()?;
+        let config: ClientConfig = serde_json::from_slice(&std::fs::read(root.join("client.json"))?)?;
+        let channel = config.channels.into_iter().find(|channel| channel.source_driver() == crate::source_driver::SourceDriverId::OpenAiSubscription)
+            .context("Dev Codex subscription missing")?;
+        let path = std::path::PathBuf::from(&channel.subscription.credential_ref).canonicalize()?;
+        anyhow::ensure!(path.starts_with(&root), "test only reads Dev credentials");
+        let credential: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
+        anyhow::ensure!(!crate::detection::credential_needs_refresh(&credential), "Dev credential needs refresh; test does not write credentials");
+        let token = credential["access_token"].as_str().context("missing access token")?;
+        let model = "gpt-6-luna";
+        anyhow::ensure!(channel.models.iter().any(|id| id == model), "smoke model is not in Dev channel");
+        let mut headers = warp::http::HeaderMap::new();
+        headers.insert("originator", "codex_vscode".parse()?);
+        headers.insert("user-agent", "codex_vscode/0.163.0".parse()?);
+        headers.insert("session-id", format!("dev-identity-smoke-{}", crate::now_unix()).parse()?);
+        let request = openai_subscription_websocket_request(crate::CODEX_RESPONSES_URL, token, &credential, &headers)?;
+        tokio::time::timeout(Duration::from_secs(60), async {
+            let (mut socket, handshake) = tokio_tungstenite::connect_async(request).await?;
+            println!("Dev Codex WebSocket: handshake HTTP={}, model={model}", handshake.status());
+            let body = serde_json::json!({"type":"response.create","model":model,"instructions":"Reply OK only.",
+                "input":[{"role":"user","content":"Reply OK."}],"reasoning":{"effort":"low"},"tools":[],"store":false,"stream":true});
+            socket.send(Message::Text(body.to_string().into())).await?;
+            let mut output = String::new();
+            while let Some(frame) = socket.next().await {
+                let frame = frame?;
+                let Message::Text(text) = frame else { continue; };
+                let event: serde_json::Value = serde_json::from_str(&text)?;
+                match event["type"].as_str() {
+                    Some("response.output_text.delta") => output.push_str(event["delta"].as_str().unwrap_or_default()),
+                    Some("response.completed") => {
+                        println!("Dev Codex WebSocket: completed, output_tokens={}", event["response"]["usage"]["output_tokens"]);
+                        socket.close(None).await?;
+                        anyhow::ensure!(output.contains("OK"), "unexpected WebSocket smoke response");
+                        return Ok(());
+                    }
+                    Some("error" | "response.failed") => {
+                        let message = crate::upstream_failure::error_object(&event)
+                            .and_then(|(_, error)| error.get("message"))
+                            .and_then(serde_json::Value::as_str).unwrap_or("no upstream message");
+                        anyhow::bail!("Dev Codex WebSocket error: {}; no retry", crate::upstream_failure::safe_excerpt(message));
+                    }
+                    _ => {}
+                }
+            }
+            anyhow::bail!("Dev Codex WebSocket closed without completion")
+        }).await.context("Dev Codex WebSocket smoke timed out")?
     }
 
     #[test]
@@ -6355,8 +6536,9 @@ mod responses_websocket_tests {
         assert_eq!(request.headers()["authorization"], "Bearer subscription-token");
         assert_eq!(request.headers()["chatgpt-account-id"], "account-1");
         assert_eq!(request.headers()["openai-alpha"], "quicksilver=v2");
-        assert_eq!(request.headers()["originator"], "codex_vscode");
-        assert_eq!(request.headers()["x-oai-attestation"], "attestation");
+        assert_eq!(request.headers()["originator"], active_codex_identity().originator);
+        // A VS Code attestation is not paired with the adapter's TUI identity.
+        assert!(!request.headers().contains_key("x-oai-attestation"));
         assert!(!request.headers().contains_key("openai-beta"));
     }
 

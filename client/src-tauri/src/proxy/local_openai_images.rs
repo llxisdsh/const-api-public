@@ -249,7 +249,8 @@ fn openai_subscription_image_request_builder(
     payload: OpenAiSubscriptionImagePayload,
 ) -> reqwest::RequestBuilder {
     let identity = active_codex_identity();
-    let request_context = codex_model_request_context_headers(Some(inbound_headers), &identity);
+    let request_context =
+        codex_subscription_model_request_context_headers(Some(inbound_headers), &identity);
     let mut request = client
         .post(url)
         .header(reqwest::header::ACCEPT, "application/json")

@@ -60,6 +60,45 @@ describe("channel refresh and inference command boundaries", () => {
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+  it("saves explicit priority groups without restarting or validating channels", async () => {
+    wire.channels.push({ ...originalChannel(), id: "priority-second", name: "Second" });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.displayChannels).toHaveLength(2));
+    expect(result.current.displayChannels.map((c) => c.local_priority)).toEqual([1, 2]);
+    vi.mocked(invoke).mockClear();
+    await act(async () => {
+      expect(await result.current.saveLocalChannelPriorities({ "priority-second": 1 })).toBe(true);
+    });
+    expect(result.current.displayChannels.map((c) => c.local_priority)).toEqual([1, 1]);
+    expect(invoke).toHaveBeenCalledWith("save_supplier_config", expect.objectContaining({
+      channels: expect.arrayContaining([expect.objectContaining({ id: "priority-second", local_priority: 1 })]),
+    }));
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => ["validate_channel_upstream", "start_supplier", "stop_supplier", "start_proxy", "stop_proxy"].includes(command))).toBe(false);
+    expect(result.current.selectedChannelHasChanges).toBe(false);
+  });
+
+  it("rolls back failed priority persistence and leaves channel edits unsaved", async () => {
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "save_supplier_config") throw new Error("fixture disk unavailable");
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    await act(async () => {
+      expect(await result.current.saveLocalChannelPriorities({ "refresh-channel": 8 })).toBe(false);
+    });
+    expect(result.current.selectedChannel.local_priority).toBe(1);
+    expect(result.current.toast?.text).toContain("fixture disk unavailable");
+    act(() => result.current.setConfig((current) => ({ ...current, channels: current.channels.map((c) => ({ ...c, name: "Unsaved draft" })) })));
+    vi.mocked(invoke).mockClear();
+    await act(async () => {
+      expect(await result.current.saveLocalChannelPriorities({ "refresh-channel": 8 })).toBe(false);
+    });
+    expect(invoke).not.toHaveBeenCalledWith("save_supplier_config", expect.anything());
+    expect(result.current.selectedChannel.name).toBe("Unsaved draft");
+  });
+
   it("restores account identity without waiting for unrelated configuration loading", async () => {
     let resolveConfig!: (value: typeof wire) => void;
     const pendingConfig = new Promise<typeof wire>((resolve) => { resolveConfig = resolve; });
@@ -103,9 +142,14 @@ describe("channel refresh and inference command boundaries", () => {
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
     act(() => { result.current.addSubscriptionPreset(driver); });
-    act(() => { result.current.setSubscriptionTokenJson('{"refresh_token":"fixture"}'); });
     vi.mocked(invoke).mockClear();
-    await act(async () => { await result.current.importSubscriptionJson(); });
+    await act(async () => {
+      await result.current.importSubscriptionJson('{"refresh_token":"fixture"}');
+    });
+    expect(invoke).toHaveBeenCalledWith("import_subscription_token_json", {
+      provider: "openai",
+      tokenJson: '{"refresh_token":"fixture"}',
+    });
     expect(invoke).toHaveBeenCalledWith("finalize_subscription_import", { channel: prepared, createDuplicate: true });
     expect(wire.channels).toHaveLength(2);
     expect(wire.channels[0]).toMatchObject(existing);

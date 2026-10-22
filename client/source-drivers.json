@@ -833,6 +833,37 @@
       "periodic": {"catalog":true,"quota":false,"metadata":true,"conversational_probe":false}
     },
     {
+      "id": "opencode_console",
+      "fixed_connection": true,
+      "category": "subscription",
+      "order": 45,
+      "title": "OpenCode Console 订阅",
+      "description": "通过 OpenCode Console 浏览器授权，使用工作区可用模型",
+      "icon_key": "opencode",
+      "action_label": "连接向导",
+      "homepage_url": "https://opencode.ai/console",
+      "advanced": false,
+      "execution_kind": "http_surface",
+      "executor": {"type":"http_surface"},
+      "default_target": {"surface":"open_ai","protocol":"openai_chat"},
+      "discovery": {"strategy":"opencode_console_models","catalog":true,"quota":false,"metadata":true},
+      "kind": "subscription_adapter",
+      "subscription_provider": "opencode",
+      "protocols": [
+        {"protocol":"openai_chat","preferred":true},
+        {"protocol":"openai_responses","preferred":false},
+        {"protocol":"anthropic_messages","preferred":false},
+        {"protocol":"gemini_native","preferred":false}
+      ],
+      "surfaces": [
+        {"surface":"open_ai","base_url":"https://opencode.ai/inference/openai/v1","endpoint_profile":"openai_compatible","auth_scheme":"bearer","protocols":["openai_chat","openai_responses"],"preferred_protocol":"openai_chat"},
+        {"surface":"anthropic","base_url":"https://opencode.ai/inference/anthropic/v1","endpoint_profile":"anthropic_compatible","auth_scheme":"bearer","protocols":["anthropic_messages"],"preferred_protocol":"anthropic_messages"},
+        {"surface":"gemini","base_url":"https://opencode.ai/inference/google/v1beta","endpoint_profile":"gemini_native","auth_scheme":"bearer","protocols":["gemini_native"],"preferred_protocol":"gemini_native"}
+      ],
+      "creation": {"trigger":"guided","basic_verification":"surface_preferred","advanced_conversational":"none"},
+      "periodic": {"catalog":true,"quota":false,"metadata":true,"conversational_probe":false}
+    },
+    {
       "id": "copilot_subscription",
       "fixed_connection": true,
       "category": "subscription",

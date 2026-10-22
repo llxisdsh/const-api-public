@@ -398,6 +398,197 @@ exports[`source drivers > encodes the complete V2 defaults used to create every 
     ],
   },
   {
+    "apiFormat": "openai_chat",
+    "baseUrl": "https://opencode.ai/inference/openai/v1",
+    "credentialRef": "",
+    "defaultTarget": {
+      "protocol": "openai_chat",
+      "surface": "open_ai",
+    },
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": false,
+      "strategy": "opencode_console_models",
+    },
+    "executionKind": "http_surface",
+    "executor": {
+      "type": "http_surface",
+    },
+    "kind": "subscription_adapter",
+    "models": [],
+    "sourceDriver": "opencode_console",
+    "subscription": {
+      "platform": "opencode",
+    },
+    "supportedProtocols": [
+      "openai_chat",
+      "openai_responses",
+      "anthropic_messages",
+      "gemini_native",
+    ],
+    "surfaceBindings": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://opencode.ai/inference/openai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://opencode.ai/inference/anthropic/v1",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://opencode.ai/inference/google/v1beta",
+        "endpoint_profile": "gemini_native",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "gemini_native",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "gemini",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://opencode.ai/inference/openai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://opencode.ai/inference/anthropic/v1",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://opencode.ai/inference/google/v1beta",
+        "endpoint_profile": "gemini_native",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "gemini_native",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "gemini",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
     "apiFormat": "anthropic_messages",
     "baseUrl": "",
     "credentialRef": "",
@@ -5538,6 +5729,132 @@ exports[`source drivers > round-trips every source driver through the V5-only ch
           },
         ],
         "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "created_at_unix_ms": 0,
+    "credential_ref": "credential://opencode_console",
+    "default_model": "",
+    "default_target": {
+      "protocol": "openai_chat",
+      "surface": "open_ai",
+    },
+    "detection_evidence": [],
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": false,
+      "strategy": "opencode_console_models",
+    },
+    "enabled": false,
+    "executor": {
+      "type": "http_surface",
+    },
+    "id": "channel-opencode_console",
+    "max_concurrency": 20,
+    "model_capability_evidence": [],
+    "models": [],
+    "name": "OpenCode Console 订阅",
+    "node_id": "node-opencode_console",
+    "price_ratio": 1,
+    "quota_reserve_percent": 0,
+    "server_quic_url": "platform.example.test:443",
+    "server_ws_url": "wss://platform.example.test/supplier/ws",
+    "share_enabled": false,
+    "source_driver": "opencode_console",
+    "subscription": {
+      "account_label": "",
+      "audit_enabled": false,
+      "claude_fast_enabled": false,
+      "cooldown_until_unix": 0,
+      "daily_request_limit": 0,
+      "max_concurrency": 20,
+      "platform": "opencode",
+      "quota_reserve_percent": 0,
+      "responses_ws_pool_enabled": true,
+      "responses_ws_subscription_multiplex_probe_enabled": false,
+      "risk_note": "",
+      "rpm_limit": 0,
+    },
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://opencode.ai/inference/openai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://opencode.ai/inference/anthropic/v1",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://opencode.ai/inference/google/v1beta",
+        "endpoint_profile": "gemini_native",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "gemini_native",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "gemini",
         "verification": {
           "checked_at_unix": 0,
           "state": "declared",

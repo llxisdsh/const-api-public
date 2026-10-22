@@ -2161,7 +2161,7 @@ mod buffered_response_tests {
     }
 
     #[test]
-    fn codex_response_request_preserves_complete_caller_identity_and_turn_state() {
+    fn codex_response_request_uses_adapter_identity_and_preserves_turn_state() {
         let mut inbound = reqwest::header::HeaderMap::new();
         inbound.insert("originator", "codex_vscode".parse().unwrap());
         inbound.insert("user-agent", "codex_vscode/1.2.3".parse().unwrap());
@@ -2181,11 +2181,12 @@ mod buffered_response_tests {
         .build()
         .expect("Codex response request");
 
-        assert_eq!(request.headers()["originator"], "codex_vscode");
-        assert_eq!(request.headers()["user-agent"], "codex_vscode/1.2.3");
-        assert_eq!(request.headers()["version"], "1.2.3");
+        let identity = crate::codex_identity::active_codex_identity();
+        assert_eq!(request.headers()["originator"], identity.originator);
+        assert_eq!(request.headers()["user-agent"], identity.user_agent);
+        assert_eq!(request.headers()["version"], identity.version);
         assert_eq!(request.headers()["x-codex-turn-state"], "turn-state-1");
-        assert_eq!(request.headers()["x-oai-attestation"], "attestation-1");
+        assert!(!request.headers().contains_key("x-oai-attestation"));
         assert!(!request.headers().contains_key("x-not-codex"));
     }
 
@@ -2407,18 +2408,21 @@ mod buffered_response_tests {
                     "Bearer upstream-test-token"
                 );
                 assert_eq!(request.body().unwrap().as_bytes().unwrap(), body.as_bytes());
-                if native {
-                    assert_eq!(request.headers()["user-agent"], headers["user-agent"]);
-                    assert!(!request.headers().contains_key("x-stainless-runtime"));
+                assert_eq!(request.headers()["user-agent"], CLAUDE_CODE_USER_AGENT);
+                if endpoint.ends_with("count_tokens") {
+                    assert!(request.headers().get("x-stainless-timeout").is_none());
                 } else {
-                    assert_eq!(request.headers()["user-agent"], CLAUDE_CODE_USER_AGENT);
+                    assert_eq!(request.headers()["x-stainless-timeout"], "600");
+                }
+                if native {
+                    assert_eq!(request.headers()["x-stainless-runtime"], "node");
                 }
             }
         }
     }
 
     #[test]
-    fn native_claude_request_preserves_real_client_identity_headers() {
+    fn native_claude_request_uses_adapter_identity_and_preserves_protocol_headers() {
         let body = serde_json::json!({
             "model": "claude-sonnet-4-6",
             "system": [{
@@ -2460,6 +2464,10 @@ mod buffered_response_tests {
             reqwest::header::HeaderValue::from_static("native-nonce"),
         );
         inbound.insert(
+            "x-stainless-timeout",
+            reqwest::header::HeaderValue::from_static("900"),
+        );
+        inbound.insert(
             "anthropic-beta",
             reqwest::header::HeaderValue::from_static(
                 "claude-code-20250219,interleaved-thinking-2025-05-14",
@@ -2478,21 +2486,34 @@ mod buffered_response_tests {
 
         assert_eq!(
             request.headers().get(reqwest::header::USER_AGENT).unwrap(),
-            "claude-cli/2.1.241 (external, cli)"
+            CLAUDE_CODE_USER_AGENT
         );
-        assert_eq!(request.headers().get("x-stainless-os").unwrap(), "Windows");
-        assert_eq!(request.headers().get("x-stainless-arch").unwrap(), "x64");
+        assert_eq!(
+            request.headers().get("x-stainless-os").unwrap(),
+            claude_code_stainless_os()
+        );
+        assert_eq!(
+            request.headers().get("x-stainless-arch").unwrap(),
+            claude_code_stainless_arch()
+        );
+        // Native Claude Code negotiates JSON even for streaming requests; the
+        // adapter must not rewrite content negotiation for a native caller.
         assert_eq!(request.headers().get("accept").unwrap(), "application/json");
         assert_eq!(
             request.headers().get("x-auth-nonce").unwrap(),
             "native-nonce"
         );
-        assert!(!request
-            .headers()
-            .contains_key("x-stainless-package-version"));
-        assert!(!request.headers().contains_key("x-stainless-runtime"));
-        assert!(!request.headers().contains_key("x-client-request-id"));
-        assert!(!request.headers().contains_key("connection"));
+        assert_eq!(
+            request.headers().get("x-stainless-package-version").unwrap(),
+            CLAUDE_CODE_STAINLESS_PACKAGE_VERSION
+        );
+        assert_eq!(request.headers().get("x-stainless-runtime").unwrap(), "node");
+        assert_eq!(
+            request.headers().get("x-stainless-timeout").unwrap(),
+            "900"
+        );
+        assert!(request.headers().contains_key("x-client-request-id"));
+        assert_eq!(request.headers().get("connection").unwrap(), "keep-alive");
         assert_eq!(
             request.headers().get("accept-encoding").unwrap(),
             CLAUDE_RESPONSE_ACCEPT_ENCODING
@@ -2508,8 +2529,38 @@ mod buffered_response_tests {
             .headers()
             .get("anthropic-beta")
             .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value
-                == "claude-code-20250219,interleaved-thinking-2025-05-14,oauth-2025-04-20"));
+            .is_some_and(|value| value == CLAUDE_CODE_BETA_HEADER));
+    }
+
+    #[test]
+    fn claude_count_tokens_keeps_a_native_caller_timeout_only() {
+        let body = serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "system": [{
+                "type": "text",
+                "text": "x-anthropic-billing-header: cc_version=2.1.241; cc_entrypoint=cli; cch=abcde;"
+            }],
+            "messages": [{"role": "user", "content": "hello"}]
+        })
+        .to_string();
+        let mut inbound = reqwest::header::HeaderMap::new();
+        inbound.insert(
+            "user-agent",
+            "claude-cli/2.1.241 (external, cli)".parse().unwrap(),
+        );
+        inbound.insert("x-stainless-timeout", "900".parse().unwrap());
+        let request = claude_subscription_request_with_headers(
+            &Client::new(),
+            "https://api.anthropic.test/v1/messages/count_tokens",
+            "token",
+            body,
+            Some(&inbound),
+        )
+        .build()
+        .expect("native Claude count_tokens request");
+
+        assert_eq!(request.headers()["x-stainless-timeout"], "900");
+        assert_eq!(request.headers()["accept"], "application/json");
     }
 
     #[test]
@@ -2534,8 +2585,12 @@ mod buffered_response_tests {
             let request = openai_subscription_response_request(&client, "https://example.test/responses", "mock-supplier-token", &serde_json::json!({}), prepared.body, Some(&headers)).unwrap().build().unwrap();
             let encoded = request.body().unwrap().as_bytes().unwrap();
             assert_eq!(zstd::stream::decode_all(std::io::Cursor::new(encoded)).unwrap(), body.as_bytes());
-            assert_eq!(request.headers()["version"], version);
-            assert_eq!(request.headers()["user-agent"], user_agent);
+            let identity = crate::codex_identity::active_codex_identity();
+            assert_eq!(request.headers()["originator"], identity.originator);
+            assert_eq!(request.headers()["version"], identity.version);
+            assert_eq!(request.headers()["user-agent"], identity.user_agent);
+            // A native Codex HTTP call does not negotiate the experimental
+            // beta; only the caller's own opt-in tokens survive.
             assert_eq!(request.headers()["openai-beta"], "tools=future-v9");
         }
         for version in ["2.1.220", "2.1.285", "2.1.300", "2.1.301", "2.1.302", "3.0.0"] {
@@ -2555,10 +2610,24 @@ mod buffered_response_tests {
             assert_eq!(conversion.body, body);
             let adjusted = ensure_claude_messages_body_with_faults(&conversion.body, model).unwrap();
             let prepared = prepare_claude_subscription_oauth_body(&adjusted.body, "mock-credential-reference").unwrap();
-            assert_eq!(prepared, body);
-            let request = claude_subscription_request_with_headers(&client, "https://example.test/v1/messages", "mock-supplier-token", prepared, Some(&headers)).build().unwrap();
-            assert_eq!(request.body().unwrap().as_bytes().unwrap(), body.as_bytes());
-            assert_eq!(request.headers()["user-agent"], user_agent);
+            let original_billing =
+                format!("x-anthropic-billing-header: cc_version={version}; cc_entrypoint=cli;");
+            let prepared_value: serde_json::Value = serde_json::from_str(&prepared).unwrap();
+            let synced_billing = prepared_value["system"][0]["text"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert!(synced_billing.starts_with(&format!(
+                "x-anthropic-billing-header: cc_version={CLAUDE_CODE_VERSION}."
+            )));
+            assert!(synced_billing.ends_with(&format!(
+                "cc_entrypoint={CLAUDE_CODE_ENTRYPOINT};"
+            )));
+            // Only the billing identity moves; the rest of a native payload stays byte-stable.
+            assert_eq!(prepared, body.replace(&original_billing, &synced_billing));
+            let request = claude_subscription_request_with_headers(&client, "https://example.test/v1/messages", "mock-supplier-token", prepared.clone(), Some(&headers)).build().unwrap();
+            assert_eq!(request.body().unwrap().as_bytes().unwrap(), prepared.as_bytes());
+            assert_eq!(request.headers()["user-agent"], CLAUDE_CODE_USER_AGENT);
             assert!(request.headers()["anthropic-beta"].to_str().unwrap().contains("future-feature-2099-01-01"));
         }
     }
@@ -2616,7 +2685,7 @@ mod buffered_response_tests {
     }
 
     #[test]
-    fn native_claude_compaction_keeps_identity_and_appends_required_beta() {
+    fn native_claude_compaction_uses_adapter_identity_and_appends_required_beta() {
         let body = serde_json::json!({
             "model": "claude-sonnet-4-6",
             "system": [{
@@ -2648,14 +2717,17 @@ mod buffered_response_tests {
         .expect("native Claude compaction request");
         assert_eq!(
             request.headers().get(reqwest::header::USER_AGENT).unwrap(),
-            "claude-cli/2.1.241 (external, cli)"
+            CLAUDE_CODE_USER_AGENT
+        );
+        let expected_beta = format!(
+            "{CLAUDE_CODE_BETA_HEADER},{CLAUDE_SERVER_SIDE_COMPACTION_BETA}"
         );
         assert_eq!(
             request
                 .headers()
                 .get("anthropic-beta")
                 .and_then(|value| value.to_str().ok()),
-            Some("claude-code-20250219,oauth-2025-04-20,compact-2026-01-12")
+            Some(expected_beta.as_str())
         );
     }
 
@@ -2904,6 +2976,121 @@ mod buffered_response_tests {
     }
 
     #[test]
+    fn subscription_identity_claude_fingerprint_matches_javascript_utf16() {
+        // Vectors computed independently with Node crypto and JS string indexing.
+        assert_eq!(CLAUDE_CODE_VERSION, "2.1.302", "refresh vectors when the profile changes");
+        for (text, expected) in [
+            ("你好，这是一次中文请求，请帮我检查代码。", "99c"),
+            ("1234😀x😀123456789012😀", "8f7"),
+            ("abcdéfg中hijklmnopqrst", "64f"),
+            ("hi", "ea8"),
+        ] {
+            let body = serde_json::json!({"messages":[{"role":"user","content":text}]});
+            assert_eq!(claude_code_build_fingerprint(&body), expected);
+        }
+        let empty_first = serde_json::json!({"messages":[
+            {"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.test/fixture.png"}}]},
+            {"role":"assistant","content":"What should I check?"},
+            {"role":"user","content":"Inspect the code"}
+        ]});
+        assert_eq!(first_claude_user_text(&empty_first), "");
+        assert_eq!(claude_code_build_fingerprint(&empty_first), claude_code_build_fingerprint(&serde_json::json!({"messages":[]})));
+        // The empty fingerprint seed must not merge unrelated image-first sessions.
+        let session = |body: &serde_json::Value| {
+            let wrapped = prepare_claude_subscription_oauth_body(&body.to_string(), "credential-a").unwrap();
+            claude_code_session_id_from_body(&wrapped).expect("generated session")
+        };
+        let mut other_image = empty_first.clone();
+        other_image["messages"][0]["content"][0]["source"]["url"] = "https://example.test/other.png".into();
+        let mut next_turn = empty_first.clone();
+        next_turn["messages"].as_array_mut().unwrap().extend([
+            serde_json::json!({"role":"assistant","content":"Done."}),
+            serde_json::json!({"role":"user","content":"Now the tests"}),
+        ]);
+        assert_ne!(session(&empty_first), session(&other_image));
+        assert_eq!(session(&empty_first), session(&next_turn));
+    }
+
+    #[test]
+    fn subscription_identity_claude_only_rewrites_the_system_billing_token() {
+        let billing = "x-anthropic-billing-header: cc_version=2.1.1.old; cc_entrypoint=cli; cch=old; workload=a;";
+        for escape_system in [false, true] {
+            let encoded = serde_json::to_string(billing).unwrap();
+            let system_text = if escape_system { encoded.replace(' ', r"\u0020") } else { encoded.clone() };
+            let body = format!(r#"{{ "system":[{{"type":"text","text":"classifier"}},{{"type":"text","text":{system_text},"cache_control":{{"type":"ephemeral"}}}}],
+ "messages":[{{"role":"user","content":{encoded}}}], "future":{{"unknown":1e2}} }}"#);
+            let prepared = prepare_claude_subscription_oauth_body(&body, "fixture").unwrap();
+            let value: serde_json::Value = serde_json::from_str(&prepared).unwrap();
+            let synced = value["system"][1]["text"].as_str().unwrap();
+            assert!(synced.contains("workload=a;"));
+            assert!(!synced.contains("cch="));
+            assert_eq!(value["messages"][0]["content"], billing);
+            assert_eq!(prepared, body.replacen(
+                &format!("\"text\":{system_text},\"cache_control\""),
+                &format!("\"text\":{},\"cache_control\"", serde_json::to_string(synced).unwrap()), 1,
+            ));
+            assert_eq!(prepare_claude_subscription_oauth_body(&prepared, "fixture").unwrap(), prepared);
+        }
+    }
+
+    #[test]
+    fn subscription_identity_claude_count_tokens_does_not_gain_a_generation_wrapper() {
+        let body = serde_json::json!({"model":"claude-sonnet-4-6","max_tokens":32,
+            "system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.1.old; cc_entrypoint=cli;"}],
+            "messages":[{"role":"user","content":"hi"}]});
+        let adjusted = normalize_claude_subscription_count_tokens_body(&body.to_string()).unwrap();
+        let adjusted: serde_json::Value = serde_json::from_str(&adjusted).unwrap();
+        assert!(adjusted.get("max_tokens").is_none());
+        assert!(adjusted.get("metadata").is_none());
+        assert_eq!(adjusted["messages"], body["messages"]);
+        assert_eq!(adjusted["system"].as_array().unwrap().len(), 1);
+        assert!(adjusted["system"][0]["text"].as_str().unwrap().contains("2.1.302.ea8"));
+    }
+
+    #[tokio::test]
+    async fn subscription_identity_claude_http_wire_preserves_tools_and_session() {
+        use warp::Filter;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let route = warp::header::headers_cloned().and(warp::body::bytes())
+            .map(move |headers: reqwest::header::HeaderMap, body: bytes::Bytes| {
+                tx.send((headers, body)).unwrap();
+                warp::reply::with_header("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "content-type", "text/event-stream")
+            });
+        let (address, server) = crate::bind_ephemeral!(route, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        let body = serde_json::json!({
+            "model":"claude-sonnet-4-6", "stream":true,
+            "system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.1.old; cc_entrypoint=cli;"}],
+            "messages":[{"role":"user","content":"你好，这是一次中文请求，请帮我检查代码。"}],
+            "metadata":{"user_id":serde_json::json!({"device_id":"fixture-device","session_id":"fixture-session"}).to_string()},
+            "tools":[{"name":"read","input_schema":{"type":"object","properties":{}}}],
+            "tool_choice":{"type":"tool","name":"read"}
+        });
+        let prepared = prepare_claude_subscription_oauth_body(&body.to_string(), "fixture").unwrap();
+        let mut inbound = reqwest::header::HeaderMap::new();
+        inbound.insert("user-agent", "claude-cli/2.1.1 (external, cli)".parse().unwrap());
+        inbound.insert("x-claude-code-session-id", "fixture-session".parse().unwrap());
+        inbound.insert("anthropic-beta", "future-feature-2099-01-01".parse().unwrap());
+        inbound.insert("authorization", "Bearer must-not-forward".parse().unwrap());
+        let client = Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+        let response = claude_subscription_request_with_headers(&client, &format!("http://{address}/v1/messages"),
+            "fixture-token", prepared.clone(), Some(&inbound)).send().await.unwrap();
+        assert!(response.text().await.unwrap().contains("message_stop"));
+        let (headers, received) = rx.recv().await.unwrap();
+        server.abort();
+        assert_eq!(received.as_ref(), prepared.as_bytes());
+        assert_eq!(headers["user-agent"], CLAUDE_CODE_USER_AGENT);
+        assert_eq!(headers["authorization"], "Bearer fixture-token");
+        assert_eq!(headers.get_all("x-claude-code-session-id").iter().count(), 1);
+        assert_eq!(headers["x-claude-code-session-id"], "fixture-session");
+        assert!(headers["anthropic-beta"].to_str().unwrap().contains("future-feature-2099-01-01"));
+        let received: serde_json::Value = serde_json::from_slice(&received).unwrap();
+        assert_eq!(received["tools"], body["tools"]);
+        assert_eq!(received["tool_choice"], body["tool_choice"]);
+        assert!(received["system"][0]["text"].as_str().unwrap().contains("2.1.302.99c"));
+    }
+
+    #[test]
     fn claude_oauth_body_wrapper_preserves_compaction_control_and_replay_state() {
         let generic = serde_json::json!({
             "model": "claude-sonnet-4-6",
@@ -3060,7 +3247,7 @@ mod buffered_response_tests {
     }
 
     #[test]
-    fn claude_oauth_body_wrapper_preserves_native_billing_block_in_any_position() {
+    fn claude_oauth_body_wrapper_syncs_native_billing_block_in_any_position() {
         let native_body = r#"{
   "model": "claude-sonnet-4-6",
   "system": [
@@ -3071,16 +3258,31 @@ mod buffered_response_tests {
   "messages": [{"role": "user", "content": "review"}],
   "metadata": {"user_id": "native-metadata"}
 }"#;
-        let native: serde_json::Value = serde_json::from_str(native_body).unwrap();
 
         let wrapped =
             prepare_claude_subscription_oauth_body(native_body, "C:/credentials/claude.json")
                 .expect("native Claude body");
 
-        assert_eq!(wrapped, native_body);
+        // The body's billing version must match the User-Agent the adapter sends.
+        let wrapped_value: serde_json::Value = serde_json::from_str(&wrapped).unwrap();
+        let billing = wrapped_value["system"][1]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(billing.starts_with(&format!(
+            "x-anthropic-billing-header: cc_version={CLAUDE_CODE_VERSION}."
+        )));
+        assert!(billing.ends_with(&format!(
+            "cc_entrypoint={CLAUDE_CODE_ENTRYPOINT};"
+        )));
+        // Blocks before and after the billing block, and the rest of the document,
+        // keep their original bytes.
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&wrapped).unwrap(),
-            native
+            wrapped,
+            native_body.replace(
+                "x-anthropic-billing-header: cc_version=2.1.220.abc; cc_entrypoint=cli;",
+                &billing
+            )
         );
 
         let adjusted = ensure_claude_messages_body_with_faults(native_body, "claude-sonnet-4-6")
@@ -3128,6 +3330,14 @@ mod buffered_response_tests {
         assert_eq!(
             request.headers().get("x-grok-client-mode").unwrap(),
             "interactive"
+        );
+        assert_eq!(
+            request.headers().get("x-grok-client-identifier").unwrap(),
+            GROK_CLI_CLIENT_IDENTIFIER
+        );
+        assert_eq!(
+            request.headers().get("x-authenticateresponse").unwrap(),
+            "authenticate-response"
         );
         assert_eq!(
             request.headers().get("x-grok-model-override").unwrap(),

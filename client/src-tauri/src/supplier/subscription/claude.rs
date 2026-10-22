@@ -219,6 +219,8 @@ pub(crate) fn grok_subscription_response_request(
         .header("X-XAI-Token-Auth", "xai-grok-cli")
         .header("x-grok-client-version", GROK_CLI_VERSION)
         .header("X-Grok-Client-Mode", "interactive")
+        .header("x-grok-client-identifier", GROK_CLI_CLIENT_IDENTIFIER)
+        .header("x-authenticateresponse", "authenticate-response")
         .header("x-grok-model-override", model)
         .header("User-Agent", GROK_CLI_USER_AGENT);
     // xAI accepts both forms for sticky cache routing. Derive the header from
@@ -239,7 +241,8 @@ fn codex_response_identity_headers(
     request_headers: Option<&reqwest::header::HeaderMap>,
     identity: &CodexClientIdentity,
 ) -> reqwest::header::HeaderMap {
-    let mut headers = codex_model_request_context_headers(request_headers, identity);
+    // Like current Codex, HTTP /responses sends no Responses beta header.
+    let mut headers = codex_subscription_model_request_context_headers(request_headers, identity);
     let Ok(body) = serde_json::from_str::<serde_json::Value>(body) else {
         return headers;
     };
@@ -915,10 +918,9 @@ pub(crate) async fn forward_claude_subscription_stream_request_with_capacity(
     Ok(None)
 }
 
-fn native_claude_code_headers(
+fn native_claude_code_protocol_headers(
     body: &str,
     request_headers: Option<&reqwest::header::HeaderMap>,
-    fallback_beta: &str,
 ) -> Option<reqwest::header::HeaderMap> {
     let Some(request_headers) = request_headers else {
         return None;
@@ -934,31 +936,19 @@ fn native_claude_code_headers(
         return None;
     }
 
+    // A native Claude request can carry protocol/session state that is needed
+    // by the subscription endpoint. Keep only those fields. The caller's UA,
+    // Stainless runtime/OS/arch, x-app and client version are identity data;
+    // the adapter below supplies one stable Claude Code profile instead. Accept
+    // stays here because Claude Code negotiates JSON even for streaming calls.
     let mut output = reqwest::header::HeaderMap::new();
     for name in [
         "accept",
-        "accept-encoding",
-        "user-agent",
-        "anthropic-dangerous-direct-browser-access",
-        "anthropic-version",
-        "x-app",
         "x-anthropic-additional-protection",
-        "x-client-request-id",
-        "x-client-app",
         "x-auth-nonce",
         "x-claude-code-session-id",
         "x-claude-remote-container-id",
         "x-claude-remote-session-id",
-        "x-stainless-lang",
-        "x-stainless-package-version",
-        "x-stainless-os",
-        "x-stainless-arch",
-        "x-stainless-runtime",
-        "x-stainless-runtime-version",
-        "x-stainless-retry-count",
-        "x-stainless-timeout",
-        "x-stainless-read-timeout",
-        "x-stainless-helper-method",
     ] {
         if let Some(value) = request_headers.get(name) {
             output.insert(
@@ -968,27 +958,6 @@ fn native_claude_code_headers(
         }
     }
 
-    let mut betas = caller_claude_betas(Some(request_headers));
-    if !betas.is_empty() {
-        push_claude_beta(&mut betas, "oauth-2025-04-20");
-        if claude_request_uses_server_side_compaction(body) {
-            push_claude_beta(&mut betas, CLAUDE_SERVER_SIDE_COMPACTION_BETA);
-        }
-        if let Ok(value) = reqwest::header::HeaderValue::from_str(&betas.join(",")) {
-            output.insert("anthropic-beta", value);
-        }
-    }
-    if !output.contains_key("anthropic-beta") {
-        if let Ok(value) = reqwest::header::HeaderValue::from_str(fallback_beta) {
-            output.insert("anthropic-beta", value);
-        }
-    }
-    if !output.contains_key("anthropic-version") {
-        output.insert(
-            "anthropic-version",
-            reqwest::header::HeaderValue::from_static("2023-06-01"),
-        );
-    }
     Some(output)
 }
 
@@ -1071,14 +1040,14 @@ fn claude_subscription_request_with_headers(
     request_headers: Option<&reqwest::header::HeaderMap>,
 ) -> reqwest::RequestBuilder {
     let session_id = claude_code_session_id_from_body(&body);
-    let stream = !is_anthropic_count_tokens_path(url)
-        && top_level_json_bool(body.as_bytes(), "stream").unwrap_or(false);
-    let mut beta_header = if is_anthropic_count_tokens_path(url) {
+    let count_tokens = is_anthropic_count_tokens_path(url);
+    let stream = !count_tokens && top_level_json_bool(body.as_bytes(), "stream").unwrap_or(false);
+    let mut beta_header = if count_tokens {
         CLAUDE_COUNT_TOKENS_BETA_HEADER.to_string()
     } else {
         CLAUDE_CODE_BETA_HEADER.to_string()
     };
-    if !is_anthropic_count_tokens_path(url)
+    if !count_tokens
         && top_level_json_string(body.as_bytes(), "speed")
             .is_some_and(|speed| speed.eq_ignore_ascii_case("fast"))
         && !beta_header.contains("fast-mode-2026-02-01")
@@ -1105,7 +1074,20 @@ fn claude_subscription_request_with_headers(
         push_claude_beta(&mut betas, &beta);
     }
     beta_header = betas.join(",");
-    let native_headers = native_claude_code_headers(&body, request_headers, &beta_header);
+    let native_protocol_headers = native_claude_code_protocol_headers(&body, request_headers);
+    // RequestBuilder::header appends. A copied native session must not acquire
+    // a second header from metadata (even when both values happen to agree).
+    let session_id = session_id.filter(|_| {
+        native_protocol_headers.as_ref()
+            .is_none_or(|headers| !headers.contains_key("x-claude-code-session-id"))
+    });
+    let native_caller_timeout = if native_protocol_headers.is_some() {
+        request_headers
+            .and_then(|headers| headers.get("x-stainless-timeout"))
+            .cloned()
+    } else {
+        None
+    };
     let accept = if stream {
         "text/event-stream"
     } else {
@@ -1118,10 +1100,8 @@ fn claude_subscription_request_with_headers(
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {token}"))
         .body(body);
-    if let Some(native_headers) = native_headers {
-        // Do not mix a real Claude Code identity with the compatibility
-        // client's synthetic Stainless/OS/runtime fingerprint.
-        return request.headers(native_headers);
+    if let Some(native_protocol_headers) = native_protocol_headers {
+        request = request.headers(native_protocol_headers);
     }
     request = request
         .header("anthropic-version", "2023-06-01")
@@ -1141,13 +1121,19 @@ fn claude_subscription_request_with_headers(
             CLAUDE_CODE_STAINLESS_RUNTIME_VERSION,
         )
         .header("X-Stainless-Retry-Count", "0")
-        .header("X-Stainless-Timeout", "600")
         .header(
             "Anthropic-Dangerous-Direct-Browser-Access",
             CLAUDE_DIRECT_BROWSER_ACCESS,
         )
         .header("x-client-request-id", random_request_uuid())
         .header("Connection", "keep-alive");
+    // Claude Code omits X-Stainless-Timeout on count_tokens; a confirmed native
+    // caller keeps only its own value there.
+    if let Some(timeout) = native_caller_timeout {
+        request = request.header("X-Stainless-Timeout", timeout);
+    } else if !count_tokens {
+        request = request.header("X-Stainless-Timeout", "600");
+    }
     if stream {
         request = request.header("x-stainless-helper-method", "stream");
     }

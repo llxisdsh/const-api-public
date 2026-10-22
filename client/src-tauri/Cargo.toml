@@ -1,6 +1,6 @@
 [package]
 name = "const-api-local"
-version = "0.1.61"
+version = "0.1.62"
 description = "CONST API local-only source build"
 license = "MIT"
 edition = "2024"

@@ -262,7 +262,8 @@ async fn normalize_openai_subscription_realtime_call_payload(
 fn codex_realtime_request_context_headers(
     inbound: &warp::http::HeaderMap,
 ) -> reqwest::header::HeaderMap {
-    let mut headers = codex_model_request_context_headers(Some(inbound), &active_codex_identity());
+    let mut headers =
+        codex_subscription_model_request_context_headers(Some(inbound), &active_codex_identity());
     // Voice versions negotiate their own dialect. Preserve the native tool's
     // negotiation headers without changing the identity used for text requests.
     if crate::codex_request_is_native(Some(inbound)) {

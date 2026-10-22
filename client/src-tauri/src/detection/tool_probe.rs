@@ -109,7 +109,7 @@ fn request_body(protocol: ProtocolKind, model: &str, budget: u32) -> Value {
             "tool_choice":{"type":"tool","name":"const_probe"}, "max_tokens":budget
         }),
         ProtocolKind::GeminiNative => json!({
-            "contents":[{"parts":[{"text":prompt}]}],
+            "contents":[{"role":"user","parts":[{"text":prompt}]}],
             "tools":[{"functionDeclarations":[{"name":"const_probe","parameters":{
                 "type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]
             }}]}],

@@ -89,6 +89,75 @@ pub(crate) fn model_ids(observations: Vec<ModelObservation>) -> Vec<String> {
         .collect()
 }
 
+/// Merge the authenticated OpenCode Console price hints into the models
+/// returned by the public inference directory.
+///
+/// Console's `/api/v2/config` is workspace-scoped and its prices are advisory
+/// for the local catalog only. They must never be serialized as a platform
+/// billing rule. OpenCode expresses prices as USD per million tokens, while
+/// `probe_cost_nanos` is the estimated USD cost of a 32-input/16-output probe
+/// in nanos, so the conversion includes the per-million divisor.
+pub(crate) fn apply_opencode_console_costs(
+    models: &mut [ModelObservation],
+    config: &serde_json::Value,
+) {
+    let Some(provider_models) = config
+        .get("providers")
+        .and_then(|providers| providers.get("opencode"))
+        .and_then(|provider| provider.get("models"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return;
+    };
+
+    for model in models {
+        let entry = provider_models
+            .get(&model.id)
+            .or_else(|| {
+                provider_models
+                    .iter()
+                    .find_map(|(id, value)| id.eq_ignore_ascii_case(&model.id).then_some(value))
+            })
+            .or_else(|| {
+                provider_models.values().find(|value| {
+                    value
+                        .get("modelID")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|id| id.eq_ignore_ascii_case(&model.id))
+                })
+            });
+        let Some(entry) = entry else {
+            continue;
+        };
+        let Some(probe_cost) = opencode_console_probe_cost(entry.get("cost")) else {
+            continue;
+        };
+        model.probe_cost_nanos = Some(
+            model
+                .probe_cost_nanos
+                .map_or(probe_cost, |current| current.min(probe_cost)),
+        );
+    }
+}
+
+fn opencode_console_probe_cost(value: Option<&serde_json::Value>) -> Option<u64> {
+    let entries = match value {
+        Some(value) if value.is_array() => value.as_array()?.as_slice(),
+        Some(value) => std::slice::from_ref(value),
+        None => return None,
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let input = entry.get("input").and_then(json_f64)?;
+            let output = entry.get("output").and_then(json_f64)?;
+            let cost = (input * 32.0 + output * 16.0) * 1_000.0;
+            (cost.is_finite() && cost >= 0.0 && cost <= u64::MAX as f64)
+                .then_some(cost.ceil() as u64)
+        })
+        .min()
+}
+
 pub(crate) fn model_observations_from_value(
     kind: ModelCatalogKind,
     value: &serde_json::Value,
@@ -543,6 +612,12 @@ fn json_i64(value: &serde_json::Value) -> Option<i64> {
         .or_else(|| value.as_str().and_then(|value| value.trim().parse().ok()))
 }
 
+fn json_f64(value: &serde_json::Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str()?.trim().parse::<f64>().ok())
+}
+
 pub(crate) async fn fetch_model_catalog(
     client: &Client,
     initial_url: Url,
@@ -742,6 +817,58 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use warp::Filter;
+
+    #[test]
+    fn opencode_console_costs_are_advisory_and_use_workspace_model_ids() {
+        let mut models = vec![
+            ModelObservation {
+                id: "deepseek-v4.1-flash-free".into(),
+                ..Default::default()
+            },
+            ModelObservation {
+                id: "big-pickle".into(),
+                ..Default::default()
+            },
+            ModelObservation {
+                id: "alias-model".into(),
+                ..Default::default()
+            },
+            ModelObservation {
+                id: "ignored-provider-model".into(),
+                ..Default::default()
+            },
+        ];
+        apply_opencode_console_costs(
+            &mut models,
+            &serde_json::json!({
+                "providers": {
+                    "opencode": {
+                        "models": {
+                            "DeepSeek-V4.1-Flash-Free": {
+                                "cost": [
+                                    {"input": 0.5, "output": 1.25},
+                                    {"tier": {"type": "context", "size": 200000}, "input": 1.0, "output": 2.0}
+                                ]
+                            },
+                            "big-pickle": {"cost": {"input": 0, "output": 0}},
+                            "alias-key": {"modelID": "alias-model", "cost": {"input": 0.25, "output": 0.5}},
+                            "invalid": {"cost": {"input": -1, "output": 1}}
+                        }
+                    },
+                    "anthropic": {
+                        "models": {
+                            "ignored-provider-model": {"cost": {"input": 0, "output": 0}}
+                        }
+                    }
+                }
+            }),
+        );
+
+        assert_eq!(models[0].probe_cost_nanos, Some(36_000));
+        assert_eq!(models[1].probe_cost_nanos, Some(0));
+        assert_eq!(models[2].probe_cost_nanos, Some(16_000));
+        assert_eq!(models[3].probe_cost_nanos, None);
+    }
 
     #[test]
     fn catalog_limits_are_parsed_without_inference_and_duplicates_use_lower_claim() {

@@ -58,6 +58,25 @@
       "upstream_error": "Meta 授权请求失败，可重新登录；未启用按量计费回退。"
     }
   },
+  "opencode": {
+    "login": "登录 OpenCode Console",
+    "starting": "正在生成设备授权…",
+    "hint": "在浏览器登录 OpenCode Console 并授权当前工作区。请求使用 Console 会话令牌，令牌会按官方流程刷新，不使用普通 API Key。",
+    "code": "设备确认码：",
+    "openLogin": "打开 OpenCode 授权页",
+    "waiting": "请在浏览器确认授权，完成后会自动导入会话。",
+    "retrying": "暂时无法连接或请求受限，正在等待重试；可随时取消。",
+    "success": "已授权。保存并验证会读取工作区模型目录，模型测试会消耗上游额度。",
+    "errors": {
+      "network": "连接 OpenCode Console 失败，请检查网络后重试。",
+      "invalid_response": "OpenCode Console 返回了无法识别的授权信息，未导入会话。",
+      "unexpected_endpoint": "OpenCode Console 返回了非预期授权地址，已停止授权。",
+      "denied": "OpenCode 授权被拒绝，可重新发起。",
+      "expired": "设备授权已过期，请重新登录。",
+      "slow_down": "授权尝试过多，请等待后再试。",
+      "upstream_error": "OpenCode Console 授权失败，请稍后重试。"
+    }
+  },
   "windowControls": {
     "minimize": "最小化",
     "maximize": "最大化",
@@ -707,8 +726,18 @@
     "noChannels": "还没有模型渠道。添加并启用后，即可在本机使用。",
     "channel": "渠道",
     "localPriority": "优先级",
-    "moveChannelUp": "上移 {{channel}}",
-    "moveChannelDown": "下移 {{channel}}",
+    "priority": {
+      "title": "本机渠道优先级",
+      "hint": "这里是本机手动设置的优先级，不按价格自动排序。数字越小越优先；把多个账号设为相同数字，就让它们共同分担新会话；前一级不可用或并发已满时，后一级再接手。已有会话尽量保持原账号。",
+      "scope": "只影响本机和局域网请求，不参与平台市场的价格和排序。",
+      "editChannel": "调整 {{channel}} 的优先级，当前为 {{priority}}",
+      "channelValue": "{{channel}} 的优先级",
+      "selectChannel": "选择 {{channel}}",
+      "selectAll": "全选",
+      "selected": "已选 {{count}} 个",
+      "setTo": "设为",
+      "invalid": "优先级须为 1 至 4294967295 的整数。"
+    },
     "switch": "开关",
     "model": "模型",
     "newChannel": "添加模型渠道",
@@ -734,6 +763,7 @@
     "statusAria": "渠道状态",
     "status": "状态",
     "latency": "延迟",
+    "activeRequests": "活跃请求",
     "protocolLatency": "协议 / 延迟",
     "safety": "安全",
     "quota": "额度",
@@ -1674,6 +1704,7 @@
       "grok": "Grok 账号订阅",
       "kiro": "Kiro 账号订阅",
       "cursor": "Cursor 账号订阅",
+      "opencode": "OpenCode Console 订阅",
       "connect": "连接 {{provider}}"
     },
     "capability": {
@@ -1694,7 +1725,7 @@
       "quotaExhausted": "额度耗尽",
       "reauthorize": "需重新授权",
       "manualAction": "需人工处理",
-      "platformOnline": "平台在线",
+      "platformOnline": "在线",
       "localAvailable": "本机可用",
       "pendingLocalCheck": "待本机检测",
       "waitingRefresh": "等待刷新",
@@ -2750,6 +2781,10 @@
     "opencode_zen": {
       "title": "OpenCode Zen",
       "description": "使用 OpenCode Zen API Key；官方地址和协议已内置"
+    },
+    "opencode_console": {
+      "title": "OpenCode Console 订阅",
+      "description": "登录 OpenCode Console，使用工作区订阅模型和额度"
     },
     "kilo_gateway": {
       "title": "Kilo AI Gateway",

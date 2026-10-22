@@ -430,7 +430,7 @@ pub(crate) async fn probe_gemini_native(
         &path,
     )?;
     let body = serde_json::json!({
-        "contents": [{"parts": [{"text": "ping"}]}],
+        "contents": [{"role": "user", "parts": [{"text": "ping"}]}],
         "generationConfig": {"maxOutputTokens": 4}
     });
     let mut req = client
@@ -457,7 +457,7 @@ pub(crate) async fn probe_gemini_native_stream(
 ) -> Result<()> {
     let path = format!("/v1beta/models/{model}:streamGenerateContent?alt=sse");
     let body = serde_json::json!({
-        "contents": [{"parts": [{"text": "ping"}]}],
+        "contents": [{"role": "user", "parts": [{"text": "ping"}]}],
         "generationConfig": {"maxOutputTokens": 4}
     });
     let resp = gemini_native_request(client, channel, &path, &body)?
@@ -474,7 +474,7 @@ pub(crate) async fn probe_gemini_native_json_schema(
 ) -> Result<()> {
     let path = format!("/v1beta/models/{model}:generateContent");
     let body = serde_json::json!({
-        "contents": [{"parts": [{"text": "Return {\"ok\":true}."}]}],
+        "contents": [{"role": "user", "parts": [{"text": "Return {\"ok\":true}."}]}],
         "generationConfig": {
             "responseMimeType": "application/json",
             "responseSchema": {
@@ -683,6 +683,7 @@ pub(crate) fn channel_provider_hint(channel: &ChannelConfig) -> String {
         | SourceDriverId::TencentHunyuanApi
         | SourceDriverId::OpencodeGo
         | SourceDriverId::OpencodeZen
+        | SourceDriverId::OpencodeConsole
         | SourceDriverId::KiloGateway
         | SourceDriverId::ClineApi
         | SourceDriverId::CommandCode
@@ -847,6 +848,12 @@ pub(crate) fn subscription_supported_protocols(platform: &str) -> Vec<String> {
         "grok" => vec!["openai_responses".to_string()],
         "antigravity" => vec!["gemini_native".to_string()],
         "claude" | "anthropic" | "kiro" | "cursor" => vec!["anthropic_messages".to_string()],
+        "opencode" => vec![
+            "openai_chat".to_string(),
+            "openai_responses".to_string(),
+            "anthropic_messages".to_string(),
+            "gemini_native".to_string(),
+        ],
         _ => Vec::new(),
     }
 }

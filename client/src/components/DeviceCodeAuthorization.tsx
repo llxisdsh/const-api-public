@@ -16,7 +16,7 @@ type PollResult =
 type AuthError = { code: string; status?: number };
 
 export function DeviceCodeAuthorization({ provider = "muse_code", disabled, onStarting, onAuthorized, onOpenUrl }: {
-  provider?: "muse_code" | "copilot" | "cursor";
+  provider?: "muse_code" | "copilot" | "cursor" | "opencode";
   disabled: boolean;
   onStarting?: () => void;
   onAuthorized: (key: string) => void;
@@ -118,8 +118,10 @@ export function DeviceCodeAuthorization({ provider = "muse_code", disabled, onSt
       {(starting || session) && <button type="button" className="quiet" onClick={stop}>{t("common.cancel")}</button>}
     </div>
     {session && <div className="wizard-operation-status" role="status">
-      {session.user_code && <span>{t(`${labels}.code`)} <code>{session.user_code}</code></span>}
-      <button type="button" className="quiet" onClick={() => onOpenUrl(session.verification_uri)}>{t(`${labels}.openLogin`)}</button>
+      {session.user_code && <div className="wizard-device-code">{t(`${labels}.code`)} <code>{session.user_code}</code></div>}
+      <div className="wizard-operation-actions">
+        <button type="button" className="quiet" onClick={() => onOpenUrl(session.verification_uri)}>{t(`${labels}.openLogin`)}</button>
+      </div>
       <p>{t(`${labels}.${status === "retrying" ? "retrying" : "waiting"}`)}</p>
     </div>}
     {error && <p className="field-hint field-hint-warning" role="alert">
@@ -131,6 +133,16 @@ export function DeviceCodeAuthorization({ provider = "muse_code", disabled, onSt
 }
 
 function authError(value: unknown): AuthError {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === "object" && "code" in parsed && typeof parsed.code === "string") {
+        return { code: parsed.code, status: "status" in parsed && typeof parsed.status === "number" ? parsed.status : undefined };
+      }
+    } catch {
+      // Tauri may return a plain string for command errors.
+    }
+  }
   if (value && typeof value === "object" && "code" in value && typeof value.code === "string") {
     return { code: value.code, status: "status" in value && typeof value.status === "number" ? value.status : undefined };
   }

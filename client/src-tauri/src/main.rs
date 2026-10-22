@@ -74,6 +74,7 @@ mod announcements;
 mod antigravity_models;
 mod autostart;
 mod catalog_registry;
+mod channel_concurrency;
 mod channel_executor;
 mod channel_identity;
 mod channel_surface;
@@ -109,6 +110,9 @@ mod native_i18n;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod network_recovery;
+mod opencode;
+mod opencode_client;
+
 mod openrouter;
 mod output_buffer;
 mod platform_transport;
@@ -262,6 +266,7 @@ const GROK_BILLING_MONTHLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billi
 // Official https://x.ai/cli/stable, checked 2026-10-19.
 const GROK_CLI_VERSION: &str = "1.0.62";
 const GROK_CLI_USER_AGENT: &str = "xai-grok-workspace/1.0.62";
+const GROK_CLI_CLIENT_IDENTIFIER: &str = "grok-shell";
 const GROK_BILLING_USER_AGENT: &str = "grok-pager/1.0.62 grok-shell/1.0.62 (macos; aarch64)";
 const ANTIGRAVITY_OAUTH_CLIENT_ID: &str = match option_env!("CONST_LOCAL_ANTIGRAVITY_CLIENT_ID") { Some(value) => value, None => "" };
 const ANTIGRAVITY_OAUTH_CLIENT_SECRET: &str = match option_env!("CONST_LOCAL_ANTIGRAVITY_CLIENT_SECRET") { Some(value) => value, None => "" };
@@ -1112,6 +1117,8 @@ async fn run_desktop_host(
             create_subscription_oauth_session,
             muse_code_auth::create_muse_code_auth_session,
             muse_code_auth::poll_muse_code_auth_session,
+            opencode::create_opencode_auth_session,
+            opencode::poll_opencode_auth_session,
             copilot::create_copilot_auth_session,
             copilot::poll_copilot_auth_session,
             cursor::auth::create_cursor_auth_session,
@@ -1639,12 +1646,39 @@ fn apply_renderer_supplier_config(
         if unchanged {
             continue;
         }
+        if let Some(base) = baseline
+            .iter()
+            .find(|channel| channel.id == incoming_channel.id)
+        {
+            let mut without_priority_edit = incoming_channel.clone();
+            without_priority_edit.v2.local_priority = base.v2.local_priority;
+            if channel_configs_match(&without_priority_edit, base) {
+                // The priority dialog owns only this field. Keep concurrent
+                // credential refreshes, edits and deletions authoritative.
+                if let Some(channel) = current
+                    .channels
+                    .iter_mut()
+                    .find(|channel| channel.id == base.id)
+                {
+                    channel.v2.local_priority = incoming_channel
+                        .v2
+                        .local_priority
+                        .or(channel.v2.local_priority);
+                }
+                continue;
+            }
+        }
         if let Some(current_channel) = current
             .channels
             .iter_mut()
             .find(|channel| channel.id == incoming_channel.id)
         {
             let mut merged = incoming_channel.clone();
+            // Adjacent older renderers do not know this optional field.
+            merged.v2.local_priority = merged
+                .v2
+                .local_priority
+                .or(current_channel.v2.local_priority);
             if let Some(base) = baseline.iter().find(|channel| channel.id == merged.id) {
                 preserve_unedited_channel_observations(&mut merged, base, current_channel);
             }

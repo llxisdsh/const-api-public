@@ -308,6 +308,14 @@ where
                 )
             })
         }
+        Err(error)
+            if local_execution_error_retry_scope(&error, false, path)
+                == LocalRouteRetryScope::AdmissionCapacity =>
+        {
+            // This upload was never sent. Do not turn a busy channel into an
+            // outage, or replay a streaming input after handing ownership off.
+            return Ok(proxy_execution_error_response(&error));
+        }
         Err(error) => {
             transport_failure = local_execution_error_marks_channel_unready(&error);
             error_response(StatusCode::BAD_GATEWAY, &error.to_string())

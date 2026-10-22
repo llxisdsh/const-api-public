@@ -490,6 +490,57 @@
     }
 
     #[tokio::test]
+    async fn native_websocket_holds_channel_admission_only_while_a_turn_is_active() {
+        use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let upstream_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            socket.next().await.unwrap().unwrap();
+            socket.send(Message::Text(r#"{"type":"response.created","response":{"id":"resp-admission","output":[]}}"#.into())).await.unwrap();
+            released.await.unwrap();
+            socket.send(Message::Text(r#"{"type":"response.completed","response":{"id":"resp-admission","output":[]}}"#.into())).await.unwrap();
+            let _ = socket.next().await;
+        });
+        let mut channel = openai_api_channel("ws-admission-channel", "model-ws", &format!("http://{address}/v1"));
+        channel.upstream_api_key = "mock-upstream".into();
+        channel.v2.max_concurrency = 1;
+        channel.detection_checks.push(ChannelDetectionCheck {
+            name: "responses_operation".to_string(),
+            capability: "openai.responses_websocket".to_string(),
+            status: "verified".to_string(),
+            ..Default::default()
+        });
+        let mut config = default_config();
+        config.api_key = "mock-local-key".into();
+        config.account_device_api_key.clear();
+        config.prefer_local_supply = true;
+        config.channels = vec![channel];
+        let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+        let (proxy_address, proxy_server) = crate::bind_ephemeral!(crate::proxy_routes(shared), ([127,0,0,1],0));
+        let proxy_task = tokio::spawn(proxy_server);
+        let mut request = format!("ws://{proxy_address}/v1/responses").into_client_request().unwrap();
+        request.headers_mut().insert("authorization", "Bearer mock-local-key".parse().unwrap());
+        let (mut client, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        client.send(Message::Text(r#"{"type":"response.create","model":"model-ws","input":[],"store":false}"#.into())).await.unwrap();
+        let mut next_text = async || tokio::time::timeout(Duration::from_secs(5), client.next()).await.unwrap().unwrap().unwrap().into_text().unwrap().to_string();
+        assert!(next_text().await.contains("response.created"));
+        assert_eq!(crate::channel_concurrency::current("ws-admission-channel"), 1, "an in-flight turn holds a slot");
+        release.send(()).unwrap();
+        assert!(next_text().await.contains("response.completed"));
+        let idle = tokio::time::timeout(Duration::from_secs(2), async {
+            while crate::channel_concurrency::current("ws-admission-channel") != 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await;
+        assert!(idle.is_ok(), "an open idle socket holds no slot");
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
+    #[tokio::test]
     async fn responses_websocket_http_bridge_replays_a_custom_tool_call_before_its_output() {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 

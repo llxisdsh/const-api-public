@@ -64,6 +64,9 @@ pub(crate) fn parse_http_surface_base(base_url: &str) -> Result<Url> {
 }
 
 pub(crate) fn validate_channel_v2(channel: &ChannelConfig) -> Result<()> {
+    if channel.v2.local_priority == Some(0) {
+        return Err(anyhow!("channel local priority must be a positive integer"));
+    }
     crate::coding_plan::validate_key(channel)?;
     let driver = crate::source_driver::source_driver(channel.source_driver())?;
     if channel.v2.executor != driver.executor {

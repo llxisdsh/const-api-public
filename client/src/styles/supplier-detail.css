@@ -106,7 +106,7 @@
 }
 
 .supplier-channel-table {
-  --supplier-channel-columns: 10px minmax(0, 1fr) var(--supplier-channel-priority-width) minmax(70px, 86px) minmax(74px, 92px) minmax(54px, 64px) minmax(64px, 82px) minmax(78px, 112px) minmax(112px, 150px) 18px;
+  --supplier-channel-columns: 10px minmax(0, 1fr) var(--supplier-channel-priority-width) minmax(70px, 86px) minmax(74px, 92px) minmax(54px, 64px) minmax(64px, 82px) minmax(86px, 112px) 18px;
   --supplier-channel-priority-width: 76px;
 }
 
@@ -161,40 +161,172 @@
   cursor: pointer;
 }
 
-.supplier-channel-priority-controls {
-  display: grid;
-  grid-template-columns: repeat(2, 24px);
-  align-items: center;
-  justify-content: start;
-  justify-self: stretch;
-  gap: 3px;
-  min-width: 0;
-}
-
-.supplier-channel-priority-controls > button {
+.supplier-channel-priority {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  min-width: 24px;
-  height: 24px;
-  min-height: 24px;
-  padding: 0;
+  justify-self: start;
+  min-width: 32px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 2px 5px;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: var(--muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
 }
 
-.supplier-channel-priority-controls > button:hover:not(:disabled) {
+.supplier-channel-priority:hover:not(:disabled) {
   border-color: transparent;
   background: color-mix(in srgb, var(--text) 4%, transparent);
   color: var(--text);
   transform: none;
 }
 
-.supplier-channel-priority-controls > button:disabled {
+.supplier-channel-priority:disabled {
   opacity: 0.32;
+}
+
+.modal-panel.channel-priority-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, calc(100vw - 40px));
+  max-height: calc(100dvh - 48px);
+  gap: 14px;
+  padding: 22px;
+  overflow: hidden;
+}
+
+.channel-priority-heading,
+.channel-priority-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.channel-priority-heading h2,
+.channel-priority-hint,
+.channel-priority-error {
+  margin: 0;
+}
+
+.channel-priority-hint,
+.channel-priority-footer small,
+.channel-priority-selection {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.channel-priority-batch {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.channel-priority-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.channel-priority-dialog label {
+  align-self: center;
+}
+
+.channel-priority-selection {
+  margin-right: auto;
+}
+
+.channel-priority-dialog input[type="checkbox"] {
+  appearance: auto;
+  -webkit-appearance: auto;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  accent-color: var(--blue);
+  cursor: pointer;
+}
+
+.channel-priority-dialog input[type="checkbox"]:focus,
+.channel-priority-dialog input[type="checkbox"]:focus-visible {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.channel-priority-dialog input[type="checkbox"]:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.channel-priority-dialog input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+.channel-priority-dialog input[type="number"] {
+  width: 112px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.channel-priority-list {
+  overflow-y: auto;
+  min-height: 0;
+  border-block: 1px solid var(--border);
+}
+
+.channel-priority-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 112px;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 6px 2px;
+}
+
+.channel-priority-row + .channel-priority-row {
+  border-top: 1px solid var(--border);
+}
+
+.channel-priority-row label {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.channel-priority-columns {
+  min-height: 32px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.channel-priority-footer {
+  flex-wrap: wrap;
+}
+
+.channel-priority-footer .actions {
+  margin-left: auto;
+}
+
+.channel-priority-error {
+  color: var(--danger);
+  font-size: 12px;
 }
 
 .supplier-channel-expand {

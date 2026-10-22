@@ -1431,6 +1431,10 @@ button.model-rule-remove {
 }
 
 .wizard-operation-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
   grid-column: 1 / -1;
   padding: 9px 11px;
   border: 1px solid var(--border);
@@ -1439,6 +1443,24 @@ button.model-rule-remove {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.wizard-device-code {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.wizard-operation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wizard-operation-status p {
+  margin: 0;
 }
 
 .wizard-operation-status.error {

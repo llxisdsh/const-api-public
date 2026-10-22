@@ -259,27 +259,41 @@ async fn run_supplier_voice_call(
         config.source_driver == crate::source_driver::SourceDriverId::OpenAiSubscription;
     let _activity = crate::update_activity::try_begin_supplier_request(&open.id)
         .ok_or_else(|| anyhow!("client update is starting; retry in 2 seconds"))?;
-    let _safety = if subscription {
-        match subscription_safety_enter(
+    // Either way the whole call holds one of the channel's request slots.
+    let admission = if subscription {
+        subscription_safety_enter(
             config,
             &serde_json::json!({"model":wire.selected_upstream_model}).to_string(),
-        ) {
-            Ok(guard) => Some(guard),
-            Err(payload) => {
-                send_native_supplier_message(
-                    outbound,
-                    SupplierMessage {
-                        id: open.id,
-                        kind: "duplex_error".into(),
-                        payload,
-                    },
-                )
-                .await?;
-                return Ok(());
-            }
-        }
+        )
     } else {
-        None
+        crate::channel_executor::enter_channel_capacity(
+            &channel,
+            wire.operation.unwrap_or(crate::surface::ApiOperation::RealtimeCallsCreate),
+        )
+        .map_err(|_| {
+            crate::supplier::subscription_structured_error_response(
+                429,
+                "concurrency_full",
+                "channel concurrency limit reached locally",
+                1,
+                now_unix() + 1,
+            )
+        })
+    };
+    let _safety = match admission {
+        Ok(guard) => guard,
+        Err(payload) => {
+            send_native_supplier_message(
+                outbound,
+                SupplierMessage {
+                    id: open.id,
+                    kind: "duplex_error".into(),
+                    payload,
+                },
+            )
+            .await?;
+            return Ok(());
+        }
     };
     let bootstrap = tokio::time::timeout(
         Duration::from_secs(40),

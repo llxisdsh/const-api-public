@@ -37,6 +37,7 @@ pub(crate) fn upsert_codex_toml(raw: &str, base_url: &str, api_key: &str) -> Res
     provider["supports_websockets"] = toml_value(true);
     provider["requires_openai_auth"] = toml_value(true);
     provider["experimental_bearer_token"] = toml_value(api_key);
+    remove_retired_codex_catalog_url(provider);
 
     let mut text = doc.to_string();
     if !text.ends_with('\n') {
@@ -56,6 +57,31 @@ fn remove_legacy_codex_const_api_provider(providers: &mut Table, base_url: &str,
             providers.remove(provider_id);
         }
     }
+}
+
+/// An earlier build wrote a provider catalog URL that CONST never served. Codex
+/// treats that URL as authoritative and drops its bundled catalog, so failed
+/// discovery leaves no fallback. Remove only the exact retired value; a
+/// user-supplied catalog URL is preserved.
+fn remove_retired_codex_catalog_url(provider: &mut Table) {
+    let retired = provider
+        .get("model_catalog_url")
+        .and_then(Item::as_str)
+        .is_some_and(is_retired_codex_catalog_url);
+    if retired {
+        provider.remove("model_catalog_url");
+    }
+}
+
+fn is_retired_codex_catalog_url(value: &str) -> bool {
+    let value = value.trim().trim_end_matches('/');
+    let Some(endpoint) = value.strip_prefix("http://127.0.0.1:") else {
+        return false;
+    };
+    let Some((port, path)) = endpoint.split_once('/') else {
+        return false;
+    };
+    port.parse::<u16>().is_ok() && path == "v1/backend-api/codex/models"
 }
 
 fn codex_provider_table_matches_const_api(provider: &Table, base_url: &str, api_key: &str) -> bool {

@@ -825,7 +825,8 @@ fn supplier_provider_kind(config: &SupplierConfig) -> String {
         crate::source_driver::SourceDriverId::TencentHunyuanApi => "tencent_hunyuan",
         crate::source_driver::SourceDriverId::Openrouter => "openrouter",
         crate::source_driver::SourceDriverId::OpencodeGo
-        | crate::source_driver::SourceDriverId::OpencodeZen => "opencode",
+        | crate::source_driver::SourceDriverId::OpencodeZen
+        | crate::source_driver::SourceDriverId::OpencodeConsole => "opencode",
         crate::source_driver::SourceDriverId::KiloGateway => "kilo",
         crate::source_driver::SourceDriverId::ClineApi => "cline",
         crate::source_driver::SourceDriverId::CommandCode => "command_code",
@@ -855,6 +856,7 @@ fn supplier_endpoint_kind(config: &SupplierConfig) -> String {
         | crate::source_driver::SourceDriverId::GrokSubscription
         | crate::source_driver::SourceDriverId::KiroSubscription
         | crate::source_driver::SourceDriverId::CursorSubscription
+        | crate::source_driver::SourceDriverId::OpencodeConsole
         | crate::source_driver::SourceDriverId::CopilotSubscription => "subscription",
         crate::source_driver::SourceDriverId::Ollama
         | crate::source_driver::SourceDriverId::LmStudio

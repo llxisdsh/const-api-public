@@ -59,7 +59,7 @@ pub(crate) fn local_proxy_test_spec(
                 model.replace('/', "%2F")
             ),
             body: serde_json::json!({
-                "contents": [{"parts": [{"text": prompt}]}],
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"maxOutputTokens": 128}
             }),
             accept_event_stream: false,

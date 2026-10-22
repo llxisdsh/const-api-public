@@ -108,7 +108,9 @@ async fn each_protocol_retries_only_truncation_once_with_a_bounded_budget() {
             .collect::<Vec<_>>();
         assert_eq!(budgets, [256, 1024]);
         for body in requests {
-            if protocol != ProtocolKind::GeminiNative {
+            if protocol == ProtocolKind::GeminiNative {
+                assert_eq!(body["contents"][0]["role"], "user");
+            } else {
                 assert_eq!(body["model"], "configured-model");
             }
         }

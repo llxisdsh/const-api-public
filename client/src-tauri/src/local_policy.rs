@@ -160,6 +160,12 @@ mod tests {
             crate::source_driver::SourceDriverId::OpencodeGo,
             "https://opencode.ai/zen/go/v1",
         );
+        // OpenCode Go is a fixed-connection preset with per-surface bases; the
+        // helper above overrides every base, so restore the official bindings.
+        channel.surface_bindings = crate::source_driver_surface_bindings(
+            crate::source_driver::SourceDriverId::OpencodeGo,
+            "",
+        );
         channel.share_enabled = true;
         channel.server_ws_url = "wss://example.invalid".into();
         config.channels = vec![channel];

@@ -354,6 +354,7 @@ pub(crate) fn group(model: &str) -> &'static str {
 fn candidate_rank(model: &str) -> (u8, u8, String) {
     let name = model.to_ascii_lowercase();
     let unstable = name.contains(":free")
+        || name.ends_with("-free")
         || name.contains("preview")
         || name.contains("experimental")
         || name.contains("thinking")
@@ -397,6 +398,9 @@ fn representatives(channel: &ChannelConfig) -> Vec<(String, String)> {
     for model in &channel.models {
         let lower = model.to_ascii_lowercase();
         let short = crate::config::short_model_name(&lower);
+        if crate::coding_gateway::is_non_conversational_model(model) {
+            continue;
+        }
         if matches!(short, "auto" | "router" | "bodybuilder")
             || lower == "openrouter/free"
             || short.ends_with(":batch")
@@ -485,10 +489,14 @@ pub(crate) fn effective_models(channel: &ChannelConfig, models: Vec<String>) -> 
         .get(&channel.id)
         .filter(|s| s.fingerprint == fingerprint(channel))
     else {
-        return models;
+        return models
+            .into_iter()
+            .filter(|model| !crate::coding_gateway::is_non_conversational_model(model))
+            .collect();
     };
     models
         .into_iter()
+        .filter(|model| !crate::coding_gateway::is_non_conversational_model(model))
         .filter(|model| snapshot.allows(model))
         .collect()
 }
@@ -1790,6 +1798,49 @@ mod tests {
         assert_eq!(selected.len(), 4);
         assert!(selected.iter().any(|(_, m)| m == "qwen-27b"));
         assert!(selected.iter().any(|(_, m)| m == "claude-haiku-4-5"));
+    }
+
+    #[test]
+    fn representative_skips_opencode_system_one_models_and_ranks_free_suffixes_as_unstable() {
+        let mut channel = crate::default_config().channels.remove(0);
+        channel.set_source_driver(crate::source_driver::SourceDriverId::OpencodeConsole);
+        channel.models = [
+            "jev-1.13",
+            "jev-1.13-free",
+            "big-pickle",
+            "deepseek-v4.1-flash-free",
+            "deepseek-v4.1-flash",
+        ]
+        .map(str::to_string)
+        .to_vec();
+
+        let selected = representatives(&channel);
+        assert_eq!(
+            selected,
+            vec![("other".to_string(), "deepseek-v4.1-flash".to_string())]
+        );
+        assert_eq!(
+            candidate_rank("deepseek-v4.1-flash-free").0,
+            1,
+            "OpenCode's terminal -free marker should be treated like :free"
+        );
+        assert_eq!(candidate_rank("deepseek-v4.1-flash").0, 0);
+    }
+
+    #[test]
+    fn effective_models_excludes_opencode_system_one_models_without_a_snapshot() {
+        let mut channel = crate::default_config().channels.remove(0);
+        channel.id = "availability-opencode-system-one-filter".into();
+        channel.set_source_driver(crate::source_driver::SourceDriverId::OpencodeConsole);
+        let models = vec![
+            "jev-1.13".to_string(),
+            "jev-1.13-free".to_string(),
+            "big-pickle".to_string(),
+        ];
+        assert_eq!(
+            effective_models(&channel, models),
+            vec!["big-pickle".to_string()]
+        );
     }
 
     #[tokio::test]

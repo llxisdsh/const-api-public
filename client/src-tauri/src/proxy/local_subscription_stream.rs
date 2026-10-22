@@ -3,7 +3,7 @@ struct LocalOpenAiSubscriptionStreamState {
     converter: InboundSseStreamConverter,
     upstream_utf8: crate::protocol::stream::Utf8ChunkDecoder,
     converted_utf8: crate::protocol::stream::Utf8ChunkDecoder,
-    _safety_guard: Option<SubscriptionSafetyGuard>,
+    _safety_guard: Option<crate::channel_concurrency::Guard>,
     config: SupplierConfig,
     inbound_path: String,
     inbound_body: String,

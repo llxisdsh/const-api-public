@@ -52,6 +52,7 @@ where
 
 include!("proxy/resource_owner.rs");
 include!("proxy/gemini_upload_session.rs");
+include!("proxy/local_priority.rs");
 include!("proxy/runtime.rs");
 include!("proxy/model_health.rs");
 include!("proxy/websocket.rs");

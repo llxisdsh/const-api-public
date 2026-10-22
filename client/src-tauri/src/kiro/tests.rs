@@ -8,6 +8,21 @@ use event_stream::{Decoder, test_frame};
 
 const PROFILE: &str = "arn:aws:codewhisperer:us-east-1:123456789012:profile/test-profile";
 
+#[test]
+fn kiro_requests_do_not_claim_a_const_api_user_agent() {
+    let request = api_request(
+        &Client::new(),
+        "https://example.test/",
+        "synthetic-access",
+        "KiroControlPlaneBearerService.ListAvailableModels",
+        &json!({}),
+    )
+    .build()
+    .expect("Kiro request");
+
+    assert!(!request.headers().contains_key("user-agent"));
+}
+
 fn test_supplier(directory: &std::path::Path) -> crate::SupplierConfig {
     let token = json!({"provider":"kiro","type":"kiro","auth_type":"social",
         "access_token":"synthetic-access","refresh_token":"synthetic-refresh",

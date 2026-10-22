@@ -184,7 +184,9 @@ import {
 import {
   channelsVisibleInModelMarket,
   configuredModelMarketChannelCount,
-  moveChannelInVisibleOrder,
+  applyLocalPriorities,
+  channelsByLocalPriority,
+  withLocalPriorities,
 } from "./channelOrdering";
 import {
   DEFAULT_CLAUDE_MODEL_SETTINGS,
@@ -1256,7 +1258,7 @@ export function useAppController({
     );
 
   const displayChannels = useMemo(
-      () => channelsVisibleInModelMarket(channels, showDevelopmentPresentation),
+      () => channelsVisibleInModelMarket(channelsByLocalPriority(channels), showDevelopmentPresentation),
       [channels, showDevelopmentPresentation],
     );
 
@@ -3486,14 +3488,14 @@ export function useAppController({
       const serverWsUrl = firstEndpoint ? supplierWsFromEndpoint(firstEndpoint) : current.supplier.server_ws_url;
       const serverQuicUrl = firstEndpoint ? supplierQuicFromEndpoint(firstEndpoint) : current.supplier.server_quic_url;
       const rawChannels = current.channels.length > 0 ? current.channels : [channelFromSupplier("channel-1", current.supplier)];
-      const channels = rawChannels.map((channel, index) => normalizeRendererChannel({
+      const channels = withLocalPriorities(rawChannels.map((channel, index) => normalizeRendererChannel({
         ...channel,
         id: channel.id || `channel-${index + 1}`,
         name: channel.name || (index === 0 ? "Local Channel" : `Local Channel ${index + 1}`),
         server_ws_url: channel.server_ws_url || serverWsUrl,
         server_quic_url: channel.server_quic_url || serverQuicUrl,
         price_ratio: normalizedPriceRatio(channel.price_ratio),
-      }));
+      })));
       const supplier = supplierFromChannel(channels[0] ?? channelFromSupplier("channel-1", current.supplier));
       return {
         ...current,
@@ -3539,30 +3541,21 @@ export function useAppController({
       return nextDraft;
     }
 
-  async function moveLocalChannel(channelId: string, direction: -1 | 1) {
+  async function saveLocalChannelPriorities(priorities: Readonly<Record<string, number>>): Promise<boolean> {
       if (selectedChannelHasChanges) {
         showToast(tr("supplier.messages.saveBeforeReorder"), "info", 4200);
-        return;
+        return false;
       }
+      let saved = false;
       await runConfigAction(async () => {
         const previous = configRef.current;
-        const visibleIds = channelsVisibleInModelMarket(
-          previous.channels,
-          showDevelopmentPresentation,
-        ).map((channel) => channel.id);
-        const channels = moveChannelInVisibleOrder(
-          previous.channels,
-          visibleIds,
-          channelId,
-          direction,
-        );
-        if (!channels) return;
         try {
+          const channels = applyLocalPriorities(previous.channels, priorities);
           await persistConfig({
             ...previous,
             channels,
-            supplier: supplierFromChannel(channels[0]),
           });
+          saved = true;
         } catch (error) {
           configRef.current = previous;
           setConfig(previous);
@@ -3571,6 +3564,7 @@ export function useAppController({
           }), "error", 5200);
         }
       });
+      return saved;
     }
 
   function rememberDetectedQuota(channelId: string, observation: ChannelDetectionResult | SupplierChannelHealth) {
@@ -3601,7 +3595,7 @@ export function useAppController({
       return id;
     }
 
-  async function saveSupplierChanges(channelArg = selectedChannel, forceDetection = false) {
+  async function saveSupplierChanges(channelArg: ChannelConfig = selectedChannel, forceDetection = false) {
       const persistedChannel = savedConfigRef.current.channels.find(
         (candidate) => candidate.id === channelArg.id,
       );
@@ -5451,9 +5445,10 @@ export function useAppController({
       }
     }
 
-  async function importSubscriptionJson() {
+  async function importSubscriptionJson(tokenJson?: string) {
       const retryChannel = subscriptionImportRetryChannel;
-      if (!retryChannel && !subscriptionTokenJson.trim()) {
+      const requestedTokenJson = tokenJson ?? subscriptionTokenJson;
+      if (!retryChannel && !requestedTokenJson.trim()) {
         showToast(tr("subscriptionImport.pasteTokenJson"), "error");
         return;
       }
@@ -5465,7 +5460,7 @@ export function useAppController({
       try {
         const channel = retryChannel ?? await invoke<ChannelConfigV5>("import_subscription_token_json", {
           provider: subscriptionWizardProvider,
-          tokenJson: subscriptionTokenJson,
+          tokenJson: requestedTokenJson,
         });
         setSubscriptionImportRetryChannel(channel);
         const finalizedChannel = await finalizePreparedSubscriptionChannel(channel);
@@ -5617,7 +5612,7 @@ export function useAppController({
     }
 
   function addSubscriptionPreset(driver: SourceDriver) {
-      if (driver.executor.type === "http_surface") {
+      if (driver.executor.type === "http_surface" && driver.subscriptionProvider !== "opencode") {
         void addPresetChannelWithConnection(driver);
         return;
       }
@@ -5936,7 +5931,7 @@ export function useAppController({
     changeLanAccess,
     closeSupplierDetail,
     openSupplierChannel,
-    moveLocalChannel,
+    saveLocalChannelPriorities,
     openPlatformCallLog,
     openLocalSupplierCallLog,
     closeCallLog,

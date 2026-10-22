@@ -9,7 +9,14 @@ use std::sync::OnceLock;
 /// at runtime is not evidence that this binary implements its wire contract.
 /// The models endpoint also gates its catalog on this version's `client_version`.
 pub(crate) const BUNDLED_CODEX_CLIENT_VERSION: &str = "0.163.0";
-pub(crate) const CODEX_ORIGINATOR: &str = "codex_cli_rs";
+/// The subscription adapter presents one official interactive Codex client.
+/// The User-Agent prefix, `originator`, and `version` header must always name
+/// the same client family. This is a compatibility invariant, not evidence
+/// about upstream capacity or risk-control decisions.
+pub(crate) const CODEX_ORIGINATOR: &str = "codex-tui";
+/// Older Codex HTTP calls negotiated this beta. Current Codex sends no beta over
+/// HTTP and only `responses_websockets=…` in its WebSocket handshake.
+const CODEX_LEGACY_RESPONSES_BETA: &str = "responses=experimental";
 
 pub(crate) fn codex_identity_for_version(
     version: &str,
@@ -17,17 +24,25 @@ pub(crate) fn codex_identity_for_version(
     checked_at_unix: i64,
 ) -> CodexClientIdentity {
     let os_info = os_info::get();
-    let fallback_user_agent = format!("{CODEX_ORIGINATOR}/{version}");
-    let user_agent = sanitize_codex_user_agent(
-        format!(
-            "{CODEX_ORIGINATOR}/{version} ({} {}; {}) {}",
-            os_info.os_type(),
-            os_info.version(),
-            os_info.architecture().unwrap_or("unknown"),
-            codex_terminal_user_agent_token(),
-        ),
-        &fallback_user_agent,
+    let prefix = format!(
+        "{CODEX_ORIGINATOR}/{version} ({} {}; {}) {}",
+        os_info.os_type(),
+        os_info.version(),
+        os_info.architecture().unwrap_or("unknown"),
+        codex_terminal_user_agent_token(),
     );
+    // The official TUI reaches the model through its app-server, which appends
+    // the initialized client's `(name; version)` to every User-Agent.
+    let user_agent =
+        sanitize_codex_user_agent(format!("{prefix} ({CODEX_ORIGINATOR}; {version})"), &prefix);
+
+    log::debug!(
+        "[const-api][codex] identity constructed: user_agent={}, originator={}, version={}",
+        user_agent,
+        CODEX_ORIGINATOR,
+        version
+    );
+
     CodexClientIdentity {
         version: version.to_string(),
         user_agent,
@@ -127,6 +142,31 @@ pub(crate) fn codex_model_identity_headers(identity: &CodexClientIdentity) -> He
     headers
 }
 
+/// Drop only the legacy Responses beta from forwarded native context; keep any
+/// independent beta negotiation such as the WebSocket protocol version.
+fn strip_codex_legacy_responses_beta(headers: &mut HeaderMap) {
+    let Some(value) = headers
+        .get("openai-beta")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return;
+    };
+    let kept = value
+        .split(',')
+        .map(str::trim)
+        .filter(|token| !token.is_empty() && *token != CODEX_LEGACY_RESPONSES_BETA)
+        .collect::<Vec<_>>()
+        .join(", ");
+    match HeaderValue::from_str(&kept) {
+        Ok(value) if !kept.is_empty() => {
+            headers.insert("openai-beta", value);
+        }
+        _ => {
+            headers.remove("openai-beta");
+        }
+    }
+}
+
 /// A request is native only when both identity components belong to a known
 /// first-party Codex originator. Thread-scoped originator overrides can differ
 /// from the process-wide User-Agent prefix, so validate both independently.
@@ -201,6 +241,38 @@ pub(crate) fn codex_model_request_context_headers(
     let Some(inbound) = native_inbound else {
         return headers;
     };
+    copy_codex_request_context_headers(inbound, &mut headers);
+    headers
+}
+
+/// Build the identity for the retained OpenAI/Codex subscription adapter.
+///
+/// A subscription request may arrive through a first-party client, but the
+/// adapter owns the upstream credential and must not forward that caller's
+/// `originator`, `User-Agent`, or `version`. Those fields identify a different
+/// product and can make one subscription account appear to be several clients.
+/// Known turn/session context remains protocol data and is copied below.
+pub(crate) fn codex_subscription_model_request_context_headers(
+    inbound: Option<&HeaderMap>,
+    fallback: &CodexClientIdentity,
+) -> HeaderMap {
+    let mut headers = codex_model_identity_headers(fallback);
+    if let Some(inbound) = inbound.filter(|headers| codex_request_is_native(Some(headers))) {
+        copy_codex_request_context_headers(inbound, &mut headers);
+        strip_codex_legacy_responses_beta(&mut headers);
+        // An attestation vouches for the caller's own client. Pair it only with
+        // the identity that issued it, never with another client's adapter UA.
+        let caller = bounded_ascii_header(inbound, "originator", 256)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim);
+        if caller != Some(fallback.originator.as_str()) {
+            headers.remove("x-oai-attestation");
+        }
+    }
+    headers
+}
+
+fn copy_codex_request_context_headers(inbound: &HeaderMap, headers: &mut HeaderMap) {
     for &name in CODEX_REQUEST_CONTEXT_HEADERS {
         let Some(value) = bounded_ascii_header(inbound, name, 32 * 1024) else {
             continue;
@@ -210,7 +282,6 @@ pub(crate) fn codex_model_request_context_headers(
             value.clone(),
         );
     }
-    headers
 }
 
 fn complete_codex_model_identity_headers(inbound: &HeaderMap) -> Option<HeaderMap> {
@@ -298,11 +369,9 @@ mod tests {
     #[test]
     fn codex_identity_user_agent_matches_official_shape() {
         let identity = bundled_codex_identity();
-        assert!(
-            identity
-                .user_agent
-                .starts_with(&format!("codex_cli_rs/{BUNDLED_CODEX_CLIENT_VERSION} ("))
-        );
+        assert!(identity.user_agent.starts_with(&format!(
+            "{CODEX_ORIGINATOR}/{BUNDLED_CODEX_CLIENT_VERSION} ("
+        )));
         assert!(identity.user_agent.contains(std::env::consts::ARCH));
         assert!(!identity.user_agent.contains("CONST API"));
         let version = semver::Version::parse(BUNDLED_CODEX_CLIENT_VERSION)
@@ -330,7 +399,7 @@ mod tests {
         )
         .build()
         .expect("request");
-        assert_eq!(request.headers()["originator"], "codex_cli_rs");
+        assert_eq!(request.headers()["originator"], CODEX_ORIGINATOR);
         assert_eq!(request.headers()["user-agent"], identity.user_agent);
         assert!(!request.headers().contains_key("version"));
 
@@ -349,7 +418,7 @@ mod tests {
     fn codex_auth_identity_omits_model_provider_version() {
         let identity = bundled_codex_identity();
         let headers = codex_control_identity_headers(&identity);
-        assert_eq!(headers["originator"], "codex_cli_rs");
+        assert_eq!(headers["originator"], CODEX_ORIGINATOR);
         assert_eq!(headers["user-agent"], identity.user_agent);
         assert!(!headers.contains_key("version"));
     }
@@ -364,7 +433,7 @@ mod tests {
             HeaderValue::from_static("sticky-turn"),
         );
         let headers = codex_model_request_context_headers(Some(&partial), &fallback);
-        assert_eq!(headers["originator"], "codex_cli_rs");
+        assert_eq!(headers["originator"], CODEX_ORIGINATOR);
         assert_eq!(headers["version"], BUNDLED_CODEX_CLIENT_VERSION);
         assert!(!headers.contains_key("x-codex-turn-state"));
 
@@ -385,10 +454,71 @@ mod tests {
         partial.insert("originator", HeaderValue::from_static("custom_gateway"));
         partial.insert("user-agent", HeaderValue::from_static("custom_gateway/1"));
         let headers = codex_model_request_context_headers(Some(&partial), &fallback);
-        assert_eq!(headers["originator"], "codex_cli_rs");
+        assert_eq!(headers["originator"], CODEX_ORIGINATOR);
         assert_eq!(headers["user-agent"], fallback.user_agent);
         assert_eq!(headers["version"], BUNDLED_CODEX_CLIENT_VERSION);
         assert!(!headers.contains_key("x-codex-turn-state"));
+    }
+
+    #[test]
+    fn codex_subscription_context_uses_adapter_identity_and_keeps_turn_state() {
+        let fallback = bundled_codex_identity();
+        let mut inbound = HeaderMap::new();
+        inbound.insert("originator", HeaderValue::from_static("codex_vscode"));
+        inbound.insert("user-agent", HeaderValue::from_static("codex_vscode/1.2.3"));
+        inbound.insert("version", HeaderValue::from_static("1.2.3"));
+        inbound.insert(
+            "x-codex-turn-state",
+            HeaderValue::from_static("sticky-turn"),
+        );
+        inbound.insert("x-not-codex", HeaderValue::from_static("drop-me"));
+
+        let headers = codex_subscription_model_request_context_headers(Some(&inbound), &fallback);
+
+        assert_eq!(headers["originator"], fallback.originator);
+        assert_eq!(headers["user-agent"], fallback.user_agent);
+        assert_eq!(headers["version"], fallback.version);
+        assert_eq!(headers["x-codex-turn-state"], "sticky-turn");
+        assert!(!headers.contains_key("x-not-codex"));
+
+        // Another client's attestation and the legacy HTTP beta are not forwarded.
+        inbound.insert(
+            "x-oai-attestation",
+            HeaderValue::from_static("vscode-attestation"),
+        );
+        inbound.insert(
+            "openai-beta",
+            HeaderValue::from_static("responses=experimental, responses_multi_agent=v1"),
+        );
+        let headers = codex_subscription_model_request_context_headers(Some(&inbound), &fallback);
+        assert!(!headers.contains_key("x-oai-attestation"));
+        assert_eq!(headers["openai-beta"], "responses_multi_agent=v1");
+        inbound.insert(
+            "openai-beta",
+            HeaderValue::from_static("responses=experimental"),
+        );
+        inbound.insert("originator", HeaderValue::from_static(CODEX_ORIGINATOR));
+        inbound.insert("user-agent", HeaderValue::from_static("codex-tui/0.163.0"));
+        let headers = codex_subscription_model_request_context_headers(Some(&inbound), &fallback);
+        assert_eq!(headers["x-oai-attestation"], "vscode-attestation");
+        assert!(!headers.contains_key("openai-beta"));
+    }
+
+    #[test]
+    fn codex_adapter_user_agent_matches_the_official_tui_shape() {
+        let identity = bundled_codex_identity();
+        let expected_prefix = format!("{CODEX_ORIGINATOR}/{BUNDLED_CODEX_CLIENT_VERSION} (");
+        let expected_suffix = format!(" ({CODEX_ORIGINATOR}; {BUNDLED_CODEX_CLIENT_VERSION})");
+        assert!(
+            identity.user_agent.starts_with(&expected_prefix),
+            "{}",
+            identity.user_agent
+        );
+        assert!(
+            identity.user_agent.ends_with(&expected_suffix),
+            "{}",
+            identity.user_agent
+        );
     }
 
     #[test]

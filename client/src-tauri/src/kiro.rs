@@ -137,7 +137,6 @@ pub(crate) async fn refresh_token(client: &Client, credential: &Value) -> Result
 async fn oauth_post(client: &Client, url: &str, body: &Value, secrets: &[&str]) -> Result<Value> {
     let response = client
         .post(url)
-        .header("User-Agent", user_agent())
         .timeout(Duration::from_secs(30))
         .json(body)
         .send_adaptive()
@@ -224,10 +223,6 @@ pub(crate) fn profile_region(profile: &str) -> Result<&str> {
     Ok(region)
 }
 
-fn user_agent() -> &'static str {
-    concat!("const-api/", env!("CARGO_PKG_VERSION"))
-}
-
 pub(crate) fn api_request(
     client: &Client,
     url: &str,
@@ -238,7 +233,6 @@ pub(crate) fn api_request(
     client
         .post(url)
         .bearer_auth(token)
-        .header("User-Agent", user_agent())
         .header("Content-Type", "application/x-amz-json-1.0")
         .header("x-amz-target", target)
         .header("x-amzn-codewhisperer-optout", "true")

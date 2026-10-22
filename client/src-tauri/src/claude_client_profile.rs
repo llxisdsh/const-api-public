@@ -1,7 +1,9 @@
-//! Synthetic Claude Code profile used only when adapting a non-native request
-//! to the Claude account-subscription executor.
+//! Claude Code compatibility profile used by the Claude account-subscription
+//! executor for both adapted and native request bodies.
 //!
-//! Native Claude Code requests keep their original body and identity headers.
+//! The Claude account-subscription adapter uses one coherent compatibility
+//! profile for every request. Native caller bodies may keep protocol/session
+//! context, but their identity headers are not forwarded through the adapter.
 //! Keep the values below together so a future compatibility update cannot
 //! accidentally mix several Claude Code releases in one request.
 

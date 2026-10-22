@@ -711,17 +711,10 @@ pub(crate) enum SupplierCheckMode {
     Activation,
 }
 
-static SUBSCRIPTION_CONCURRENCY: OnceLock<StdMutex<HashMap<String, u32>>> = OnceLock::new();
-
-fn subscription_concurrency_map() -> &'static StdMutex<HashMap<String, u32>> {
-    SUBSCRIPTION_CONCURRENCY.get_or_init(|| StdMutex::new(HashMap::new()))
-}
-
 #[cfg(test)]
 pub(crate) fn reset_subscription_safety_runtime_for_tests() {
-    if let Ok(mut guard) = subscription_concurrency_map().lock() {
-        guard.clear();
-    }
+    // Active slots belong to their guards, including guards in parallel tests.
+    // Reset only persisted-state caches; dropping a guard releases its slot.
     reset_subscription_safety_state_cache_for_tests();
 }
 
@@ -1013,6 +1006,21 @@ pub(crate) async fn validate_supplier_channel(
     } else {
         None
     };
+    // Only a completed upstream interaction is a latency measurement. Cached
+    // activation and catalog snapshots can finish in a few milliseconds
+    // without contacting the provider, so expose them as unknown instead of
+    // presenting local validation time as provider latency. A retained
+    // subscription may still have a real EWMA from earlier requests.
+    let latency_ms = test
+        .as_ref()
+        .map(|item| item.latency_ms)
+        .or_else(|| {
+            safety
+                .as_ref()
+                .filter(|state| state.latency_ewma_ms.is_finite() && state.latency_ewma_ms > 0.0)
+                .map(|state| state.latency_ewma_ms.round() as u128)
+        })
+        .unwrap_or_default();
     let rpm_remaining = safety
         .as_ref()
         .map(|state| subscription_safety_rpm_remaining(state, next_channel.subscription.rpm_limit))
@@ -1042,7 +1050,7 @@ pub(crate) async fn validate_supplier_channel(
                 .map(|item| item.model.clone())
                 .unwrap_or(model),
             model_count: effective_models.len(),
-            latency_ms: started_at.elapsed().as_millis(),
+            latency_ms,
             upstream_http_version: test
                 .as_ref()
                 .map(|item| item.upstream_http_version.clone())
@@ -1084,7 +1092,7 @@ pub(crate) async fn validate_supplier_channel(
             latency_ewma_ms: safety
                 .as_ref()
                 .map(|state| state.latency_ewma_ms)
-                .unwrap_or(started_at.elapsed().as_millis() as f64),
+                .unwrap_or(latency_ms as f64),
             current_concurrency: safety
                 .as_ref()
                 .map(|state| state.current_concurrency)

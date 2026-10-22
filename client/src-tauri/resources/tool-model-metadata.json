@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_revision": "7ef92689da786029f532c101fceae9703fe39ade",
+  "source_revision": "f2118fc7670ba3fa736d9b8f4deef9077a45a720",
   "compatibility_version_id": "compat-v28-2026-10-19",
   "compatibility_groups": [
     {
@@ -4764,10 +4764,11 @@
       ],
       "reasoning": true,
       "reasoning_efforts": [
-        "minimal",
+        "none",
         "low",
         "medium",
-        "high"
+        "high",
+        "xhigh"
       ],
       "tool_call": true,
       "source_key": "gpt-5.3-codex"

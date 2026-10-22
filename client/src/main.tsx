@@ -2,8 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { DEFAULT_TOOL_MODEL_INJECTION } from "./toolModelInjection";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  ArrowDown,
-  ArrowUp,
   Check,
   ChevronDown,
   ChevronRight,
@@ -271,6 +269,8 @@ const OperationCapabilityMatrix = React.lazy(() => import("./components/Operatio
   .then((module) => ({ default: module.OperationCapabilityMatrix })));
 const SupplierModelPoolDialog = React.lazy(() => import("./components/SupplierModelPoolDialog")
   .then((module) => ({ default: module.SupplierModelPoolDialog })));
+const ChannelPriorityDialog = React.lazy(() => import("./components/ChannelPriorityDialog")
+  .then((module) => ({ default: module.ChannelPriorityDialog })));
 type ConstApiWindow = typeof window & {
   __CONST_API_ROOT__?: ReturnType<typeof createRoot>;
   __CONST_API_SCROLLBAR_VISIBILITY_CLEANUP__?: () => void;
@@ -559,7 +559,7 @@ function ProductApp({
     changeLanAccess,
     closeSupplierDetail,
     openSupplierChannel,
-    moveLocalChannel,
+    saveLocalChannelPriorities,
     openLocalSupplierCallLog,
     closeCallLog,
     refreshAccount,
@@ -901,6 +901,7 @@ function ProductApp({
     marketPriceCache.clear();
   }, [marketPriceCache, marketPriceScope]);
   const [supplierModelPoolOpen, setSupplierModelPoolOpen] = useState(false);
+  const [priorityEditor, setPriorityEditor] = useState<{ channelId?: string } | null>(null);
   const [lanSharingOpen, setLanSharingOpen] = useState(false);
   const experimentalToolsUnlockedRef = useRef(clientModePolicy.experimental.toolsUnlocked);
   const selectedChannelTransport = supplierChannelTransportForChannel(
@@ -1687,16 +1688,18 @@ function ProductApp({
                     <span>{t("supplier.status")}</span>
                     <span>{t("supplier.model")}</span>
                     <span className="latency">{t("supplier.latency")}</span>
-                    <span className="safety">{t("supplier.safety")}</span>
-                    <span className="quota">{t("supplier.quota")}</span>
+                    <span className="active-requests">{t("supplier.activeRequests")}</span>
                     <span />
                   </div>
-                  {displayChannels.map((channel, index) => {
+                  {displayChannels.map((channel) => {
                     const health = supplierStatus.channels?.find((item) => item.channel_id === channel.id);
                     const routeStatus = supplierRouteStatusForChannel(supplierStatus, channel.id);
                     const routeDetail = supplierRouteStatusDetail(routeStatus);
                     const stateTone = channelStateTone(channel, health, supplierStatus, supplierStartingChannelId, pendingSupplierChannelIds);
                     const runningLabel = channelOnlineLabel(channel, health, supplierStatus, pendingSupplierChannelIds);
+                    const statusTooltip = routeDetail
+                      ? `${runningLabel}${t("supplierRoute.detailSeparator")}${routeDetail}`
+                      : runningLabel;
                     const routeAcceptedModelCount = routeStatus?.accepted_models?.length ?? 0;
                     const totalModelCount = supplierChannelModelCount(channel, health, routeStatus);
                     const onlineModelCount = routeStatus?.accepted_models
@@ -1705,6 +1708,10 @@ function ProductApp({
                         ? totalModelCount
                         : 0;
                     const modelCountLabel = totalModelCount > 0 ? `${onlineModelCount}/${totalModelCount}` : "-";
+                    const activeRequestsLabel = channel.kind === "subscription_adapter"
+                      && typeof health?.current_concurrency === "number"
+                      ? String(health.current_concurrency)
+                      : "-";
                     const channelDisplayName = sourceDriverDisplayName(
                       sourceDriverById(channel.source_driver),
                       channel.name,
@@ -1721,36 +1728,25 @@ function ProductApp({
                           <strong>{channelDisplayName}</strong>
                           <small>{channelKindLabel(channel.kind)} · {modelDisplayName(channel.upstream_model || channel.public_model) || t("supplier.notSelected")}</small>
                         </div>
-                        <div
-                          className="supplier-channel-priority-controls"
-                          onClick={(event) => event.stopPropagation()}
+                        <button
+                          type="button"
+                          className="supplier-channel-priority"
+                          aria-label={t("supplier.priority.editChannel", { channel: channelDisplayName, priority: channel.local_priority })}
+                          disabled={configActionBusy || selectedChannelHasChanges || selectedChannelBusy}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setPriorityEditor({ channelId: channel.id });
+                          }}
                         >
-                          <button
-                            type="button"
-                            aria-label={t("supplier.moveChannelUp", { channel: channel.name })}
-                            title={t("supplier.moveChannelUp", { channel: channel.name })}
-                            disabled={configActionBusy || selectedChannelHasChanges || selectedChannelBusy || index === 0}
-                            onClick={() => void moveLocalChannel(channel.id, -1)}
-                          >
-                            <ArrowUp size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={t("supplier.moveChannelDown", { channel: channel.name })}
-                            title={t("supplier.moveChannelDown", { channel: channel.name })}
-                            disabled={configActionBusy || selectedChannelHasChanges || selectedChannelBusy || index === displayChannels.length - 1}
-                            onClick={() => void moveLocalChannel(channel.id, 1)}
-                          >
-                            <ArrowDown size={14} />
-                          </button>
-                        </div>
+                          {channel.local_priority}
+                        </button>
                         <div className="channel-stat pool">
                           <small>{t("supplier.switch")}</small>
                           <span className={`channel-value-chip ${channelIsPooled(channel) ? "enabled" : "muted"}`}>{channelSwitchLabel(channel)}</span>
                         </div>
                         <div className="channel-stat online">
                           <small>{t("supplier.status")}</small>
-                          <span className={`channel-value-chip ${stateTone}`} title={routeDetail || undefined}>{runningLabel}</span>
+                          <span className={`channel-value-chip ${stateTone}`} title={statusTooltip}>{runningLabel}</span>
                         </div>
                         <div className="channel-stat models">
                           <small>{t("supplier.model")}</small>
@@ -1760,13 +1756,9 @@ function ProductApp({
                           <small>{t("supplier.latency")}</small>
                           <span>{health?.latency_ms ? `${health.latency_ms}ms` : "-"}</span>
                         </div>
-                        <div className="channel-stat safety">
-                          <small>{t("supplier.safety")}</small>
-                          <span>{safetyStatusLabel(health, channel)}</span>
-                        </div>
-                        <div className="channel-stat quota wide">
-                          <small>{t("supplier.quota")}</small>
-                          <span>{quotaStatusLabel(health?.quota_status, channel, health?.quota_windows)}</span>
+                        <div className="channel-stat active-requests">
+                          <small>{t("supplier.activeRequests")}</small>
+                          <span>{activeRequestsLabel}</span>
                         </div>
                         <button
                           type="button"
@@ -1972,7 +1964,7 @@ function ProductApp({
                       />
                     </div>
 
-                    {subscriptionWizardProvider !== "cursor" && <div className="wizard-steps">
+                    {!["cursor", "opencode"].includes(subscriptionWizardProvider) && <div className="wizard-steps">
                       <div className={`wizard-step ${subscriptionOAuthSession ? "done" : "active"}`}>
                         <div className="wizard-step-index">1</div>
                         <div>
@@ -2005,11 +1997,16 @@ function ProductApp({
                         />
                         <span className="field-hint">{t("supplier.accountTypeHint")}</span>
                       </label>
-                      {subscriptionWizardProvider === "cursor" ? <DeviceCodeAuthorization
-                        provider="cursor"
+                      {["cursor", "opencode"].includes(subscriptionWizardProvider) ? <DeviceCodeAuthorization
+                        provider={subscriptionWizardProvider === "cursor" ? "cursor" : "opencode"}
                         disabled={subscriptionWizardBusy}
                         onStarting={() => setSubscriptionTokenJson("")}
-                        onAuthorized={(token) => setSubscriptionTokenJson(token)}
+                        onAuthorized={(token) => {
+                          setSubscriptionTokenJson(token);
+                          if (subscriptionWizardProvider === "opencode") {
+                            void importSubscriptionJson(token);
+                          }
+                        }}
                         onOpenUrl={openExternalUrl}
                       /> : <div className="wizard-actions wizard-create-action">
                         <button className="primary" onClick={() => createSubscriptionOAuth()} disabled={subscriptionWizardBusy}>
@@ -2017,7 +2014,7 @@ function ProductApp({
                         </button>
                       </div>}
 
-                      {subscriptionWizardProvider === "cursor" && subscriptionTokenJson && <div className="wizard-actions grid-wide">
+                      {["cursor", "opencode"].includes(subscriptionWizardProvider) && subscriptionTokenJson && <div className="wizard-actions grid-wide">
                         <button className="primary" onClick={() => void importSubscriptionJson()} disabled={subscriptionWizardBusy}>
                           <Save size={16} />{t("supplier.saveImportJson")}
                         </button>
@@ -2137,8 +2134,13 @@ function ProductApp({
 
                     <div className="drawer-summary">
                       <div>
-                        <span>{t("supplier.defaultModel")}</span>
-                        <strong>{modelDisplayName(selectedChannelModel) || "-"}</strong>
+                        <span>{t("supplier.activeRequests")}</span>
+                        <strong>
+                          {selectedChannel.kind === "subscription_adapter"
+                            && typeof selectedChannelHealth?.current_concurrency === "number"
+                            ? selectedChannelHealth.current_concurrency
+                            : "-"}
+                        </strong>
                       </div>
                       <div>
                         <span>{t("supplier.modelCount")}</span>
@@ -2786,6 +2788,19 @@ function ProductApp({
                     )}
                   </div>
                 </DialogBackdrop>
+              )}
+
+              {priorityEditor && (
+                <React.Suspense fallback={null}><ChannelPriorityDialog
+                  channels={displayChannels.map((channel) => ({
+                    id: channel.id,
+                    name: sourceDriverDisplayName(sourceDriverById(channel.source_driver), channel.name, channel.id),
+                    local_priority: channel.local_priority,
+                  }))}
+                  initialChannelId={priorityEditor.channelId}
+                  onClose={() => setPriorityEditor(null)}
+                  onSave={saveLocalChannelPriorities}
+                /></React.Suspense>
               )}
 
               {supplierModelPoolOpen && supplierDetailOpen && (

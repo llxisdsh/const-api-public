@@ -1568,13 +1568,27 @@ mod native_codex_endpoint_tests {
         .await?;
         let status = response.status();
         anyhow::ensure!(status.is_success(), "subscription returned HTTP {status}");
+        println!(
+            "Codex HTTP smoke: model={model} lite={:?} HTTP={status} content_type={}",
+            observed.use_responses_lite,
+            response.headers().get("content-type").and_then(|value| value.to_str().ok()).unwrap_or("missing")
+        );
         let body = response.text().await?;
-        let completed = body
+        let events = body
             .lines()
             .filter_map(|line| line.strip_prefix("data:"))
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok())
+            .collect::<Vec<_>>();
+        // A 200 SSE response can still terminate with an upstream error. Keep
+        // its sanitized cause instead of reporting only "did not complete".
+        if let Some((_, error)) = events.iter().find_map(crate::upstream_failure::error_object) {
+            let message = error.get("message").and_then(serde_json::Value::as_str).unwrap_or("no upstream message");
+            anyhow::bail!("subscription stream error: {}", crate::upstream_failure::safe_excerpt(message));
+        }
+        let completed = events.iter()
             .find(|event| event["type"] == "response.completed")
-            .ok_or_else(|| anyhow!("subscription stream did not complete"))?;
+            .ok_or_else(|| anyhow!("subscription stream did not complete; event types={:?}",
+                events.iter().filter_map(|event| event["type"].as_str()).take(16).collect::<Vec<_>>()))?;
         // Subscription streams need not repeat streamed items in completed.output.
         // Exercise the production accumulator instead of inspecting only that frame.
         let mut parser = crate::protocol::stream::StreamParser::new(

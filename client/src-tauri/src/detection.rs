@@ -114,6 +114,9 @@ static OPENAI_CREDENTIAL_READ_CACHE: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<PathBuf, OpenAiCredentialReadCacheEntry>>,
 > = std::sync::OnceLock::new();
 const SUBSCRIPTION_OAUTH_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+const OPENCODE_CONSOLE_TOKEN_URL: &str = "https://opencode.ai/console/auth/device/token";
+const OPENCODE_CONSOLE_CONFIG_URL: &str = "https://opencode.ai/console/api/v2/config";
+const OPENCODE_CONSOLE_CATALOG_URL: &str = "https://opencode.ai/inference/v1/models";
 // Periodic channel snapshots run every 30 seconds, but subscription control-plane
 // model discovery follows these independent cadences. Usage queries have their
 // own shared cache in quota_refresh and never perform paid model interactions.
@@ -632,7 +635,12 @@ async fn detect_channel_single(
     let mut warnings = Vec::new();
 
     if channel.kind.trim() == "subscription_adapter" {
-        let platform = channel.subscription.platform.trim();
+        let platform =
+            if channel.source_driver() == crate::source_driver::SourceDriverId::OpencodeConsole {
+                "opencode"
+            } else {
+                channel.subscription.platform.trim()
+            };
         let refreshed;
         let mut quota_status = "unknown".to_string();
         let mut remaining_ratio = 0.0;
@@ -785,6 +793,14 @@ async fn detect_channel_single(
                 observations.len()
             ));
             (model_ids(observations.clone()), observations)
+        } else if platform == "opencode" && !channel.v2.credential_ref.trim().is_empty() {
+            let observations = fetch_opencode_console_catalog(&client, &channel).await?;
+            refreshed = false;
+            checks.push(format!(
+                "models: OpenCode Console catalog loaded ({} models)",
+                observations.len()
+            ));
+            (model_ids(observations.clone()), observations)
         } else if platform == "gemini" {
             return Err(anyhow!(
                 "Gemini Code Assist consumer subscriptions are no longer supported; remove the old channel and connect Antigravity."
@@ -807,13 +823,17 @@ async fn detect_channel_single(
             warnings
                 .push("credential reference is empty; concrete executor is not ready".to_string());
         }
-        let native_protocol = match platform_or_default(platform) {
-            "openai" => "openai_responses",
-            "claude" => "anthropic_messages",
-            "antigravity" => "gemini_native",
-            "grok" => "openai_responses",
-            "kiro" | "cursor" => "anthropic_messages",
-            _ => "",
+        let native_protocol = if platform == "opencode" {
+            channel.v2.default_target.protocol.as_str()
+        } else {
+            match platform_or_default(platform) {
+                "openai" => "openai_responses",
+                "claude" => "anthropic_messages",
+                "antigravity" => "gemini_native",
+                "grok" => "openai_responses",
+                "kiro" | "cursor" => "anthropic_messages",
+                _ => "",
+            }
         };
         let mut capability_profiles = if native_protocol.is_empty() {
             Vec::new()
@@ -1304,6 +1324,9 @@ async fn fetch_surface_catalog(
     let projection = probe_channel_from_context(context)?;
     if context.source_driver == crate::source_driver::SourceDriverId::Openrouter {
         return crate::openrouter::fetch_channel_catalog(client, &projection).await;
+    }
+    if context.source_driver == crate::source_driver::SourceDriverId::OpencodeConsole {
+        return fetch_opencode_console_catalog(client, &projection).await;
     }
     let models = match context.binding.surface {
         crate::surface::ApiSurface::Anthropic => {
@@ -3591,18 +3614,60 @@ pub(crate) async fn fetch_openai_compatible_catalog(
         _ => ModelCatalogKind::OpenAI,
     };
     let models = fetch_model_catalog(client, url, headers, kind).await?;
-    if channel.source_driver() == crate::source_driver::SourceDriverId::OpencodeZen {
-        return Ok(models
-            .into_iter()
-            .filter(|model| {
-                !crate::coding_gateway::is_non_conversational_model(
-                    channel.source_driver(),
-                    &model.id,
-                )
-            })
-            .collect());
+    Ok(models
+        .into_iter()
+        .filter(|model| !crate::coding_gateway::is_non_conversational_model(&model.id))
+        .collect())
+}
+
+async fn fetch_opencode_console_catalog(
+    client: &Client,
+    channel: &ChannelConfig,
+) -> Result<Vec<crate::model_catalog::ModelObservation>> {
+    let (access_token, credential, _) = ensure_opencode_subscription_access_token(client, channel)
+        .await
+        .context("prepare OpenCode Console subscription credential")?;
+    let mut headers = HeaderMap::new();
+    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", access_token.trim()))?,
+    );
+    if let Some(org_id) =
+        json_string(&credential, &["org_id"]).filter(|value| !value.trim().is_empty())
+    {
+        headers.insert("x-org-id", HeaderValue::from_str(&org_id)?);
     }
-    Ok(models)
+    crate::opencode_client::apply_headers(&mut headers, None);
+    let mut models = fetch_model_catalog(
+        client,
+        Url::parse(OPENCODE_CONSOLE_CATALOG_URL)?,
+        headers.clone(),
+        ModelCatalogKind::OpenAI,
+    )
+    .await?;
+    // The Console config is the same authenticated, workspace-scoped source
+    // used by OpenCode itself for per-model cost metadata. Treat it as an
+    // optional advisory overlay: the public inference directory remains the
+    // callable model source, and failures here must not hide usable models.
+    if let Ok(response) = client
+        .get(OPENCODE_CONSOLE_CONFIG_URL)
+        .headers(headers)
+        .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
+        .send_adaptive()
+        .await
+    {
+        crate::http_client::observe_response(&response);
+        if response.status().is_success() {
+            if let Ok(config) = response.json::<serde_json::Value>().await {
+                crate::model_catalog::apply_opencode_console_costs(&mut models, &config);
+            }
+        }
+    }
+    Ok(models
+        .into_iter()
+        .filter(|model| !crate::coding_gateway::is_non_conversational_model(&model.id))
+        .collect())
 }
 
 pub(super) fn subscription_catalog_cache_identity(channel: &ChannelConfig) -> Result<String> {
@@ -4693,6 +4758,10 @@ pub(crate) async fn fetch_grok_subscription_catalog(
         HeaderValue::from_static(GROK_CLI_VERSION),
     );
     headers.insert(
+        "x-grok-client-identifier",
+        HeaderValue::from_static(GROK_CLI_CLIENT_IDENTIFIER),
+    );
+    headers.insert(
         "x-grok-client-mode",
         HeaderValue::from_static("interactive"),
     );
@@ -4831,13 +4900,12 @@ pub(crate) async fn fetch_openai_subscription_quota_windows(
     credential: &serde_json::Value,
 ) -> Result<Vec<QuotaWindow>> {
     let identity = active_codex_identity();
-    let mut req = apply_codex_control_identity_headers(
-        client
-            .get(CODEX_USAGE_URL)
-            .header("Accept", "application/json")
-            .header("Authorization", format!("Bearer {token}")),
-        &identity,
-    );
+    let headers = codex_control_identity_headers(&identity);
+    let mut req = client
+        .get(CODEX_USAGE_URL)
+        .header("Accept", "application/json")
+        .header("Authorization", format!("Bearer {token}"))
+        .headers(headers);
     if let Some(account_id) = json_string(credential, &["account_id"])
         .or_else(|| json_string(credential, &["accountID"]))
         .filter(|value| !value.trim().is_empty())
@@ -5077,6 +5145,125 @@ pub(crate) async fn ensure_openai_subscription_access_token_with_options(
         write_subscription_credential_atomically(&path, &refreshed)?;
         Ok((access_token, refreshed, true))
     }).await
+}
+
+pub(crate) fn valid_opencode_refresh_credentials(
+    token: serde_json::Value,
+) -> Result<(String, serde_json::Value)> {
+    let access_token = json_string(&token, &["access_token"])
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("OpenCode Console refresh response did not include access_token"))?;
+    if json_string(&token, &["refresh_token"])
+        .filter(|value| !value.trim().is_empty())
+        .is_none()
+    {
+        return Err(SubscriptionOAuthError::from_response(
+            "opencode",
+            401,
+            &serde_json::json!({"error": "invalid_grant"}),
+        )
+        .into());
+    }
+    Ok((access_token, token))
+}
+
+pub(crate) async fn ensure_opencode_subscription_access_token(
+    client: &Client,
+    channel: &ChannelConfig,
+) -> Result<(String, serde_json::Value, bool)> {
+    let started_at = Instant::now();
+    let path = subscription_credential_path(channel)?;
+    let mut credential = read_subscription_credential(&path)?;
+    ensure_subscription_token_provider(&mut credential, "opencode");
+
+    let original_access_token =
+        json_string(&credential, &["access_token"]).filter(|token| !token.trim().is_empty());
+    if let Some(access_token) = original_access_token.clone() {
+        if !credential_needs_refresh(&credential) {
+            return Ok((access_token, credential, false));
+        }
+    }
+
+    let refresh_lock = subscription_refresh_lock(&path)?;
+    let mut refresh_guard = refresh_lock.lock().await;
+    refresh_guard
+        .run(started_at, async {
+            let mut latest = read_subscription_credential(&path)?;
+            ensure_subscription_token_provider(&mut latest, "opencode");
+            if let Some(access_token) =
+                json_string(&latest, &["access_token"]).filter(|token| !token.trim().is_empty())
+            {
+                let refreshed_by_peer =
+                    original_access_token.as_deref() != Some(access_token.as_str());
+                if !credential_needs_refresh(&latest) {
+                    return Ok((access_token, latest, refreshed_by_peer));
+                }
+            }
+            credential = latest;
+
+            let refresh_token = json_string(&credential, &["refresh_token"])
+                .filter(|token| !token.trim().is_empty())
+                .ok_or_else(|| anyhow!("OpenCode Console credential is missing refresh_token"))?;
+            let refresh_key = subscription_refresh_token_key("opencode", &refresh_token);
+            let token_refresh_lock = subscription_refresh_token_lock(&refresh_key);
+            let mut token_refresh_guard = token_refresh_lock.lock().await;
+            token_refresh_guard
+                .run(started_at, async {
+                    if let Some(mut refreshed) = cached_subscription_refresh_result(&refresh_key) {
+                        copy_token_metadata(&credential, &mut refreshed);
+                        ensure_subscription_token_provider(&mut refreshed, "opencode");
+                        normalize_token_expiry(&mut refreshed);
+                        let (access_token, refreshed) =
+                            valid_opencode_refresh_credentials(refreshed)?;
+                        write_subscription_credential_atomically(&path, &refreshed)?;
+                        return Ok((access_token, refreshed, true));
+                    }
+
+                    let refresh_request = serde_json::json!({
+                        "grant_type": "refresh_token",
+                        "refresh_token": refresh_token,
+                        "client_id": "opencode-cli",
+                    });
+                    let response = client
+                        .post(OPENCODE_CONSOLE_TOKEN_URL)
+                        .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
+                        .header(USER_AGENT, crate::opencode_client::USER_AGENT_VALUE)
+                        .json(&refresh_request)
+                        .send_adaptive()
+                        .await?;
+                    let status = response.status();
+                    let body = response
+                        .json::<serde_json::Value>()
+                        .await
+                        .unwrap_or_default();
+                    if !status.is_success() {
+                        return Err(SubscriptionOAuthError::from_response(
+                            "opencode",
+                            status.as_u16(),
+                            &body,
+                        )
+                        .into());
+                    }
+                    let mut refreshed = body;
+                    // OpenCode's own client treats a null refreshed org as unchanged.
+                    if refreshed
+                        .get("org_id")
+                        .is_some_and(serde_json::Value::is_null)
+                    {
+                        refreshed["org_id"] = credential.get("org_id").cloned().unwrap_or_default();
+                    }
+                    copy_token_metadata(&credential, &mut refreshed);
+                    ensure_subscription_token_provider(&mut refreshed, "opencode");
+                    normalize_token_expiry(&mut refreshed);
+                    let (access_token, refreshed) = valid_opencode_refresh_credentials(refreshed)?;
+                    let token_material = refreshed.clone();
+                    write_subscription_credential_atomically(&path, &refreshed)?;
+                    remember_subscription_refresh_result(refresh_key, token_material);
+                    Ok((access_token, refreshed, true))
+                })
+                .await
+        })
+        .await
 }
 
 fn antigravity_subscription_catalog_cache_key(

@@ -144,7 +144,7 @@ pub(crate) fn rewrite_supplier_body_model(body: &str, upstream_model: &str) -> S
     rewrite_top_level_json_field(body, "model", &model, false).unwrap_or_else(|_| body.to_string())
 }
 
-fn top_level_json_raw_token<'a>(body: &'a [u8], field: &str) -> Option<&'a str> {
+pub(crate) fn top_level_json_raw_token<'a>(body: &'a [u8], field: &str) -> Option<&'a str> {
     use serde_json::value::RawValue;
 
     let body = std::str::from_utf8(body).ok()?;
@@ -410,7 +410,10 @@ pub(crate) fn normalize_claude_subscription_count_tokens_body(body: &str) -> Res
     if let Some(object) = value.as_object_mut() {
         object.remove("max_tokens");
     }
-    Ok(serde_json::to_string(&value)?)
+    let body = serde_json::to_string(&value)?;
+    // Token counting uses the same header profile, but must not gain the
+    // generation wrapper or its defaults merely to synchronize native billing.
+    Ok(sync_native_claude_billing_identity(&body, &value)?.unwrap_or(body))
 }
 
 fn first_claude_user_text(value: &serde_json::Value) -> String {
@@ -418,35 +421,35 @@ fn first_claude_user_text(value: &serde_json::Value) -> String {
         .get("messages")
         .and_then(serde_json::Value::as_array)
         .and_then(|messages| {
-            messages.iter().find_map(|message| {
-                if message.get("role").and_then(serde_json::Value::as_str) != Some("user") {
-                    return None;
-                }
-                match message.get("content") {
-                    Some(serde_json::Value::String(text)) => Some(text.clone()),
-                    Some(serde_json::Value::Array(blocks)) => blocks.iter().find_map(|block| {
-                        (block.get("type").and_then(serde_json::Value::as_str) == Some("text"))
-                            .then(|| block.get("text").and_then(serde_json::Value::as_str))
-                            .flatten()
-                            .map(str::to_string)
-                    }),
-                    _ => None,
-                }
+            messages.iter().find(|message| {
+                message.get("role").and_then(serde_json::Value::as_str) == Some("user")
             })
+        })
+        .and_then(|message| match message.get("content") {
+            Some(serde_json::Value::String(text)) => Some(text.clone()),
+            Some(serde_json::Value::Array(blocks)) => blocks.iter().find_map(|block| {
+                (block.get("type").and_then(serde_json::Value::as_str) == Some("text"))
+                    .then(|| block.get("text").and_then(serde_json::Value::as_str))
+                    .flatten()
+                    .map(str::to_string)
+            }),
+            _ => None,
         })
         .unwrap_or_default()
 }
 
 fn claude_code_build_fingerprint(value: &serde_json::Value) -> String {
     let first_text = first_claude_user_text(value);
-    let text = first_text.as_bytes();
+    // JavaScript indexes UTF-16 code units, not UTF-8 bytes or Unicode scalars.
+    // Its UTF-8 encoder replaces any unpaired surrogate after joining the units.
+    let text: Vec<u16> = first_text.encode_utf16().take(21).collect();
+    let sampled = [4_usize, 7, 20].map(|index| text.get(index).copied().unwrap_or(u16::from(b'0')));
+    let sampled = String::from_utf16_lossy(&sampled);
     let mut input = Vec::with_capacity(
-        CLAUDE_CODE_FINGERPRINT_SALT.len() + 3 + CLAUDE_CODE_VERSION.len(),
+        CLAUDE_CODE_FINGERPRINT_SALT.len() + sampled.len() + CLAUDE_CODE_VERSION.len(),
     );
     input.extend_from_slice(CLAUDE_CODE_FINGERPRINT_SALT);
-    for index in [4_usize, 7, 20] {
-        input.push(text.get(index).copied().unwrap_or(b'0'));
-    }
+    input.extend_from_slice(sampled.as_bytes());
     input.extend_from_slice(CLAUDE_CODE_VERSION.as_bytes());
     hex::encode(Sha256::digest(&input))[..3].to_string()
 }
@@ -465,21 +468,80 @@ fn stable_claude_code_uuid(seed: &str) -> String {
     )
 }
 
-fn claude_code_system_is_native(value: &serde_json::Value) -> bool {
-    value
-        .get("system")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|blocks| {
-            blocks.iter().any(|block| {
-                block
-                    .get("text")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|text| {
-                        text.starts_with("x-anthropic-billing-header:")
-                            && text.contains("cc_entrypoint=")
-                    })
+fn claude_billing_header_text(value: &serde_json::Value) -> Option<&str> {
+    value.get("system")?.as_array()?.iter().find_map(|block| {
+        block
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| {
+                text.starts_with("x-anthropic-billing-header:") && text.contains("cc_entrypoint=")
             })
-        })
+    })
+}
+
+fn claude_code_system_is_native(value: &serde_json::Value) -> bool {
+    claude_billing_header_text(value).is_some()
+}
+
+/// Report the adapter's Claude Code profile in a native body's billing block.
+///
+/// The adapter sends one Claude Code identity in its headers, so a native body
+/// that advertises the caller's own version and entrypoint claims a second
+/// client. Keep these fields consistent without claiming that a mismatch is
+/// evidence of an upstream risk-control decision. A caller's `cch` signature
+/// cannot be retained after changing the signed body.
+///
+/// Only the billing text is replaced: every other byte of the body survives, so
+/// unknown fields and key order are kept. Locate the actual system block, not
+/// an identical string in a user message; JSON escapes must not change the target.
+fn sync_native_claude_billing_identity(
+    body: &str,
+    value: &serde_json::Value,
+) -> Result<Option<String>> {
+    let Some(original) = claude_billing_header_text(value) else {
+        return Ok(None);
+    };
+    let synced = synced_claude_billing_header_text(original, &claude_code_build_fingerprint(value));
+    if synced == original {
+        return Ok(None);
+    }
+    let system = top_level_json_raw_token(body.as_bytes(), "system")
+        .context("Claude billing identity is missing its system array")?;
+    let blocks: Vec<&serde_json::value::RawValue> = serde_json::from_str(system)?;
+    let block = blocks
+        .iter()
+        .map(|block| block.get())
+        .find(|block| top_level_json_string(block.as_bytes(), "text").as_deref() == Some(original))
+        .context("Claude billing identity is missing its system text block")?;
+    let replacement =
+        rewrite_top_level_json_field(block, "text", &serde_json::to_string(&synced)?, false)?;
+    // RawValue borrows its token directly from `body`; no other content is re-encoded.
+    let start = block.as_ptr() as usize - body.as_ptr() as usize;
+    let mut output = body.to_string();
+    output.replace_range(start..start + block.len(), &replacement);
+    Ok(Some(output))
+}
+
+fn synced_claude_billing_header_text(text: &str, fingerprint: &str) -> String {
+    let mut fields = Vec::new();
+    for field in text
+        .trim_start_matches("x-anthropic-billing-header:")
+        .split(';')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+    {
+        if field.starts_with("cch=") {
+            continue;
+        }
+        if field.starts_with("cc_version=") {
+            fields.push(format!("cc_version={CLAUDE_CODE_VERSION}.{fingerprint}"));
+        } else if field.starts_with("cc_entrypoint=") {
+            fields.push(format!("cc_entrypoint={CLAUDE_CODE_ENTRYPOINT}"));
+        } else {
+            fields.push(field.to_string());
+        }
+    }
+    format!("x-anthropic-billing-header: {};", fields.join("; "))
 }
 
 fn claude_system_text_and_cache_control(
@@ -565,7 +627,27 @@ fn ensure_claude_code_metadata(
     ));
     let session_seed = normalized_subscription_cache_identity(cache_identity)
         .map(|cache_identity| format!("cache:{cache_identity}"))
-        .unwrap_or_else(|| first_claude_user_text(value));
+        .unwrap_or_else(|| {
+            let text = first_claude_user_text(value);
+            if !text.is_empty() {
+                return text;
+            }
+            // A text-free opening (for example an image) still identifies its
+            // own conversation; an empty seed would merge unrelated sessions.
+            value
+                .get("messages")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|messages| {
+                    messages.iter().find(|message| {
+                        message.get("role").and_then(serde_json::Value::as_str) == Some("user")
+                    })
+                })
+                .and_then(|message| message.get("content"))
+                .map(|content| {
+                    format!("content:{}", hex::encode(Sha256::digest(content.to_string().as_bytes())))
+                })
+                .unwrap_or_default()
+        });
     let session_id = stable_claude_code_uuid(&format!(
         "const-api-claude-session-v1\0{identity_seed}\0{original_user_id}\0{session_seed}"
     ));
@@ -588,7 +670,8 @@ fn ensure_claude_code_metadata(
 /// Claude OAuth credentials are scoped to the first-party client. Catalog and quota reads can
 /// succeed while a generic inference body is classified as third-party usage. Keep the rewrite
 /// here, at the retained subscription boundary, so probes and real requests share one contract.
-/// Bodies that already carry a Claude Code billing block are preserved.
+/// Bodies that already carry a Claude Code billing block are preserved except for that block's
+/// version, entrypoint and signature.
 #[cfg(test)]
 pub(crate) fn prepare_claude_subscription_oauth_body(
     body: &str,
@@ -604,9 +687,12 @@ pub(crate) fn prepare_claude_subscription_oauth_body_with_cache_identity(
 ) -> Result<String> {
     let mut value: serde_json::Value = serde_json::from_str(body)?;
     // A genuine Claude Code request can contain session/classifier system blocks before or after
-    // its billing block. Preserve the whole body instead of re-wrapping or replacing metadata.
+    // its billing block. Preserve the body, but keep the billing identity on the same Claude Code
+    // profile the adapter sends in its headers.
     if claude_code_system_is_native(&value) {
-        return Ok(body.to_string());
+        return Ok(
+            sync_native_claude_billing_identity(body, &value)?.unwrap_or_else(|| body.to_string())
+        );
     }
     // Derive the session from the caller's original first user turn. The compatibility rewrite
     // can prepend a migrated system instruction, which must not collapse unrelated conversations
@@ -618,6 +704,9 @@ pub(crate) fn prepare_claude_subscription_oauth_body_with_cache_identity(
     let cache_compatibility_prompt =
         claude_cache_controls(&value).should_cache_compatibility_prompt();
     let (original_system, cache_control) = claude_system_text_and_cache_control(&value);
+    // Fingerprint the first user text that will actually be sent. Metadata above
+    // deliberately still uses the original conversation rather than this prefix.
+    prepend_claude_system_instructions_to_messages(&mut value, original_system, cache_control);
     let fingerprint = claude_code_build_fingerprint(&value);
     let mut compatibility_prompt = serde_json::json!({
         "type": "text",
@@ -637,7 +726,6 @@ pub(crate) fn prepare_claude_subscription_oauth_body_with_cache_identity(
         {"type": "text", "text": CLAUDE_CODE_IDENTITY_PROMPT},
         compatibility_prompt
     ]);
-    prepend_claude_system_instructions_to_messages(&mut value, original_system, cache_control);
     Ok(serde_json::to_string(&value)?)
 }
 
@@ -1027,7 +1115,7 @@ pub(crate) fn test_request_for_channel(
                 &format!("/v1beta/models/{model}:generateContent"),
             )?,
             serde_json::json!({
-                "contents": [{"parts": [{"text": prompt}]}],
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"maxOutputTokens": 128}
             }),
             "gemini",
@@ -1339,17 +1427,31 @@ pub(crate) fn extract_responses_sse_content(raw: &str) -> Option<String> {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
             continue;
         };
-        if let Some(delta) = value
+        let delta = value
             .get("delta")
-            .or_else(|| value.pointer("/response/output_text/delta"))
-            .or_else(|| value.pointer("/choices/0/delta/content"))
-            .and_then(|item| item.as_str())
-        {
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                value
+                    .pointer("/delta/text")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .or_else(|| {
+                value
+                    .pointer("/response/output_text/delta")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .or_else(|| {
+                value
+                    .pointer("/choices/0/delta/content")
+                    .and_then(serde_json::Value::as_str)
+            });
+        if let Some(delta) = delta {
             text.push_str(delta);
         }
         if let Some(done) = value
             .get("text")
             .or_else(|| value.pointer("/part/text"))
+            .or_else(|| value.pointer("/content_block/text"))
             .or_else(|| value.pointer("/choices/0/message/content"))
             .and_then(|item| item.as_str())
             .filter(|item| !item.is_empty())
@@ -1610,6 +1712,28 @@ mod top_level_json_tests {
         }
         assert_eq!(requested_model_from_body_or_path("{}", "/v1/models/model:free"), Some("model:free".into()));
         assert_eq!(supplier_upstream_path("/v1/chat/completions", "Vendor/model"), "/v1/chat/completions");
+    }
+
+    #[test]
+    fn anthropic_sse_text_deltas_are_visible_to_probe_completion_checks() {
+        let raw = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}\n\n",
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"OK\"}}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+        assert_eq!(extract_any_content(raw).as_deref(), Some("OK"));
+        assert_eq!(
+            extract_usage_tokens(raw),
+            (9, 1),
+            "streamed usage must stay observable to probes"
+        );
     }
 
     #[test]

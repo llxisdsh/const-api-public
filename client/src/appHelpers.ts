@@ -1,4 +1,5 @@
 import { modelDisplayName } from "./modelPresentation";
+import { withLocalPriorities } from "./channelOrdering";
 import type {
   ApiSurface,
   AppMetaState,
@@ -1275,6 +1276,7 @@ export function subscriptionProviderLabel(provider: SubscriptionProvider) {
   if (provider === "grok") return tr("labels.subscription.grok");
   if (provider === "kiro") return tr("labels.subscription.kiro");
   if (provider === "cursor") return tr("labels.subscription.cursor");
+  if (provider === "opencode") return tr("labels.subscription.opencode");
   return tr("labels.subscription.claude");
 }
 
@@ -2094,6 +2096,7 @@ export function channelV5FromRenderer(channel: ChannelConfig): ChannelConfigV5 {
   return {
     id: channel.id,
     name: channel.name,
+    ...(channel.local_priority !== undefined ? { local_priority: channel.local_priority } : {}),
     created_at_unix_ms: channel.created_at_unix_ms,
     source_driver: driver.id,
     enabled: channel.enabled,
@@ -2143,7 +2146,7 @@ export function normalizeRendererChannel(channel: ChannelConfig): ChannelConfig 
 }
 
 export function hydrateClientConfigV5(config: ClientConfigV5Wire): ClientConfig {
-  const channels = (config.channels ?? []).map((channel) => rendererChannelFromV5(channel));
+  const channels = withLocalPriorities((config.channels ?? []).map((channel) => rendererChannelFromV5(channel)));
   const fallback = channels[0] ?? channelFromSupplier("channel-1", emptyConfig.supplier);
   return {
     ...emptyConfig,

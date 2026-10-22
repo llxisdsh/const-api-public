@@ -396,6 +396,15 @@ fn supplier_execution_error_payload(
         return payload;
     }
     let evidence = execution_evidence_for_error(error);
+    if evidence.error_code == "concurrency_full" && !evidence.upstream_attempted {
+        return subscription_structured_error_response(
+            429,
+            "concurrency_full",
+            "channel concurrency limit reached locally",
+            1,
+            now_unix() + 1,
+        );
+    }
     let diagnostic_text = evidence.diagnostics.as_ref()
         .map(|diagnostics| format!(
             "supplier execution failed: class={}, phase={}, causes={}, os_error={:?}, diagnostic={}",

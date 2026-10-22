@@ -72,6 +72,7 @@ where
         | SourceDriverId::VolcengineArkApi
         | SourceDriverId::BaiduQianfanApi
         | SourceDriverId::TencentHunyuanApi
+        | SourceDriverId::OpencodeConsole
         | SourceDriverId::CustomEndpoint => API_MODEL_CATALOG_REFRESH_INTERVAL,
         _ => return fetch.await,
     };
@@ -132,6 +133,11 @@ where
 }
 
 pub(crate) fn catalog_url(driver: SourceDriverId, base: &str) -> Result<reqwest::Url> {
+    if driver == SourceDriverId::OpencodeConsole {
+        return Ok(reqwest::Url::parse(
+            "https://opencode.ai/inference/v1/models",
+        )?);
+    }
     let mut base = reqwest::Url::parse(base)?;
     match driver {
         SourceDriverId::GlmCodingPlan => base.set_path("/api/coding/paas/v4"),
@@ -160,6 +166,7 @@ pub(crate) fn is_gateway(driver: SourceDriverId) -> bool {
         driver,
         SourceDriverId::OpencodeGo
             | SourceDriverId::OpencodeZen
+            | SourceDriverId::OpencodeConsole
             | SourceDriverId::KiloGateway
             | SourceDriverId::ClineApi
             | SourceDriverId::CommandCode
@@ -177,17 +184,17 @@ pub(crate) fn is_gateway(driver: SourceDriverId) -> bool {
 pub(crate) fn is_opencode(driver: SourceDriverId) -> bool {
     matches!(
         driver,
-        SourceDriverId::OpencodeGo | SourceDriverId::OpencodeZen
+        SourceDriverId::OpencodeGo | SourceDriverId::OpencodeZen | SourceDriverId::OpencodeConsole
     )
 }
 
-/// Zen's Jev/System One entries are decision endpoints, not text-generation
-/// models. They must not enter the normal conversational model pool.
-pub(crate) fn is_non_conversational_model(driver: SourceDriverId, model: &str) -> bool {
-    driver == SourceDriverId::OpencodeZen
-        && crate::config::without_context_hint(model)
-            .to_ascii_lowercase()
-            .starts_with("jev-")
+/// Jev/System One entries are decision endpoints, not text-generation models.
+/// This is a model-family rule, rather than an OpenCode-provider rule: the
+/// model ID must not enter any ordinary conversational model pool.
+pub(crate) fn is_non_conversational_model(model: &str) -> bool {
+    crate::config::without_context_hint(model)
+        .to_ascii_lowercase()
+        .starts_with("jev-")
 }
 
 pub(crate) fn default_user_agent(driver: SourceDriverId) -> Option<&'static str> {
@@ -249,7 +256,7 @@ pub(crate) fn model_supports_protocol(
     model: &str,
     protocol: ProtocolKind,
 ) -> bool {
-    if is_non_conversational_model(driver, model) {
+    if is_non_conversational_model(model) {
         return false;
     }
     if matches!(
@@ -298,7 +305,8 @@ pub(crate) fn model_supports_protocol(
 
 /// Zen keeps a legacy Gemini-compatible /zen/v1 root. Go's current native
 /// endpoint uses the shared /inference/go root with an additional /google
-/// family segment; other Gemini providers retain their existing URL policy.
+/// family segment. Console declares the full `/inference/google/v1beta` base,
+/// so the protocol-relative `/v1beta` prefix is removed before joining.
 pub(crate) fn gemini_url(driver: SourceDriverId, base: &str, path: &str) -> Result<String> {
     if driver == SourceDriverId::OpencodeZen {
         let relative = path.strip_prefix("/v1beta/").ok_or_else(|| {
@@ -316,6 +324,9 @@ pub(crate) fn gemini_url(driver: SourceDriverId, base: &str, path: &str) -> Resu
             format!("{base}/google")
         };
         Ok(format!("{family_base}{path}"))
+    } else if driver == SourceDriverId::OpencodeConsole {
+        let relative = path.strip_prefix("/v1beta").unwrap_or(path);
+        Ok(format!("{}{}", base.trim_end_matches('/'), relative))
     } else {
         crate::detection::join_gemini_native_url(base, path)
     }
@@ -438,10 +449,11 @@ pub(crate) fn upgrade_legacy_go_surfaces(channel: &mut ChannelConfig) {
     channel.surface_bindings.push(binding);
 }
 
-/// The published Go/Zen catalogs contain IDs only. Their endpoint table defines
-/// family-specific dialects, with Chat as the default (see docs/coding-gateways.md).
+/// The published OpenCode catalogs contain IDs only. Their endpoint tables
+/// define family-specific dialects, with Chat as the default
+/// (see docs/coding-gateways.md).
 pub(crate) fn model_protocol(driver: SourceDriverId, model: &str) -> Option<ProtocolKind> {
-    if is_non_conversational_model(driver, model) {
+    if is_non_conversational_model(model) {
         return None;
     }
     if driver == SourceDriverId::AbacusRoutellm {
@@ -480,6 +492,11 @@ pub(crate) fn model_protocol(driver: SourceDriverId, model: &str) -> Option<Prot
             .any(|prefix| model.starts_with(prefix))
         {
             ProtocolKind::OpenAiResponses
+        } else if driver == SourceDriverId::OpencodeConsole && model.starts_with("qwen3.8-max") {
+            // The Console catalog exposes this Qwen model through the
+            // OpenAI-compatible Chat endpoint; the other current Qwen models
+            // use Anthropic Messages.
+            ProtocolKind::OpenAiChat
         } else if model.starts_with("qwen")
             || model.starts_with("claude-")
             || (driver == SourceDriverId::OpencodeGo && model.starts_with("minimax-"))
@@ -487,7 +504,9 @@ pub(crate) fn model_protocol(driver: SourceDriverId, model: &str) -> Option<Prot
             ProtocolKind::AnthropicMessages
         } else if matches!(
             driver,
-            SourceDriverId::OpencodeGo | SourceDriverId::OpencodeZen
+            SourceDriverId::OpencodeGo
+                | SourceDriverId::OpencodeZen
+                | SourceDriverId::OpencodeConsole
         ) && model.starts_with("gemini-")
         {
             ProtocolKind::GeminiNative
@@ -498,7 +517,7 @@ pub(crate) fn model_protocol(driver: SourceDriverId, model: &str) -> Option<Prot
 }
 
 pub(crate) fn channel_model_protocol(channel: &ChannelConfig, model: &str) -> Option<ProtocolKind> {
-    if is_non_conversational_model(channel.source_driver(), model) {
+    if is_non_conversational_model(model) {
         return None;
     }
     if matches!(
@@ -643,8 +662,15 @@ pub(crate) fn prepare_headers(
     headers: &mut HeaderMap,
     cache_identity: Option<&str>,
 ) {
+    if channel.source_driver() == SourceDriverId::OpencodeConsole {
+        // Console requests must look like OpenCode's own: User-Agent,
+        // OpenCode-shaped session and turn IDs, and no affinity headers.
+        crate::opencode_client::apply_headers(headers, cache_identity);
+    }
     let header = match channel.source_driver() {
-        SourceDriverId::OpencodeGo | SourceDriverId::OpencodeZen => "x-opencode-session",
+        SourceDriverId::OpencodeGo
+        | SourceDriverId::OpencodeZen
+        | SourceDriverId::OpencodeConsole => "x-opencode-session",
         SourceDriverId::KiloGateway => "x-kilocode-taskid",
         _ => return,
     };
@@ -773,9 +799,42 @@ pub(crate) mod tests {
             model_protocol(SourceDriverId::OpencodeZen, "jev-1.13"),
             None
         );
+        assert_eq!(
+            model_protocol(SourceDriverId::OpencodeConsole, "jev-1.13-free"),
+            None
+        );
+        assert_eq!(
+            model_protocol(SourceDriverId::Openrouter, "jev-1.13-free"),
+            None
+        );
+        assert_eq!(
+            model_protocol(SourceDriverId::OpencodeConsole, "qwen3.8-max"),
+            Some(OpenAiChat)
+        );
+        assert_eq!(
+            model_protocol(SourceDriverId::OpencodeConsole, "qwen3.8-flash"),
+            Some(AnthropicMessages)
+        );
+        assert_eq!(
+            model_protocol(SourceDriverId::OpencodeConsole, "minimax-m3"),
+            Some(OpenAiChat)
+        );
+        assert_eq!(
+            model_protocol(SourceDriverId::OpencodeConsole, "claude-sonnet-5"),
+            Some(AnthropicMessages)
+        );
+        assert_eq!(
+            model_protocol(SourceDriverId::OpencodeConsole, "gemini-3.8-flash"),
+            Some(GeminiNative)
+        );
         assert!(!model_supports_protocol(
             SourceDriverId::OpencodeZen,
             "jev-1.13",
+            OpenAiChat
+        ));
+        assert!(!model_supports_protocol(
+            SourceDriverId::OpencodeConsole,
+            "jev-1.13-free",
             OpenAiChat
         ));
         assert_eq!(
@@ -807,6 +866,43 @@ pub(crate) mod tests {
         }
         channel.api_format = "openai_responses".into();
         assert!(probe_model(&channel, &catalog[..1], "qwen3.8-max".into()).is_err());
+    }
+
+    #[test]
+    fn opencode_console_headers_match_the_official_client() {
+        let channel = channel(
+            SourceDriverId::OpencodeConsole,
+            "https://opencode.ai/inference/openai/v1",
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", HeaderValue::from_static("caller/7"));
+        headers.insert("x-session-affinity", HeaderValue::from_static("affinity"));
+
+        prepare_headers(
+            &channel,
+            ApiOperation::ChatCompletions,
+            ProtocolKind::OpenAiChat,
+            &mut headers,
+            Some("c1_0123456789abcdef0123456789abcdef01234567"),
+        );
+
+        assert_eq!(
+            headers["user-agent"],
+            crate::opencode_client::USER_AGENT_VALUE
+        );
+        assert!(!headers.contains_key("x-session-affinity"));
+        let session = headers["x-opencode-session"].to_str().unwrap();
+        assert!(session.starts_with("ses_"));
+        assert_eq!(session.len(), 30);
+        assert_eq!(headers["x-opencode-session-id"], session);
+        assert!(
+            headers["x-opencode-request"]
+                .to_str()
+                .unwrap()
+                .starts_with("msg_")
+        );
+        assert_eq!(headers["x-opencode-client"], "cli");
+        assert_eq!(headers["x-opencode-project"], "global");
     }
 
     #[test]

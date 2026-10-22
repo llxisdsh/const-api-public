@@ -395,6 +395,8 @@ pub(crate) struct ChannelConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ChannelConfigV2Contract {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) local_priority: Option<u32>,
     #[serde(default)]
     pub(crate) created_at_unix_ms: i64,
     pub(crate) source_driver: crate::source_driver::SourceDriverId,
@@ -568,6 +570,8 @@ pub(crate) struct ChannelConfigV4Read {
 pub(crate) struct ChannelConfigV2 {
     pub(crate) id: String,
     pub(crate) name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) local_priority: Option<u32>,
     #[serde(default)]
     pub(crate) created_at_unix_ms: i64,
     pub(crate) source_driver: crate::source_driver::SourceDriverId,
@@ -644,11 +648,13 @@ impl ChannelConfig {
         source_driver: crate::source_driver::SourceDriverId,
     ) {
         let created_at_unix_ms = self.v2.created_at_unix_ms;
+        let local_priority = self.v2.local_priority;
         let credential_ref = std::mem::take(&mut self.v2.credential_ref);
         let max_concurrency = self.v2.max_concurrency;
         let quota_reserve_percent = self.v2.quota_reserve_percent;
         self.v2 = crate::channel_v2_contract_for_source(source_driver);
         self.v2.created_at_unix_ms = created_at_unix_ms;
+        self.v2.local_priority = local_priority;
         self.v2.credential_ref = credential_ref;
         self.v2.max_concurrency = max_concurrency;
         self.v2.quota_reserve_percent = quota_reserve_percent;
@@ -790,6 +796,7 @@ impl From<ChannelConfig> for ChannelConfigV2 {
                 | crate::source_driver::SourceDriverId::GrokSubscription
                 | crate::source_driver::SourceDriverId::KiroSubscription
                 | crate::source_driver::SourceDriverId::CursorSubscription
+                | crate::source_driver::SourceDriverId::OpencodeConsole
         );
         value.models = crate::config::dedupe_models(value.models);
         let default_model =
@@ -800,6 +807,7 @@ impl From<ChannelConfig> for ChannelConfigV2 {
             id: value.id,
             name: value.name,
             created_at_unix_ms,
+            local_priority: value.v2.local_priority,
             source_driver: value.v2.source_driver,
             enabled: value.enabled,
             share_enabled: value.share_enabled,
@@ -875,6 +883,7 @@ impl From<ChannelConfigV2> for ChannelConfig {
         subscription.max_concurrency = max_concurrency;
         subscription.quota_reserve_percent = quota_reserve_percent;
         let v2 = ChannelConfigV2Contract {
+            local_priority: value.local_priority,
             created_at_unix_ms: value.created_at_unix_ms,
             source_driver: value.source_driver,
             credential_ref: value.credential_ref.clone(),

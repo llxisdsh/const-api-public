@@ -567,17 +567,19 @@
 		assert_eq!(derived_chat, derived_responses);
 		assert_eq!(derived_chat, derived_anthropic);
 
-        assert_ne!(
+        assert_eq!(
             local_model_route_affinity_key(
                 "/v1/chat/completions",
                 &no_headers,
                 br#"{"model":"shared-model","messages":[]}"#,
             ),
-            local_model_route_affinity_key(
+            None,
+        );
+        assert_eq!(local_model_route_affinity_key(
                 "/v1/responses",
                 &no_headers,
                 br#"{"model":"shared-model","input":[]}"#,
-            )
+            ), None
         );
     }
 

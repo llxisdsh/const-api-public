@@ -113,6 +113,12 @@ async fn information_refresh_for_direct_http_drivers_never_requests_generation()
         ) {
             continue;
         }
+        // OpenCode Console uses an authenticated control-plane catalog and
+        // cannot consume this generic local API-key fixture. Its catalog and
+        // token-refresh paths are covered by the dedicated OpenCode tests.
+        if driver == SourceDriverId::OpencodeConsole {
+            continue;
+        }
         for verified in [false, true] {
             requests.lock().unwrap().clear();
             let mut channel = channel_for(driver, &format!("http://{addr}"));
@@ -266,4 +272,66 @@ async fn information_refresh_accepts_an_authoritative_empty_openrouter_account_c
     let result = refresh_channel(channel).await.unwrap();
     assert!(result.models.is_empty());
     task.abort();
+}
+
+#[test]
+fn missing_rotation_is_expired() {
+    let missing_refresh = crate::detection::valid_opencode_refresh_credentials(serde_json::json!({
+        "access_token": "access-a",
+        "org_id": "org-a"
+    }));
+    let error = missing_refresh
+        .err()
+        .expect("missing rotated token must fail");
+    let wire = crate::subscription_oauth_error::oauth_wire_error_from_anyhow(&error).unwrap();
+    assert_eq!(wire.status, 401);
+    assert_eq!(wire.error_type, "subscription_credential_expired");
+    assert!(!wire.message.contains("access-a"));
+
+    let expired = crate::subscription_oauth_error::SubscriptionOAuthError::from_response(
+        "opencode",
+        400,
+        &serde_json::json!({"error": "invalid_grant"}),
+    );
+    assert_eq!(expired.wire_error().status, 401);
+
+    let (access, token) = crate::detection::valid_opencode_refresh_credentials(serde_json::json!({
+        "access_token": "access-b",
+        "refresh_token": "refresh-b",
+        "expires_in": 3600
+    }))
+    .unwrap();
+    assert_eq!(access, "access-b");
+    assert_eq!(token["refresh_token"], "refresh-b");
+    assert_eq!(token["expires_in"], 3600);
+}
+
+#[test]
+fn import_keeps_console_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let channel = crate::detection::prepare_subscription_token_and_import_in_dir(
+        "opencode",
+        serde_json::json!({
+            "type": "opencode",
+            "provider": "opencode",
+            "access_token": "access-a",
+            "refresh_token": "refresh-a",
+            "expires_in": 3600,
+            "org_id": "org-a"
+        }),
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        channel.source_driver(),
+        crate::source_driver::SourceDriverId::OpencodeConsole
+    );
+    assert_eq!(channel.subscription.platform, "opencode");
+    let token = crate::detection::read_subscription_credential(std::path::Path::new(
+        &channel.subscription.credential_ref,
+    ))
+    .unwrap();
+    assert_eq!(token["type"], "opencode");
+    assert_eq!(token["org_id"], "org-a");
+    assert!(token["expired"].as_i64().unwrap() > crate::now_unix());
 }

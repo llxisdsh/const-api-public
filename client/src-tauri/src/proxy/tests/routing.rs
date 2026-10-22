@@ -1,4 +1,115 @@
     #[test]
+    fn local_priority_tiers_balance_equal_accounts_without_overriding_fidelity() {
+        let mut config = default_config();
+        config.channels = (0..3).map(|i| {
+            let mut channel = local_model_channel(&["model-a"], "https://priority.test/v1");
+            channel.id = format!("priority-selection-{i}");
+            channel.v2.local_priority = Some(if i == 2 { 2 } else { 1 });
+            channel
+        }).collect();
+        let peers = || local_priority_candidates(&config, config.channels.iter().map(|c| (c, 0, 0)))
+            .iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+        assert_eq!(peers(), vec!["priority-selection-0", "priority-selection-1"]);
+        let active = crate::channel_concurrency::Guard::acquire(&config.channels[0].id, 0).unwrap();
+        assert_eq!(peers(), vec!["priority-selection-1"]);
+        let other_active = crate::channel_concurrency::Guard::acquire(&config.channels[1].id, 0).unwrap();
+        assert_eq!(peers(), vec!["priority-selection-0", "priority-selection-1"], "an idle backup cannot override an available higher tier");
+        let selected = select_local_channel_route_where(&config, "/v1/chat/completions", br#"{"model":"model-a","messages":[]}"#, |c| c.v2.local_priority == Some(2)).unwrap();
+        assert_eq!(selected.channel.id, "priority-selection-2");
+        for ranks in [(1, 0), (0, 1)] {
+            let best = select_local_priority_channel(&config, config.channels.iter().enumerate()
+                .map(|(i, c)| if i == 2 { (c, 0, 0) } else { (c, ranks.0, ranks.1) })).unwrap();
+            assert_eq!(best.id, "priority-selection-2", "capability and protocol fidelity precede tiers");
+        }
+        let before = local_model_route_preference_context(&config, false, true);
+        config.channels[2].v2.local_priority = Some(1);
+        let after = local_model_route_preference_context(&config, false, true);
+        assert_ne!(before.policy_fingerprint, after.policy_fingerprint);
+        drop((active, other_active));
+    }
+
+    #[tokio::test]
+    async fn local_priority_http_balances_new_sessions_keeps_affinity_and_falls_back_at_capacity() {
+        let upstream = warp::path!(String / "v1" / "chat" / "completions")
+            .map(|account: String| warp::reply::json(&serde_json::json!({"account":account,"choices":[]})));
+        let (addr, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let task = tokio::spawn(server);
+        let mut config = default_config();
+        config.endpoints.clear();
+        config.account_device_api_key.clear();
+        config.prefer_local_supply = true;
+        config.allow_model_equivalence = false;
+        config.channels = ["a", "b", "backup"].iter().map(|name| {
+            let mut channel = local_model_channel(&["model-a"], &format!("http://{addr}/{name}/v1"));
+            channel.id = format!("priority-http-{name}");
+            channel.v2.max_concurrency = 2;
+            channel.v2.local_priority = Some(if *name == "backup" { 2 } else { 1 });
+            channel
+        }).collect();
+        let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+        async fn request(shared: &Arc<ProxyShared>, session: &str) -> String {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-conversation-id", session.parse().unwrap());
+            let response = forward_with_failover(warp::http::Method::POST, "/v1/chat/completions", "", headers,
+                bytes::Bytes::from_static(br#"{"model":"model-a","messages":[]}"#), shared).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = crate::test_body_bytes(response.into_body()).await.unwrap();
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["account"].as_str().unwrap().to_string()
+        }
+        let a_busy = crate::channel_concurrency::Guard::acquire("priority-http-a", 2).unwrap();
+        assert_eq!(request(&shared, "session-b").await, "b", "new session uses the less busy peer");
+        drop(a_busy);
+        let b_busy = crate::channel_concurrency::Guard::acquire("priority-http-b", 2).unwrap();
+        assert_eq!(request(&shared, "session-b").await, "b", "existing session remains on its account");
+        assert_eq!(request(&shared, "session-a").await, "a", "another session can use the idle peer");
+        let a1 = crate::channel_concurrency::Guard::acquire("priority-http-a", 2).unwrap();
+        let a2 = crate::channel_concurrency::Guard::acquire("priority-http-a", 2).unwrap();
+        let b2 = crate::channel_concurrency::Guard::acquire("priority-http-b", 2).unwrap();
+        assert_eq!(request(&shared, "session-backup").await, "backup", "full first tier falls through without spending upstream attempts");
+        drop((a1, a2, b_busy, b2));
+        assert_ne!(request(&shared, "session-recovered").await, "backup", "new sessions return to the recovered first tier");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn local_priority_one_shot_request_uses_headroom_before_a_full_channel() {
+        let upstream = warp::path!(String / "v1" / "embeddings")
+            .map(|account: String| warp::reply::json(&serde_json::json!({"account":account,"data":[]})));
+        let (addr, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let task = tokio::spawn(server);
+        let mut config = default_config();
+        config.endpoints.clear();
+        config.account_device_api_key.clear();
+        config.prefer_local_supply = true;
+        config.channels = [("small", 1, 1), ("large", 20, 1), ("backup", 20, 2)].iter().map(|(name, limit, tier)| {
+            let mut channel = local_model_channel(&["embed-a"], &format!("http://{addr}/{name}/v1"));
+            channel.id = format!("one-shot-{name}");
+            channel.v2.max_concurrency = *limit;
+            channel.v2.local_priority = Some(*tier);
+            channel
+        }).collect();
+        let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+        async fn embed(shared: &Arc<ProxyShared>) -> (StatusCode, String) {
+            let response = forward_with_failover(warp::http::Method::POST, "/v1/embeddings", "", HeaderMap::new(),
+                bytes::Bytes::from_static(br#"{"model":"embed-a","input":"hi"}"#), shared).await.unwrap();
+            let status = response.status();
+            let body = crate::test_body_bytes(response.into_body()).await.unwrap();
+            let account = serde_json::from_slice::<serde_json::Value>(&body).ok()
+                .and_then(|value| value["account"].as_str().map(str::to_string)).unwrap_or_default();
+            (status, account)
+        }
+        // A full small channel loses to a busier peer that still has headroom.
+        let small = crate::channel_concurrency::Guard::acquire("one-shot-small", 1).unwrap();
+        let large = [(); 2].map(|()| crate::channel_concurrency::Guard::acquire("one-shot-large", 20).unwrap());
+        assert_eq!(embed(&shared).await, (StatusCode::OK, "large".into()));
+        // A full first tier falls through to the next tier instead of returning 429.
+        let large_rest = (2..20).map(|_| crate::channel_concurrency::Guard::acquire("one-shot-large", 20).unwrap()).collect::<Vec<_>>();
+        assert_eq!(embed(&shared).await, (StatusCode::OK, "backup".into()));
+        drop((small, large, large_rest));
+        task.abort();
+    }
+
+    #[test]
     fn malformed_optional_model_metadata_cannot_panic_during_capacity_merge() {
         for malformed in [serde_json::json!("unexpected"), serde_json::json!([1]), serde_json::json!(true), serde_json::Value::Null] {
             let mut preferred = serde_json::json!({"id":"unknown-context-model","const_api":malformed});
@@ -340,14 +451,14 @@
                 .headers()
                 .get("originator")
                 .and_then(|v| v.to_str().ok()),
-            Some("Codex Desktop")
+            Some(active_codex_identity().originator.as_str())
         );
         assert_eq!(
             request
                 .headers()
                 .get("user-agent")
                 .and_then(|v| v.to_str().ok()),
-            Some("Codex Desktop/0.999.0 (Windows 11; x86_64) vscode")
+            Some(active_codex_identity().user_agent.as_str())
         );
         assert_eq!(
             request
@@ -361,7 +472,7 @@
                 .headers()
                 .get("version")
                 .and_then(|value| value.to_str().ok()),
-            Some("0.999.0")
+            Some(active_codex_identity().version.as_str())
         );
         assert_eq!(
             request
@@ -383,6 +494,60 @@
             Some(body.as_ref())
         );
     }
+    #[tokio::test]
+    async fn subscription_identity_codex_http_wire_is_shared_across_text_image_and_voice() {
+        use warp::Filter;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let route = warp::header::headers_cloned().and(warp::body::bytes())
+            .map(move |headers: reqwest::header::HeaderMap, body: bytes::Bytes| {
+                tx.send((headers, body)).unwrap();
+                "{}"
+            });
+        let (address, server) = crate::bind_ephemeral!(route, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        let client = Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+        let identity = active_codex_identity();
+        let credential = serde_json::json!({"account_id":"fixture-account"});
+        let mut headers = warp::http::HeaderMap::new();
+        headers.insert("originator", "codex_vscode".parse().unwrap());
+        headers.insert("user-agent", "codex_vscode/9.9.9".parse().unwrap());
+        headers.insert("version", "9.9.9".parse().unwrap());
+        headers.insert("session-id", "fixture-session".parse().unwrap());
+        headers.insert("x-codex-turn-metadata", r#"{"turn_id":"fixture-turn"}"#.parse().unwrap());
+        headers.insert("openai-beta", "future-feature=v1".parse().unwrap());
+        headers.insert("openai-alpha", "quicksilver=v1".parse().unwrap());
+        headers.insert("authorization", "Bearer must-not-forward".parse().unwrap());
+        headers.insert("cookie", "must-not-forward".parse().unwrap());
+        let body = r#"{ "input":"fixture", "tools":[{"type":"function","name":"probe","parameters":{"type":"object","properties":{}}}],"tool_choice":"required" }"#;
+        let url = format!("http://{address}/test");
+        let requests = [
+            crate::supplier::openai_subscription_response_request(&client, &url, "fixture-token", &credential, body.into(), Some(&headers)).unwrap(),
+            openai_subscription_image_request_builder(&client, &url, "fixture-token", &credential, &headers,
+                OpenAiSubscriptionImagePayload { body: body.into(), content_type:"application/json".into() }),
+            openai_subscription_realtime_call_request(&client, &url, "fixture-token", &credential, &headers,
+                OpenAiSubscriptionRealtimeCallPayload { body: body.into(), content_type:"application/json", upstream_model:"fixture".into() }),
+        ];
+        for (index, request) in requests.into_iter().enumerate() {
+            assert!(request.send().await.unwrap().status().is_success());
+            let (received, payload) = rx.recv().await.unwrap();
+            for (name, expected) in [("originator", &identity.originator), ("user-agent", &identity.user_agent), ("version", &identity.version)] {
+                assert_eq!(received[name], *expected);
+            }
+            assert_eq!(received["authorization"], "Bearer fixture-token");
+            assert_eq!(received["chatgpt-account-id"], "fixture-account");
+            assert_eq!(received["session-id"], "fixture-session");
+            assert_eq!(received["x-codex-turn-metadata"], headers["x-codex-turn-metadata"]);
+            assert!(!received.contains_key("cookie"));
+            assert!(received["openai-beta"].to_str().unwrap().contains("future-feature=v1"));
+            if index == 2 { assert_eq!(received["openai-alpha"], "quicksilver=v1"); }
+            let payload = if index == 0 {
+                zstd::stream::decode_all(std::io::Cursor::new(payload)).unwrap()
+            } else { payload.to_vec() };
+            assert_eq!(payload, body.as_bytes());
+        }
+        server.abort();
+    }
+
     #[tokio::test]
     async fn subscription_images_preserve_json_and_normalize_public_multipart_edits() {
         let boundary = "const-api-image-boundary";
@@ -1642,20 +1807,23 @@
             crate::bind_ephemeral!(platform, ([127, 0, 0, 1], 0));
         let platform_task = tokio::spawn(platform_server);
 
-        let mut channel = openai_subscription_channel(&["model-a", "model-b"]);
-        channel.id = "safety-proxy-capacity-fallback".to_string();
-        channel.node_id = "node-safety-proxy-capacity-fallback".to_string();
-        channel.v2.max_concurrency = 1;
-        channel.subscription.rpm_limit = 0;
-        channel.v2.quota_reserve_percent = 0;
-        let supplier = supplier_from_channel(&channel);
         let request_body =
             br#"{"model":"model-a","input":"hello","store":false}"#;
-        let _held_capacity = subscription_safety_enter(
-            &supplier,
-            std::str::from_utf8(request_body).expect("request body"),
-        )
-        .expect("reserve the only local subscription slot");
+        let mut channels = Vec::new();
+        let mut held_capacity = Vec::new();
+        for index in 0..4 {
+            let mut channel = openai_subscription_channel(&["model-a", "model-b"]);
+            channel.id = format!("safety-proxy-capacity-fallback-{index}");
+            channel.node_id = format!("node-{}", channel.id);
+            channel.v2.max_concurrency = 1;
+            channel.subscription.rpm_limit = 0;
+            channel.v2.quota_reserve_percent = 0;
+            held_capacity.push(subscription_safety_enter(
+                &supplier_from_channel(&channel),
+                std::str::from_utf8(request_body).expect("request body"),
+            ).expect("reserve each local subscription slot"));
+            channels.push(channel);
+        }
 
         let mut config = default_config();
         config.account_device_api_key = "sk-platform-device".to_string();
@@ -1668,7 +1836,7 @@
             supplier_quic_url: String::new(),
             enabled: true,
         }];
-        config.channels = vec![channel];
+        config.channels = channels;
         configure_model_compatibility_pair(&mut config, "model-a", "model-b");
         let shared = Arc::new(ProxyShared::from_config(
             normalize_config(config),
@@ -1698,6 +1866,78 @@
         );
 
         platform_task.abort();
+    }
+
+    #[tokio::test]
+    async fn local_api_capacity_rejections_reach_the_fourth_channel_without_harming_health() {
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let received = requests.clone();
+        let upstream = warp::any().map(move || {
+            received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            warp::reply::json(&serde_json::json!({"source": "fourth-channel"}))
+        });
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let task = tokio::spawn(server);
+        let mut config = default_config();
+        config.account_device_api_key.clear();
+        config.endpoints.clear();
+        config.prefer_local_supply = true;
+        config.channels.clear();
+        let mut held = Vec::new();
+        for index in 0..4 {
+            let mut channel = local_model_channel(&["model-a"], &format!("http://{address}/v1"));
+            channel.id = format!("api-capacity-fallback-{index}");
+            channel.v2.max_concurrency = 1;
+            if index < 3 {
+                held.push(crate::channel_concurrency::Guard::acquire(&channel.id, 1).unwrap());
+            }
+            config.channels.push(channel);
+        }
+        let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+        let response = forward_with_failover(
+            warp::http::Method::POST, "/v1/chat/completions", "", HeaderMap::new(),
+            bytes::Bytes::from_static(br#"{"model":"model-a","messages":[]}"#), &shared,
+        ).await.expect("capacity fallback");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = crate::test_body_bytes(response.into_body()).await.unwrap();
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["source"], "fourth-channel");
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let ready = shared.ready_local_channel_ids();
+        for index in 0..3 {
+            assert!(ready.contains(&format!("api-capacity-fallback-{index}")), "busy is not unhealthy");
+        }
+        assert_eq!(crate::channel_concurrency::current("api-capacity-fallback-3"), 0);
+        let _last_slot = crate::channel_concurrency::Guard::acquire("api-capacity-fallback-3", 1).unwrap();
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), forward_with_failover(
+            warp::http::Method::POST, "/v1/chat/completions", "", HeaderMap::new(),
+            bytes::Bytes::from_static(br#"{"model":"model-a","messages":[]}"#), &shared,
+        )).await.expect("an all-full pool must terminate").unwrap_err();
+        assert_eq!(proxy_execution_error_response(&error).status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1, "all-full pool must not dispatch");
+        task.abort();
+    }
+
+    #[test]
+    fn local_capacity_budget_exemption_requires_pre_dispatch_proof() {
+        let local = crate::supplier::subscription_structured_error_response(
+            429, "concurrency_full", "local capacity full", 1, 0,
+        );
+        for upstream_attempted in [None, Some(false), Some(true)] {
+            let mut payload = local.clone();
+            if let Some(attempted) = upstream_attempted {
+                payload.get_mut(crate::supplier::EXECUTION_EVIDENCE_FIELD).unwrap()["upstream_attempted"] = attempted.into();
+            } else {
+                payload.remove(crate::supplier::EXECUTION_EVIDENCE_FIELD);
+            }
+            let mut response = error_response(StatusCode::TOO_MANY_REQUESTS, "full");
+            attach_local_model_failure_evidence(&mut response, &payload);
+            assert_eq!(response.extensions().get::<LocalAdmissionFailure>(), Some(&LocalAdmissionFailure::ConcurrencyFull {
+                before_dispatch: upstream_attempted == Some(false),
+            }));
+        }
+        let error = crate::supplier::channel_concurrency_failure();
+        assert_eq!(local_execution_error_retry_scope(&error, false, "/v1/responses"), LocalRouteRetryScope::AdmissionCapacity);
+        assert_eq!(local_execution_error_retry_scope(&error, true, "/v1/responses"), LocalRouteRetryScope::None);
     }
 
     #[tokio::test]

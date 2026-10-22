@@ -56,26 +56,6 @@ impl SubscriptionRequestCapacity {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct SubscriptionSafetyGuard {
-    channel_id: String,
-}
-
-impl Drop for SubscriptionSafetyGuard {
-    fn drop(&mut self) {
-        if self.channel_id.is_empty() {
-            return;
-        }
-        if let Ok(mut guard) = subscription_concurrency_map().lock() {
-            let value = guard.entry(self.channel_id.clone()).or_insert(0);
-            *value = value.saturating_sub(1);
-        }
-        // Concurrency is process-local and is hydrated from the in-memory counter whenever the
-        // state is read. Persisting every guard drop caused an unnecessary full state-file
-        // read/write on the request hot path and could only store a transient value.
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn subscription_safety_preflight(
     config: &SupplierConfig,
@@ -99,7 +79,7 @@ pub(crate) fn subscription_safety_preflight(
 pub(crate) fn subscription_safety_enter(
     config: &SupplierConfig,
     request_body: &str,
-) -> std::result::Result<SubscriptionSafetyGuard, serde_json::Map<String, serde_json::Value>> {
+) -> std::result::Result<crate::channel_concurrency::Guard, serde_json::Map<String, serde_json::Value>> {
     subscription_safety_enter_with_capacity(
         config,
         request_body,
@@ -111,17 +91,13 @@ pub(crate) fn subscription_safety_enter_with_capacity(
     config: &SupplierConfig,
     _request_body: &str,
     capacity: SubscriptionRequestCapacity,
-) -> std::result::Result<SubscriptionSafetyGuard, serde_json::Map<String, serde_json::Value>> {
+) -> std::result::Result<crate::channel_concurrency::Guard, serde_json::Map<String, serde_json::Value>> {
     if config.kind.trim() != "subscription_adapter" {
-        return Ok(SubscriptionSafetyGuard {
-            channel_id: String::new(),
-        });
+        return Ok(crate::channel_concurrency::Guard::default());
     }
     #[cfg(test)]
     if !subscription_safety_enabled_for_tests(config) {
-        return Ok(SubscriptionSafetyGuard {
-            channel_id: String::new(),
-        });
+        return Ok(crate::channel_concurrency::Guard::default());
     }
     let channel_id = subscription_safety_channel_id(config);
     let state = subscription_safety_admission_state_for_channel(config).map_err(|err| {
@@ -141,29 +117,23 @@ pub(crate) fn subscription_safety_enter_with_capacity(
     // Token counting bypasses request capacity, while a routed retry can keep
     // concurrency protection without re-checking the same logical request's reserve.
     if !capacity.counts_concurrency && !capacity.starts_logical_request {
-        return Ok(SubscriptionSafetyGuard {
-            channel_id: String::new(),
-        });
+        return Ok(crate::channel_concurrency::Guard::default());
     }
 
     let now = now_unix();
     let max_concurrency = config.max_concurrency();
-    let guard_channel_id = if capacity.counts_concurrency {
-        if !try_increment_subscription_concurrency(&channel_id, max_concurrency) {
-            return Err(subscription_structured_error_response(
+    let request_guard = if capacity.counts_concurrency {
+        crate::channel_concurrency::Guard::acquire(&channel_id, max_concurrency).map_err(|()| {
+            subscription_structured_error_response(
                 429,
                 "concurrency_full",
                 "subscription channel concurrency limit reached locally",
                 1,
                 now + 1,
-            ));
-        }
-        channel_id.clone()
+            )
+        })?
     } else {
-        String::new()
-    };
-    let request_guard = SubscriptionSafetyGuard {
-        channel_id: guard_channel_id,
+        crate::channel_concurrency::Guard::default()
     };
 
     if capacity.starts_logical_request && config.subscription.rpm_limit > 0 {
@@ -925,23 +895,7 @@ pub(crate) fn subscription_safety_channel_id(config: &SupplierConfig) -> String 
 }
 
 pub(crate) fn subscription_current_concurrency(channel_id: &str) -> u32 {
-    subscription_concurrency_map()
-        .lock()
-        .ok()
-        .and_then(|guard| guard.get(channel_id).cloned())
-        .unwrap_or(0)
-}
-
-fn try_increment_subscription_concurrency(channel_id: &str, limit: u32) -> bool {
-    let Ok(mut guard) = subscription_concurrency_map().lock() else {
-        return false;
-    };
-    let value = guard.entry(channel_id.to_string()).or_insert(0);
-    if limit > 0 && *value >= limit {
-        return false;
-    }
-    *value = value.saturating_add(1);
-    true
+    crate::channel_concurrency::current(channel_id)
 }
 
 pub(crate) fn subscription_safety_rpm_remaining(

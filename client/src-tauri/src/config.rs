@@ -286,6 +286,7 @@ pub(crate) fn channel_v2_contract_for_source(
             metadata: true,
         });
     ChannelConfigV2Contract {
+        local_priority: None,
         created_at_unix_ms: 0,
         source_driver,
         credential_ref: String::new(),
@@ -662,6 +663,7 @@ pub(crate) fn channel_configs_match(left: &ChannelConfig, right: &ChannelConfig)
 pub(crate) fn channel_detection_inputs_match(left: &ChannelConfig, right: &ChannelConfig) -> bool {
     let contract = |channel: &ChannelConfig| {
         let mut value = channel.v2.clone();
+        value.local_priority = None;
         value.created_at_unix_ms = 0;
         value.max_concurrency = 0;
         value.quota_reserve_percent = 0;
@@ -826,6 +828,7 @@ pub(crate) fn normalize_config(mut cfg: ClientConfig) -> ClientConfig { let mut 
             )
         })
         .collect();
+    materialize_local_channel_priorities(&mut cfg.channels);
     cfg.lan_share.shared_models = dedupe_models(cfg.lan_share.shared_models);
     cfg.lan_share.preferred_connect_ip = cfg.lan_share.preferred_connect_ip.trim().to_string();
     // Ordinary channels retain the single-switch contract. A LAN-share
@@ -834,9 +837,8 @@ pub(crate) fn normalize_config(mut cfg: ClientConfig) -> ClientConfig { let mut 
     cfg.supplier_auto_start = cfg.channels.iter().any(|channel| {
         channel.enabled && crate::source_driver::channel_is_platform_shareable(channel)
     });
-    // Channel order is the user-controlled priority for local routing. Health,
-    // capability, and model filters may skip a channel, but normalization must
-    // never silently reorder the remaining candidates.
+    // Explicit local tiers do not change marketplace routing. Keep storage order
+    // stable; older configs inherit their original distinct tiers above.
     if let Some(compatibility_channel) = cfg
         .channels
         .iter()
@@ -849,6 +851,20 @@ pub(crate) fn normalize_config(mut cfg: ClientConfig) -> ClientConfig { let mut 
     }
     cfg
 })(); crate::local_policy::enforce(&mut exported_config); exported_config }
+
+pub(crate) fn materialize_local_channel_priorities(channels: &mut [ChannelConfig]) {
+    let mut last = channels
+        .iter()
+        .filter_map(|channel| channel.v2.local_priority)
+        .max()
+        .unwrap_or(0);
+    for channel in channels {
+        if channel.v2.local_priority.is_none() {
+            last = last.saturating_add(1);
+            channel.v2.local_priority = Some(last);
+        }
+    }
+}
 
 fn migrate_legacy_price_ratio(value: f64) -> f64 {
     if value.is_finite() && value >= LEGACY_PRICE_RATIO_THRESHOLD {
@@ -863,6 +879,7 @@ pub(crate) fn channel_from_supplier(id: String, supplier: &SupplierConfig) -> Ch
     subscription.credential_ref = supplier.credential_ref.clone();
     ChannelConfig {
         v2: ChannelConfigV2Contract {
+            local_priority: None,
             created_at_unix_ms: 0,
             source_driver: supplier.source_driver,
             credential_ref: supplier.credential_ref.clone(),
@@ -1308,6 +1325,7 @@ pub(crate) fn normalize_channel(
             | crate::source_driver::SourceDriverId::GrokSubscription
             | crate::source_driver::SourceDriverId::KiroSubscription
             | crate::source_driver::SourceDriverId::CursorSubscription
+            | crate::source_driver::SourceDriverId::OpencodeConsole
     );
     if subscription_driver {
         if source_driver == crate::source_driver::SourceDriverId::OpenAiSubscription {
@@ -1458,6 +1476,7 @@ pub(crate) fn infer_source_driver_at_load_boundary(
             "grok" | "xai" => SourceDriverId::GrokSubscription,
             "kiro" => SourceDriverId::KiroSubscription,
             "cursor" => SourceDriverId::CursorSubscription,
+            "opencode" | "opencode_console" => SourceDriverId::OpencodeConsole,
             _ => SourceDriverId::ClaudeSubscription,
         };
     }
@@ -2384,6 +2403,58 @@ mod tests {
                 .map(|channel| channel.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["first-disabled-z", "second-enabled-a"]
+        );
+        assert_eq!(
+            normalized
+                .channels
+                .iter()
+                .map(|c| c.v2.local_priority)
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
+    }
+
+    #[test]
+    fn local_priority_groups_round_trip_and_new_channels_follow_existing_tiers() {
+        let mut cfg = default_config();
+        let mut first = cfg.channels[0].clone();
+        first.id = "priority-first".into();
+        first.v2.local_priority = Some(7);
+        let mut second = first.clone();
+        second.id = "priority-second".into();
+        let mut new = first.clone();
+        new.id = "priority-new".into();
+        new.v2.local_priority = None;
+        cfg.channels = vec![first, second, new];
+        let cfg = normalize_config(cfg);
+        assert_eq!(
+            cfg.channels
+                .iter()
+                .map(|c| c.v2.local_priority)
+                .collect::<Vec<_>>(),
+            vec![Some(7), Some(7), Some(8)]
+        );
+        let wire = serde_json::to_value(&cfg.channels[0]).unwrap();
+        let restored: ChannelConfig = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(restored.v2.local_priority, Some(7));
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(4294967296_u64),
+        ] {
+            let mut invalid_wire = wire.clone();
+            invalid_wire["local_priority"] = invalid;
+            assert!(serde_json::from_value::<ChannelConfig>(invalid_wire).is_err());
+        }
+        let mut legacy = wire;
+        legacy.as_object_mut().unwrap().remove("local_priority");
+        assert!(
+            serde_json::from_value::<ChannelConfig>(legacy)
+                .unwrap()
+                .v2
+                .local_priority
+                .is_none()
         );
     }
 

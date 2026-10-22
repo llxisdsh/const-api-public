@@ -263,6 +263,11 @@ pub(crate) fn observe_value(status: u16, value: &Value, model: Option<&str>) -> 
     let rpc_status = lower(error.get("status"));
     let message = text(error.get("message").or_else(|| value.get("detail")));
     let message_lower = message.trim().to_ascii_lowercase();
+    // OpenCode wraps credential rejection in a generic `server_error` envelope.
+    // The HTTP status and message are authoritative here; otherwise a 401 such
+    // as "Invalid credential" is surfaced as a retryable provider overload.
+    let invalid_credential =
+        classification_status == 401 && message_lower.contains("invalid credential");
     let mut failure = Failure {
         version: 1,
         cause: "unknown".into(),
@@ -336,7 +341,13 @@ pub(crate) fn observe_value(status: u16, value: &Value, model: Option<&str>) -> 
     } else {
         rpc_status.as_str()
     };
+    let kind = if invalid_credential {
+        "__invalid_credential__"
+    } else {
+        kind
+    };
     let (cause, scope, rule) = match kind {
+        "__invalid_credential__" => ("auth_error", "channel", "auth.credential.v1"),
         "cyber_policy" => ("cyber_policy", "request", "policy.cyber.v1"),
         "content_policy_violation" | "image_content_policy_violation" | "refusal" => {
             ("content_policy", "request", "policy.content.v1")
@@ -667,6 +678,18 @@ mod tests {
         assert_eq!(error.cause, "provider_overload");
         assert_eq!(error.scope, "request");
         assert!(error.safe_to_retry());
+    }
+
+    #[test]
+    fn opencode_invalid_credential_is_not_misclassified_as_provider_overload() {
+        let error = failure(
+            401,
+            r#"{"error":{"type":"server_error","message":"Invalid credential [cause=provider_overload, rule=availability.structured.v1]"}}"#,
+        );
+        assert_eq!(error.cause, "auth_error");
+        assert_eq!(error.scope, "channel");
+        assert_eq!(error.rule_id, "auth.credential.v1");
+        assert_eq!(error.legacy_kind(), "auth_error");
     }
 
     #[test]

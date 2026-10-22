@@ -524,6 +524,9 @@ fn voice_preserves_native_dialect_headers_for_calls_and_sideband() {
     headers.insert("openai-alpha", "quicksilver=v1".parse().unwrap());
     headers.insert("openai-beta", "future-voice=v1".parse().unwrap());
     let copied = codex_realtime_request_context_headers(&headers);
+    assert_eq!(copied["originator"], active_codex_identity().originator);
+    assert_eq!(copied["user-agent"], active_codex_identity().user_agent);
+    assert_eq!(copied["version"], active_codex_identity().version);
     assert_eq!(copied["openai-alpha"], "quicksilver=v1");
     assert_eq!(copied["openai-beta"], "future-voice=v1");
     let sideband = openai_subscription_live_websocket_request(

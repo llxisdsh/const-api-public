@@ -58,6 +58,25 @@
       "upstream_error": "Meta authorization failed. Try signing in again; no pay-as-you-go fallback was enabled."
     }
   },
+  "opencode": {
+    "login": "Sign in to OpenCode Console",
+    "starting": "Creating device authorization…",
+    "hint": "Sign in to OpenCode Console in your browser and authorize this workspace. Requests use the refreshable Console session, not a regular API key.",
+    "code": "Device code:",
+    "openLogin": "Open OpenCode authorization",
+    "waiting": "Confirm authorization in your browser. The session will be imported automatically.",
+    "retrying": "Connection unavailable or rate limited. Waiting to retry; you can cancel anytime.",
+    "success": "Authorized. Saving and validating reads the workspace model catalog; model tests consume upstream quota.",
+    "errors": {
+      "network": "Could not connect to OpenCode Console. Check your network and retry.",
+      "invalid_response": "OpenCode Console returned unrecognized authorization details. No session was imported.",
+      "unexpected_endpoint": "OpenCode Console returned an unexpected authorization endpoint. Authorization stopped.",
+      "denied": "OpenCode authorization was denied. You can start again.",
+      "expired": "The device authorization expired. Start sign-in again.",
+      "slow_down": "Too many authorization attempts. Wait and try again.",
+      "upstream_error": "OpenCode Console authorization failed. Try again later."
+    }
+  },
   "windowControls": {
     "minimize": "Minimize",
     "maximize": "Maximize",
@@ -707,8 +726,18 @@
     "noChannels": "No model channels yet. Add and enable a channel to use it locally.",
     "channel": "Channel",
     "localPriority": "Priority",
-    "moveChannelUp": "Move {{channel}} up",
-    "moveChannelDown": "Move {{channel}} down",
+    "priority": {
+      "title": "Local channel priority",
+      "hint": "Set this order manually for local routing; it does not follow price. Lower numbers go first. Give accounts the same number to share new sessions; later tiers take over when an earlier tier is unavailable or at capacity. Existing sessions stay on their account when possible.",
+      "scope": "Only affects local and LAN requests; it does not change marketplace prices or ranking.",
+      "editChannel": "Adjust priority for {{channel}}, currently {{priority}}",
+      "channelValue": "Priority for {{channel}}",
+      "selectChannel": "Select {{channel}}",
+      "selectAll": "Select all",
+      "selected": "{{count}} selected",
+      "setTo": "Set to",
+      "invalid": "Priority must be a whole number from 1 to 4294967295."
+    },
     "switch": "Switch",
     "model": "Model",
     "newChannel": "Add Model Channel",
@@ -734,6 +763,7 @@
     "statusAria": "Channel status",
     "status": "Status",
     "latency": "Latency",
+    "activeRequests": "Active requests",
     "protocolLatency": "Protocol / latency",
     "safety": "Safety",
     "quota": "Quota",
@@ -1674,6 +1704,7 @@
       "grok": "Grok account subscription",
       "kiro": "Kiro account subscription",
       "cursor": "Cursor account subscription",
+      "opencode": "OpenCode Console subscription",
       "connect": "Connect {{provider}}"
     },
     "capability": {
@@ -1694,7 +1725,7 @@
       "quotaExhausted": "Quota exhausted",
       "reauthorize": "Authorization required",
       "manualAction": "Needs attention",
-      "platformOnline": "Platform online",
+      "platformOnline": "Online",
       "localAvailable": "Local available",
       "pendingLocalCheck": "Waiting for local check",
       "waitingRefresh": "Waiting for refresh",
@@ -2750,6 +2781,10 @@
     "opencode_zen": {
       "title": "OpenCode Zen",
       "description": "Use your OpenCode Zen API key; official URLs and protocols are built in"
+    },
+    "opencode_console": {
+      "title": "OpenCode Console subscription",
+      "description": "Sign in to OpenCode Console and use the workspace subscription models and quota"
     },
     "kilo_gateway": {
       "title": "Kilo AI Gateway",

@@ -624,6 +624,30 @@ pub(crate) async fn execute_channel_request(
     {
         upstream_path.truncate(upstream_path.len() - "?alt=sse".len());
     }
+    if !opaque
+        && channel.source_driver() == crate::source_driver::SourceDriverId::OpencodeConsole
+        && matches!(
+            route.operation,
+            ApiOperation::ChatCompletions
+                | ApiOperation::Responses
+                | ApiOperation::Messages
+                | ApiOperation::GenerateContent
+                | ApiOperation::StreamGenerateContent
+        )
+        && crate::opencode_client::is_free_model(channel, &upstream_model)
+    {
+        // Console free models require streaming and bash/read declarations.
+        // The adapter preserves caller tools and disables compatibility-only
+        // tools for ordinary chat; the executor buffers forced streams for JSON.
+        if let Some(body) = crate::opencode_client::apply_free_tier_body_contract(
+            target.protocol,
+            &upstream_body,
+        )
+        .map_err(|error| execution_error(ChannelExecutionErrorCode::ConversionFailed, error))?
+        {
+            upstream_body = Bytes::from(body);
+        }
+    }
     let url = resolve_target_url(
         channel,
         &target,
@@ -713,8 +737,12 @@ pub(crate) async fn execute_channel_request(
             reqwest::header::HeaderValue::from_static("identity"),
         );
     }
+    let opencode_auth_channel = prepare_opencode_console_auth(client, channel, &mut headers)
+        .await
+        .map_err(opencode_auth_error)?;
+    let auth_channel = opencode_auth_channel.as_ref().unwrap_or(channel);
     if channel.source_driver() != crate::source_driver::SourceDriverId::CopilotSubscription {
-        apply_upstream_auth(&mut headers, channel, &target, !opaque).map_err(|error| {
+        apply_upstream_auth(&mut headers, auth_channel, &target, !opaque).map_err(|error| {
             execution_error(ChannelExecutionErrorCode::AuthenticationFailed, error)
         })?;
     }
@@ -742,6 +770,7 @@ pub(crate) async fn execute_channel_request(
             tool_mapping,
         });
     }
+    let capacity_guard = enter_channel_capacity(channel, route.operation)?;
     let request = client
         .request(request.method, url)
         .headers(headers)
@@ -763,6 +792,7 @@ pub(crate) async fn execute_channel_request(
         })?;
     strip_http_response_headers(response.headers_mut());
     crate::copilot::observe_response(channel, response.status(), copilot_generation).await;
+    let response = capacity_guard.hold_response(response);
     let response = crate::openrouter::observe_response(channel, response);
     Ok(ChannelExecution {
         response,
@@ -895,9 +925,14 @@ pub(crate) async fn execute_native_streaming_channel_request(
         reqwest::header::ACCEPT_ENCODING,
         reqwest::header::HeaderValue::from_static("identity"),
     );
-    apply_upstream_auth(&mut headers, channel, &target, true)
+    let opencode_auth_channel = prepare_opencode_console_auth(client, channel, &mut headers)
+        .await
+        .map_err(opencode_auth_error)?;
+    let auth_channel = opencode_auth_channel.as_ref().unwrap_or(channel);
+    apply_upstream_auth(&mut headers, auth_channel, &target, true)
         .map_err(|error| execution_error(ChannelExecutionErrorCode::AuthenticationFailed, error))?;
 
+    let capacity_guard = enter_channel_capacity(channel, route.operation)?;
     let request = client.request(method, url).headers(headers).body(body);
     let mut response = crate::upstream_transport::send(request)
         .await
@@ -912,7 +947,21 @@ pub(crate) async fn execute_native_streaming_channel_request(
             execution_error_with_source(code, error)
         })?;
     strip_http_response_headers(response.headers_mut());
-    Ok(response)
+    Ok(capacity_guard.hold_response(response))
+}
+
+pub(crate) fn enter_channel_capacity(
+    channel: &ChannelConfig,
+    operation: ApiOperation,
+) -> Result<crate::channel_concurrency::Guard> {
+    if matches!(
+        operation,
+        ApiOperation::CountTokens | ApiOperation::ResponsesInputTokens
+    ) {
+        return Ok(crate::channel_concurrency::Guard::default());
+    }
+    crate::channel_concurrency::Guard::acquire(&channel.id, channel.max_concurrency())
+        .map_err(|()| crate::supplier::channel_concurrency_failure())
 }
 
 pub(crate) fn resolve_target_url(
@@ -1127,6 +1176,40 @@ pub(crate) fn apply_upstream_auth(
         }
     }
     Ok(())
+}
+
+async fn prepare_opencode_console_auth(
+    client: &Client,
+    channel: &ChannelConfig,
+    headers: &mut HeaderMap,
+) -> Result<Option<ChannelConfig>> {
+    if channel.source_driver() != crate::source_driver::SourceDriverId::OpencodeConsole {
+        return Ok(None);
+    }
+    let (access_token, credential, _) =
+        crate::detection::ensure_opencode_subscription_access_token(client, channel).await?;
+    if let Some(org_id) = crate::detection::json_string(&credential, &["org_id"])
+        .filter(|value| !value.trim().is_empty())
+    {
+        headers.insert("x-org-id", reqwest::header::HeaderValue::from_str(&org_id)?);
+    }
+    let mut authenticated = channel.clone();
+    authenticated.upstream_api_key = access_token;
+    Ok(Some(authenticated))
+}
+
+// Token-endpoint network/429/5xx failures are not invalid credentials.
+fn opencode_auth_error(error: anyhow::Error) -> anyhow::Error {
+    let unavailable = error
+        .chain()
+        .any(|cause| cause.is::<crate::upstream_transport::UpstreamTransportError>())
+        || crate::subscription_oauth_error::oauth_wire_error_from_anyhow(&error)
+            .is_some_and(|wire| wire.status == 429 || wire.status >= 500);
+    if unavailable {
+        crate::supplier::credential_refresh_unavailable_failure(error)
+    } else {
+        execution_error(ChannelExecutionErrorCode::AuthenticationFailed, error)
+    }
 }
 
 fn strip_http_hop_by_hop_headers(headers: &mut HeaderMap) {
@@ -1384,6 +1467,92 @@ mod tests {
             cache_identity: None,
             safety_identifier: None,
         }
+    }
+
+    #[tokio::test]
+    async fn api_channel_concurrency_is_held_until_http_body_finishes() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let (finish, finished) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut input = vec![0_u8; 4096];
+            let _ = socket.read(&mut input).await.unwrap();
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n").await.unwrap();
+            finished.await.unwrap();
+            socket.write_all(b"{}").await.unwrap();
+        });
+        let mut channel =
+            channel_for_surface(&format!("http://{address}"), ApiSurface::OpenAi, "verified");
+        channel.id = "api-capacity-http-body".into();
+        channel.v2.max_concurrency = 1;
+        let make_request = || {
+            request(
+                Method::POST,
+                "/v1/chat/completions",
+                "",
+                Bytes::from_static(br#"{"model":"model-a","messages":[]}"#),
+            )
+        };
+        let client = Client::builder().no_proxy().build().unwrap();
+        let execution = execute_channel_request(&client, &channel, make_request())
+            .await
+            .unwrap();
+        assert_eq!(crate::channel_concurrency::current(&channel.id), 1);
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            execute_channel_request(&client, &channel, make_request()),
+        )
+        .await
+        .expect("full channel must be rejected before network dispatch")
+        .unwrap_err();
+        let evidence = crate::supplier::execution_evidence_for_error(&error);
+        assert_eq!(evidence.error_code, "concurrency_full");
+        assert!(!evidence.upstream_attempted);
+        assert_eq!(evidence.recommendation.retry, "other_channel");
+        assert_eq!(evidence.recommendation.supplier_penalty, "ineligible");
+        finish.send(()).unwrap();
+        assert_eq!(execution.response.text().await.unwrap(), "{}");
+        server.await.unwrap();
+        assert_eq!(crate::channel_concurrency::current(&channel.id), 0);
+        assert!(enter_channel_capacity(&channel, ApiOperation::ChatCompletions).is_ok());
+    }
+
+    #[test]
+    fn opencode_token_endpoint_outage_is_not_an_authentication_failure() {
+        let oauth = |status, body| {
+            opencode_auth_error(
+                crate::subscription_oauth_error::SubscriptionOAuthError::from_response(
+                    "opencode", status, &body,
+                )
+                .into(),
+            )
+        };
+        let unavailable =
+            crate::supplier::execution_evidence_for_error(&oauth(503, serde_json::Value::Null));
+        assert_eq!(unavailable.error_code, "credential_refresh_unavailable");
+        assert_eq!(unavailable.fault_domain_hint, "upstream_provider");
+        assert!(!unavailable.upstream_attempted);
+        assert_eq!(unavailable.recommendation.retry, "other_channel");
+        let expired = oauth(400, serde_json::json!({"error": "invalid_grant"}));
+        assert_eq!(
+            channel_execution_error_code(&expired),
+            Some("authentication_failed")
+        );
+    }
+
+    #[test]
+    fn api_channel_token_count_does_not_compete_for_generation_slots() {
+        let mut channel = channel_for_surface("http://127.0.0.1:1", ApiSurface::OpenAi, "verified");
+        channel.id = "api-capacity-count-tokens".into();
+        channel.v2.max_concurrency = 1;
+        let _held = enter_channel_capacity(&channel, ApiOperation::ChatCompletions).unwrap();
+        assert!(enter_channel_capacity(&channel, ApiOperation::ChatCompletions).is_err());
+        assert!(enter_channel_capacity(&channel, ApiOperation::CountTokens).is_ok());
+        assert!(enter_channel_capacity(&channel, ApiOperation::ResponsesInputTokens).is_ok());
+        assert_eq!(crate::channel_concurrency::current(&channel.id), 1);
     }
 
     #[test]

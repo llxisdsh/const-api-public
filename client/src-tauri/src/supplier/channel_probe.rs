@@ -141,6 +141,14 @@ async fn test_channel_upstream_attempt(
     let requested_model = requested_model
         .map(|model| exact_probe_model(&channel, &model))
         .transpose()?;
+    if channel.source_driver() == crate::source_driver::SourceDriverId::OpencodeConsole {
+        return test_opencode_console_channel_upstream(
+            &channel,
+            requested_model.as_deref(),
+            &prompt,
+        )
+        .await;
+    }
     if channel.kind.trim() == "subscription_adapter" {
         return test_subscription_channel_upstream(&channel, requested_model.as_deref(), &prompt)
             .await
@@ -208,6 +216,146 @@ async fn test_channel_upstream_attempt(
     let raw = resp.text().await.map_err(|err| err.to_string())?;
     let header_refs = headers.iter().map(|(name, value)| (name.as_str(), value.as_str())).collect::<Vec<_>>();
     if !(200..300).contains(&status) || crate::upstream_failure::observe(status, &raw, &header_refs, Some(&model)).is_some() {
+        return Err(ProbeError::response(status, &raw, &header_refs, &model));
+    }
+    check_probe_completion(&raw)?;
+    let content = protocol_safe_response_content(&raw);
+    let (input_tokens, output_tokens) = extract_usage_tokens(&raw);
+    Ok(ChannelUpstreamTestResult {
+        http_status: status,
+        latency_ms: started_at.elapsed().as_millis(),
+        upstream_http_version,
+        model,
+        content,
+        raw,
+        input_tokens,
+        output_tokens,
+    })
+}
+
+fn opencode_probe_request(
+    channel: &ChannelConfig,
+    model: &str,
+    prompt: &str,
+) -> Result<(crate::protocol::kind::ProtocolKind, String, bytes::Bytes)> {
+    let protocol = crate::coding_gateway::channel_model_protocol(channel, model)
+        .or_else(|| crate::protocol::kind::ProtocolKind::parse(&channel.api_format).ok())
+        .unwrap_or(channel.v2.default_target.protocol);
+    let (path, body) = match protocol {
+        crate::protocol::kind::ProtocolKind::OpenAiResponses => (
+            "/v1/responses".to_string(),
+            serde_json::json!({
+                "model": model,
+                "input": prompt,
+                "store": false,
+                "stream": false
+            }),
+        ),
+        crate::protocol::kind::ProtocolKind::OpenAiChat => (
+            "/v1/chat/completions".to_string(),
+            serde_json::json!({
+                "model": model,
+                "messages": [{ "role": "user", "content": prompt }],
+                "stream": false
+            }),
+        ),
+        crate::protocol::kind::ProtocolKind::AnthropicMessages => (
+            "/anthropic/v1/messages".to_string(),
+            serde_json::json!({
+                "model": model,
+                "max_tokens": 128,
+                "messages": [{ "role": "user", "content": prompt }]
+            }),
+        ),
+        crate::protocol::kind::ProtocolKind::GeminiNative => (
+            format!(
+                "/gemini/v1beta/models/{}:generateContent",
+                urlencoding::encode(model)
+            ),
+            serde_json::json!({
+                "contents": [{ "role": "user", "parts": [{ "text": prompt }] }],
+                "generationConfig": { "maxOutputTokens": 128 }
+            }),
+        ),
+    };
+    Ok((protocol, path, bytes::Bytes::from(serde_json::to_vec(&body)?)))
+}
+
+async fn test_opencode_console_channel_upstream(
+    channel: &ChannelConfig,
+    requested_model: Option<&str>,
+    prompt: &str,
+) -> Result<ChannelUpstreamTestResult, ProbeError> {
+    let model = requested_model
+        .map(str::to_string)
+        .unwrap_or_else(|| pick_primary_model(&channel.models, channel));
+    if model.trim().is_empty() {
+        return Err("upstream model is required".to_string().into());
+    }
+    let prompt = normalized_health_prompt(prompt);
+    let (protocol, path, body) =
+        opencode_probe_request(channel, &model, &prompt).map_err(|error| ProbeError {
+            failure: None,
+            message: format!("OpenCode Console probe request is invalid: {error}"),
+            deferred: false,
+        })?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    let request = crate::channel_executor::ChannelRequest {
+        method: reqwest::Method::POST,
+        path,
+        raw_query: String::new(),
+        has_query: false,
+        headers,
+        body,
+        stream_requested: Some(false),
+        selected_upstream_model: Some(model.clone()),
+        selected_target_protocol: Some(protocol.as_str().to_string()),
+        cache_identity: None,
+        safety_identifier: None,
+    };
+    let started_at = std::time::Instant::now();
+    let execution = crate::channel_executor::execute_channel_request(
+        &long_http_client(),
+        channel,
+        request,
+    )
+    .await
+    .map_err(|error| ProbeError {
+        failure: None,
+        message: format!("OpenCode Console probe request failed: {error}"),
+        deferred: true,
+    })?;
+    let response = execution.response;
+    let status = response.status().as_u16();
+    let upstream_http_version =
+        crate::upstream_transport::http_version_transport(response.version()).to_string();
+    let headers = response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect::<Vec<_>>();
+    let raw = response.text().await.map_err(|error| ProbeError {
+        failure: None,
+        message: format!("OpenCode Console probe response could not be read: {error}"),
+        deferred: true,
+    })?;
+    let header_refs = headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    if !(200..300).contains(&status) {
+        return Err(ProbeError::response(status, &raw, &header_refs, &model));
+    }
+    if crate::upstream_failure::observe(status, &raw, &header_refs, Some(&model)).is_some() {
         return Err(ProbeError::response(status, &raw, &header_refs, &model));
     }
     check_probe_completion(&raw)?;
@@ -432,6 +580,19 @@ mod channel_probe_tests {
     }
 
     #[test]
+    fn gemini_probe_request_uses_an_explicit_user_role() {
+        let channel = crate::coding_gateway::tests::channel(
+            crate::source_driver::SourceDriverId::OpencodeZen,
+            "https://opencode.ai/zen/v1",
+        );
+        let (url, body, protocol) =
+            test_request_for_channel(&channel, "gemini-3.1-pro", "ping").unwrap();
+        assert!(url.ends_with("/models/gemini-3.1-pro:generateContent"));
+        assert_eq!(protocol, "gemini");
+        assert_eq!(body["contents"][0]["role"], "user");
+    }
+
+    #[test]
     fn completed_responses_can_begin_with_reasoning_but_truncation_is_inconclusive() {
         let complete = r#"{"object":"response","status":"completed","output":[{"type":"reasoning","summary":[]},{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}"#;
         assert!(check_probe_completion(complete).is_ok());
@@ -475,6 +636,72 @@ mod channel_probe_tests {
             pick_primary_model(&models, &channel),
             "claude-opus-5"
         );
+    }
+
+    #[test]
+    fn opencode_probe_uses_the_console_surface_for_each_model_family() {
+        let mut channel = crate::channel_from_supplier(
+            "opencode-probe".to_string(),
+            &crate::default_supplier_config(),
+        );
+        channel.set_source_driver(crate::source_driver::SourceDriverId::OpencodeConsole);
+        channel.surface_bindings =
+            crate::source_driver_surface_bindings(channel.source_driver(), "");
+        channel.kind = "subscription_adapter".into();
+        channel.models = vec![
+            "gpt-5.4-mini".into(),
+            "claude-haiku-5-5".into(),
+            "gemini-3.1-pro".into(),
+            "minimax-m3".into(),
+        ];
+        channel.v2.credential_ref = "managed.json".into();
+        let cases = [
+            ("gpt-5.4-mini", "/v1/responses", "input"),
+            ("claude-haiku-5-5", "/anthropic/v1/messages", "max_tokens"),
+            (
+                "gemini-3.1-pro",
+                "/gemini/v1beta/models/gemini-3.1-pro:generateContent",
+                "contents",
+            ),
+            ("minimax-m3", "/v1/chat/completions", "messages"),
+        ];
+        for (model, path, field) in cases {
+            let (protocol, actual_path, body) =
+                opencode_probe_request(&channel, model, "Reply OK.").expect("probe request");
+            assert_eq!(actual_path, path);
+            let route = crate::surface::resolve_api_route("POST", &actual_path, false)
+                .expect("probe path should be a canonical API route");
+            assert_eq!(route.protocol, Some(protocol));
+            let target = crate::channel_surface::channel_protocol_target(&channel, protocol)
+                .expect("console surface should expose the model protocol");
+            let url = crate::channel_executor::resolve_target_url(
+                &channel,
+                &target,
+                &route,
+                &reqwest::Method::POST,
+                &route.relative_path,
+                model,
+            )
+            .expect("console surface URL");
+            let expected_url = match protocol {
+                crate::protocol::kind::ProtocolKind::OpenAiResponses => {
+                    "https://opencode.ai/inference/openai/v1/responses"
+                }
+                crate::protocol::kind::ProtocolKind::AnthropicMessages => {
+                    "https://opencode.ai/inference/anthropic/v1/messages"
+                }
+                crate::protocol::kind::ProtocolKind::GeminiNative => {
+                    "https://opencode.ai/inference/google/v1beta/models/gemini-3.1-pro:generateContent"
+                }
+                crate::protocol::kind::ProtocolKind::OpenAiChat => {
+                    "https://opencode.ai/inference/openai/v1/chat/completions"
+                }
+            };
+            assert_eq!(url, expected_url);
+            let body: serde_json::Value =
+                serde_json::from_slice(&body).expect("JSON probe body");
+            assert!(body.get(field).is_some(), "{model} should use {field}");
+        }
     }
 
     #[test]

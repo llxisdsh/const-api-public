@@ -145,6 +145,36 @@ pub(crate) fn request_conversion_failure(error: impl std::fmt::Display) -> anyho
     )
 }
 
+pub(crate) fn channel_concurrency_failure() -> anyhow::Error {
+    execution_failure(
+        "local_admission",
+        "capacity",
+        "concurrency_full",
+        false,
+        false,
+        false,
+        false,
+        recommendation("deny", "deny", "none", "ineligible", "other_channel"),
+        "channel concurrency limit reached locally",
+    )
+}
+
+/// The token endpoint was unreachable or answered 429/5xx. This is not an
+/// invalid credential, and inference was never sent, so another channel may run it.
+pub(crate) fn credential_refresh_unavailable_failure(error: impl std::fmt::Display) -> anyhow::Error {
+    execution_failure(
+        "upstream_auth",
+        "upstream_provider",
+        "credential_refresh_unavailable",
+        false,
+        false,
+        false,
+        false,
+        recommendation("deny", "deny", "none", "review", "other_channel"),
+        error,
+    )
+}
+
 pub(crate) fn upstream_stream_failure(
     response_started: bool,
     usable_output_produced: bool,
@@ -533,6 +563,21 @@ mod execution_evidence_tests {
         assert!(!evidence.upstream_attempted);
         assert!(!evidence.response_started);
         assert_eq!(evidence.recommendation.retry, "other_channel");
+        assert_eq!(evidence.recommendation.supplier_penalty, "ineligible");
+    }
+
+    #[test]
+    fn capacity_rejection_reports_no_upstream_dispatch_to_the_server() {
+        let payload = supplier_execution_error_payload(&channel_concurrency_failure());
+        let wire = crate::surface_wire::SurfaceEnvelope::from_payload(&payload).unwrap();
+        assert_eq!(wire.status, Some(429));
+        assert_eq!(payload["error_kind"], "concurrency_full");
+        assert_eq!(payload["safe_to_retry_other_channel"], true);
+        assert_eq!(payload["safe_to_retry_same_channel"], false);
+        assert_eq!(payload[crate::surface_wire::LOGICAL_REQUEST_STARTED_FIELD], false);
+        let evidence: ExecutionEvidence = serde_json::from_value(payload[EXECUTION_EVIDENCE_FIELD].clone()).unwrap();
+        assert!(!evidence.upstream_attempted);
+        assert_eq!(evidence.stage, "local_admission");
         assert_eq!(evidence.recommendation.supplier_penalty, "ineligible");
     }
 
