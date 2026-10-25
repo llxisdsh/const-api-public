@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_revision": "4067a60c6585b4b1387b98304f4d6f5d9fd7ded3",
+  "source_revision": "7fa2b1ff9abe6b1ac1e9814ef0780166d8a406b0",
   "edition": "local-only",
   "files": {
     "client/.node-version": "45507e6d96329a845faa642c0f485313bcb2ca1e08b043589cde4ddd15969cd6",
@@ -569,7 +569,7 @@
     "shared/apiCapabilityPresentation.ts": "1fe4e47c6aa1ddcd82b025a7425ee12e6e64606e456b595b8562f0ae267ced9d",
     "shared/tool_model_presentation_defaults.json": "953bb599fc40cf7c1f1c3de831d5f44de9526e4731b74af0633560064ce1e1ce",
     "testdata/surface-wire-v2.json": "31d2baf74c9c6ff780e094c4a5ccf960d42053dc72017cea894766c01dce4f07",
-    "shared/catalog-floor.json": "77bc51e43ca3d89759b7e3f528408ad8f9e4ace08f41bf2886739457f62cdc5a",
+    "shared/catalog-floor.json": "deb8b5871bfe6616e7d96ed2bf60cab462486f17fbd242f286c1947821918537",
     "shared/endpoints.json": "c5d44d71c8116841100fd3f91efbc2f0ff765d8d0b16ca8588fcc4ddcaecd5af",
     "client/src/account/AccountPage.tsx": "9f788f1bf4c91b5db0d7db3eee012ee0d425ab2e4e095fd380b27ea48779ecb7",
     "SOURCE.md": "1f564f353e37262d70f6c483230c9fa01d1e28e247935ac6a018dcf1ffa83e3f",
