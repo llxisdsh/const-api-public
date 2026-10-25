@@ -87,7 +87,7 @@ describe("ModelCompatibilityEditor candidates", () => {
 });
 
 describe("ModelCompatibilityEditor system baseline", () => {
-  it("shows restored Gemini, Codex and Claude candidates in the generated tier order", () => {
+  it("shows current Gemini, Codex and Claude candidates in the generated tier order", () => {
     const modelGroups: ModelCompatibilityGroup[] = bundledMetadata.compatibility_groups;
     renderEditor(readyPolicy({
       modelGroups,
@@ -102,7 +102,7 @@ describe("ModelCompatibilityEditor system baseline", () => {
       expect(Array.from(tier.querySelectorAll(".compatibility-model-row > code"), (row) => row.textContent))
         .toEqual(group.models);
     }
-    for (const model of ["gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gpt-5.4", "gpt-5.3-codex-spark", "claude-opus-4-7"]) {
+    for (const model of ["gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gpt-5.4", "gpt-5.3-codex-spark", "claude-fable-5-1"]) {
       expect(screen.getByText(model).closest(".compatibility-model-row")).not.toBeNull();
     }
     expect(screen.queryByText("codex-auto-review")).not.toBeInTheDocument();

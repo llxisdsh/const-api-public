@@ -126,6 +126,7 @@ mod source_driver;
 mod sse_buffer;
 mod subscription_oauth_callback;
 mod subscription_oauth_error;
+mod subscription_transport_policy;
 mod supplier;
 mod surface;
 mod surface_wire;

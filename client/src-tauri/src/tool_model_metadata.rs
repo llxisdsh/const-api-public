@@ -1319,13 +1319,13 @@ mod tests {
             standard
                 .models
                 .iter()
-                .any(|model| model == "claude-sonnet-4-5")
+                .any(|model| model == "gemini-3-flash-preview")
         );
         assert!(
             standard
                 .match_models
                 .iter()
-                .any(|model| model == "claude-sonnet-4-5-20250929")
+                .any(|model| model == "gemini-3-flash")
         );
         let reviewer = groups
             .iter()

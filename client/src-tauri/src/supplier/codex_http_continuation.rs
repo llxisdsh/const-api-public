@@ -5,6 +5,7 @@ const CODEX_HTTP_CONTINUATION_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const CODEX_HTTP_CONTINUATION_CACHE_MAX_ENTRY_BYTES: usize = CODEX_HTTP_CONTINUATION_CACHE_MAX_BYTES;
 const CODEX_HTTP_CONTINUATION_DISK_MAX_BYTES: usize = 256 * 1024 * 1024;
 const CODEX_HTTP_CONTINUATION_CACHE_TTL: Duration = Duration::from_secs(2 * 60 * 60);
+const CODEX_HTTP_CONTINUATION_MAX_RESPONSE_ID_BYTES: usize = 512;
 #[cfg(not(test))]
 const CODEX_HTTP_CONTINUATION_DB_FILE: &str = "codex-http-continuations.sqlite3";
 
@@ -114,6 +115,14 @@ fn codex_http_continuation_key(config: &SupplierConfig, response_id: &str) -> St
     digest.update([0x1f]);
     digest.update(response_id.trim().as_bytes());
     hex::encode(digest.finalize())
+}
+
+fn normalized_codex_response_id(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > CODEX_HTTP_CONTINUATION_MAX_RESPONSE_ID_BYTES {
+        return None;
+    }
+    Some(value.to_string())
 }
 
 #[cfg(not(test))]
@@ -414,6 +423,10 @@ fn codex_http_continuation_state(
     config: &SupplierConfig,
     response_id: &str,
 ) -> Option<CodexHttpContinuationState> {
+    let response_id = response_id.trim();
+    if response_id.is_empty() || response_id.len() > CODEX_HTTP_CONTINUATION_MAX_RESPONSE_ID_BYTES {
+        return None;
+    }
     let key = codex_http_continuation_key(config, response_id);
     let now = Instant::now();
     {
@@ -499,7 +512,10 @@ fn insert_codex_http_continuation_history_with_pin(
     websocket_pin: Option<u128>,
 ) -> bool {
     let response_id = response_id.trim();
-    if response_id.is_empty() || response_id.len() > 512 || history.is_empty() {
+    if response_id.is_empty()
+        || response_id.len() > CODEX_HTTP_CONTINUATION_MAX_RESPONSE_ID_BYTES
+        || history.is_empty()
+    {
         return false;
     }
     let state = CodexHttpContinuationState {
@@ -594,28 +610,14 @@ fn codex_websocket_replay_input_is_self_contained(
 /// The legacy cache/collector names mention HTTP because that path introduced
 /// the bounded store. WebSocket recovery intentionally shares that same store
 /// instead of creating a second history database.
+///
+/// A missing local context returns `None` (fail closed). The request body then
+/// carries only a delta, so inventing a new turn from it would silently drop the
+/// conversation and its cached prefix; the caller reports `previous_response_not_found`
+/// and the client resends the complete input, as the official Codex client does.
 pub(crate) fn prepare_codex_websocket_subscription_replay(
     config: &SupplierConfig,
     body: &str,
-) -> Result<Option<String>> {
-    prepare_codex_websocket_subscription_replay_with_recovery(config, body, false)
-}
-
-/// Builds a self-contained replacement after the Responses WebSocket pool lost
-/// affinity before it accepted the frame. In that narrow case the original
-/// request was never handed to an upstream writer, so starting a new turn is
-/// safe and avoids turning a recoverable reconnect into a user-visible 400.
-pub(crate) fn prepare_codex_websocket_subscription_replay_after_pre_send_loss(
-    config: &SupplierConfig,
-    body: &str,
-) -> Result<Option<String>> {
-    prepare_codex_websocket_subscription_replay_with_recovery(config, body, true)
-}
-
-fn prepare_codex_websocket_subscription_replay_with_recovery(
-    config: &SupplierConfig,
-    body: &str,
-    allow_missing_context_recovery: bool,
 ) -> Result<Option<String>> {
     let mut value: serde_json::Value = serde_json::from_str(body)?;
     let Some(object) = value.as_object_mut() else {
@@ -630,33 +632,19 @@ fn prepare_codex_websocket_subscription_replay_with_recovery(
     let Some(previous_response_id) = object
         .get("previous_response_id")
         .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+        .and_then(normalized_codex_response_id)
     else {
         return Ok(None);
     };
-    let state = codex_http_continuation_state(config, &previous_response_id);
-    if state.is_none() && !allow_missing_context_recovery {
+    let Some(state) = codex_http_continuation_state(config, &previous_response_id) else {
         let cache = codex_http_continuation_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         log::warn!(
             "[const-api][upstream-ws] continuation_replay_skipped code=codex_ws_replay_context_missing action=fail_closed channel_id={} cache_key={} cache_entries={} cache_bytes={} active_pins={}",
             config.channel_id, codex_http_continuation_key(config, &previous_response_id), cache.entries.len(), cache.bytes, cache.websocket_pins.len()
         );
         return Ok(None);
-    }
-    let (history_len, current_len) = if let Some(state) = state {
-        apply_codex_continuation_state(object, state)
-    } else {
-        let recovery = repair_unresolved_codex_continuation(object);
-        log::warn!(
-            "[const-api][upstream-ws] continuation_replay_degraded code=codex_ws_replay_context_missing action=start_new_turn kept_items={} dropped_orphan_tool_items={} fallback_message={}",
-            recovery.kept_items,
-            recovery.dropped_orphan_tool_items,
-            recovery.fallback_message,
-        );
-        (0, recovery.kept_items)
     };
+    let (history_len, current_len) = apply_codex_continuation_state(object, state);
     let Some(input) = object
         .get("input")
         .and_then(serde_json::Value::as_array)
@@ -731,9 +719,7 @@ pub(crate) fn prepare_codex_http_subscription_request(
     let Some(previous_response_id) = object
         .get("previous_response_id")
         .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+        .and_then(normalized_codex_response_id)
     else {
         return Ok(body.to_string());
     };
@@ -963,9 +949,7 @@ impl CodexHttpContinuationCollector {
             .as_ref()
             .and_then(|request| request.get("previous_response_id"))
             .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
+            .and_then(normalized_codex_response_id);
         let input = match previous_response_id {
             Some(previous_response_id) => {
                 let state = codex_http_continuation_state(config, &previous_response_id);
@@ -1002,8 +986,13 @@ impl CodexHttpContinuationCollector {
     ) -> Self {
         // Protect a resumed parent before looking it up/inserting it from disk.
         if let Some(parent) = serde_json::from_str::<serde_json::Value>(request_body).ok()
-            .and_then(|value| value.get("previous_response_id").and_then(serde_json::Value::as_str).map(str::to_string))
-            .filter(|value| !value.trim().is_empty())
+            .and_then(|value| {
+                value
+                    .get("previous_response_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .and_then(|value| normalized_codex_response_id(&value))
         {
             codex_http_continuation_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                 .websocket_pins.insert(pin.0, codex_http_continuation_key(config, &parent));
@@ -1247,6 +1236,26 @@ pub(crate) fn capture_codex_http_subscription_continuation(
 #[cfg(test)]
 mod codex_http_continuation_collector_tests {
     use super::*;
+
+    #[test]
+    fn continuation_response_id_bounds_and_normalization_are_shared() {
+        assert_eq!(normalized_codex_response_id("  resp-1  ").as_deref(), Some("resp-1"));
+        assert!(normalized_codex_response_id(&"r".repeat(513)).is_none());
+
+        let mut config = default_supplier_config();
+        config.channel_id = "response-id-boundary".into();
+        assert!(codex_http_continuation_state(&config, &"r".repeat(513)).is_none());
+
+        let request = serde_json::json!({
+            "previous_response_id": "r".repeat(513),
+            "input": [{"role": "user", "content": "delta"}],
+            "store": false,
+        })
+        .to_string();
+        assert!(prepare_codex_websocket_subscription_replay(&config, &request)
+            .expect("oversized response ID is a valid JSON request")
+            .is_none());
+    }
 
     #[test]
     fn continuation_shares_cached_history_without_mutating_replays() {
@@ -1603,7 +1612,7 @@ mod codex_http_continuation_collector_tests {
     }
 
     #[test]
-    fn websocket_pre_send_loss_starts_a_self_contained_turn_without_cached_parent() {
+    fn websocket_missing_parent_fails_closed_instead_of_dropping_history() {
         let mut config = default_supplier_config();
         config.channel_id = "ws-reconnect-pre-send-recovery".to_string();
         config.credential_ref = "ws-reconnect-pre-send-account".to_string();
@@ -1620,23 +1629,10 @@ mod codex_http_continuation_collector_tests {
         })
         .to_string();
 
-        let replay = prepare_codex_websocket_subscription_replay_after_pre_send_loss(
-            &config, &next,
-        )
-        .expect("pre-send recovery should not fail to encode")
-        .expect("pre-send recovery should produce a self-contained request");
-        let replay: serde_json::Value = serde_json::from_str(&replay).expect("replay JSON");
-
-        assert!(replay.get("previous_response_id").is_none());
-        assert_eq!(
-            replay["input"][0]["content"],
-            serde_json::json!("continue")
-        );
-        assert_eq!(replay["input"].as_array().map(Vec::len), Some(1));
-        assert!(replay["include"].as_array().is_some_and(|include| {
-            include
-                .iter()
-                .any(|item| item.as_str() == Some("reasoning.encrypted_content"))
-        }));
+        // The frame holds only a delta. Rebuilding it without the cached parent
+        // would send a context-free turn, so the client must resend full input.
+        assert!(prepare_codex_websocket_subscription_replay(&config, &next)
+            .expect("missing parent is not an encoding error")
+            .is_none());
     }
 }

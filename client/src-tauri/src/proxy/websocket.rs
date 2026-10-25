@@ -1336,18 +1336,73 @@ fn responses_websocket_allows_http_bridge(text: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// TLS for upstream Responses WebSockets: rustls with aws-lc-rs, the stack the
+/// official Codex client uses. tokio-tungstenite's default connector is the
+/// platform library (SChannel on Windows), whose ClientHello differs from the
+/// client family named by the request headers. The provider is passed to the
+/// builder instead of installed process-wide: `transport.rs` installs ring as
+/// the process default for QUIC, and `ClientConfig::builder()` would follow it.
+/// Certificates are checked by the platform verifier, as reqwest does for HTTP,
+/// so OS-installed roots keep working. One shared config also shares its TLS
+/// session cache across reconnects.
+pub(crate) fn responses_websocket_tls_config() -> Result<Arc<rustls::ClientConfig>> {
+    use rustls_platform_verifier::BuilderVerifierExt as _;
+    static CONFIG: std::sync::OnceLock<Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
+    if let Some(config) = CONFIG.get() {
+        return Ok(Arc::clone(config));
+    }
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()?
+    .with_platform_verifier()?
+    .with_no_client_auth();
+    Ok(Arc::clone(CONFIG.get_or_init(|| Arc::new(config))))
+}
+
 async fn connect_responses_websocket_request(
     request: tokio_tungstenite::tungstenite::http::Request<()>,
+) -> Result<ResponsesUpstreamSocket> {
+    connect_responses_websocket_request_with_tls(request, false).await
+}
+
+async fn connect_codex_responses_websocket_request(
+    request: tokio_tungstenite::tungstenite::http::Request<()>,
+) -> Result<ResponsesUpstreamSocket> {
+    connect_responses_websocket_request_with_tls(request, true).await
+}
+
+async fn connect_responses_websocket_request_with_tls(
+    request: tokio_tungstenite::tungstenite::http::Request<()>,
+    codex_tls: bool,
 ) -> Result<ResponsesUpstreamSocket> {
     let websocket_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
         .max_message_size(Some(RESPONSES_WEBSOCKET_MAX_MESSAGE_BYTES))
         .max_frame_size(Some(RESPONSES_WEBSOCKET_MAX_MESSAGE_BYTES));
-    match bounded_websocket_connect(
-        tokio_tungstenite::connect_async_with_config(request, Some(websocket_config), false),
-        WEBSOCKET_UPSTREAM_CONNECT_TIMEOUT,
-    )
-    .await
-    {
+    let result = if codex_tls {
+        let connector = tokio_tungstenite::Connector::Rustls(responses_websocket_tls_config()?);
+        bounded_websocket_connect(
+            tokio_tungstenite::connect_async_tls_with_config(
+                request,
+                Some(websocket_config),
+                false,
+                Some(connector),
+            ),
+            WEBSOCKET_UPSTREAM_CONNECT_TIMEOUT,
+        )
+        .await
+    } else {
+        bounded_websocket_connect(
+            tokio_tungstenite::connect_async_with_config(
+                request,
+                Some(websocket_config),
+                false,
+            ),
+            WEBSOCKET_UPSTREAM_CONNECT_TIMEOUT,
+        )
+        .await
+    };
+    match result {
         Some(Ok((socket, _))) => Ok(socket),
         Some(Err(error)) if matches!(error, tokio_tungstenite::tungstenite::Error::Io(_) | tokio_tungstenite::tungstenite::Error::Tls(_)) => {
             let cause = responses_ws_io_cause(&error);
@@ -1382,7 +1437,7 @@ async fn connect_responses_websocket_native_route(
                 &credential,
                 client_headers,
             )?;
-            match connect_responses_websocket_request(request).await {
+            match connect_codex_responses_websocket_request(request).await {
                 Ok(socket) => Ok(socket),
                 Err(error) if responses_websocket_error_status(&error) == Some(401) => {
                     let (token, credential, _) =
@@ -1399,7 +1454,7 @@ async fn connect_responses_websocket_native_route(
                         &credential,
                         client_headers,
                     )?;
-                    connect_responses_websocket_request(request).await
+                    connect_codex_responses_websocket_request(request).await
                 }
                 Err(error) => Err(error),
             }
@@ -1422,7 +1477,7 @@ async fn connect_openai_subscription_live(
         &credential,
         client_headers,
     )?;
-    match connect_responses_websocket_request(request).await {
+    match connect_codex_responses_websocket_request(request).await {
         Ok(socket) => Ok(socket),
         Err(error) if responses_websocket_error_status(&error) == Some(401) => {
             let (token, credential, _) = ensure_openai_subscription_access_token_with_options(
@@ -1439,7 +1494,7 @@ async fn connect_openai_subscription_live(
                 &credential,
                 client_headers,
             )?;
-            connect_responses_websocket_request(request).await
+            connect_codex_responses_websocket_request(request).await
         }
         Err(error) => Err(error),
     }
@@ -1688,9 +1743,7 @@ impl SupplierResponsesUpstreamSender {
                     && responses_ws_pool_error_requires_full_replay(&error) =>
             {
                 let config = subscription_config.expect("guarded subscription config");
-                let Some(replay) =
-                    prepare_codex_websocket_subscription_replay_after_pre_send_loss(config, text)?
-                else {
+                let Some(replay) = prepare_codex_websocket_subscription_replay(config, text)? else {
                     return Err(error.context(
                         "Responses WebSocket continuation replay context is unavailable",
                     ));
@@ -5389,6 +5442,11 @@ fn openai_subscription_websocket_request(
             reqwest::header::HeaderValue::from_str(&account_id)?,
         );
     }
+    crate::subscription_transport_policy::apply_to_headers(
+        crate::source_driver::SourceDriverId::OpenAiSubscription,
+        crate::subscription_transport_policy::HeaderOperation::ResponsesWebsocket,
+        request.headers_mut(),
+    );
     Ok(request)
 }
 
@@ -6573,7 +6631,7 @@ mod responses_websocket_tests {
         let request = openai_subscription_live_websocket_request(
             None, "", token, &credential, &warp::http::HeaderMap::new(),
         )?;
-        let mut socket = match connect_responses_websocket_request(request).await {
+        let mut socket = match connect_codex_responses_websocket_request(request).await {
             Ok(socket) => socket,
             Err(error) => return Err(anyhow!(
                 "Voice handshake failed, HTTP status={:?}", responses_websocket_error_status(&error),
@@ -6629,6 +6687,235 @@ mod responses_websocket_tests {
             crate::channel_executor::execution_kind_for_source(selected.source_driver())
                 .expect("execution kind"),
             crate::source_driver::ExecutionKind::OpenAiSubscription
+        );
+    }
+
+    #[test]
+    fn rustls_handshake_failures_keep_the_tls_error_cause() {
+        use tokio_tungstenite::tungstenite::Error;
+        let rejected = std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer),
+        );
+        assert_eq!(responses_ws_io_cause(&Error::Io(rejected)), "tls_error");
+        assert_eq!(
+            responses_ws_io_cause(&Error::Io(std::io::ErrorKind::UnexpectedEof.into())),
+            "connect_error"
+        );
+    }
+
+    /// The fields of a TLS ClientHello that make up its JA3/JA4 fingerprint,
+    /// minus per-connection randomness, key shares and the server name.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ClientHelloShape {
+        cipher_suites: Vec<u16>,
+        extensions: Vec<u16>,
+        groups: Vec<u16>,
+        signature_algorithms: Vec<u16>,
+        versions: Vec<u16>,
+        alpn: Vec<String>,
+    }
+
+    fn parse_client_hello(record: &[u8]) -> ClientHelloShape {
+        fn take<'a>(bytes: &mut &'a [u8], count: usize) -> &'a [u8] {
+            let (head, tail) = bytes.split_at(count);
+            *bytes = tail;
+            head
+        }
+        fn prefixed<'a>(bytes: &mut &'a [u8], prefix: usize) -> &'a [u8] {
+            let length = take(bytes, prefix)
+                .iter()
+                .fold(0usize, |acc, byte| (acc << 8) | usize::from(*byte));
+            take(bytes, length)
+        }
+        fn u16s(bytes: &[u8]) -> Vec<u16> {
+            bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                // GREASE placeholders (0x?a?a) change per connection.
+                .filter(|value| value & 0x0f0f != 0x0a0a)
+                .collect()
+        }
+
+        assert_eq!(record[0], 22, "first record is a TLS handshake");
+        let mut body = &record[5..];
+        assert_eq!(take(&mut body, 1), [1], "handshake message is a ClientHello");
+        let mut hello = prefixed(&mut body, 3);
+        take(&mut hello, 2 + 32);
+        prefixed(&mut hello, 1);
+        let cipher_suites = u16s(prefixed(&mut hello, 2));
+        prefixed(&mut hello, 1);
+        let mut extensions_bytes = prefixed(&mut hello, 2);
+
+        let mut shape = ClientHelloShape {
+            cipher_suites,
+            extensions: Vec::new(),
+            groups: Vec::new(),
+            signature_algorithms: Vec::new(),
+            versions: Vec::new(),
+            alpn: Vec::new(),
+        };
+        while !extensions_bytes.is_empty() {
+            let kind = u16::from_be_bytes([extensions_bytes[0], extensions_bytes[1]]);
+            take(&mut extensions_bytes, 2);
+            let mut data = prefixed(&mut extensions_bytes, 2);
+            if kind & 0x0f0f == 0x0a0a {
+                continue;
+            }
+            shape.extensions.push(kind);
+            match kind {
+                10 => shape.groups = u16s(prefixed(&mut data, 2)),
+                13 => shape.signature_algorithms = u16s(prefixed(&mut data, 2)),
+                43 => shape.versions = u16s(prefixed(&mut data, 1)),
+                16 => {
+                    let mut names = prefixed(&mut data, 2);
+                    while !names.is_empty() {
+                        shape
+                            .alpn
+                            .push(String::from_utf8_lossy(prefixed(&mut names, 1)).into_owned());
+                    }
+                }
+                _ => {}
+            }
+        }
+        shape
+    }
+
+    /// Reads only the first TLS record, then drops the connection, so the
+    /// client under test never completes a handshake or reaches a real server.
+    async fn capture_client_hello(listener: tokio::net::TcpListener) -> Vec<u8> {
+        use tokio::io::AsyncReadExt;
+        let (mut stream, _) = listener.accept().await.expect("accept TLS client");
+        let mut record = vec![0u8; 5];
+        stream.read_exact(&mut record).await.expect("TLS record header");
+        let length = usize::from(u16::from_be_bytes([record[3], record[4]]));
+        record.resize(5 + length, 0);
+        stream.read_exact(&mut record[5..]).await.expect("ClientHello body");
+        record
+    }
+
+    async fn capture_with<F, Fut>(connect: F) -> ClientHelloShape
+    where
+        F: FnOnce(u16) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("TLS capture listener");
+        let port = listener.local_addr().expect("capture address").port();
+        let capture = tokio::spawn(capture_client_hello(listener));
+        connect(port).await;
+        let record = tokio::time::timeout(Duration::from_secs(5), capture)
+            .await
+            .expect("the client never sent a ClientHello")
+            .expect("capture task");
+        parse_client_hello(&record)
+    }
+
+    async fn upstream_websocket_client_hello() -> ClientHelloShape {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        capture_with(|port| async move {
+            let request = format!("wss://localhost:{port}/v1/responses")
+                .into_client_request()
+                .expect("capture request");
+            // The capture closes the socket, so this fails after the ClientHello.
+            let _ = connect_codex_responses_websocket_request(request).await;
+        })
+        .await
+    }
+
+    async fn reqwest_client_hello() -> ClientHelloShape {
+        capture_with(|port| async move {
+            let client = reqwest::Client::builder().build().expect("reqwest client");
+            let _ = client.get(format!("https://localhost:{port}/")).send().await;
+        })
+        .await
+    }
+
+    fn rustls_reference_client_hello(provider: rustls::crypto::CryptoProvider) -> ClientHelloShape {
+        use rustls_platform_verifier::BuilderVerifierExt as _;
+        let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+            .with_safe_default_protocol_versions()
+            .expect("protocol versions")
+            .with_platform_verifier()
+            .expect("platform verifier")
+            .with_no_client_auth();
+        let name = rustls::pki_types::ServerName::try_from("localhost")
+            .expect("server name")
+            .to_owned();
+        let mut connection =
+            rustls::ClientConnection::new(Arc::new(config), name).expect("client connection");
+        let mut record = Vec::new();
+        connection.write_tls(&mut record).expect("serialize ClientHello");
+        parse_client_hello(&record)
+    }
+
+    fn describe_client_hello(label: &str, shape: &ClientHelloShape) {
+        let hex = |values: &[u16]| {
+            values
+                .iter()
+                .map(|value| format!("{value:04x}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        println!(
+            "[client-hello] {label}\n  ciphers[{}]={}\n  extensions[{}]={}\n  groups={}\n  sigalgs={}\n  versions={}\n  alpn={:?}",
+            shape.cipher_suites.len(),
+            hex(&shape.cipher_suites),
+            shape.extensions.len(),
+            hex(&shape.extensions),
+            hex(&shape.groups),
+            hex(&shape.signature_algorithms),
+            hex(&shape.versions),
+            shape.alpn,
+        );
+    }
+
+    /// The Codex client family presents rustls (aws-lc-rs). The application also
+    /// carries ring for QUIC, so the upstream WebSocket must name its provider
+    /// instead of following an ambient process default.
+    #[tokio::test]
+    async fn upstream_websocket_handshake_uses_rustls_aws_lc_provider() {
+        let websocket = upstream_websocket_client_hello().await;
+        let aws_lc = rustls_reference_client_hello(rustls::crypto::aws_lc_rs::default_provider());
+        let ring = rustls_reference_client_hello(rustls::crypto::ring::default_provider());
+        describe_client_hello("upstream websocket", &websocket);
+        describe_client_hello("rustls + aws-lc-rs reference", &aws_lc);
+        describe_client_hello("rustls + ring reference", &ring);
+
+        assert_ne!(aws_lc, ring, "the two providers must be distinguishable here");
+        assert_eq!(websocket.cipher_suites, aws_lc.cipher_suites);
+        assert_eq!(websocket.groups, aws_lc.groups);
+        assert_eq!(websocket.signature_algorithms, aws_lc.signature_algorithms);
+        assert_eq!(websocket.versions, aws_lc.versions);
+        // rustls may randomize extension order per ClientHello. Verify the
+        // advertised extension set while keeping order in the diagnostic output.
+        let sorted = |values: &[u16]| {
+            let mut values = values.to_vec();
+            values.sort_unstable();
+            values
+        };
+        assert_eq!(sorted(&websocket.extensions), sorted(&aws_lc.extensions));
+        // The upgrade is HTTP/1.1; offering h2 here would be a different client.
+        assert!(websocket.alpn.is_empty());
+    }
+
+    /// Prints the handshake of each client side by side for comparison.
+    /// Run with `--ignored --nocapture`; it depends on process-global state.
+    #[tokio::test]
+    #[ignore = "diagnostic output, not an assertion"]
+    async fn report_client_hello_shapes() {
+        describe_client_hello("upstream websocket", &upstream_websocket_client_hello().await);
+        describe_client_hello("reqwest", &reqwest_client_hello().await);
+        describe_client_hello(
+            "rustls + aws-lc-rs reference",
+            &rustls_reference_client_hello(rustls::crypto::aws_lc_rs::default_provider()),
+        );
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        describe_client_hello("reqwest after ring is the default", &reqwest_client_hello().await);
+        describe_client_hello(
+            "rustls + ring reference",
+            &rustls_reference_client_hello(rustls::crypto::ring::default_provider()),
         );
     }
 }

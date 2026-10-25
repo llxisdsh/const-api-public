@@ -735,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "const-api-local"
-version = "0.1.62"
+version = "0.1.63"
 dependencies = [
  "aes 0.9.3",
  "anyhow",
@@ -780,6 +780,7 @@ dependencies = [
  "rusqlite",
  "rustls",
  "rustls-pki-types",
+ "rustls-platform-verifier",
  "security-framework",
  "security-framework-sys",
  "semver",
@@ -5955,8 +5956,12 @@ dependencies = [
  "futures-util",
  "log",
  "native-tls",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "tokio",
  "tokio-native-tls",
+ "tokio-rustls",
  "tungstenite 0.30.0",
 ]
 
@@ -6200,6 +6205,8 @@ dependencies = [
  "log",
  "native-tls",
  "rand 0.10.3",
+ "rustls",
+ "rustls-pki-types",
  "sha1 0.11.0",
  "thiserror 2.0.21",
 ]

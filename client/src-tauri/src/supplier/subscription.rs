@@ -3292,6 +3292,74 @@ mod buffered_response_tests {
     }
 
     #[test]
+    fn native_claude_oauth_body_scopes_device_identity_and_preserves_session() {
+        let native_body = serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "system": [{
+                "type": "text",
+                "text": "x-anthropic-billing-header: cc_version=2.1.241; cc_entrypoint=cli;"
+            }],
+            "messages": [{"role": "user", "content": "review"}],
+            "metadata": {
+                "user_id": serde_json::json!({
+                    "device_id": "caller-device",
+                    "account_uuid": "caller-account",
+                    "session_id": "11111111-2222-4333-8444-555555555555",
+                    "parent_session_id": "parent-session"
+                }).to_string()
+            }
+        }).to_string();
+
+        let prepared = prepare_claude_subscription_oauth_body(&native_body, "credential-a")
+            .expect("native Claude OAuth body");
+        let value: serde_json::Value = serde_json::from_str(&prepared).unwrap();
+        let user_id: serde_json::Value =
+            serde_json::from_str(value["metadata"]["user_id"].as_str().unwrap()).unwrap();
+
+        assert_ne!(user_id["device_id"], "caller-device");
+        assert_eq!(user_id["account_uuid"], "");
+        assert_eq!(
+            user_id["session_id"],
+            "11111111-2222-4333-8444-555555555555"
+        );
+        assert_eq!(user_id["parent_session_id"], "parent-session");
+        assert_eq!(
+            prepare_claude_subscription_oauth_body(&prepared, "credential-a").unwrap(),
+            prepared
+        );
+    }
+
+    #[test]
+    fn compatible_claude_body_scopes_existing_session_identity_without_billing_block() {
+        let session_id = "11111111-2222-4333-8444-555555555555";
+        let body = serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "review"}],
+            "metadata": {
+                "user_id": serde_json::json!({
+                    "device_id": "caller-device",
+                    "account_uuid": "caller-account",
+                    "session_id": session_id
+                }).to_string()
+            }
+        }).to_string();
+
+        let prepared = prepare_claude_subscription_oauth_body(&body, "credential-a")
+            .expect("compatible Claude body");
+        let value: serde_json::Value = serde_json::from_str(&prepared).unwrap();
+        let user_id: serde_json::Value =
+            serde_json::from_str(value["metadata"]["user_id"].as_str().unwrap()).unwrap();
+
+        assert_ne!(user_id["device_id"], "caller-device");
+        assert_eq!(user_id["account_uuid"], "");
+        assert_eq!(user_id["session_id"], session_id);
+        assert_eq!(
+            prepare_claude_subscription_oauth_body(&prepared, "credential-a").unwrap(),
+            prepared
+        );
+    }
+
+    #[test]
     fn claude_subscription_does_not_invent_sampling_defaults() {
         let adjusted = ensure_claude_messages_body_with_faults(
             r#"{"model":"claude-opus-5","messages":[{"role":"user","content":"hello"}]}"#,

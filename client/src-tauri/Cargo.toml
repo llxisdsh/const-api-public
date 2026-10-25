@@ -1,6 +1,6 @@
 [package]
 name = "const-api-local"
-version = "0.1.62"
+version = "0.1.63"
 description = "CONST API local-only source build"
 license = "MIT"
 edition = "2024"
@@ -39,7 +39,7 @@ time = { version = "0.3", features = ["local-offset", "parsing"] }
 tauri = { version = "2.12", features = ["image-png", "tray-icon"] }
 toml_edit = { version = "0.25", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net", "io-util", "time"] }
-tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.30", features = ["native-tls", "rustls-tls-native-roots"] }
 futures-util = "0.3"
 h3 = "0.0.8"
 http = "1"
@@ -62,8 +62,9 @@ base64 = "0.23"
 rand = "0.10"
 tempfile = "3"
 quinn = { version = "0.11.12", default-features = false, features = ["ring", "runtime-tokio", "rustls-ring"] }
-rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "ring", "std", "tls12"] }
 rustls-pki-types = "1.15.1"
+rustls-platform-verifier = "0.7"
 webpki-roots = "1.0.9"
 zstd = "0.14.3"
 rfd = "0.17"

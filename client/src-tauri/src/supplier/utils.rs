@@ -544,6 +544,94 @@ fn synced_claude_billing_header_text(text: &str, fingerprint: &str) -> String {
     format!("x-anthropic-billing-header: {};", fields.join("; "))
 }
 
+fn claude_code_device_id(identity_seed: &str) -> String {
+    hex::encode(Sha256::digest(
+        format!("const-api-claude-device-v1\0{identity_seed}").as_bytes(),
+    ))
+}
+
+/// Scope a Claude Code identity to the subscription credential while retaining
+/// the conversation session. The body carries `metadata.user_id` as an encoded
+/// JSON string, so header filtering alone cannot remove the caller's device
+/// identity. This also handles compatible requests that carry a recognizable
+/// session identity without a native billing block.
+fn rewrite_claude_code_identity(body: &str, identity_seed: &str) -> Result<String> {
+    let mut value: serde_json::Value = serde_json::from_str(body)?;
+    let Some(metadata) = value.get_mut("metadata").and_then(|value| value.as_object_mut())
+    else {
+        return Ok(body.to_string());
+    };
+    let Some(raw_user_id) = metadata
+        .get("user_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+    else {
+        return Ok(body.to_string());
+    };
+
+    let mut user_id = if raw_user_id.starts_with('{') {
+        serde_json::from_str::<serde_json::Value>(raw_user_id).ok()
+    } else {
+        legacy_claude_code_session_id_for_rewrite(raw_user_id).map(|session_id| {
+            serde_json::json!({
+                "account_uuid": "",
+                "session_id": session_id,
+            })
+        })
+    };
+    let Some(user_id) = user_id.as_mut().and_then(serde_json::Value::as_object_mut) else {
+        return Ok(body.to_string());
+    };
+    let Some(session_id) = user_id
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(body.to_string());
+    };
+    let session_id = session_id.to_string();
+    user_id.insert(
+        "device_id".to_string(),
+        serde_json::Value::String(claude_code_device_id(identity_seed)),
+    );
+    // CONST does not have a separate upstream account UUID in the subscription
+    // credential. Do not retain a caller-owned account identity beside the
+    // credential-scoped device; the session itself remains stable above.
+    user_id.insert(
+        "account_uuid".to_string(),
+        serde_json::Value::String(String::new()),
+    );
+    metadata.insert(
+        "user_id".to_string(),
+        serde_json::Value::String(serde_json::to_string(user_id)?),
+    );
+    // Keep the helper's session validation observable to callers and avoid
+    // accepting an identity that could not be sent as a header later.
+    if session_id.len() > 256 || reqwest::header::HeaderValue::from_str(&session_id).is_err() {
+        return Ok(body.to_string());
+    }
+    Ok(serde_json::to_string(&value)?)
+}
+
+fn legacy_claude_code_session_id_for_rewrite(raw: &str) -> Option<&str> {
+    let rest = raw.strip_prefix("user_")?;
+    let (device_id, rest) = rest.split_once("_account_")?;
+    let (account_id, session_id) = rest.split_once("_session_")?;
+    if device_id.len() != 64
+        || !device_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !account_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+        || session_id.len() != 36
+        || !session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+    {
+        return None;
+    }
+    Some(session_id)
+}
+
 fn claude_system_text_and_cache_control(
     value: &serde_json::Value,
 ) -> (String, Option<serde_json::Value>) {
@@ -616,15 +704,15 @@ fn ensure_claude_code_metadata(
 ) -> Result<()> {
     let serialized = serde_json::to_string(value)?;
     if claude_code_session_id_from_body(&serialized).is_some() {
+        let rewritten = rewrite_claude_code_identity(&serialized, identity_seed)?;
+        *value = serde_json::from_str(&rewritten)?;
         return Ok(());
     }
     let original_user_id = value
         .pointer("/metadata/user_id")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    let device_id = hex::encode(Sha256::digest(
-        format!("const-api-claude-device-v1\0{identity_seed}").as_bytes(),
-    ));
+    let device_id = claude_code_device_id(identity_seed);
     let session_seed = normalized_subscription_cache_identity(cache_identity)
         .map(|cache_identity| format!("cache:{cache_identity}"))
         .unwrap_or_else(|| {
@@ -670,8 +758,8 @@ fn ensure_claude_code_metadata(
 /// Claude OAuth credentials are scoped to the first-party client. Catalog and quota reads can
 /// succeed while a generic inference body is classified as third-party usage. Keep the rewrite
 /// here, at the retained subscription boundary, so probes and real requests share one contract.
-/// Bodies that already carry a Claude Code billing block are preserved except for that block's
-/// version, entrypoint and signature.
+/// Bodies that already carry a Claude Code billing block preserve their protocol and session
+/// fields, while billing and caller-owned device/account identity are scoped to the credential.
 #[cfg(test)]
 pub(crate) fn prepare_claude_subscription_oauth_body(
     body: &str,
@@ -687,12 +775,12 @@ pub(crate) fn prepare_claude_subscription_oauth_body_with_cache_identity(
 ) -> Result<String> {
     let mut value: serde_json::Value = serde_json::from_str(body)?;
     // A genuine Claude Code request can contain session/classifier system blocks before or after
-    // its billing block. Preserve the body, but keep the billing identity on the same Claude Code
-    // profile the adapter sends in its headers.
+    // its billing block. Preserve protocol and session fields, but keep billing and device
+    // identity on the same Claude Code profile the adapter sends in its headers.
     if claude_code_system_is_native(&value) {
-        return Ok(
-            sync_native_claude_billing_identity(body, &value)?.unwrap_or_else(|| body.to_string())
-        );
+        let body = sync_native_claude_billing_identity(body, &value)?
+            .unwrap_or_else(|| body.to_string());
+        return rewrite_claude_code_identity(&body, identity_seed);
     }
     // Derive the session from the caller's original first user turn. The compatibility rewrite
     // can prepend a migrated system instruction, which must not collapse unrelated conversations

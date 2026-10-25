@@ -1783,28 +1783,8 @@ mod tests {
         config.model_compatibility_profiles.clear();
 
         assert_eq!(
-            model_compatibility_candidates(&config, "claude-opus-4-8"),
-            vec![
-                "kimi-k3",
-                "gpt-5.6-terra",
-                "muse-spark-1.3",
-                "gpt-5.5",
-                "claude-fable-5",
-                "gpt-6.1-sol",
-                "claude-sonnet-5-5",
-                "muse-wonder-full-1.0",
-                "gemini-4-argon",
-                "gpt-6-sol",
-                "gpt-5.6-sol",
-                "claude-opus-5",
-                "grok-4.7",
-                "muse-wonder-1.0",
-                "claude-mythos-5",
-                "claude-opus-5-5",
-                "claude-mythos-5-1",
-                "claude-fable-5-1",
-                "gpt-6-astra",
-            ]
+            model_compatibility_candidates(&config, "claude-opus-5-5"),
+            vec!["claude-fable-5-1", "gpt-6-astra"]
         );
     }
 
@@ -1955,16 +1935,13 @@ mod tests {
         // Ordinary tool/legacy identities are visible candidates, appended
         // after each tier's primary models. Keep specialized Guardian separate.
         for (model, expected_group) in [
-            ("claude-mythos-5", "frontier"),
             ("gpt-5.5", "elite"),
             ("gpt-5.4", "expert"),
-            ("claude-opus-4-7", "expert"),
             ("gemini-3.1-pro-preview", "advanced"),
             ("gemini-3.7-flash", "advanced"),
             ("gpt-5.3-codex", "advanced"),
             ("gpt-5.2", "capable"),
             ("gpt-5.2-codex", "capable"),
-            ("claude-opus-4-5", "capable"),
             ("gemini-3.6-flash", "capable"),
             ("gemini-3.5-flash", "capable"),
             ("gpt-5.4-mini", "capable"),
@@ -2006,12 +1983,9 @@ mod tests {
         config.model_compatibility_profiles.clear();
         config.allow_model_equivalence = true;
         for (model, first) in [
-            ("claude-mythos-5", "claude-fable-5"),
             ("gpt-5.5", "kimi-k3"),
-            ("codex-auto-review", "claude-sonnet-5"),
-            ("gpt-5.4", "claude-sonnet-5"),
-            ("claude-opus-4-7", "claude-sonnet-5"),
-            ("claude-opus-4-7[1m]", "claude-sonnet-5"),
+            ("codex-auto-review", "claude-haiku-5-5"),
+            ("gpt-5.4", "claude-haiku-5-5"),
             ("gpt-5.3-codex", "gemini-3.8-flash"),
             ("gemini-3-pro-preview", "gemini-3.8-flash"),
             ("gemini-3.1-pro-preview", "gemini-3.8-flash"),
@@ -2021,25 +1995,23 @@ mod tests {
                 "gemini-3.8-flash",
             ),
             ("gemini-3.7-flash", "gemini-3.8-flash"),
-            ("gpt-5.2", "claude-sonnet-4-6"),
-            ("gpt-5.2-codex", "claude-sonnet-4-6"),
-            ("gpt-5.4-mini", "claude-sonnet-4-6"),
-            ("claude-opus-4-5", "claude-sonnet-4-6"),
-            ("anthropic/claude-opus-4.5", "claude-sonnet-4-6"),
-            ("gemini-3.6-flash", "claude-sonnet-4-6"),
-            ("gemini-3.5-flash", "claude-sonnet-4-6"),
-            ("gpt-5.3-codex-spark", "claude-sonnet-4-5"),
-            ("gpt-5.4-nano", "claude-sonnet-4-5"),
-            ("gemini-3-flash", "claude-sonnet-4-5"),
-            ("gemini-3-flash-preview", "claude-sonnet-4-5"),
-            ("gemini-2.5-pro", "claude-haiku-4-5"),
-            ("gemini-2.5-flash", "claude-haiku-4-5"),
-            ("gemini-3.5-flash-lite", "claude-haiku-4-5"),
-            ("gemini-3.1-flash-lite", "claude-haiku-4-5"),
-            ("gemini-2.5-flash-lite", "claude-haiku-4-5"),
+            ("gpt-5.2", "gpt-5.2-codex"),
+            ("gpt-5.2-codex", "gpt-5.2"),
+            ("gpt-5.4-mini", "gpt-5.2"),
+            ("gemini-3.6-flash", "gpt-5.2"),
+            ("gemini-3.5-flash", "gpt-5.2"),
+            ("gpt-5.3-codex-spark", "gemini-3-flash-preview"),
+            ("gpt-5.4-nano", "gemini-3-flash-preview"),
+            ("gemini-3-flash", "gpt-5.3-codex-spark"),
+            ("gemini-3-flash-preview", "gpt-5.3-codex-spark"),
+            ("gemini-2.5-pro", "gemini-3.5-flash-lite"),
+            ("gemini-2.5-flash", "gemini-2.5-pro"),
+            ("gemini-3.5-flash-lite", "gemini-2.5-pro"),
+            ("gemini-3.1-flash-lite", "gemini-2.5-pro"),
+            ("gemini-2.5-flash-lite", "gemini-2.5-pro"),
             ("gemini-3.8-flash", "deepseek-v4.1-flash-1017"),
-            ("gemma-4-31b-it", "claude-haiku-4-5"),
-            ("gemma-4-26b-a4b-it", "claude-haiku-4-5"),
+            ("gemma-4-31b-it", "gemini-2.5-pro"),
+            ("gemma-4-26b-a4b-it", "gemini-2.5-pro"),
         ] {
             let candidates = model_compatibility_candidates(&config, model);
             assert_eq!(
@@ -2096,7 +2068,6 @@ mod tests {
         config.allow_model_equivalence = true;
         let removed = [
             "gpt-5.4",
-            "claude-opus-4-7[1m]",
             "gemini-3.1-pro-preview-customtools",
             "gemini-2.5-flash-lite",
             "gemini-3-flash",
@@ -2120,7 +2091,6 @@ mod tests {
                     model.as_str(),
                     Some(
                         "gpt-5.4"
-                            | "claude-opus-4-7"
                             | "gemini-3.1-pro-preview"
                             | "gemini-3-flash-preview"
                             | "gemini-2.5-flash-lite"
@@ -2163,8 +2133,8 @@ mod tests {
             );
         }
         for (model, first) in [
-            ("gpt-5.4-mini", "claude-fable-5"),
-            ("gemini-3-pro-preview", "claude-haiku-4-5"),
+            ("gpt-5.4-mini", "gpt-6.1-sol"),
+            ("gemini-3-pro-preview", "gemini-2.5-pro"),
         ] {
             let candidates = model_compatibility_candidates(&config, model);
             assert_eq!(candidates.first().map(String::as_str), Some(first));
@@ -2222,7 +2192,6 @@ mod tests {
             apex.models,
             [
                 "claude-opus-5-5",
-                "claude-mythos-5-1",
                 "claude-fable-5-1",
                 "gpt-6-astra",
                 "custom/local-gpt-6",
@@ -2329,7 +2298,7 @@ mod tests {
             profile
                 .model_groups
                 .iter()
-                .any(|group| group.models.iter().any(|model| model == "claude-opus-5"))
+                .any(|group| group.models.iter().any(|model| model == "claude-opus-5-5"))
         );
         assert!(profile.model_groups.iter().any(|group| {
             group
@@ -2457,7 +2426,7 @@ mod tests {
             standard
                 .match_models
                 .iter()
-                .any(|model| model == "claude-sonnet-4-5-20250929")
+                .all(|model| model != "claude-sonnet-4-5-20250929")
         );
         let reviewer = profile
             .model_groups
@@ -2475,7 +2444,7 @@ mod tests {
         let spark_candidates = model_compatibility_candidates(&config, "gpt-5.3-codex-spark");
         assert_eq!(
             spark_candidates.first().map(String::as_str),
-            Some("claude-sonnet-4-5")
+            Some("gemini-3-flash-preview")
         );
         assert!(
             !spark_candidates
@@ -2488,12 +2457,7 @@ mod tests {
         let review_candidates = model_compatibility_candidates(&config, "codex-auto-review");
         assert_eq!(
             &review_candidates[..4],
-            [
-                "claude-sonnet-5",
-                "claude-haiku-5-5",
-                "gpt-6-luna",
-                "gpt-5.6-luna",
-            ]
+            ["claude-haiku-5-5", "gpt-6-luna", "gpt-5.6-luna", "gpt-5.4",]
         );
         assert!(
             !review_candidates
@@ -2516,7 +2480,7 @@ mod tests {
 
         // The visible old Codex model must also be usable in the other
         // direction, when a lower-tier ordinary request needs a substitute.
-        let basic_candidates = model_compatibility_candidates(&config, "claude-haiku-4-5");
+        let basic_candidates = model_compatibility_candidates(&config, "gemini-2.5-pro");
         assert!(
             basic_candidates
                 .iter()
@@ -2548,21 +2512,7 @@ mod tests {
 
         assert_eq!(
             routes.iter().map(String::as_str).collect::<Vec<_>>(),
-            vec![
-                "claude-fable-5",
-                "claude-sonnet-5-5",
-                "claude-opus-5",
-                "claude-mythos-5",
-                "claude-opus-4-8",
-                "claude-sonnet-5",
-                "claude-haiku-5-5",
-                "claude-opus-4-7",
-                "claude-opus-4-6",
-                "claude-sonnet-4-6",
-                "claude-opus-4-5",
-                "claude-sonnet-4-5",
-                "claude-haiku-4-5",
-            ]
+            vec!["claude-sonnet-5-5", "claude-haiku-5-5",]
         );
     }
 
@@ -2572,24 +2522,7 @@ mod tests {
         assert!(anthropic_model_routes(&config, &[]).is_empty());
 
         let routes = anthropic_model_routes(&config, &["gpt-5.6-sol".to_string()]);
-        assert_eq!(
-            routes,
-            vec![
-                "claude-fable-5",
-                "claude-sonnet-5-5",
-                "claude-opus-5",
-                "claude-mythos-5",
-                "claude-opus-4-8",
-                "claude-sonnet-5",
-                "claude-haiku-5-5",
-                "claude-opus-4-7",
-                "claude-opus-4-6",
-                "claude-sonnet-4-6",
-                "claude-opus-4-5",
-                "claude-sonnet-4-5",
-                "claude-haiku-4-5",
-            ]
-        );
+        assert_eq!(routes, vec!["claude-sonnet-5-5", "claude-haiku-5-5",]);
     }
 
     #[test]

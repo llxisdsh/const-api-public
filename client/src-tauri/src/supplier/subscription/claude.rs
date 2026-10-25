@@ -164,16 +164,19 @@ fn openai_subscription_response_request_with_encoded_body(
     request_headers: Option<&reqwest::header::HeaderMap>,
 ) -> reqwest::RequestBuilder {
     let identity = active_codex_identity();
-    let response_headers =
+    let mut response_headers =
         codex_response_identity_headers(identity_body, request_headers, &identity);
+    crate::subscription_transport_policy::apply_to_headers(
+        crate::source_driver::SourceDriverId::OpenAiSubscription,
+        crate::subscription_transport_policy::HeaderOperation::ResponsesHttp,
+        &mut response_headers,
+    );
     let mut req = client
         .post(url)
         .header("Accept", "text/event-stream, application/json")
         .header("Content-Type", "application/json")
         .header("Content-Encoding", "zstd")
-        .header("Authorization", format!("Bearer {token}"))
-        .headers(response_headers)
-        .body(body);
+        .header("Authorization", format!("Bearer {token}"));
     if let Some(account_id) = json_string(credential, &["account_id"])
         .or_else(|| json_string(credential, &["accountID"]))
         .or_else(|| json_string(credential, &["chatgpt_account_id"]))
@@ -181,7 +184,7 @@ fn openai_subscription_response_request_with_encoded_body(
     {
         req = req.header("Chatgpt-Account-Id", account_id);
     }
-    req
+    req.headers(response_headers).body(body)
 }
 
 fn encode_openai_subscription_request_body(body: &str) -> Result<bytes::Bytes> {
@@ -1140,6 +1143,13 @@ fn claude_subscription_request_with_headers(
     if let Some(session_id) = session_id {
         request = request.header("X-Claude-Code-Session-Id", session_id);
     }
+    let mut policy_headers = reqwest::header::HeaderMap::new();
+    crate::subscription_transport_policy::apply_to_headers(
+        crate::source_driver::SourceDriverId::ClaudeSubscription,
+        crate::subscription_transport_policy::HeaderOperation::AnthropicMessagesHttp,
+        &mut policy_headers,
+    );
+    request = request.headers(policy_headers);
     request
 }
 

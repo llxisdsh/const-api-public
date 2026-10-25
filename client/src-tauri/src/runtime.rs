@@ -320,6 +320,16 @@ impl RuntimeSupervisor {
             Duration::from_secs(1),
             move || run_model_compatibility_sync_loop(compatibility_state.clone()),
         );
+        let subscription_transport_policy_state = self.state.clone();
+        let subscription_transport_policy_task = spawn_supervised(
+            "subscription_transport_policy_refresh",
+            Duration::from_secs(1),
+            move || {
+                run_subscription_transport_policy_refresh_loop(
+                    subscription_transport_policy_state.clone(),
+                )
+            },
+        );
         let supplier_recovery_state = self.state.clone();
         let supplier_recovery_task = spawn_supervised(
             "supplier_auto_recovery",
@@ -345,6 +355,7 @@ impl RuntimeSupervisor {
             control.tasks.push(endpoint_task);
             control.tasks.push(catalog_task);
             control.tasks.push(compatibility_task);
+            control.tasks.push(subscription_transport_policy_task);
             control.tasks.push(supplier_recovery_task);
             control.tasks.push(local_channel_health_task);
         }
@@ -623,6 +634,44 @@ async fn run_model_compatibility_sync_loop(state: AppState) {
     }
 }
 
+async fn run_subscription_transport_policy_refresh_loop(state: AppState) {
+    let mut last_platform_key = String::new();
+    let mut next_refresh = Instant::now();
+    loop {
+        let platform_key = state
+            .platform_api_key
+            .lock()
+            .map(|key| key.trim().to_string())
+            .unwrap_or_default();
+        if platform_key.is_empty() {
+            last_platform_key.clear();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+        if platform_key != last_platform_key || Instant::now() >= next_refresh {
+            match crate::subscription_transport_policy::sync_for_runtime(&state).await {
+                Ok(()) => {
+                    next_refresh = Instant::now()
+                        + crate::catalog_registry::catalog_refresh_jitter(Duration::from_secs(
+                            5 * 60,
+                        ));
+                }
+                Err(error) => {
+                    log::warn!(
+                        "[const-api][runtime] subscription transport policy refresh deferred: {error:#}"
+                    );
+                    next_refresh = Instant::now()
+                        + crate::catalog_registry::catalog_refresh_jitter(Duration::from_secs(
+                            5 * 60,
+                        ));
+                }
+            }
+            last_platform_key = platform_key;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
 async fn run_catalog_registry_refresh_loop(_: AppState) { std::future::pending::<()>().await; }
 
 fn log_runtime_summary(summary: &RuntimeSummary) {
@@ -646,11 +695,12 @@ mod tests {
     use warp::Filter;
 
     // Desktop platforms also own the supply sleep-prevention task.
-    const BACKGROUND_TASK_COUNT: usize = 9 + cfg!(any(
-        target_os = "windows",
-        target_os = "macos",
-        target_os = "linux"
-    )) as usize;
+    const BACKGROUND_TASK_COUNT: usize = 10
+        + cfg!(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux"
+        )) as usize;
 
     #[test]
     fn saved_platform_key_is_not_enabled_before_legal_reconciliation() {

@@ -227,6 +227,29 @@ const CODEX_REQUEST_CONTEXT_HEADERS: &[&str] = &[
     "x-responsesapi-include-timing-metrics",
 ];
 
+// A subscription adapter owns the upstream Codex identity. Keep protocol
+// session/turn context, but do not attach a caller's device identity or
+// attestation to the adapter's account. The native Responses transport carries
+// installation identity in client_metadata when it needs it; it does not use
+// either value as a generic subscription handshake header.
+const CODEX_SUBSCRIPTION_CONTEXT_HEADERS: &[&str] = &[
+    "openai-beta",
+    "session-id",
+    "thread-id",
+    "x-client-request-id",
+    "x-codex-window-id",
+    "x-codex-turn-metadata",
+    "x-codex-parent-thread-id",
+    "x-codex-turn-state",
+    "x-codex-beta-features",
+    "x-codex-routing-hint",
+    "x-openai-subagent",
+    "x-openai-memgen-request",
+    "x-openai-internal-codex-responses-lite",
+    "x-openai-internal-codex-residency",
+    "x-responsesapi-include-timing-metrics",
+];
+
 /// Preserve a first-party caller's model identity and copy only known Codex
 /// request context. If an older caller omits `Version`, derive it best-effort
 /// from that caller's User-Agent; otherwise use the bundled compatible identity.
@@ -258,22 +281,26 @@ pub(crate) fn codex_subscription_model_request_context_headers(
 ) -> HeaderMap {
     let mut headers = codex_model_identity_headers(fallback);
     if let Some(inbound) = inbound.filter(|headers| codex_request_is_native(Some(headers))) {
-        copy_codex_request_context_headers(inbound, &mut headers);
+        copy_codex_subscription_context_headers(inbound, &mut headers);
         strip_codex_legacy_responses_beta(&mut headers);
-        // An attestation vouches for the caller's own client. Pair it only with
-        // the identity that issued it, never with another client's adapter UA.
-        let caller = bounded_ascii_header(inbound, "originator", 256)
-            .and_then(|value| value.to_str().ok())
-            .map(str::trim);
-        if caller != Some(fallback.originator.as_str()) {
-            headers.remove("x-oai-attestation");
-        }
     }
     headers
 }
 
 fn copy_codex_request_context_headers(inbound: &HeaderMap, headers: &mut HeaderMap) {
     for &name in CODEX_REQUEST_CONTEXT_HEADERS {
+        let Some(value) = bounded_ascii_header(inbound, name, 32 * 1024) else {
+            continue;
+        };
+        headers.insert(
+            reqwest::header::HeaderName::from_static(name),
+            value.clone(),
+        );
+    }
+}
+
+fn copy_codex_subscription_context_headers(inbound: &HeaderMap, headers: &mut HeaderMap) {
+    for &name in CODEX_SUBSCRIPTION_CONTEXT_HEADERS {
         let Some(value) = bounded_ascii_header(inbound, name, 32 * 1024) else {
             continue;
         };
@@ -471,6 +498,10 @@ mod tests {
             "x-codex-turn-state",
             HeaderValue::from_static("sticky-turn"),
         );
+        inbound.insert(
+            "x-codex-installation-id",
+            HeaderValue::from_static("caller-installation"),
+        );
         inbound.insert("x-not-codex", HeaderValue::from_static("drop-me"));
 
         let headers = codex_subscription_model_request_context_headers(Some(&inbound), &fallback);
@@ -479,6 +510,7 @@ mod tests {
         assert_eq!(headers["user-agent"], fallback.user_agent);
         assert_eq!(headers["version"], fallback.version);
         assert_eq!(headers["x-codex-turn-state"], "sticky-turn");
+        assert!(!headers.contains_key("x-codex-installation-id"));
         assert!(!headers.contains_key("x-not-codex"));
 
         // Another client's attestation and the legacy HTTP beta are not forwarded.
@@ -500,7 +532,7 @@ mod tests {
         inbound.insert("originator", HeaderValue::from_static(CODEX_ORIGINATOR));
         inbound.insert("user-agent", HeaderValue::from_static("codex-tui/0.163.0"));
         let headers = codex_subscription_model_request_context_headers(Some(&inbound), &fallback);
-        assert_eq!(headers["x-oai-attestation"], "vscode-attestation");
+        assert!(!headers.contains_key("x-oai-attestation"));
         assert!(!headers.contains_key("openai-beta"));
     }
 

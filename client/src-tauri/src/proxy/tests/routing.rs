@@ -2809,7 +2809,7 @@
     async fn platform_only_anthropic_catalog_is_rewritten_to_compatible_routes() {
         let config = default_config();
         let platform = serde_json::json!({
-            "id": "gpt-5.6-terra",
+            "id": "gpt-5.6-sol",
             "object": "model",
             "owned_by": "platform"
         });
@@ -2833,10 +2833,10 @@
         let models = payload["data"].as_array().expect("models");
         let route = models
             .iter()
-            .find(|model| model["id"] == "claude-opus-4-8")
-            .expect("opus route");
+            .find(|model| model["id"] == "claude-sonnet-5-5")
+            .expect("sonnet route");
 
-        assert_eq!(route["display_name"], "claude-opus-4-8");
+        assert_eq!(route["display_name"], "claude-sonnet-5-5");
         assert!(route.get("anthropic_family_tier").is_none());
         assert!(models
             .iter()
@@ -2849,22 +2849,22 @@
     #[tokio::test]
     async fn local_model_details_use_the_requested_native_surface_shape() {
         let model = serde_json::json!({
-            "id": "Claude-Sonnet-4-6",
+            "id": "Claude-Sonnet-5-5",
             "object": "model",
             "owned_by": "local",
             "const_api": { "source": "local_supplier" }
         });
         let tests = [
-            ("/v1/models/claude-sonnet-4-6", "id", "claude-sonnet-4-6"),
+            ("/v1/models/claude-sonnet-5-5", "id", "claude-sonnet-5-5"),
             (
-                "/anthropic/v1/models/claude-sonnet-4-6",
+                "/anthropic/v1/models/claude-sonnet-5-5",
                 "display_name",
-                "claude-sonnet-4-6",
+                "claude-sonnet-5-5",
             ),
             (
-                "/gemini/v1beta/models/claude-sonnet-4-6",
+                "/gemini/v1beta/models/claude-sonnet-5-5",
                 "name",
-                "models/claude-sonnet-4-6",
+                "models/claude-sonnet-5-5",
             ),
         ];
         let config = default_config();
@@ -2905,20 +2905,20 @@
         let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         let models = payload["data"].as_array().expect("models");
-        let fable = models
+        let sonnet = models
             .iter()
-            .find(|model| model["id"] == "claude-fable-5")
-            .expect("fable route");
+            .find(|model| model["id"] == "claude-sonnet-5-5")
+            .expect("sonnet route");
 
-        assert_eq!(fable["display_name"], "claude-fable-5");
-        assert_eq!(fable["const_api"]["source"], "local_supplier");
-        assert!(fable.get("anthropic_family_tier").is_none());
-        assert!(fable.get("is_family_default").is_none());
-        assert!(fable.get("supports_1m").is_none());
-        assert!(fable.get("max_input_tokens").is_none());
+        assert_eq!(sonnet["display_name"], "claude-sonnet-5-5");
+        assert_eq!(sonnet["const_api"]["source"], "local_supplier");
+        assert!(sonnet.get("anthropic_family_tier").is_none());
+        assert!(sonnet.get("is_family_default").is_none());
+        assert!(sonnet.get("supports_1m").is_none());
+        assert!(sonnet.get("max_input_tokens").is_none());
         let haiku = models
             .iter()
-            .find(|model| model["id"] == "claude-haiku-4-5")
+            .find(|model| model["id"] == "claude-haiku-5-5")
             .expect("haiku route backed by higher compatible supply");
         assert_eq!(haiku["const_api"]["source"], "local_supplier");
         let actual_routes = models
@@ -2970,7 +2970,7 @@
         let config = default_config();
         let models = [
             serde_json::json!({
-                "id": "gpt-5.6-terra",
+                "id": "gpt-5.6-sol",
                 "object": "model",
                 "const_api": { "vision": false, "source": "frontier" }
             }),
@@ -2992,7 +2992,7 @@
             .as_array()
             .expect("models")
             .iter()
-            .find(|model| model["id"] == "claude-opus-4-8")
+            .find(|model| model["id"] == "claude-sonnet-5-5")
             .expect("frontier Claude route");
 
         assert_eq!(opus["const_api"]["source"], "frontier");
@@ -3979,7 +3979,7 @@
             enabled: true,
         }];
         cfg.channels = vec![local_model_channel(
-            &["claude-sonnet-4-6"],
+            &["claude-sonnet-5-5"],
             "http://127.0.0.1:9/v1",
         )];
         let mut shared = ProxyShared::from_config(normalize_config(cfg), Client::new());
@@ -4636,19 +4636,19 @@
         cfg.allow_model_equivalence = true;
         cfg.model_compatibility_profiles.clear();
         cfg.channels = vec![local_model_channel(
-            &["gpt-5.6-terra"],
+            &["gpt-5.6-sol"],
             "http://127.0.0.1:9/v1",
         )];
 
         let selected = select_local_channel_route_where(
             &cfg,
             "/anthropic/v1/messages",
-            br#"{"model":"claude-opus-4-8","messages":[]}"#,
+            br#"{"model":"claude-sonnet-5-5","messages":[]}"#,
             |_| true,
         )
         .expect("embedded compatibility route");
 
-        assert_eq!(selected.route_model, "gpt-5.6-terra");
+        assert_eq!(selected.route_model, "gpt-5.6-sol");
         assert!(selected.substituted);
     }
 
@@ -4668,7 +4668,7 @@
         let selected = select_local_channel_route_where(
             &cfg,
             "/anthropic/v1/messages",
-            br#"{"model":"claude-haiku-4-5","max_tokens":1,"messages":[{"role":"user","content":"."}]}"#,
+            br#"{"model":"claude-sonnet-5-5","max_tokens":1,"messages":[{"role":"user","content":"."}]}"#,
             |_| true,
         )
         .expect("higher compatibility route");
@@ -4693,7 +4693,7 @@
         let selected = select_local_channel_route_where(
             &cfg,
             "/anthropic/v1/messages",
-            br#"{"model":"claude-haiku-4-5","max_tokens":2,"messages":[{"role":"user","content":"."}]}"#,
+            br#"{"model":"claude-sonnet-5-5","max_tokens":2,"messages":[{"role":"user","content":"."}]}"#,
             |_| true,
         )
         .expect("ordinary higher compatibility route");

@@ -35,6 +35,9 @@ fn responses_ws_io_cause(error: &tokio_tungstenite::tungstenite::Error) -> &'sta
                 "connection_reset"
             }
             std::io::ErrorKind::ConnectionRefused => "connection_refused",
+            // rustls reports certificate and alert failures as an I/O error
+            // wrapping its own error rather than as `Error::Tls`.
+            _ if error.get_ref().is_some_and(|inner| inner.is::<rustls::Error>()) => "tls_error",
             _ => "connect_error",
         },
         _ => "connect_error",

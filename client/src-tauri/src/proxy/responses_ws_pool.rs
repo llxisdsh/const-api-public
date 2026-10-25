@@ -307,8 +307,11 @@ impl ResponsesWsPool {
         let preferred = lease.connection.clone();
         let preferred_lane = Some(lease.lane);
         let connection_reused = !lease.connection_was_created();
-        lease.release_idle();
         preferred.pin_session();
+        // Pin before returning the lane. Otherwise another logical session can
+        // acquire this just-released exclusive socket in the small window
+        // before the owner records its session affinity.
+        lease.release_idle();
         Ok(ResponsesWsPoolSession {
             bucket,
             preferred: Some(preferred),
@@ -654,11 +657,13 @@ impl ResponsesWsPoolBucket {
                 if let Some(preferred) = preferred {
                     if !preferred.is_broken() {
                         if let Some(lease) = preferred_lane
-                            .and_then(|lane| preferred.try_allocate_lane(lane, require_affinity))
+                            .and_then(|lane| {
+                                preferred.try_allocate_lane_for_session(lane, require_affinity)
+                            })
                         {
                             return Ok(lease);
                         }
-                        if let Some(lease) = preferred.try_allocate(require_affinity) {
+                        if let Some(lease) = preferred.try_allocate_for_session(require_affinity) {
                             return Ok(lease);
                         }
                     } else if require_affinity {
@@ -820,7 +825,34 @@ impl ResponsesWsPooledConnection {
     }
 
     fn try_allocate(self: &Arc<Self>, allow_draining: bool) -> Option<ResponsesWsLaneLease> {
+        self.try_allocate_inner(allow_draining, false)
+    }
+
+    fn try_allocate_for_session(
+        self: &Arc<Self>,
+        allow_draining: bool,
+    ) -> Option<ResponsesWsLaneLease> {
+        self.try_allocate_inner(allow_draining, true)
+    }
+
+    fn try_allocate_inner(
+        self: &Arc<Self>,
+        allow_draining: bool,
+        allow_pinned_session: bool,
+    ) -> Option<ResponsesWsLaneLease> {
         if self.is_broken() || (!allow_draining && self.draining.load(Ordering::Acquire)) {
+            return None;
+        }
+        if !allow_pinned_session
+            && self
+                .bucket
+                .upgrade()
+                .is_some_and(|bucket| {
+                    bucket.capability.value.load(Ordering::Acquire)
+                        != RESPONSES_WS_CAPABILITY_MULTIPLEX
+                        && self.session_pins.load(Ordering::Acquire) != 0
+                })
+        {
             return None;
         }
         let capacity = self.capacity();
@@ -849,14 +881,35 @@ impl ResponsesWsPooledConnection {
         })
     }
 
-    fn try_allocate_lane(
+    fn try_allocate_lane_for_session(
         self: &Arc<Self>,
         lane: usize,
         allow_draining: bool,
     ) -> Option<ResponsesWsLaneLease> {
+        self.try_allocate_lane_inner(lane, allow_draining, true)
+    }
+
+    fn try_allocate_lane_inner(
+        self: &Arc<Self>,
+        lane: usize,
+        allow_draining: bool,
+        allow_pinned_session: bool,
+    ) -> Option<ResponsesWsLaneLease> {
         if self.is_broken()
             || (!allow_draining && self.draining.load(Ordering::Acquire))
             || lane >= self.capacity()
+        {
+            return None;
+        }
+        if !allow_pinned_session
+            && self
+                .bucket
+                .upgrade()
+                .is_some_and(|bucket| {
+                    bucket.capability.value.load(Ordering::Acquire)
+                        != RESPONSES_WS_CAPABILITY_MULTIPLEX
+                        && self.session_pins.load(Ordering::Acquire) != 0
+                })
         {
             return None;
         }
@@ -1579,10 +1632,16 @@ fn responses_ws_pool_shared_headers(
     }
     if matches!(route, ResponsesWebsocketNativeRoute::OpenAiSubscription { .. }) {
         // The adapter keeps only a native caller's beta negotiation, as over HTTP.
-        return codex_subscription_model_request_context_headers(
+        let mut shared = codex_subscription_model_request_context_headers(
             Some(headers),
             &active_codex_identity(),
         );
+        crate::subscription_transport_policy::apply_to_headers(
+            crate::source_driver::SourceDriverId::OpenAiSubscription,
+            crate::subscription_transport_policy::HeaderOperation::ResponsesWebsocket,
+            &mut shared,
+        );
+        return shared;
     }
     let mut shared = codex_model_request_context_headers(Some(headers), &active_codex_identity());
     if let Some(beta) = headers.get("openai-beta") {
@@ -2126,6 +2185,22 @@ mod responses_ws_pool_tests {
         tokio::time::sleep(Duration::from_millis(140)).await;
         assert!(connection.is_broken(), "exclusive idle socket was retained");
         server.await.expect("mock server");
+    }
+
+    #[tokio::test]
+    async fn exclusive_pinned_connection_is_not_shared_by_other_sessions() {
+        let (_bucket, connection, _server) = buffered_test_connection().await;
+        connection.pin_session();
+        assert!(
+            connection.try_allocate(false).is_none(),
+            "an exclusive socket pinned by another logical session must not be reused"
+        );
+        let mut lease = connection
+            .try_allocate_for_session(false)
+            .expect("the owning session can retain its preferred socket");
+        lease.release_idle();
+        connection.unpin_session();
+        connection.request_close("test_finished");
     }
 
     #[tokio::test]
@@ -3183,7 +3258,7 @@ mod responses_ws_pool_tests {
         if !include_beta {
             request.headers_mut().remove("openai-beta");
         }
-        connect_responses_websocket_request(request).await
+        connect_codex_responses_websocket_request(request).await
     }
 
     #[tokio::test]
