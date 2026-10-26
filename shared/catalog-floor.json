@@ -1,6 +1,6 @@
 {
-  "sequence": 49,
-  "release_id": "catalog-v49-2026-10-25",
+  "sequence": 50,
+  "release_id": "catalog-v50-2026-10-26",
   "model_version_id": "models-v37-2026-10-26",
   "compatibility_version_id": "compat-v29-2026-10-25",
   "pricing_version_id": "pricing-20261026-litellm-1024-v19"
