@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_revision": "ae2e19ebb33d6328fc882e1a17c596cbd6524508",
+  "source_revision": "31bc2edc4b96d33d98c908622652f3ddee263664",
   "edition": "local-only",
   "files": {
     "client/.node-version": "45507e6d96329a845faa642c0f485313bcb2ca1e08b043589cde4ddd15969cd6",
@@ -135,7 +135,7 @@
     "client/src-tauri/src/memory_diagnostics.rs": "dd518771d699355c0e128288037ea29ba5058623343d91d69a8df4f5f9d8bc1f",
     "client/src-tauri/src/model.rs": "f716c088d5319e6b4c17ec99cf22f8ca95f57b8485deaf22e85a644f48e7691a",
     "client/src-tauri/src/model_catalog.rs": "06638f2c98f656ca21d9bd495219c8aeb25d83f6b6089b73407194f8a4d38018",
-    "client/src-tauri/src/model_compatibility.rs": "796e5c42a988ab0ac7068ab57b96cfc43e4c092ccf7f137641025c5df900e300",
+    "client/src-tauri/src/model_compatibility.rs": "b4cfd5a903288e79488b4082802722adcd28264ac65847b1a55e49a73dcea559",
     "client/src-tauri/src/model_compatibility/http_cache_tests.rs": "7cf6d5629530f7420082c066350684bca33fcc224f26566af983683bca9b3e98",
     "client/src-tauri/src/model_discovery.rs": "4a1bb9911ba56c2be52a0cd96cf878de6e899d14aa7a57b771c7d3a955e5a650",
     "client/src-tauri/src/muse_code_auth.rs": "af655efa4b9ceeaab132f9aebd6e271831873aae76898c0ad35d4ed6dd21c501",

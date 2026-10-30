@@ -1983,7 +1983,7 @@ mod tests {
         config.model_compatibility_profiles.clear();
         config.allow_model_equivalence = true;
         for (model, first) in [
-            ("gpt-5.5", "kimi-k3"),
+            ("gpt-5.5", "gpt-6.1-terra"),
             ("codex-auto-review", "claude-haiku-5-5"),
             ("gpt-5.4", "claude-haiku-5-5"),
             ("gpt-5.3-codex", "gemini-3.8-flash"),
