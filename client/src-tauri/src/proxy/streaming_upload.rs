@@ -246,16 +246,20 @@ where
         }
     }
     let channel_id = channel.id.clone();
-    let result = crate::channel_executor::execute_native_streaming_channel_request(
-        &shared.client.snapshot(),
-        &channel,
-        reqwest_method,
-        path,
-        &raw_query,
-        has_query,
-        upstream_headers,
-        request_body,
-    )
+    let result = async {
+        let client = crate::http_client::channel_client(channel.v2.use_system_proxy)?;
+        crate::channel_executor::execute_native_streaming_channel_request(
+            &client,
+            &channel,
+            reqwest_method,
+            path,
+            &raw_query,
+            has_query,
+            upstream_headers,
+            request_body,
+        )
+        .await
+    }
     .await;
     let mut transport_failure = false;
     let response = match result {

@@ -282,6 +282,9 @@ fn fingerprint(channel: &ChannelConfig) -> String {
     hash.update(bytes);
     // An empty override preserves existing channels' persisted fingerprints.
     hash.update(channel.v2.user_agent_profile.as_bytes());
+    if channel.v2.use_system_proxy {
+        hash.update(b"\0use-system-proxy");
+    }
     hex::encode(hash.finalize())
 }
 

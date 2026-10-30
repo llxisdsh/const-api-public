@@ -724,6 +724,9 @@ pub(crate) fn subscription_safety_enabled_for_tests(config: &SupplierConfig) -> 
     channel_id.starts_with("safety-")
         || channel_id.starts_with("risk-")
         || channel_id.starts_with("register-")
+        // The opt-in live probe must retain real subscription safety checks.
+        || (std::env::var("CONST_CAPACITY_LIVE").as_deref() == Ok("1")
+            && std::env::var("CONST_CAPACITY_CHANNEL").as_deref() == Ok(channel_id.as_str()))
 }
 
 #[cfg(test)]

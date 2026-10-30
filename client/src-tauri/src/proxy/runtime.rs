@@ -27,6 +27,7 @@ const MODEL_CATALOG_CACHE_HEADER: &str = "x-const-model-catalog-cache";
 const MODEL_CATALOG_FRESH_TTL: Duration = Duration::from_secs(30);
 const MODEL_CATALOG_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const LOCAL_MODEL_ROUTE_PREFERENCE_IDLE_SECONDS: i64 = 5 * 60 * 60;
+const LOCAL_MODEL_RESELECTION_SECONDS: i64 = 120;
 const LOCAL_MODEL_ROUTE_PREFERENCE_CAPACITY: usize = 4096;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -54,6 +55,15 @@ struct LocalModelRoutePreference {
     route_key: String,
     context: LocalModelRoutePreferenceContext,
     last_success_at_unix: i64,
+    last_reselection_at_unix: i64,
+    binding_updated_at: std::time::Instant,
+}
+
+#[derive(Clone)]
+struct LocalRoutePromotion {
+    affinity_key: String,
+    context: LocalModelRoutePreferenceContext,
+    selected_at: std::time::Instant,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,6 +112,7 @@ impl UpstreamAttemptBudget {
 }
 
 pub(crate) struct ProxyShared {
+    pub(crate) websocket_shutdown: tokio::sync::watch::Sender<bool>,
     pub(crate) config: ClientConfig,
     pub(crate) live_config: Arc<StdMutex<ClientConfig>>,
     pub(crate) local_channel_readiness: Arc<StdMutex<HashMap<String, bool>>>,
@@ -217,6 +228,7 @@ impl ProxyShared {
             local_resource_owner_database_path(&crate::default_config_path()),
         );
         Self {
+            websocket_shutdown: tokio::sync::watch::Sender::new(false),
             config,
             live_config,
             local_channel_readiness,
@@ -254,6 +266,14 @@ impl ProxyShared {
             .lock()
             .map(|config| config.clone())
             .unwrap_or_else(|_| self.config.clone())
+    }
+
+    async fn wait_for_websocket_shutdown(&self) {
+        let _ = self
+            .websocket_shutdown
+            .subscribe()
+            .wait_for(|stopped| *stopped)
+            .await;
     }
 
     fn local_channel_accepts_new_requests(&self, channel_id: &str) -> bool {
@@ -423,14 +443,20 @@ impl ProxyShared {
                         .and_then(|value| value.trim().parse::<i64>().ok())
                         .unwrap_or_default()
                 });
-            routes
-                .entry(key)
-                .or_default()
-                .record_runtime_failure(
+            let state = routes.entry(key).or_default();
+            if matching_evidence.is_some_and(|evidence| evidence.error_kind == "provider_overload") {
+                state.record_runtime_overload(
                     now,
                     retry_after,
                     matching_evidence.is_some_and(|evidence| evidence.soft),
                 );
+            } else {
+                state.record_runtime_failure(
+                    now,
+                    retry_after,
+                    matching_evidence.is_some_and(|evidence| evidence.soft),
+                );
+            }
             return true;
         }
         false
@@ -479,6 +505,7 @@ impl ProxyShared {
         route_key: &str,
         context: LocalModelRoutePreferenceContext,
         now: i64,
+        selected_at: std::time::Instant,
     ) {
         if affinity_key.is_empty() || route_key.is_empty() {
             return;
@@ -497,14 +524,52 @@ impl ProxyShared {
                 preferences.remove(&oldest);
             }
         }
+        if preferences
+            .get(affinity_key)
+            .is_some_and(|previous| {
+                previous.binding_updated_at > selected_at
+                    && (previous.route_key != route_key || previous.context != context)
+            })
+        {
+            return;
+        }
+        let previous_binding = preferences
+            .get(affinity_key)
+            .filter(|previous| previous.route_key == route_key && previous.context == context);
+        // Only an actual binding change fences out requests already in flight.
+        // A normal success on the old route must not suppress a pending failover.
+        let binding_updated_at = previous_binding.map_or_else(
+            std::time::Instant::now,
+            |previous| previous.binding_updated_at,
+        );
+        let last_reselection_at_unix =
+            previous_binding.map_or(now, |previous| previous.last_reselection_at_unix);
         preferences.insert(
             affinity_key.to_string(),
             LocalModelRoutePreference {
                 route_key: route_key.to_string(),
                 context,
                 last_success_at_unix: now,
+                last_reselection_at_unix,
+                binding_updated_at,
             },
         );
+    }
+
+    fn begin_local_reselection(&self, key: &str, route_key: &str, now: i64) -> bool {
+        let Ok(mut preferences) = self.local_model_route_preferences.lock() else {
+            return false;
+        };
+        let Some(preference) = preferences.get_mut(key) else {
+            return false;
+        };
+        if preference.route_key != route_key
+            || now.saturating_sub(preference.last_reselection_at_unix) < LOCAL_MODEL_RESELECTION_SECONDS
+        {
+            return false;
+        }
+        preference.last_reselection_at_unix = now;
+        true
     }
 
     fn forget_local_model_route(&self, affinity_key: &str, route_key: &str) {
@@ -1978,6 +2043,11 @@ async fn attempt_local_model_route(
             required_route_key,
             attempted_route_keys,
             capacity_excluded_channel_ids,
+            Some(LocalRoutePromotion {
+                affinity_key: affinity_key.to_owned(),
+                context: preference_context,
+                selected_at: std::time::Instant::now(),
+            }),
         )
         .await
         else {
@@ -2011,14 +2081,6 @@ async fn attempt_local_model_route(
                 last_response = Some(response);
             }
             Ok(response) => {
-                if response.status().is_success() {
-                    shared.promote_local_model_route(
-                        affinity_key,
-                        &execution.route_key,
-                        preference_context,
-                        now_unix(),
-                    );
-                }
                 return ModelRouteAttempt::CompleteResponse(response);
             }
             Err(error) if execution.retry_scope != LocalRouteRetryScope::None => {
@@ -2268,6 +2330,7 @@ async fn forward_ready_local_channel(
             None,
             &excluded_routes,
             &excluded_channels,
+            None,
         )
         .await
         else {
@@ -2300,6 +2363,7 @@ async fn forward_ready_local_channel_with_match(
     required_route_key: Option<&str>,
     excluded_route_keys: &HashSet<String>,
     excluded_channel_ids: &HashSet<String>,
+    promotion: Option<LocalRoutePromotion>,
 ) -> Option<LocalChannelExecution> {
     let mut claim_excluded = excluded_route_keys.clone();
     let (selection, route_key, resource_owned) = loop {
@@ -2364,7 +2428,16 @@ async fn forward_ready_local_channel_with_match(
                 false,
             ),
         };
-        let selection = selection?;
+        let mut selection = selection?;
+        if !resource_owned
+            && required_route_key.is_some()
+            && let Some(context) = &promotion
+        {
+            selection = reselect_preferred_local_channel(
+                shared, config, selection, &context.affinity_key, method, path, body,
+                ready_local_channel_ids, match_mode, &claim_excluded, excluded_channel_ids,
+            );
+        }
         let route_key = local_model_route_key(selection.channel, &selection.route_model);
         if shared.claim_local_model_route(&route_key, now_unix()) {
             break (selection, route_key, resource_owned);
@@ -2384,6 +2457,9 @@ async fn forward_ready_local_channel_with_match(
         .is_some_and(|route| local_operation_proves_model_health(route.operation));
     let mut model_observation = model_operation
         .then(|| LocalModelOutcomeGuard::new(shared.clone(), &channel_id, &route_upstream_model));
+    if !resource_owned && let Some(observation) = model_observation.as_mut() {
+        observation.promotion = promotion;
+    }
     let result = forward_local_channel_once_with_query_presence(
         method.clone(),
         path,
@@ -2550,6 +2626,49 @@ async fn forward_ready_local_channel_with_match(
             }
         }
     })
+}
+
+// HTTP and native Responses WS use the same request-boundary reselection rule.
+// The caller has already selected an eligible preferred route and released the
+// health lock; the interval is claimed before evaluating the normal pool.
+fn reselect_preferred_local_channel<'a>(
+    shared: &ProxyShared,
+    config: &'a ClientConfig,
+    selection: LocalChannelSelection<'a>,
+    affinity_key: &str,
+    method: &warp::http::Method,
+    path: &str,
+    body: &[u8],
+    ready_channel_ids: &HashSet<String>,
+    match_mode: ModelMatchMode,
+    excluded_route_keys: &HashSet<String>,
+    excluded_channel_ids: &HashSet<String>,
+) -> LocalChannelSelection<'a> {
+    let route_key = local_model_route_key(selection.channel, &selection.route_model);
+    if !shared.begin_local_reselection(affinity_key, &route_key, now_unix()) {
+        return selection;
+    }
+    let Ok(health) = shared.local_model_quota_routes.lock() else {
+        return selection;
+    };
+    let Some(candidate) = select_ready_local_channel_with_model_route_policy(
+        config, method, path, body, ready_channel_ids, &health, now_unix(), match_mode,
+        None, excluded_route_keys, excluded_channel_ids,
+    ) else {
+        return selection;
+    };
+    let candidate_key = local_model_route_key(candidate.channel, &candidate.route_model);
+    if local_channel_priority(config, candidate.channel)
+        < local_channel_priority(config, selection.channel)
+        && health.get(&candidate_key).is_none_or(|state| !state.has_runtime_failure())
+        && (candidate.channel.max_concurrency() == 0
+            || crate::channel_concurrency::current(&candidate.channel.id)
+                < candidate.channel.max_concurrency())
+    {
+        candidate
+    } else {
+        selection
+    }
 }
 
 fn proxy_execution_error_response(error: &anyhow::Error) -> warp::reply::Response {
@@ -4512,11 +4631,13 @@ async fn forward_local_channel_once_with_query_presence(
     has_query: bool,
     mut headers: warp::http::HeaderMap,
     body: bytes::Bytes,
-    client: &Client,
+    _client: &Client,
     cfg: &ClientConfig,
     channel: &ChannelConfig,
     selected_upstream_model: Option<&str>,
 ) -> Result<warp::reply::Response> {
+    let channel_client = crate::http_client::channel_client(channel.v2.use_system_proxy)?;
+    let client = &channel_client;
     let route = crate::surface::resolve_api_route(method.as_str(), path, false)
         .ok_or_else(|| anyhow!("request path is outside the configured API surfaces"))?;
     let incoming_lan_share_path = headers

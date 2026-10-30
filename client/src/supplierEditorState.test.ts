@@ -144,6 +144,22 @@ describe("supplier editor state", () => {
     expect(channelDetectionInputChanged(changed, saved)).toBe(true);
   });
 
+  test("OpenAI proxy edits invalidate detection and activate the new transport", () => {
+    const saved = {
+      id: "proxy", name: "Proxy", source_driver: "openai_subscription",
+      enabled: true, share_enabled: true, credential_ref: "fixture",
+      executor: {}, discovery: {}, surfaces: [], default_target: {},
+      default_model: "model", price_ratio: 1, node_id: "node",
+      server_ws_url: "wss://platform.test/ws", server_quic_url: "platform.test:443",
+      use_system_proxy: false,
+    };
+    const changed = { ...saved, use_system_proxy: true };
+    expect(channelEditorSettingsChanged(saved, changed)).toBe(true);
+    expect(channelDetectionInputChanged(saved, changed)).toBe(true);
+    expect(channelRuntimeNeedsActivation(saved, changed)).toBe(true);
+    expect(channelDetectionInputChanged(saved, { ...saved, use_system_proxy: undefined })).toBe(false);
+  });
+
   test("renaming a channel does not replay an unchanged diagnostic toast", () => {
     const original = diagnosticToastEventKey({
       id: "supplier-model-catalog-channel-1",

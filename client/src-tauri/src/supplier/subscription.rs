@@ -2581,10 +2581,16 @@ mod buffered_response_tests {
             assert!(conversion.tool_mapping.is_empty());
             assert_eq!(conversion.body, body);
             let prepared = prepare_codex_subscription_endpoint_request(&default_supplier_config(), &conversion.body, false, "gpt-test", None, Some(&headers)).unwrap();
-            assert_eq!(prepared.body, body);
+            let mut payload: serde_json::Value = serde_json::from_str(&prepared.body).unwrap();
+            assert!(payload["client_metadata"]["session_id"].is_string());
+            assert_eq!(payload["client_metadata"]["x-codex-installation-id"], crate::codex_identity::installation_id("channel-1").unwrap());
+            payload.as_object_mut().unwrap().remove("client_metadata");
+            payload.as_object_mut().unwrap().remove("prompt_cache_key");
+            assert_eq!(payload, serde_json::from_str::<serde_json::Value>(body).unwrap());
+            let prepared_body = prepared.body.clone();
             let request = openai_subscription_response_request(&client, "https://example.test/responses", "mock-supplier-token", &serde_json::json!({}), prepared.body, Some(&headers)).unwrap().build().unwrap();
             let encoded = request.body().unwrap().as_bytes().unwrap();
-            assert_eq!(zstd::stream::decode_all(std::io::Cursor::new(encoded)).unwrap(), body.as_bytes());
+            assert_eq!(zstd::stream::decode_all(std::io::Cursor::new(encoded)).unwrap(), prepared_body.as_bytes());
             let identity = crate::codex_identity::active_codex_identity();
             assert_eq!(request.headers()["originator"], identity.originator);
             assert_eq!(request.headers()["version"], identity.version);

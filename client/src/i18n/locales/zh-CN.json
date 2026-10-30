@@ -727,16 +727,11 @@
     "channel": "渠道",
     "localPriority": "优先级",
     "priority": {
-      "title": "本机渠道优先级",
-      "hint": "这里是本机手动设置的优先级，不按价格自动排序。数字越小越优先；把多个账号设为相同数字，就让它们共同分担新会话；前一级不可用或并发已满时，后一级再接手。已有会话尽量保持原账号。",
-      "scope": "只影响本机和局域网请求，不参与平台市场的价格和排序。",
-      "editChannel": "调整 {{channel}} 的优先级，当前为 {{priority}}",
-      "channelValue": "{{channel}} 的优先级",
-      "selectChannel": "选择 {{channel}}",
-      "selectAll": "全选",
-      "selected": "已选 {{count}} 个",
-      "setTo": "设为",
-      "invalid": "优先级须为 1 至 4294967295 的整数。"
+      "dragChannel": "{{channel}} 的优先级 {{priority}}，拖动调整",
+      "keyboardHint": "上下键预览优先级，Enter 保存，Esc 取消",
+      "dragSaved": "优先级已保存",
+      "dragFailed": "未能保存，已保留原优先级",
+      "undo": "撤销"
     },
     "switch": "开关",
     "model": "模型",
@@ -875,6 +870,10 @@
     "hideAdvanced": "收起",
     "advancedHint": "协议绑定、端点细节和凭证引用等不常用配置；仅本地字段不会上传服务器。",
     "advanced": {
+      "codexDesktopDefault": "Codex Desktop（默认）",
+      "codexProfileHint": "统一用于 OpenAI 订阅的请求身份。保存后新连接生效。",
+      "useSystemProxy": "使用代理",
+      "useSystemProxyHint": "默认关闭，由 CONST 直接连接；开启后使用系统或环境代理。TUN 属于系统网络路由，不受此开关控制，开或关都可能经过 TUN。",
       "userAgentProfile": "User-Agent 覆盖",
       "userAgentProfileDefault": "不覆盖（跟随请求）",
       "userAgentProfileHint": "仅当上游渠道限制或要求特定客户端时选择。渠道刷新、检查和工具请求都会改用所选客户端的 User-Agent；普通渠道保持不覆盖。",

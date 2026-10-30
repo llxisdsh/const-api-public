@@ -50,12 +50,24 @@ fn prepare_codex_subscription_endpoint_request_with_lite_override(
     responses_lite_override: Option<bool>,
 ) -> Result<ReportedSubscriptionDialectAdjustment> {
     // Codex already emits the ChatGPT subscription dialect. Keep a genuine
-    // first-party request byte-stable unless an old/resumed history contains
-    // an invalid message ID or a reasoning item that cannot be replayed. Such a reasoning item has only
+    // first-party payload unchanged except for supplier installation identity,
+    // missing conversation fields, or an invalid resumed history. Such a reasoning item has only
     // an rs_* server reference but no encrypted payload; the subscription
     // endpoint never persisted that reference and explicitly rejects it.
     if crate::codex_identity::codex_request_is_native(request_headers) {
-        if let Some(adjustment) = repair_native_codex_history(body) {
+        let mut adjustment = repair_native_codex_history(body).unwrap_or(SubscriptionDialectAdjustment {
+            body: body.to_string(),
+            actions: Vec::new(),
+        });
+        let scoped = prepare_codex_subscription_identity(&config.channel_id, &adjustment.body, cache_identity, request_headers)?;
+        if scoped != adjustment.body {
+            adjustment.body = scoped;
+            adjustment.actions.push(SubscriptionDialectAction {
+                code: "codex_subscription_identity_completed",
+                path: "$.client_metadata".to_string(),
+            });
+        }
+        if !adjustment.actions.is_empty() {
             return report_codex_subscription_adjustment(adjustment, model);
         }
         return Ok(ReportedSubscriptionDialectAdjustment {
@@ -71,8 +83,13 @@ fn prepare_codex_subscription_endpoint_request_with_lite_override(
         openai_subscription_body_with_cache_identity(&body, cache_identity)?
     };
     let mut adjustment = adjust_codex_subscription_request_for_operation(&body, compact)?;
-    if !compact {
-        ensure_codex_subscription_session_metadata(&mut adjustment)?;
+    let scoped = prepare_codex_subscription_identity(&config.channel_id, &adjustment.body, cache_identity, request_headers)?;
+    if scoped != adjustment.body {
+        adjustment.body = scoped;
+        adjustment.actions.push(SubscriptionDialectAction {
+            code: "codex_subscription_identity_completed",
+            path: "$.client_metadata".to_string(),
+        });
     }
     if !compact
         && responses_lite_override
@@ -85,6 +102,175 @@ fn prepare_codex_subscription_endpoint_request_with_lite_override(
         adjustment.actions.insert(0, action);
     }
     report_codex_subscription_adjustment(adjustment, model)
+}
+
+/// Preserve caller conversation/cache identities and their parent relationships.
+/// The scoped identity remains an internal ownership/routing key; use it only
+/// as a stable fallback when the caller did not supply a conversation identity.
+pub(crate) fn prepare_codex_subscription_identity(
+    channel_id: &str,
+    body: &str,
+    cache_identity: Option<&str>,
+    request_headers: Option<&reqwest::header::HeaderMap>,
+) -> Result<String> {
+    let mut value: serde_json::Value = serde_json::from_str(body)?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("Codex request must be an object"))?;
+    let header = |names: &[&str]| -> Option<String> {
+        names.iter().find_map(|name| {
+            request_headers?
+                .get(*name)?
+                .to_str()
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_string)
+        })
+    };
+    let supplied_cache = object
+        .get("prompt_cache_key")
+        .and_then(serde_json::Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+        .map(str::to_string);
+    let metadata = object
+        .entry("client_metadata")
+        .or_insert_with(|| serde_json::json!({}));
+    let metadata = metadata
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("Codex client_metadata must be an object"))?;
+    let original_metadata = metadata.clone();
+    let nested = metadata
+        .get("x-codex-turn-metadata")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            request_headers
+                .and_then(|h| h.get("x-codex-turn-metadata"))
+                .and_then(|h| h.to_str().ok())
+        })
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+    let id = |key: &str| -> Option<String> {
+        metadata
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| {
+                nested
+                    .as_ref()?
+                    .get(key)?
+                    .as_str()
+                    .filter(|v| !v.trim().is_empty())
+            })
+            .map(str::to_string)
+    };
+    let thread = id("thread_id").or_else(|| header(&["thread-id"]));
+    let session =
+        id("session_id").or_else(|| header(&["session-id", "session_id", "x-session-id"]));
+    // A caller cache key can be a shared business label, not a unique session.
+    // Only the caller-scoped routing identity is safe as a stable fallback.
+    let fallback = || {
+        normalized_subscription_cache_identity(cache_identity)
+            .map(|seed| stable_codex_subscription_uuid(b"const-codex-conversation-v2\0", seed))
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+    };
+    let thread = thread.or_else(|| session.clone()).unwrap_or_else(fallback);
+    let session = session.unwrap_or_else(|| thread.clone());
+    for (key, value) in [("thread_id", thread), ("session_id", session.clone())] {
+        if metadata
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|v| v.trim().is_empty())
+        {
+            metadata.insert(key.into(), value.into());
+        }
+    }
+    metadata.remove("installation_id");
+    metadata.insert(
+        "x-codex-installation-id".into(),
+        crate::codex_identity::installation_id(channel_id)?.into(),
+    );
+    // Native headers and metadata can intentionally have different cache/session
+    // roles. Preserve supplied values; do not force equality or hash each field.
+    for (key, names) in [
+        (
+            "x-codex-parent-thread-id",
+            &["x-codex-parent-thread-id"][..],
+        ),
+        ("x-codex-turn-metadata", &["x-codex-turn-metadata"][..]),
+    ] {
+        if !metadata.contains_key(key) {
+            if let Some(value) = header(names) {
+                metadata.insert(key.into(), value.into());
+            }
+        }
+    }
+    // The header copy above is untrusted device metadata too.
+    if let Some(raw) = metadata
+        .get("x-codex-turn-metadata")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+    {
+        if let Ok(serde_json::Value::Object(mut turn)) = serde_json::from_str(&raw) {
+            if turn.remove("installation_id").is_some()
+                | turn.remove("x-codex-installation-id").is_some()
+            {
+                turn.insert(
+                    "installation_id".into(),
+                    crate::codex_identity::installation_id(channel_id)?.into(),
+                );
+                metadata.insert(
+                    "x-codex-turn-metadata".into(),
+                    serde_json::to_string(&turn)?.into(),
+                );
+            }
+        }
+    }
+    let mut changed = *metadata != original_metadata;
+    if supplied_cache.is_none()
+        && object
+            .get("prompt_cache_key")
+            .is_none_or(|v| v.is_null() || v.is_string())
+    {
+        object.insert(
+            "prompt_cache_key".into(),
+            header(&["session-id", "session_id"])
+                .unwrap_or(session)
+                .into(),
+        );
+        changed = true;
+    }
+    if changed {
+        Ok(serde_json::to_string(&value)?)
+    } else {
+        Ok(body.to_string())
+    }
+}
+
+/// Fill absent handshake conversation headers from the already normalized first
+/// request. A supplied header may intentionally differ from body cache metadata.
+pub(crate) fn complete_codex_conversation_headers(
+    headers: &mut reqwest::header::HeaderMap,
+    body: &str,
+) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return;
+    };
+    for (header, field) in [
+        ("session-id", "session_id"),
+        ("thread-id", "thread_id"),
+        ("x-client-request-id", "thread_id"),
+    ] {
+        let Some(value) = value
+            .get("client_metadata")
+            .and_then(|m| m.get(field))
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.trim().is_empty())
+        else {
+            continue;
+        };
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(value) {
+            headers.entry(header).or_insert(value);
+        }
+    }
 }
 
 fn normalize_codex_string_input_before_continuation(
@@ -565,78 +751,6 @@ fn adjust_codex_subscription_request_for_operation(
         body: serde_json::to_string(&value)?,
         actions,
     })
-}
-
-/// Gives a non-Codex caller the stable session identity that the official Codex
-/// client sends alongside `prompt_cache_key`. The identifiers are derived from
-/// the already opaque cache identity, so growing turns keep one upstream cache
-/// domain without exposing a caller-supplied conversation key as a header.
-fn ensure_codex_subscription_session_metadata(
-    adjustment: &mut SubscriptionDialectAdjustment,
-) -> Result<()> {
-    let mut value: serde_json::Value = serde_json::from_str(&adjustment.body)?;
-    let Some(object) = value.as_object_mut() else {
-        return Ok(());
-    };
-
-    let metadata_seed = object
-        .get("client_metadata")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|metadata| {
-            ["session_id", "thread_id"].into_iter().find_map(|key| {
-                metadata
-                    .get(key)
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|value| normalized_subscription_cache_identity(Some(value)))
-            })
-        })
-        .or_else(|| {
-            object
-                .get("prompt_cache_key")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|value| normalized_subscription_cache_identity(Some(value)))
-        })
-        .map(str::to_string);
-    let Some(seed) = metadata_seed else {
-        return Ok(());
-    };
-
-    let metadata = match object.entry("client_metadata".to_string()) {
-        serde_json::map::Entry::Vacant(entry) => {
-            entry.insert(serde_json::Value::Object(serde_json::Map::new()))
-        }
-        serde_json::map::Entry::Occupied(entry) => entry.into_mut(),
-    };
-    let Some(metadata) = metadata.as_object_mut() else {
-        return Ok(());
-    };
-    let mut changed = false;
-    for (key, namespace) in [
-        ("session_id", b"const-codex-session-v1\0".as_slice()),
-        ("thread_id", b"const-codex-thread-v1\0".as_slice()),
-    ] {
-        let missing = metadata
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .is_none_or(|value| value.trim().is_empty());
-        if missing {
-            metadata.insert(
-                key.to_string(),
-                serde_json::Value::String(stable_codex_subscription_uuid(namespace, &seed)),
-            );
-            changed = true;
-        }
-    }
-    if !changed {
-        return Ok(());
-    }
-
-    adjustment.actions.push(SubscriptionDialectAction {
-        code: "codex_session_identity_derived",
-        path: "$.client_metadata".to_string(),
-    });
-    adjustment.body = serde_json::to_string(&value)?;
-    Ok(())
 }
 
 fn stable_codex_subscription_uuid(namespace: &[u8], seed: &str) -> String {
@@ -1415,13 +1529,25 @@ mod native_codex_endpoint_tests {
     use super::*;
 
     #[test]
+    fn codex_supplier_client_id_is_stable_per_channel_across_sessions() {
+        let body=r#"{"input":[],"client_metadata":{"x-codex-installation-id":"caller-device"}}"#;
+        let prepare=|channel,session| serde_json::from_str::<serde_json::Value>(&prepare_codex_subscription_identity(channel,body,Some(session),None).unwrap()).unwrap();
+        let a=prepare("channel-a","session-1");
+        let b=prepare("channel-a","session-2");
+        let c=prepare("channel-b","session-1");
+        assert_eq!(a["client_metadata"]["x-codex-installation-id"],b["client_metadata"]["x-codex-installation-id"]);
+        assert_ne!(a["client_metadata"]["x-codex-installation-id"],c["client_metadata"]["x-codex-installation-id"]);
+        assert_ne!(a["client_metadata"]["x-codex-installation-id"],"caller-device");
+    }
+
+    #[test]
     fn native_codex_repairs_only_complete_message_ids_and_is_idempotent() {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("originator", "codex_cli_rs".parse().unwrap());
         headers.insert("user-agent", "codex_cli_rs/0.153.4".parse().unwrap());
         let mut original = serde_json::json!({
             "model": "gpt-5.6-luna", "store": false, "stream": true,
-            "prompt_cache_key": "preserve-cache-identity", "future_extension": {"keep": true},
+            "prompt_cache_key": "must-not-replace-cache-key", "future_extension": {"keep": true},
             "input": [
                 {"id":"item_8af9603617104500a810eedd", "role":"assistant", "content":[{"type":"output_text", "text":"hello"}]},
                 {"type":"message", "id":"item_explicit", "role":"user", "content":"continue"},
@@ -1447,10 +1573,9 @@ mod native_codex_endpoint_tests {
         let fixed = prepare(&original.to_string());
         original["input"][0]["id"] = "msg_item_8af9603617104500a810eedd".into();
         original["input"][1]["id"] = "msg_item_explicit".into();
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&fixed.body).unwrap(),
-            original
-        );
+        let mut actual: serde_json::Value = serde_json::from_str(&fixed.body).unwrap();
+        actual.as_object_mut().unwrap().remove("client_metadata");
+        assert_eq!(actual, original);
         assert_eq!(prepare(&fixed.body).body, fixed.body);
         assert!(fixed.faults.is_empty());
     }
@@ -1653,12 +1778,19 @@ mod native_codex_endpoint_tests {
         )
         .expect("native Codex body");
 
-        assert_eq!(prepared.body, body);
+        let expected: serde_json::Value = serde_json::from_str(body).unwrap();
+        let mut actual: serde_json::Value = serde_json::from_str(&prepared.body).unwrap();
+        let identity = actual.as_object_mut().unwrap().remove("client_metadata").unwrap();
+        assert_eq!(identity["session_id"], identity["thread_id"]);
+        assert!(uuid::Uuid::parse_str(identity["thread_id"].as_str().unwrap()).is_ok());
+        assert_eq!(
+            actual, expected
+        );
         assert!(prepared.faults.is_empty());
     }
 
     #[test]
-    fn native_codex_incremental_catalog_and_message_metadata_remain_byte_stable() {
+    fn native_codex_incremental_catalog_and_message_metadata_preserve_payload_with_supplier_identity() {
         // Mainline Codex moves instructions into input, updates declarations in
         // place and can replay partial answers. None require a subscription rewrite.
         let body = r#"{
@@ -1678,7 +1810,13 @@ mod native_codex_endpoint_tests {
                 &crate::default_supplier_config(), body, false, "gpt-6.1-sol",
                 Some("must-not-replace-native-context"), Some(&headers),
             ).unwrap();
-            assert_eq!(prepared.body, body);
+            let expected: serde_json::Value = serde_json::from_str(body).unwrap();
+            let mut actual: serde_json::Value = serde_json::from_str(&prepared.body).unwrap();
+            assert!(actual["prompt_cache_key"].is_string());
+            actual.as_object_mut().unwrap().remove("prompt_cache_key");
+            let metadata = actual["client_metadata"].as_object_mut().unwrap();
+            for key in ["session_id", "thread_id", "x-codex-installation-id"] { metadata.remove(key); }
+            assert_eq!(actual, expected);
             assert!(prepared.faults.is_empty());
         }
     }
@@ -1735,7 +1873,7 @@ mod native_codex_endpoint_tests {
     }
 
     #[test]
-    fn native_codex_reasoning_replay_remains_byte_stable() {
+    fn native_codex_reasoning_replay_preserves_payload_with_supplier_identity() {
         let body = r#"{
   "model": "gpt-5.6-sol",
   "input": [{"type":"reasoning","status":"completed","summary":[],"encrypted_content":"opaque-state","content":[{"type":"reasoning_text","text":"native"}]}],
@@ -1761,7 +1899,10 @@ mod native_codex_endpoint_tests {
         )
         .expect("native Codex body");
 
-        assert_eq!(prepared.body, body);
+        let mut actual: serde_json::Value = serde_json::from_str(&prepared.body).unwrap();
+        actual.as_object_mut().unwrap().remove("client_metadata");
+        actual.as_object_mut().unwrap().remove("prompt_cache_key");
+        assert_eq!(actual, serde_json::from_str::<serde_json::Value>(body).unwrap());
         assert!(prepared.faults.is_empty());
     }
 
@@ -1830,7 +1971,7 @@ mod native_codex_endpoint_tests {
     }
 
     #[test]
-    fn native_codex_with_replayable_reasoning_remains_byte_stable() {
+    fn native_codex_with_replayable_reasoning_preserves_payload_with_supplier_identity() {
         let body = r#"{
   "model": "gpt-5.6-terra",
   "input": [{"id":"rs_valid","type":"reasoning","summary":[],"encrypted_content":"opaque"}],
@@ -1858,7 +1999,10 @@ mod native_codex_endpoint_tests {
         )
         .expect("preserve valid native reasoning");
 
-        assert_eq!(prepared.body, body);
+        let mut actual: serde_json::Value = serde_json::from_str(&prepared.body).unwrap();
+        actual.as_object_mut().unwrap().remove("client_metadata");
+        actual.as_object_mut().unwrap().remove("prompt_cache_key");
+        assert_eq!(actual, serde_json::from_str::<serde_json::Value>(body).unwrap());
         assert!(prepared.faults.is_empty());
     }
 
@@ -1924,7 +2068,7 @@ mod native_codex_endpoint_tests {
         assert_eq!(session_id.len(), 36);
         assert_eq!(thread_id.len(), 36);
         assert_ne!(session_id, "stable-session");
-        assert_ne!(session_id, thread_id);
+        assert_eq!(session_id, thread_id);
         assert!(body_uses_codex_responses_lite(&value));
         assert!(prepared
             .faults
@@ -1985,7 +2129,8 @@ mod native_codex_endpoint_tests {
             "instructions": "stable instructions",
             "tools": [{"type": "function", "name": "lookup", "parameters": {}}],
             "input": [{"role": "user", "content": "hello"}],
-            "prompt_cache_key": "stable-session"
+            "prompt_cache_key": "stable-session",
+            "client_metadata": {"session_id":"stable-root", "thread_id":"stable-thread"}
         });
         let first = prepare(&request);
         let tools_id = &first["input"][0]["id"];
@@ -2020,14 +2165,14 @@ mod native_codex_endpoint_tests {
         assert_ne!(&changed_instructions["input"][1]["id"], instructions_id);
 
         let mut other_thread = request;
-        other_thread["prompt_cache_key"] = "other-session".into();
+        other_thread["client_metadata"]["thread_id"] = "other-thread".into();
         let other_thread = prepare(&other_thread);
         assert_ne!(&other_thread["input"][0]["id"], tools_id);
         assert_ne!(&other_thread["input"][1]["id"], instructions_id);
     }
 
     #[test]
-    fn native_codex_new_fields_and_lite_ids_remain_byte_stable() {
+    fn native_codex_new_fields_and_lite_ids_preserve_payload_with_supplier_identity() {
         let body = r#"{ "model":"gpt-6-astra", "store":false,
             "input":[{"type":"additional_tools","id":"at_native","role":"developer","tools":[]}],
             "reasoning":{"effort":"disabled","context":"all_turns"},
@@ -2049,8 +2194,56 @@ mod native_codex_endpoint_tests {
             Some(&headers),
         )
         .unwrap();
-        assert_eq!(prepared.body, body);
+        let mut actual: serde_json::Value = serde_json::from_str(&prepared.body).unwrap();
+        actual.as_object_mut().unwrap().remove("client_metadata");
+        actual.as_object_mut().unwrap().remove("prompt_cache_key");
+        assert_eq!(actual, serde_json::from_str::<serde_json::Value>(body).unwrap());
         assert!(prepared.faults.is_empty());
+    }
+
+    #[test]
+    fn supplier_installation_replaces_device_identity_and_preserves_conversation() {
+        let body = serde_json::json!({
+            "model": "gpt-5.6-sol",
+            "prompt_cache_key": "caller-cache",
+            "client_metadata": {
+                "session_id": "caller-session",
+                "thread_id": "caller-thread",
+                "installation_id": "caller-installation-alias",
+                "x-codex-installation-id": "caller-installation",
+                "x-codex-window-id": "caller-window",
+                "x-codex-turn-metadata": serde_json::json!({
+                    "installation_id": "nested-installation",
+                    "session_id": "nested-session",
+                    "thread_id": "nested-thread"
+                }).to_string()
+            }
+        }).to_string();
+        let scoped = prepare_codex_subscription_identity("channel-1", &body, Some("c1-user-a"), None)
+            .expect("scope Codex request");
+        let value: serde_json::Value = serde_json::from_str(&scoped).unwrap();
+        assert_eq!(value["prompt_cache_key"], "caller-cache");
+        assert_eq!(value["client_metadata"]["session_id"], "caller-session");
+        assert_eq!(value["client_metadata"]["thread_id"], "caller-thread");
+        assert_eq!(value["client_metadata"]["x-codex-window-id"], "caller-window");
+        assert_eq!(value["client_metadata"]["x-codex-installation-id"], crate::codex_identity::installation_id("channel-1").unwrap());
+        assert!(value["client_metadata"]["installation_id"].is_null());
+        let turn_metadata: serde_json::Value = serde_json::from_str(
+            value["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(turn_metadata["installation_id"], crate::codex_identity::installation_id("channel-1").unwrap());
+        assert_eq!(turn_metadata["session_id"], "nested-session");
+        assert_eq!(turn_metadata["thread_id"], "nested-thread");
+
+        let sanitized = prepare_codex_subscription_identity("channel-1", &body, None, None)
+            .expect("sanitize Codex request");
+        let sanitized: serde_json::Value = serde_json::from_str(&sanitized).unwrap();
+        assert_eq!(sanitized["client_metadata"]["session_id"], "caller-session");
+        assert_eq!(sanitized["client_metadata"]["x-codex-installation-id"], crate::codex_identity::installation_id("channel-1").unwrap());
+        assert!(sanitized["client_metadata"]["installation_id"].is_null());
     }
 
     #[test]
@@ -2082,7 +2275,68 @@ mod native_codex_endpoint_tests {
     }
 
     #[test]
-    fn derived_codex_session_identity_is_stable_and_preserves_caller_metadata() {
+    fn codex_conversation_ids_preserve_root_child_and_header_roles() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("session-id", "root-header".parse().unwrap());
+        headers.insert("thread-id", "child-header".parse().unwrap());
+        headers.insert("x-codex-parent-thread-id", "parent-thread".parse().unwrap());
+        let body = r#"{"input":[],"client_metadata":{"session_id":"root-body","thread_id":"child-body"},"prompt_cache_key":"caller-cache"}"#;
+        let first = prepare_codex_subscription_identity("channel-1", body, Some("tenant-a"), Some(&headers)).unwrap();
+        let other = prepare_codex_subscription_identity("channel-1", body, Some("tenant-b"), Some(&headers)).unwrap();
+        assert_eq!(first, other, "internal ownership scope must not rename supplied IDs");
+        assert_eq!(first, prepare_codex_subscription_identity("channel-1", &first, Some("tenant-b"), Some(&headers)).unwrap());
+        let value: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(value["client_metadata"]["session_id"], "root-body");
+        assert_eq!(value["client_metadata"]["thread_id"], "child-body");
+        assert_eq!(value["client_metadata"]["x-codex-parent-thread-id"], "parent-thread");
+        assert_eq!(value["prompt_cache_key"], "caller-cache");
+        complete_codex_conversation_headers(&mut headers, &first);
+        assert_eq!(headers["session-id"], "root-header");
+        assert_eq!(headers["thread-id"], "child-header");
+        let from_headers = prepare_codex_subscription_identity("channel-1", r#"{"input":[]}"#, None, Some(&headers)).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&from_headers).unwrap();
+        assert_eq!(value["client_metadata"]["session_id"], "root-header");
+        assert_eq!(value["client_metadata"]["thread_id"], "child-header");
+    }
+
+    #[test]
+    fn codex_missing_conversation_ids_share_one_stable_root_per_scope() {
+        let body = r#"{"input":[]}"#;
+        let first = prepare_codex_subscription_identity("channel-1", body, Some("scope-a"), None).unwrap();
+        assert_eq!(first, prepare_codex_subscription_identity("channel-1", body, Some("scope-a"), None).unwrap());
+        assert_ne!(first, prepare_codex_subscription_identity("channel-1", body, Some("scope-b"), None).unwrap());
+        let value: serde_json::Value = serde_json::from_str(&first).unwrap();
+        let id = value["client_metadata"]["session_id"].as_str().unwrap();
+        assert!(uuid::Uuid::parse_str(id).is_ok());
+        assert_eq!(value["client_metadata"]["thread_id"], id);
+        assert_eq!(value["prompt_cache_key"], id);
+        let mut headers = reqwest::header::HeaderMap::new();
+        complete_codex_conversation_headers(&mut headers, &first);
+        assert_eq!(headers["session-id"], id);
+        assert_eq!(headers["thread-id"], id);
+        let unscoped = prepare_codex_subscription_identity("channel-1", body, None, None).unwrap();
+        assert_ne!(unscoped, prepare_codex_subscription_identity("channel-1", body, None, None).unwrap());
+    }
+
+    #[test]
+    fn codex_shared_cache_label_does_not_merge_caller_sessions() {
+        let body = r#"{"input":[],"prompt_cache_key":"shared-business-cache"}"#;
+        let prepare = |scope| {
+            serde_json::from_str::<serde_json::Value>(
+                &prepare_codex_subscription_identity("channel-1", body, scope, None).unwrap(),
+            ).unwrap()
+        };
+        let first = prepare(Some("caller-a"));
+        let second = prepare(Some("caller-b"));
+        assert_ne!(first["client_metadata"]["session_id"], second["client_metadata"]["session_id"]);
+        assert_eq!(first["prompt_cache_key"], second["prompt_cache_key"]);
+        assert_ne!(prepare(None)["client_metadata"]["session_id"], prepare(None)["client_metadata"]["session_id"]);
+        let pretty = serde_json::to_string_pretty(&first).unwrap();
+        assert_eq!(prepare_codex_subscription_identity("channel-1", &pretty, Some("caller-a"), None).unwrap(), pretty);
+    }
+
+    #[test]
+    fn scoped_codex_session_identity_is_stable_and_preserves_caller_metadata() {
         let request = |input: serde_json::Value| {
             prepare_codex_subscription_endpoint_request(
                 &crate::default_supplier_config(),
@@ -2096,7 +2350,7 @@ mod native_codex_endpoint_tests {
                 .to_string(),
                 false,
                 "gpt-5.6-luna",
-                None,
+                Some("caller-scoped-conversation"),
                 None,
             )
             .unwrap()

@@ -516,6 +516,45 @@ fn responses_websocket_terminal_metadata(
     responses_websocket_terminal_metadata_from_value(&event)
 }
 
+fn responses_websocket_rejected_continuation(
+    metadata: &ResponsesWebsocketTerminalMetadata,
+    text: &str,
+) -> bool {
+    if metadata.status != 400 || metadata.event_type != "error" {
+        return false;
+    }
+    if metadata.error_code.as_deref() == Some("previous_response_not_found") {
+        return true;
+    }
+    if metadata.error_type.as_deref() != Some("invalid_request_error")
+        || metadata.error_code.is_some()
+        || metadata
+            .error_param
+            .as_deref()
+            .is_some_and(|param| param != "previous_response_id")
+    {
+        return false;
+    }
+
+    // The subscription upstream also rejects references with this exact message
+    // and no code. Inspect it without retaining raw provider text in diagnostics.
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    let error = event
+        .get("error")
+        .or_else(|| event.pointer("/body/error"))
+        .or_else(|| event.pointer("/response/error"))
+        .or_else(|| event.pointer("/response/status_details/error"));
+    matches!(
+        error
+            .and_then(|value| value.get("message"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim),
+        Some("Invalid `previous_response_id`.")
+    )
+}
+
 fn attach_responses_websocket_terminal_metadata(
     payload: &mut serde_json::Map<String, serde_json::Value>,
     metadata: &ResponsesWebsocketTerminalMetadata,
@@ -622,12 +661,7 @@ where
     tokio::time::timeout(timeout, connect).await.ok()
 }
 
-type ResponsesUpstreamSocket = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
-
-// Boxing the native WebSocket would add a heap allocation to every duplex
-// session; the enum is short-lived and kept on the owning task's stack.
+// The registry socket stays inline; only the Codex compression state is boxed.
 #[allow(clippy::large_enum_variant)]
 enum ResponsesRelayConnection {
     WebSocket(ResponsesUpstreamSocket),
@@ -1104,7 +1138,7 @@ fn select_responses_websocket_local_route(
         first_body,
         &ready_channel_ids,
     ) {
-        Ok(selection) => selection.map(|selection| selection.channel.clone()),
+        Ok(selection) => selection,
         // The normal HTTP router owns the structured affinity error path. Do
         // not silently switch a stateful request to another native channel.
         Err(_) => {
@@ -1113,23 +1147,28 @@ fn select_responses_websocket_local_route(
             );
         }
     };
+    let resource_owned = owned.is_some();
+    let affinity_key =
+        local_model_route_affinity_key("/v1/responses", client_headers, first_body).unwrap_or_default();
+    let preference_context =
+        local_model_route_preference_context(&config, platform_authenticated, true);
+    let preferred_route = if resource_owned {
+        None
+    } else {
+        shared.preferred_local_model_route(&affinity_key, preference_context, now_unix())
+    };
+    let excluded = HashSet::new();
     let Ok(model_quota_routes) = shared.local_model_quota_routes.lock() else {
         return ResponsesWebsocketLocalRoute::HttpBridge("local_route_state_unavailable");
     };
     let exact = owned.or_else(|| {
-        select_ready_local_channel_with_model_quota_and_match(
-            &config,
-            &warp::http::Method::POST,
-            "/v1/responses",
-            first_body,
-            &ready_channel_ids,
-            &model_quota_routes,
-            now_unix(),
-            ModelMatchMode::ExactOnly,
-        )
-        .ok()
-        .flatten()
-        .map(|selection| selection.channel.clone())
+        let select = |required_route| select_ready_local_channel_with_model_route_policy(
+            &config, &warp::http::Method::POST, "/v1/responses", first_body,
+            &ready_channel_ids, &model_quota_routes, now_unix(), ModelMatchMode::ExactOnly,
+            required_route, &excluded, &excluded,
+        );
+        preferred_route.as_deref().and_then(|key| select(Some(key)))
+            .or_else(|| select(None))
     });
 
     let Some(selection) = exact else {
@@ -1151,6 +1190,19 @@ fn select_responses_websocket_local_route(
             ResponsesWebsocketLocalRoute::Unavailable
         };
     };
+    drop(model_quota_routes);
+    let selection = if !resource_owned && preferred_route.as_deref().is_some_and(|key| {
+        key == local_model_route_key(selection.channel, &selection.route_model)
+    }) {
+        reselect_preferred_local_channel(
+            shared, &config, selection, &affinity_key, &warp::http::Method::POST,
+            "/v1/responses", first_body, &ready_channel_ids, ModelMatchMode::ExactOnly,
+            &excluded, &excluded,
+        )
+    } else {
+        selection
+    };
+    let selection = selection.channel.clone();
 
     let Ok(execution_kind) =
         crate::channel_executor::execution_kind_for_source(selection.source_driver())
@@ -1192,6 +1244,31 @@ fn select_responses_websocket_local_route(
         }
         _ => ResponsesWebsocketLocalRoute::HttpBridge("local_route_requires_http"),
     }
+}
+
+fn local_responses_websocket_promotion(
+    shared: &ProxyShared,
+    client_headers: &warp::http::HeaderMap,
+    body: &[u8],
+    selected_at: std::time::Instant,
+) -> Option<LocalRoutePromotion> {
+    let route = crate::surface::resolve_api_route("POST", "/v1/responses", false)?;
+    if local_resource_references(&route, "/v1/responses", body).iter().any(|reference| {
+        shared.local_resource_owners.get(
+            reference.surface, reference.resource_type, &reference.resource_id,
+        ).is_some()
+    }) {
+        // Continuing an existing resource is not a free choice of stable route.
+        return None;
+    }
+    let config = shared.config_snapshot();
+    let platform_authenticated = shared.platform_api_key.lock()
+        .map(|value| !value.trim().is_empty()).unwrap_or(false);
+    Some(LocalRoutePromotion {
+        affinity_key: local_model_route_affinity_key("/v1/responses", client_headers, body)?,
+        context: local_model_route_preference_context(&config, platform_authenticated, true),
+        selected_at,
+    })
 }
 
 fn platform_responses_websocket_allowed(
@@ -1336,81 +1413,77 @@ fn responses_websocket_allows_http_bridge(text: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// TLS for upstream Responses WebSockets: rustls with aws-lc-rs, the stack the
-/// official Codex client uses. tokio-tungstenite's default connector is the
-/// platform library (SChannel on Windows), whose ClientHello differs from the
-/// client family named by the request headers. The provider is passed to the
-/// builder instead of installed process-wide: `transport.rs` installs ring as
-/// the process default for QUIC, and `ClientConfig::builder()` would follow it.
-/// Certificates are checked by the platform verifier, as reqwest does for HTTP,
-/// so OS-installed roots keep working. One shared config also shares its TLS
-/// session cache across reconnects.
+/// OpenAI subscription HTTP/Responses WS/Live share an explicit aws-lc-rs
+/// provider and platform trust augmented by the configured custom CA bundle.
 pub(crate) fn responses_websocket_tls_config() -> Result<Arc<rustls::ClientConfig>> {
-    use rustls_platform_verifier::BuilderVerifierExt as _;
-    static CONFIG: std::sync::OnceLock<Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
-    if let Some(config) = CONFIG.get() {
-        return Ok(Arc::clone(config));
+    crate::openai_transport::tls_config()
+}
+
+async fn connect_registry_channel_websocket(
+    mut request: http::Request<()>,
+    config: tokio_tungstenite::tungstenite::protocol::WebSocketConfig,
+) -> Result<ResponsesUpstreamSocket> {
+    if request.extensions_mut().remove::<crate::http_client::ChannelProxy>().is_some_and(|policy| policy.0) {
+        let (socket, _) = crate::http_client::connect_channel_websocket(request, config).await?;
+        Ok(ResponsesUpstreamSocket::ProxiedRegistry(socket))
+    } else {
+        let (socket, _) = tokio_tungstenite::connect_async_with_config(request, Some(config), false).await?;
+        Ok(socket.into())
     }
-    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::aws_lc_rs::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()?
-    .with_platform_verifier()?
-    .with_no_client_auth();
-    Ok(Arc::clone(CONFIG.get_or_init(|| Arc::new(config))))
 }
 
-async fn connect_responses_websocket_request(
+pub(crate) async fn connect_responses_websocket_request(
     request: tokio_tungstenite::tungstenite::http::Request<()>,
-) -> Result<ResponsesUpstreamSocket> {
-    connect_responses_websocket_request_with_tls(request, false).await
-}
-
-async fn connect_codex_responses_websocket_request(
-    request: tokio_tungstenite::tungstenite::http::Request<()>,
-) -> Result<ResponsesUpstreamSocket> {
-    connect_responses_websocket_request_with_tls(request, true).await
-}
-
-async fn connect_responses_websocket_request_with_tls(
-    request: tokio_tungstenite::tungstenite::http::Request<()>,
-    codex_tls: bool,
 ) -> Result<ResponsesUpstreamSocket> {
     let websocket_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
         .max_message_size(Some(RESPONSES_WEBSOCKET_MAX_MESSAGE_BYTES))
         .max_frame_size(Some(RESPONSES_WEBSOCKET_MAX_MESSAGE_BYTES));
-    let result = if codex_tls {
-        let connector = tokio_tungstenite::Connector::Rustls(responses_websocket_tls_config()?);
-        bounded_websocket_connect(
-            tokio_tungstenite::connect_async_tls_with_config(
-                request,
-                Some(websocket_config),
-                false,
-                Some(connector),
-            ),
-            WEBSOCKET_UPSTREAM_CONNECT_TIMEOUT,
-        )
-        .await
-    } else {
-        bounded_websocket_connect(
-            tokio_tungstenite::connect_async_with_config(
-                request,
-                Some(websocket_config),
-                false,
-            ),
-            WEBSOCKET_UPSTREAM_CONNECT_TIMEOUT,
-        )
-        .await
-    };
+    let result = bounded_websocket_connect(
+        connect_registry_channel_websocket(request, websocket_config),
+        WEBSOCKET_UPSTREAM_CONNECT_TIMEOUT,
+    )
+    .await;
+    finish_responses_websocket_connect(result.map(|result| {
+        result
+    }))
+}
+
+pub(crate) async fn connect_codex_responses_websocket_request(
+    request: tokio_tungstenite::tungstenite::http::Request<()>,
+) -> Result<ResponsesUpstreamSocket> {
+    responses_ws_transport::CodexSubscriptionWebSocketConnector::new(
+        responses_websocket_tls_config()?,
+    )
+    .connect(request, RESPONSES_WEBSOCKET_MAX_MESSAGE_BYTES, true, true)
+    .await
+}
+
+async fn connect_codex_live_websocket_request(
+    request: tokio_tungstenite::tungstenite::http::Request<()>,
+) -> Result<ResponsesUpstreamSocket> {
+    responses_ws_transport::CodexSubscriptionWebSocketConnector::new(
+        responses_websocket_tls_config()?,
+    )
+    .connect(request, DUPLEX_WEBSOCKET_MAX_MESSAGE_BYTES, false, false)
+    .await
+}
+
+fn finish_responses_websocket_connect(
+    result: Option<Result<ResponsesUpstreamSocket>>,
+) -> Result<ResponsesUpstreamSocket> {
     match result {
-        Some(Ok((socket, _))) => Ok(socket),
-        Some(Err(error)) if matches!(error, tokio_tungstenite::tungstenite::Error::Io(_) | tokio_tungstenite::tungstenite::Error::Tls(_)) => {
-            let cause = responses_ws_io_cause(&error);
-            Err(anyhow!(error).context(ResponsesWsConnectFailure { cause, timeout_ms: 0 }))
+        Some(Ok(socket)) => Ok(socket),
+        Some(Err(error)) => {
+            use tokio_tungstenite::tungstenite::Error;
+            match error.downcast_ref::<Error>() {
+                Some(cause @ (Error::Io(_) | Error::Tls(_))) => {
+                    let cause = responses_ws_io_cause(cause);
+                    Err(error.context(ResponsesWsConnectFailure { cause, timeout_ms: 0 }))
+                }
+                // HTTP/protocol errors must retain their original classification.
+                _ => Err(error),
+            }
         }
-        // HTTP rejection / protocol errors retain their original status and
-        // classification; they are not evidence of a transient network fault.
-        Some(Err(error)) => Err(anyhow!(error)),
         None => Err(anyhow!(ResponsesWsConnectFailure {
             cause: "connect_timeout",
             timeout_ms: duration_millis_u64(WEBSOCKET_UPSTREAM_CONNECT_TIMEOUT),
@@ -1423,7 +1496,7 @@ async fn connect_responses_websocket_native_route(
     route: &ResponsesWebsocketNativeRoute,
     client_headers: &warp::http::HeaderMap,
 ) -> Result<ResponsesUpstreamSocket> {
-    match route {
+    let mut result = match route {
         ResponsesWebsocketNativeRoute::HttpSurface { channel, target } => {
             let request = responses_websocket_upstream_request(channel, target, client_headers)?;
             connect_responses_websocket_request(request).await
@@ -1431,11 +1504,12 @@ async fn connect_responses_websocket_native_route(
         ResponsesWebsocketNativeRoute::OpenAiSubscription { channel } => {
             let (token, credential, _) =
                 ensure_openai_subscription_access_token(client, channel).await?;
-            let request = openai_subscription_websocket_request(
+            let request = openai_subscription_websocket_request_with_options(
                 &codex_responses_url(),
                 &token,
                 &credential,
                 client_headers,
+                crate::openai_transport::TransportOptions::for_channel(channel),
             )?;
             match connect_codex_responses_websocket_request(request).await {
                 Ok(socket) => Ok(socket),
@@ -1448,18 +1522,25 @@ async fn connect_responses_websocket_native_route(
                             OPENAI_OAUTH_TOKEN_URL,
                         )
                         .await?;
-                    let request = openai_subscription_websocket_request(
+                    let request = openai_subscription_websocket_request_with_options(
                         &codex_responses_url(),
                         &token,
                         &credential,
                         client_headers,
+                        crate::openai_transport::TransportOptions::for_channel(channel),
                     )?;
                     connect_codex_responses_websocket_request(request).await
                 }
                 Err(error) => Err(error),
             }
         }
+    };
+    if let (ResponsesWebsocketNativeRoute::OpenAiSubscription { channel }, Ok(socket)) = (route, &mut result) {
+        if let Some(headers) = socket.take_handshake_headers() {
+            crate::detection::observe_openai_subscription_response_headers(channel, &headers);
+        }
     }
+    result
 }
 
 async fn connect_openai_subscription_live(
@@ -1475,9 +1556,10 @@ async fn connect_openai_subscription_live(
         raw_query,
         &token,
         &credential,
-        client_headers,
+        client_headers, crate::openai_transport::TransportOptions::for_channel(channel),
     )?;
-    match connect_codex_responses_websocket_request(request).await {
+    // Official Realtime/Live uses the default, uncompressed WS configuration.
+    let mut result = match connect_codex_live_websocket_request(request).await {
         Ok(socket) => Ok(socket),
         Err(error) if responses_websocket_error_status(&error) == Some(401) => {
             let (token, credential, _) = ensure_openai_subscription_access_token_with_options(
@@ -1492,12 +1574,18 @@ async fn connect_openai_subscription_live(
                 raw_query,
                 &token,
                 &credential,
-                client_headers,
+                client_headers, crate::openai_transport::TransportOptions::for_channel(channel),
             )?;
-            connect_codex_responses_websocket_request(request).await
+            connect_codex_live_websocket_request(request).await
         }
         Err(error) => Err(error),
+    };
+    if let Ok(socket) = &mut result {
+        if let Some(headers) = socket.take_handshake_headers() {
+            crate::detection::observe_openai_subscription_response_headers(channel, &headers);
+        }
     }
+    result
 }
 
 fn responses_websocket_error_status(error: &anyhow::Error) -> Option<u16> {
@@ -1515,6 +1603,13 @@ fn responses_websocket_error_status(error: &anyhow::Error) -> Option<u16> {
 
 fn responses_websocket_terminal_status(text: &str) -> Option<u16> {
     responses_websocket_terminal_metadata(text).map(|metadata| metadata.status)
+}
+
+fn is_responses_metadata_frame(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text).ok().is_some_and(|event| {
+        matches!(event.get("type").and_then(serde_json::Value::as_str),
+            Some("response.metadata" | "codex.response.metadata" | "codex.rate_limits"))
+    })
 }
 
 fn responses_websocket_supplier_route(
@@ -1775,13 +1870,12 @@ impl SupplierResponsesUpstreamSender {
         config: &SupplierConfig,
         request_body: &str,
         metadata: Option<&ResponsesWebsocketTerminalMetadata>,
+        response_text: &str,
         response_started: bool,
     ) -> Result<Option<String>> {
         if response_started
             || !metadata.is_some_and(|event| {
-                event.event_type == "error"
-                    && event.status == 400
-                    && event.error_code.as_deref() == Some("previous_response_not_found")
+                responses_websocket_rejected_continuation(event, response_text)
             })
         {
             return Ok(None);
@@ -1913,6 +2007,7 @@ pub(crate) async fn run_supplier_responses_duplex(
     mut commands: tokio::sync::mpsc::Receiver<SupplierMessage>,
     outbound: &SupplierOutbound,
     responses_ws_pool: ResponsesWsPool,
+    mut admission: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
     let session_kind = open
         .payload
@@ -1936,6 +2031,32 @@ pub(crate) async fn run_supplier_responses_duplex(
     }
     let client_headers = wire.header_map()?;
     let (route, channel) = responses_websocket_supplier_route(config)?;
+    let subscription_cache_identity = wire.cache_identity.clone()
+        .or_else(|| Some(uuid::Uuid::new_v4().to_string()));
+    let mut upstream_client_headers = codex_subscription_websocket_headers(
+        &route,
+        &client_headers,
+        wire.selected_upstream_model
+            .as_deref()
+            .or(wire.requested_model.as_deref()),
+        wire.body
+            .utf8()
+            .ok()
+            .and_then(|body| {
+                serde_json::from_str::<serde_json::Value>(body)
+                    .ok()
+                    .and_then(|value| value.get("service_tier").and_then(serde_json::Value::as_str).map(str::to_string))
+            })
+            .as_deref(),
+    );
+    if matches!(route, ResponsesWebsocketNativeRoute::OpenAiSubscription { .. }) {
+        // Duplex opens before its first response.create frame. Use the same
+        // scoped fallback as later frames when no caller handshake ID exists.
+        let identity = crate::supplier::prepare_codex_subscription_identity(
+            &config.channel_id, "{}", subscription_cache_identity.as_deref(), Some(&client_headers),
+        )?;
+        crate::supplier::complete_codex_conversation_headers(&mut upstream_client_headers, &identity);
+    }
     let safety_identifier = open
         .payload
         .get("_const_safety_identifier")
@@ -1947,7 +2068,7 @@ pub(crate) async fn run_supplier_responses_duplex(
         client,
         &route,
         &channel,
-        &client_headers,
+        &upstream_client_headers,
         &request_source,
         responses_ws_pool,
     )
@@ -2031,6 +2152,17 @@ pub(crate) async fn run_supplier_responses_duplex(
 
     loop {
         tokio::select! {
+            biased;
+            _ = async { let _ = admission.wait_for(|accepting| !*accepting).await; }, if !turn_active => {
+                upstream_sender.close(&mut upstream_receiver, "channel_stopped").await;
+                upstream_sender.set_close_reason("channel_stopped");
+                send_supplier_message(outbound, SupplierMessage {
+                    id: open.id.clone(), kind: "duplex_close".into(),
+                    payload: serde_json::json!({"code":1001,"reason":"channel stopped"})
+                        .as_object().unwrap().clone(),
+                }).await?;
+                return Ok(());
+            }
             command = commands.recv() => {
                 let Some(command) = command else {
                     upstream_sender
@@ -2066,6 +2198,15 @@ pub(crate) async fn run_supplier_responses_duplex(
                             ).into_owned(),
                         );
                         let outbound_text = crate::openrouter::request_body(Some(route.channel()), &outbound_text).into_owned();
+                        let outbound_text = if subscription_config.is_some() {
+                            crate::supplier::prepare_codex_subscription_identity(
+                                &config.channel_id, &outbound_text,
+                                subscription_cache_identity.as_deref(),
+                                Some(&client_headers),
+                            )?
+                        } else {
+                            outbound_text
+                        };
                         validate_response_create_frame(&outbound_text)
                             .map_err(|(_, message)| anyhow!(message))?;
                         let request_started_at = std::time::Instant::now();
@@ -2299,7 +2440,7 @@ pub(crate) async fn run_supplier_responses_duplex(
                         {
                             match upstream_sender.replay_rejected_subscription_continuation(
                                 &mut upstream_receiver, subscription, &request.request_body,
-                                terminal_metadata.as_ref(), active_response_started,
+                                terminal_metadata.as_ref(), &text, active_response_started,
                             ).await {
                                 Ok(Some(replay)) => {
                                     active_continuation = Some(CodexHttpContinuationCollector::new_for_pinned_websocket(
@@ -2374,7 +2515,7 @@ pub(crate) async fn run_supplier_responses_duplex(
                             kind: "duplex_server_frame".to_string(),
                             payload,
                         }).await?;
-                        active_response_started = true;
+                        active_response_started = active_response_started || !is_responses_metadata_frame(&text);
                         if let Some(status) = terminal_status {
                             active_continuation = None;
                             if let Some(request) = active_request.take() {
@@ -2566,53 +2707,63 @@ pub(crate) async fn proxy_websocket_request(
         .max_frame_size(DUPLEX_WEBSOCKET_MAX_MESSAGE_BYTES);
     Ok(websocket
         .on_upgrade(move |socket| async move {
-            match operation {
-                crate::surface::ApiOperation::ResponsesWebSocket => {
-                    run_responses_websocket_proxy(socket, headers, shared, activity_guard).await;
+            if operation == crate::surface::ApiOperation::ResponsesWebSocket {
+                // Responses drains an admitted turn, then closes before the next one.
+                run_responses_websocket_proxy(socket, headers, shared, activity_guard).await;
+                return;
+            }
+            let stopping = shared.clone();
+            let relay = async move {
+                match operation {
+                    crate::surface::ApiOperation::RealtimeWebSocket => {
+                        run_openai_realtime_websocket_proxy(
+                            socket,
+                            raw_query,
+                            headers,
+                            shared,
+                            activity_guard,
+                        )
+                        .await;
+                    }
+                    crate::surface::ApiOperation::RealtimeLiveConnect
+                    | crate::surface::ApiOperation::RealtimeLiveWebSocket => {
+                        run_openai_live_websocket_proxy(
+                            socket,
+                            websocket_path,
+                            raw_query,
+                            headers,
+                            shared,
+                            activity_guard,
+                        )
+                        .await;
+                    }
+                    crate::surface::ApiOperation::RealtimeTranslationWebSocket => {
+                        run_openai_realtime_translation_websocket_proxy(
+                            socket,
+                            raw_query,
+                            headers,
+                            shared,
+                            activity_guard,
+                        )
+                        .await;
+                    }
+                    crate::surface::ApiOperation::LiveWebSocket => {
+                        run_gemini_live_websocket_proxy(
+                            socket,
+                            raw_query,
+                            headers,
+                            shared,
+                            activity_guard,
+                        )
+                        .await;
+                    }
+                    _ => {}
                 }
-                crate::surface::ApiOperation::RealtimeWebSocket => {
-                    run_openai_realtime_websocket_proxy(
-                        socket,
-                        raw_query,
-                        headers,
-                        shared,
-                        activity_guard,
-                    )
-                    .await;
-                }
-                crate::surface::ApiOperation::RealtimeLiveConnect
-                | crate::surface::ApiOperation::RealtimeLiveWebSocket => {
-                    run_openai_live_websocket_proxy(
-                        socket,
-                        websocket_path,
-                        raw_query,
-                        headers,
-                        shared,
-                        activity_guard,
-                    )
-                    .await;
-                }
-                crate::surface::ApiOperation::RealtimeTranslationWebSocket => {
-                    run_openai_realtime_translation_websocket_proxy(
-                        socket,
-                        raw_query,
-                        headers,
-                        shared,
-                        activity_guard,
-                    )
-                    .await;
-                }
-                crate::surface::ApiOperation::LiveWebSocket => {
-                    run_gemini_live_websocket_proxy(
-                        socket,
-                        raw_query,
-                        headers,
-                        shared,
-                        activity_guard,
-                    )
-                    .await;
-                }
-                _ => {}
+            };
+            tokio::select! {
+                biased;
+                _ = stopping.wait_for_websocket_shutdown() => {}
+                _ = relay => {}
             }
         })
         .into_response())
@@ -2625,7 +2776,15 @@ async fn run_responses_websocket_proxy(
     first_activity_guard: crate::update_activity::UpdateActivityGuard,
 ) {
     let (mut client_sender, mut client_receiver) = client_socket.split();
+    // The upgrade is finished. An idle socket waiting for its first turn is not
+    // an executing request; reacquire the update admission after reading it.
+    drop(first_activity_guard);
     let first = match tokio::select! {
+        biased;
+        _ = shared.wait_for_websocket_shutdown() => {
+            let _ = client_sender.send(warp::ws::Message::close_with(1012u16, "proxy stopped")).await;
+            return;
+        }
         first = tokio::time::timeout(
             RESPONSES_WEBSOCKET_FIRST_FRAME_TIMEOUT,
             client_receiver.next(),
@@ -2663,6 +2822,10 @@ async fn run_responses_websocket_proxy(
             return;
         }
     };
+    let Some(first_activity_guard) = crate::update_activity::try_begin_proxy_request() else {
+        let _ = client_sender.send(warp::ws::Message::close_with(1012u16, "client update")).await;
+        return;
+    };
     let first_request_started_at = std::time::Instant::now();
     let mut active_activity_guard = Some(first_activity_guard);
     let (native_route, platform_route) =
@@ -2687,6 +2850,54 @@ async fn run_responses_websocket_proxy(
                 return;
             }
         };
+    let native_cache_identity = native_route.as_ref().and_then(|route| {
+        let ResponsesWebsocketNativeRoute::OpenAiSubscription { channel } = route else {
+            return None;
+        };
+        let requested_model = first_value
+            .get("model")
+            .and_then(serde_json::Value::as_str);
+        let upstream_model = channel_upstream_model_for_request(channel, requested_model);
+        let config = shared.config_snapshot();
+        crate::supplier::scoped_subscription_cache_identity(
+            &config.account_user_id,
+            &upstream_model,
+            &client_headers,
+            &first_text,
+        ).or_else(|| Some(uuid::Uuid::new_v4().to_string()))
+    });
+    let wire_first_text = match responses_websocket_wire_body(
+        native_route.as_ref().map(ResponsesWebsocketNativeRoute::channel),
+        &first_text, native_cache_identity.as_deref(), &client_headers,
+    ) {
+        Ok(body) => body.into_owned(),
+        Err(error) => {
+            let _ = send_responses_websocket_status_error(&mut client_sender, 500,
+                "subscription_request_preparation_failed", &format!("Could not prepare the subscription request: {error}")).await;
+            return;
+        }
+    };
+    let mut native_request_headers = native_route
+        .as_ref()
+        .map(|route| {
+            let channel = route.channel();
+            let requested_model = first_value
+                .get("model")
+                .and_then(serde_json::Value::as_str);
+            let upstream_model = channel_upstream_model_for_request(channel, requested_model);
+            codex_subscription_websocket_headers(
+                route,
+                &client_headers,
+                Some(&upstream_model),
+                first_value
+                    .get("service_tier")
+                    .and_then(serde_json::Value::as_str),
+            )
+        })
+        .unwrap_or_else(|| client_headers.clone());
+    if matches!(native_route, Some(ResponsesWebsocketNativeRoute::OpenAiSubscription { .. })) {
+        crate::supplier::complete_codex_conversation_headers(&mut native_request_headers, &wire_first_text);
+    }
     let connect_started_at = std::time::Instant::now();
     let (upstream_connection, channel, subscription_config, route_label, first_frame_sent) =
         if let Some(native_route) = native_route {
@@ -2700,7 +2911,7 @@ async fn run_responses_websocket_proxy(
             let connection = match connect_responses_websocket_native_route(
                 &shared.client.snapshot(),
                 &native_route,
-                &client_headers,
+                &native_request_headers,
             )
             .await
             {
@@ -2815,6 +3026,11 @@ async fn run_responses_websocket_proxy(
     if let Some(diagnostics) = upstream_diagnostics.as_mut() {
         diagnostics.mark_turn();
     }
+    let mut active_local_promotion = channel.as_ref().and_then(|_| {
+        local_responses_websocket_promotion(
+            &shared, &client_headers, first_text.as_bytes(), first_request_started_at,
+        )
+    });
     let mut active_subscription_request = match subscription_config.as_ref() {
         Some(config) => match NativeSubscriptionWebsocketRequest::start_at(
             config,
@@ -2864,7 +3080,7 @@ async fn run_responses_websocket_proxy(
     if !first_frame_sent
         && upstream_sender
         .send(tokio_tungstenite::tungstenite::Message::Text(
-            responses_websocket_wire_body(channel.as_ref(), &first_text).into_owned().into(),
+            wire_first_text.into(),
         ))
         .await
         .is_err()
@@ -2901,6 +3117,14 @@ async fn run_responses_websocket_proxy(
     let mut bridge_handoff = None;
     loop {
         tokio::select! {
+            biased;
+            _ = shared.wait_for_websocket_shutdown(), if !turn_active => {
+                let _ = client_sender.send(warp::ws::Message::close_with(1012u16, "proxy stopped")).await;
+                if let Some(diagnostics) = upstream_diagnostics.as_mut() {
+                    diagnostics.set_close_reason("proxy_stopped");
+                }
+                break;
+            }
             _ = crate::update_activity::wait_for_update_drain(), if !turn_active => {
                 let _ = client_sender
                     .send(warp::ws::Message::close_with(1012u16, "client update"))
@@ -3068,6 +3292,16 @@ async fn run_responses_websocket_proxy(
                         ).await;
                         break;
                     }
+                    let wire_text = match responses_websocket_wire_body(
+                        channel.as_ref(), text, native_cache_identity.as_deref(), &client_headers,
+                    ) {
+                        Ok(body) => body.into_owned(),
+                        Err(error) => {
+                            let _ = send_responses_websocket_status_error(&mut client_sender, 500,
+                                "subscription_request_preparation_failed", &format!("Could not prepare the subscription request: {error}")).await;
+                            continue;
+                        }
+                    };
                     let mut pending_subscription_request = match subscription_config.as_ref() {
                         Some(config) => match NativeSubscriptionWebsocketRequest::start_at(config, text, request_started_at) {
                             Ok(mut request) => {
@@ -3110,8 +3344,18 @@ async fn run_responses_websocket_proxy(
                     if let Some(diagnostics) = upstream_diagnostics.as_mut() {
                         diagnostics.mark_turn();
                     }
+                    // This socket is still bound to the original selection.
+                    // Later turns must not drag back a session that succeeded
+                    // on a newly selected connection in the meantime.
+                    let pending_local_promotion = channel.as_ref().and_then(|_| {
+                        local_responses_websocket_promotion(
+                            &shared, &client_headers, text.as_bytes(), first_request_started_at,
+                        )
+                    });
                     if upstream_sender
-                        .send(tokio_tungstenite::tungstenite::Message::Text(responses_websocket_wire_body(channel.as_ref(), text).into_owned().into()))
+                        .send(tokio_tungstenite::tungstenite::Message::Text(
+                            wire_text.into(),
+                        ))
                         .await
                         .is_err()
                     {
@@ -3130,6 +3374,7 @@ async fn run_responses_websocket_proxy(
                         request.mark_sent();
                     }
                     active_subscription_request = pending_subscription_request;
+                    active_local_promotion = pending_local_promotion;
                     active_turn_capacity = pending_turn_capacity;
                     turn_active = true;
                 } else if client_message.is_ping() {
@@ -3307,6 +3552,17 @@ async fn run_responses_websocket_proxy(
                         diagnostics.finish_turn();
                     }
                     turn_active = false;
+                    if let (Some(promotion), Some(channel)) =
+                        (active_local_promotion.take(), channel.as_ref())
+                    {
+                        if (200..300).contains(&status) {
+                            shared.promote_local_model_route(
+                                &promotion.affinity_key,
+                                &local_model_route_key(channel, &active_model),
+                                promotion.context, now_unix(), promotion.selected_at,
+                            );
+                        }
+                    }
                     if let (Some(request), Some(channel)) =
                         (active_subscription_request.take(), channel.as_ref())
                     {
@@ -4108,6 +4364,7 @@ fn native_duplex_upstream_request(
             .append_pair("key", channel.upstream_api_key.trim());
     }
     let mut request = url.as_str().into_client_request()?;
+    request.extensions_mut().insert(crate::http_client::ChannelProxy(channel.v2.use_system_proxy));
     copy_safe_websocket_headers(request.headers_mut(), client_headers);
     if !(matches!(kind, NativeDuplexKind::GeminiLive)
         && target.auth_scheme == "x_goog_api_key")
@@ -4163,21 +4420,17 @@ async fn connect_native_duplex_upstream(
     kind: NativeDuplexKind,
     channel_id: &str,
     request_source: &str,
-) -> Option<
-    tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
-> {
+) -> Option<ResponsesUpstreamSocket> {
     let websocket_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
         .max_message_size(Some(DUPLEX_WEBSOCKET_MAX_MESSAGE_BYTES))
         .max_frame_size(Some(DUPLEX_WEBSOCKET_MAX_MESSAGE_BYTES));
     match bounded_websocket_connect(
-        tokio_tungstenite::connect_async_with_config(request, Some(websocket_config), false),
+        connect_registry_channel_websocket(request, websocket_config),
         WEBSOCKET_UPSTREAM_CONNECT_TIMEOUT,
     )
     .await
     {
-        Some(Ok((connection, _))) => Some(connection),
+        Some(Ok(connection)) => Some(connection),
         result => {
             let (code, message, status, error_kind, provider_request_id) = match result {
                 None => (
@@ -4219,9 +4472,7 @@ async fn connect_native_duplex_upstream(
 async fn relay_native_duplex(
     mut client_sender: futures_util::stream::SplitSink<warp::ws::WebSocket, warp::ws::Message>,
     mut client_receiver: futures_util::stream::SplitStream<warp::ws::WebSocket>,
-    upstream_socket: tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+    upstream_socket: ResponsesUpstreamSocket,
     first_message: Option<tokio_tungstenite::tungstenite::Message>,
     kind: NativeDuplexKind,
     channel: ChannelConfig,
@@ -4879,6 +5130,11 @@ async fn run_responses_websocket_http_bridge(
             value
         } else {
             let message = tokio::select! {
+                biased;
+                _ = shared.wait_for_websocket_shutdown() => {
+                    let _ = client_sender.send(warp::ws::Message::close_with(1012u16, "proxy stopped")).await;
+                    return;
+                }
                 _ = crate::update_activity::wait_for_update_drain() => {
                     let _ = client_sender
                         .send(warp::ws::Message::close_with(1012u16, "client update"))
@@ -5320,22 +5576,54 @@ async fn send_responses_websocket_status_error(
 fn responses_websocket_wire_body<'a>(
     channel: Option<&ChannelConfig>,
     body: &'a str,
-) -> std::borrow::Cow<'a, str> {
+    cache_identity: Option<&str>,
+    headers: &warp::http::HeaderMap,
+) -> Result<std::borrow::Cow<'a, str>> {
     use std::borrow::Cow;
     let Some(channel) = channel else {
-        return Cow::Borrowed(body);
+        return Ok(Cow::Borrowed(body));
     };
-    let Some(model) = crate::supplier::top_level_json_string(body.as_bytes(), "model") else {
-        return Cow::Borrowed(body);
+    let rewritten = if let Some(model) =
+        crate::supplier::top_level_json_string(body.as_bytes(), "model")
+    {
+        let upstream = channel_upstream_model_for_request(channel, Some(&model));
+        let upstream = crate::openrouter::upstream_model(channel, &upstream);
+        if upstream == model {
+            Cow::Borrowed(body)
+        } else {
+            // Only the top-level model changes: continuation IDs, tool state
+            // and cache prefixes retain their logical values on every turn.
+            Cow::Owned(crate::supplier::rewrite_supplier_body_model(body, &upstream))
+        }
+    } else {
+        Cow::Borrowed(body)
     };
-    let upstream = channel_upstream_model_for_request(channel, Some(&model));
-    let upstream = crate::openrouter::upstream_model(channel, &upstream);
-    if upstream == model {
-        return Cow::Borrowed(body);
+    if channel.source_driver() != crate::source_driver::SourceDriverId::OpenAiSubscription {
+        return Ok(rewritten);
     }
-    // Only the top-level model changes: continuation IDs, tool state and cache
-    // prefixes retain their original bytes on every turn of a reused socket.
-    Cow::Owned(crate::supplier::rewrite_supplier_body_model(body, &upstream))
+    let scoped = crate::supplier::prepare_codex_subscription_identity(
+        &channel.id, rewritten.as_ref(),
+        cache_identity,
+        Some(headers),
+    )?;
+    if scoped == body {
+        Ok(Cow::Borrowed(body))
+    } else {
+        Ok(Cow::Owned(scoped))
+    }
+}
+
+fn codex_subscription_websocket_headers(
+    route: &ResponsesWebsocketNativeRoute,
+    headers: &warp::http::HeaderMap,
+    model: Option<&str>,
+    service_tier: Option<&str>,
+) -> warp::http::HeaderMap {
+    let mut headers = headers.clone();
+    if matches!(route, ResponsesWebsocketNativeRoute::OpenAiSubscription { .. }) {
+        crate::codex_identity::set_codex_routing_hint(&mut headers, model, service_tier);
+    }
+    headers
 }
 
 fn responses_websocket_url(http_url: &str) -> Result<reqwest::Url> {
@@ -5360,6 +5648,7 @@ pub(crate) fn responses_websocket_upstream_request(
     let http_url = crate::supplier::join_upstream_url(&target.base_url, "/v1/responses");
     let url = responses_websocket_url(&http_url)?;
     let mut request = url.as_str().into_client_request()?;
+    request.extensions_mut().insert(crate::http_client::ChannelProxy(channel.v2.use_system_proxy));
     for (name, value) in client_headers {
         let lower = name.as_str().to_ascii_lowercase();
         if matches!(
@@ -5402,17 +5691,28 @@ pub(crate) fn responses_websocket_upstream_request(
     Ok(request)
 }
 
+#[cfg(test)]
 fn openai_subscription_websocket_request(
     responses_url: &str,
     token: &str,
     credential: &serde_json::Value,
     client_headers: &warp::http::HeaderMap,
 ) -> Result<tokio_tungstenite::tungstenite::http::Request<()>> {
+    openai_subscription_websocket_request_with_options(responses_url, token, credential, client_headers, Default::default())
+}
+
+fn openai_subscription_websocket_request_with_options(
+    responses_url: &str,
+    token: &str,
+    credential: &serde_json::Value,
+    client_headers: &warp::http::HeaderMap,
+    options: crate::openai_transport::TransportOptions,
+) -> Result<tokio_tungstenite::tungstenite::http::Request<()>> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
     let url = responses_websocket_url(responses_url)?;
     let mut request = url.as_str().into_client_request()?;
-    let identity = active_codex_identity();
+    let identity = options.profile.identity();
     let context_headers =
         codex_subscription_model_request_context_headers(Some(client_headers), &identity);
     for (name, value) in context_headers {
@@ -5447,6 +5747,7 @@ fn openai_subscription_websocket_request(
         crate::subscription_transport_policy::HeaderOperation::ResponsesWebsocket,
         request.headers_mut(),
     );
+    crate::openai_transport::attach_websocket_cookies(&mut request, credential, options);
     Ok(request)
 }
 
@@ -5456,6 +5757,7 @@ fn openai_subscription_live_websocket_request(
     token: &str,
     credential: &serde_json::Value,
     client_headers: &warp::http::HeaderMap,
+    options: crate::openai_transport::TransportOptions,
 ) -> Result<tokio_tungstenite::tungstenite::http::Request<()>> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -5477,7 +5779,7 @@ fn openai_subscription_live_websocket_request(
     url.set_scheme("wss")
         .map_err(|_| anyhow!("cannot convert OpenAI realtime URL to WebSocket"))?;
     let mut request = url.as_str().into_client_request()?;
-    let context_headers = codex_realtime_request_context_headers(client_headers);
+    let context_headers = codex_realtime_request_context_headers(client_headers, options);
     for (name, value) in context_headers {
         if let Some(name) = name {
             request.headers_mut().insert(name, value);
@@ -5497,6 +5799,12 @@ fn openai_subscription_live_websocket_request(
             reqwest::header::HeaderValue::from_str(&account_id)?,
         );
     }
+	crate::subscription_transport_policy::apply_to_headers(
+		crate::source_driver::SourceDriverId::OpenAiSubscription,
+		crate::subscription_transport_policy::HeaderOperation::OpenAiRealtimeWebsocket,
+		request.headers_mut(),
+	);
+    crate::openai_transport::attach_websocket_cookies(&mut request, credential, options);
     Ok(request)
 }
 
@@ -5703,6 +6011,63 @@ mod responses_websocket_tests {
         assert_eq!(payload["failure_scope"], "request");
         assert_eq!(payload["provider_event_type"], "error");
         assert!(payload.get("message").is_none());
+    }
+
+    #[test]
+    fn websocket_rejected_continuation_recognizes_provider_message_without_code() {
+        let text =
+            r#"{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"Invalid `previous_response_id`."}}"#;
+        let terminal = responses_websocket_terminal_metadata(text).expect("terminal metadata");
+        assert_eq!(terminal.status, 400);
+        assert!(responses_websocket_rejected_continuation(&terminal, text));
+
+        let ordinary =
+            r#"{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"Invalid input."}}"#;
+        let ordinary_terminal =
+            responses_websocket_terminal_metadata(ordinary).expect("terminal metadata");
+        assert!(!responses_websocket_rejected_continuation(
+            &ordinary_terminal,
+            ordinary
+        ));
+    }
+
+    #[test]
+    fn websocket_rejected_continuation_message_does_not_override_other_failures() {
+        let rejection = serde_json::json!({
+            "type": "error", "status": 400,
+            "error": {
+                "type": "invalid_request_error", "code": null, "param": null,
+                "message": "Invalid `previous_response_id`."
+            }
+        });
+        let terminal = responses_websocket_terminal_metadata_from_value(&rejection).unwrap();
+        assert!(responses_websocket_rejected_continuation(&terminal, &rejection.to_string()));
+
+        for (path, value) in [
+            ("/status", serde_json::json!(500)),
+            ("/type", serde_json::json!("response.failed")),
+            ("/error/type", serde_json::json!("server_error")),
+            ("/error/code", serde_json::json!("rate_limit_exceeded")),
+            ("/error/param", serde_json::json!("input")),
+            ("/error/message", serde_json::json!("Invalid `previous_response_id`. Another error follows.")),
+        ] {
+            let mut event = rejection.clone();
+            *event.pointer_mut(path).unwrap() = value;
+            let terminal = responses_websocket_terminal_metadata_from_value(&event).unwrap();
+            assert!(!responses_websocket_rejected_continuation(&terminal, &event.to_string()), "{path}");
+        }
+
+        let mut no_status = rejection;
+        no_status.as_object_mut().unwrap().remove("status");
+        let terminal = responses_websocket_terminal_metadata_from_value(&no_status).unwrap();
+        assert!(!responses_websocket_rejected_continuation(&terminal, &no_status.to_string()));
+    }
+
+    #[test]
+    fn websocket_rejected_continuation_keeps_structured_reference_code() {
+        let text = r#"{"type":"error","error":{"type":"invalid_request_error","code":"previous_response_not_found","message":"previous response expired"}}"#;
+        let terminal = responses_websocket_terminal_metadata(text).expect("terminal metadata");
+        assert!(responses_websocket_rejected_continuation(&terminal, text));
     }
 
     #[test]
@@ -6241,6 +6606,97 @@ mod responses_websocket_tests {
         }
     }
 
+    fn many_subscription_routes(higher_priority: bool) -> (Arc<ProxyShared>, warp::http::HeaderMap) {
+        let mut config = default_config();
+        config.account_device_api_key = "platform-device-key".into();
+        config.prefer_local_supply = true;
+        config.channels = (0..128).map(|index| {
+            let mut channel = channel_from_supplier(format!("ws-sticky-{index}"), &default_supplier_config());
+            channel.set_source_driver(crate::source_driver::SourceDriverId::OpenAiSubscription);
+            channel.surface_bindings = crate::source_driver_surface_bindings(
+                crate::source_driver::SourceDriverId::OpenAiSubscription, "",
+            );
+            channel.enabled = true;
+            channel.models = vec!["gpt-test".into()];
+            channel.public_model = "gpt-test".into();
+            channel.upstream_model = "gpt-test".into();
+            channel.v2.local_priority = Some(if higher_priority && index == 0 { 1 } else { 2 });
+            channel
+        }).collect();
+        let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+        let mut headers = warp::http::HeaderMap::new();
+        headers.insert("originator", "codex_vscode".parse().unwrap());
+        headers.insert("user-agent", "codex_vscode/1.2.3".parse().unwrap());
+        headers.insert("session_id", "ws-sticky-session".parse().unwrap());
+        (shared, headers)
+    }
+
+    #[test]
+    fn websocket_reconnect_reuses_sticky_route_and_reselects_only_healthy_higher_priority() {
+        let body = br#"{"model":"gpt-test","input":[]}"#;
+        for (higher_priority, recovering) in [(false, false), (true, false), (true, true)] {
+            let (shared, headers) = many_subscription_routes(higher_priority);
+            let promotion = local_responses_websocket_promotion(&shared, &headers, body, std::time::Instant::now()).unwrap();
+            let stable_key = model_quota_route_key("ws-sticky-127", "gpt-test");
+            shared.promote_local_model_route(
+                &promotion.affinity_key, &stable_key, promotion.context, now_unix(), promotion.selected_at,
+            );
+            let select = || match select_responses_websocket_route(&shared, &headers, body) {
+                ResponsesWebsocketRoute::Native(route) => route.channel().id.clone(),
+                ResponsesWebsocketRoute::HttpBridge(reason) => panic!("unexpected bridge: {reason}"),
+                ResponsesWebsocketRoute::Platform => panic!("expected a native subscription route"),
+            };
+            assert_eq!(select(), "ws-sticky-127", "keep the stable route during cooldown");
+            if recovering {
+                let mut state = LocalModelQuotaRouteState::default();
+                state.record_runtime_failure(now_unix(), 10, true);
+                state.runtime_cooldown_until_unix = 0;
+                shared.local_model_quota_routes.lock().unwrap()
+                    .insert(model_quota_route_key("ws-sticky-0", "gpt-test"), state);
+            }
+            for _ in 0..128 {
+                shared.local_model_route_preferences.lock().unwrap()
+                    .get_mut(&promotion.affinity_key).unwrap().last_reselection_at_unix -= LOCAL_MODEL_RESELECTION_SECONDS;
+                assert_eq!(select(), if higher_priority && !recovering { "ws-sticky-0" } else { "ws-sticky-127" });
+                assert_eq!(
+                    shared.preferred_local_model_route(&promotion.affinity_key, promotion.context, now_unix()),
+                    Some(stable_key.clone()), "selection alone must not promote a route",
+                );
+            }
+            let mut other_headers = headers.clone();
+            other_headers.insert("session_id", "another-ws-session".parse().unwrap());
+            let other = local_responses_websocket_promotion(&shared, &other_headers, body, std::time::Instant::now()).unwrap();
+            assert!(shared.preferred_local_model_route(&other.affinity_key, other.context, now_unix()).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn websocket_owner_constraint_does_not_replace_general_sticky_route() {
+        let (shared, headers) = many_subscription_routes(false);
+        let body = br#"{"model":"gpt-test","input":[]}"#;
+        let promotion = local_responses_websocket_promotion(&shared, &headers, body, std::time::Instant::now()).unwrap();
+        shared.promote_local_model_route(
+            &promotion.affinity_key, &model_quota_route_key("ws-sticky-127", "gpt-test"),
+            promotion.context, now_unix(), promotion.selected_at,
+        );
+        shared.local_resource_owners.bind_many(vec![LocalResourceOwner {
+            key: LocalResourceOwnerKey {
+                surface: crate::surface::ApiSurface::OpenAi,
+                resource_type: "response".into(), resource_id: "resp_ws_sticky_owner".into(),
+            },
+            channel_id: "ws-sticky-0".into(), route_model: "gpt-test".into(), updated_at_unix: now_unix(),
+        }]).await.unwrap();
+        let owned_body = br#"{"model":"gpt-test","previous_response_id":"resp_ws_sticky_owner","input":[]}"#;
+        match select_responses_websocket_route(&shared, &headers, owned_body) {
+            ResponsesWebsocketRoute::Native(route) => assert_eq!(route.channel().id, "ws-sticky-0"),
+            ResponsesWebsocketRoute::HttpBridge(reason) => panic!("unexpected owner bridge: {reason}"),
+            ResponsesWebsocketRoute::Platform => panic!("owner route should remain native"),
+        }
+        assert!(local_responses_websocket_promotion(&shared, &headers, owned_body, std::time::Instant::now()).is_none());
+        assert_eq!(shared.preferred_local_model_route(&promotion.affinity_key, promotion.context, now_unix()),
+            Some(model_quota_route_key("ws-sticky-127", "gpt-test")));
+    }
+
     #[test]
     fn websocket_route_bridges_an_unverified_openai_api_channel() {
         let mut channel =
@@ -6585,7 +7041,7 @@ mod responses_websocket_tests {
             "",
             "subscription-token",
             &serde_json::json!({"account_id":"account-1"}),
-            &headers,
+            &headers, Default::default(),
         )
         .expect("subscription Live sideband request");
 
@@ -6607,14 +7063,14 @@ mod responses_websocket_tests {
             "model=gpt-live-future-codex&future=1",
             "subscription-token",
             &serde_json::json!({"account_id":"account-1"}),
-            &warp::http::HeaderMap::new(),
+            &warp::http::HeaderMap::new(), Default::default(),
         ).expect("standalone Live request");
         assert_eq!(request.uri().path(), "/v1/live");
         assert_eq!(request.uri().query(), Some("model=gpt-live-future-codex&future=1"));
         assert_eq!(request.headers()["authorization"], "Bearer subscription-token");
         assert_eq!(request.headers()["openai-alpha"], "quicksilver=v2");
         let default = openai_subscription_live_websocket_request(
-            None, "", "token", &serde_json::json!({}), &warp::http::HeaderMap::new(),
+            None, "", "token", &serde_json::json!({}), &warp::http::HeaderMap::new(), Default::default(),
         ).expect("default Live request");
         assert_eq!(default.uri().query(), Some("model=gpt-live-1-codex"));
     }
@@ -6629,9 +7085,9 @@ mod responses_websocket_tests {
         let token = credential["access_token"].as_str()
             .ok_or_else(|| anyhow!("credential has no access token"))?;
         let request = openai_subscription_live_websocket_request(
-            None, "", token, &credential, &warp::http::HeaderMap::new(),
+            None, "", token, &credential, &warp::http::HeaderMap::new(), Default::default(),
         )?;
-        let mut socket = match connect_codex_responses_websocket_request(request).await {
+        let mut socket = match connect_codex_live_websocket_request(request).await {
             Ok(socket) => socket,
             Err(error) => return Err(anyhow!(
                 "Voice handshake failed, HTTP status={:?}", responses_websocket_error_status(&error),
@@ -6812,24 +7268,42 @@ mod responses_websocket_tests {
         parse_client_hello(&record)
     }
 
-    async fn upstream_websocket_client_hello() -> ClientHelloShape {
+    async fn upstream_websocket_client_hello(live: bool) -> ClientHelloShape {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         capture_with(|port| async move {
             let request = format!("wss://localhost:{port}/v1/responses")
                 .into_client_request()
                 .expect("capture request");
             // The capture closes the socket, so this fails after the ClientHello.
-            let _ = connect_codex_responses_websocket_request(request).await;
+            if live {
+                let _ = connect_codex_live_websocket_request(request).await;
+            } else {
+                let _ = connect_codex_responses_websocket_request(request).await;
+            }
         })
         .await
     }
 
     async fn reqwest_client_hello() -> ClientHelloShape {
         capture_with(|port| async move {
-            let client = reqwest::Client::builder().build().expect("reqwest client");
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("reqwest client");
             let _ = client.get(format!("https://localhost:{port}/")).send().await;
         })
         .await
+    }
+
+    async fn subscription_https_client_hello() -> ClientHelloShape {
+        capture_with(|port| async move {
+            let client = crate::openai_transport::http_client(
+                &reqwest::Client::new(),
+                "https://chatgpt.com/backend-api/codex/responses",
+                &serde_json::json!({"account_id":"tls-capture-fixture"}),
+            ).expect("production subscription HTTP client");
+            let _ = client.get(format!("https://localhost:{port}/")).send().await;
+        }).await
     }
 
     fn rustls_reference_client_hello(provider: rustls::crypto::CryptoProvider) -> ClientHelloShape {
@@ -6876,10 +7350,15 @@ mod responses_websocket_tests {
     /// instead of following an ambient process default.
     #[tokio::test]
     async fn upstream_websocket_handshake_uses_rustls_aws_lc_provider() {
-        let websocket = upstream_websocket_client_hello().await;
-        let aws_lc = rustls_reference_client_hello(rustls::crypto::aws_lc_rs::default_provider());
+        let websocket = upstream_websocket_client_hello(false).await;
+        let live = upstream_websocket_client_hello(true).await;
+        let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+        provider.kx_groups.sort_by_key(|group| group.name() != rustls::NamedGroup::X25519MLKEM768);
+        let aws_lc = rustls_reference_client_hello(provider);
+        assert_eq!(aws_lc.groups.first(), Some(&0x11ec), "Codex standard build prefers X25519MLKEM768");
         let ring = rustls_reference_client_hello(rustls::crypto::ring::default_provider());
         describe_client_hello("upstream websocket", &websocket);
+        describe_client_hello("subscription Live websocket", &live);
         describe_client_hello("rustls + aws-lc-rs reference", &aws_lc);
         describe_client_hello("rustls + ring reference", &ring);
 
@@ -6898,6 +7377,51 @@ mod responses_websocket_tests {
         assert_eq!(sorted(&websocket.extensions), sorted(&aws_lc.extensions));
         // The upgrade is HTTP/1.1; offering h2 here would be a different client.
         assert!(websocket.alpn.is_empty());
+        assert_eq!(live.cipher_suites, websocket.cipher_suites);
+        assert_eq!(live.groups, websocket.groups);
+        assert_eq!(live.signature_algorithms, websocket.signature_algorithms);
+        assert_eq!(live.versions, websocket.versions);
+        assert_eq!(sorted(&live.extensions), sorted(&websocket.extensions));
+        assert!(live.alpn.is_empty());
+    }
+
+    // Called only by the isolated transport child; other tests may install a
+    // process-wide provider for their own QUIC servers.
+    pub(super) async fn subscription_https_provider_is_stable_after_quic_setup() {
+        assert!(rustls::crypto::CryptoProvider::get_default().is_none());
+        let before = subscription_https_client_hello().await;
+        let mut pinned = crate::supplier::parse_supplier_quic_url("quic://pin.example:443").unwrap();
+        pinned.cert_sha256 = Some([7; 32]);
+        for target in [
+            crate::supplier::parse_supplier_quic_url("quic://localhost:443").unwrap(),
+            pinned,
+            crate::supplier::parse_supplier_quic_url("quic://roots.example:443").unwrap(),
+        ] {
+            let config = crate::supplier::rustls_client_config_for_supplier_quic(&target);
+            assert_eq!(config.alpn_protocols, [b"const-api-supplier/1".to_vec()]);
+            let groups: Vec<_> = config.crypto_provider().kx_groups.iter()
+                .map(|group| group.name()).collect();
+            let ring_groups: Vec<_> = rustls::crypto::ring::default_provider().kx_groups.iter()
+                .map(|group| group.name()).collect();
+            assert_eq!(groups, ring_groups, "QUIC must retain its own ring provider");
+            assert!(
+                rustls::crypto::CryptoProvider::get_default().is_none(),
+                "QUIC must not install a process-wide provider"
+            );
+        }
+        let after = subscription_https_client_hello().await;
+        let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+        provider.kx_groups.sort_by_key(|group| group.name() != rustls::NamedGroup::X25519MLKEM768);
+        let aws_lc = rustls_reference_client_hello(provider);
+        assert_eq!(aws_lc.groups.first(), Some(&0x11ec), "Codex standard build prefers X25519MLKEM768");
+        for https in [before, after] {
+            assert_eq!(https.cipher_suites, aws_lc.cipher_suites);
+            assert_eq!(https.groups, aws_lc.groups);
+            assert_eq!(https.signature_algorithms, aws_lc.signature_algorithms);
+            assert_eq!(https.versions, aws_lc.versions);
+            // HTTPS keeps HTTP/2 negotiation instead of inheriting the WS profile.
+            assert_eq!(https.alpn, ["h2", "http/1.1"]);
+        }
     }
 
     /// Prints the handshake of each client side by side for comparison.
@@ -6905,7 +7429,7 @@ mod responses_websocket_tests {
     #[tokio::test]
     #[ignore = "diagnostic output, not an assertion"]
     async fn report_client_hello_shapes() {
-        describe_client_hello("upstream websocket", &upstream_websocket_client_hello().await);
+        describe_client_hello("upstream websocket", &upstream_websocket_client_hello(false).await);
         describe_client_hello("reqwest", &reqwest_client_hello().await);
         describe_client_hello(
             "rustls + aws-lc-rs reference",

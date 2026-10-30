@@ -181,29 +181,16 @@ pub(super) async fn enrich(
         crate::proxy::responses_websocket_upstream_request(channel, &target, &HeaderMap::new());
     let (state, detail) = match request {
         Ok(request) => match check_deadline::step(Duration::from_secs(6), async {
-            // Probe with the TLS stack real traffic uses; a different handshake
-            // would also be a different client from the account's point of view.
+            // Use the production connector, including compression and proxy policy.
             if channel.source_driver() == crate::source_driver::SourceDriverId::OpenAiSubscription {
-                let connector = tokio_tungstenite::Connector::Rustls(
-                    crate::proxy::responses_websocket_tls_config()?,
-                );
-                tokio_tungstenite::connect_async_tls_with_config(
-                    request,
-                    None,
-                    false,
-                    Some(connector),
-                )
-                .await
-                .map_err(anyhow::Error::from)
+                crate::proxy::connect_codex_responses_websocket_request(request).await
             } else {
-                tokio_tungstenite::connect_async(request)
-                    .await
-                    .map_err(anyhow::Error::from)
+                crate::proxy::connect_responses_websocket_request(request).await
             }
         })
         .await
         {
-            Ok((mut socket, _)) => {
+            Ok(mut socket) => {
                 // A handshake proves transport, not custom tools or session replay.
                 // Never send response.create; close/drop the probe connection.
                 let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(None)).await;

@@ -129,6 +129,77 @@ pub(crate) fn cached_client(
     Ok(slot.get_or_init(|| client).snapshot())
 }
 
+/// Channel data/metadata traffic has its own pools. Platform control traffic
+/// keeps its existing system-proxy policy. Neither setting controls OS TUN routing.
+pub(crate) fn channel_client(use_system_proxy: bool) -> reqwest::Result<Client> {
+    static DIRECT: OnceLock<HttpClient> = OnceLock::new();
+    static PROXY: OnceLock<HttpClient> = OnceLock::new();
+    cached_client(if use_system_proxy { &PROXY } else { &DIRECT }, move || {
+        let builder = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(crate::MODEL_REQUEST_TIMEOUT)
+            .retry(reqwest::retry::never());
+        proxy_policy(builder, use_system_proxy)
+    })
+}
+
+pub(crate) fn channel_short_client(use_system_proxy: bool) -> reqwest::Result<Client> {
+    static DIRECT: OnceLock<HttpClient> = OnceLock::new();
+    static PROXY: OnceLock<HttpClient> = OnceLock::new();
+    cached_client(if use_system_proxy { &PROXY } else { &DIRECT }, move || {
+        proxy_policy(
+            Client::builder()
+                .timeout(Duration::from_secs(30))
+                .retry(reqwest::retry::never()),
+            use_system_proxy,
+        )
+    })
+}
+
+pub(crate) fn proxy_policy(builder: ClientBuilder, use_system_proxy: bool) -> ClientBuilder {
+    if use_system_proxy {
+        builder
+    } else {
+        builder.no_proxy()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ChannelProxy(pub(crate) bool);
+
+pub(crate) async fn connect_channel_websocket(
+    request: http::Request<()>,
+    config: tokio_tungstenite::tungstenite::protocol::WebSocketConfig,
+) -> anyhow::Result<(
+    tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<crate::openai_transport::dialer::Socket>,
+    >,
+    tokio_tungstenite::tungstenite::handshake::client::Response,
+)> {
+    // TLS to an HTTPS proxy uses ordinary native trust. Upstream TLS remains
+    // the registry connector's native TLS; Codex-only CA/fingerprint policy
+    // is deliberately not inherited by other channel types.
+    static TLS: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    let tls = TLS.get_or_init(|| {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
+        Arc::new(
+            rustls::ClientConfig::builder_with_provider(Arc::new(
+                rustls::crypto::aws_lc_rs::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .expect("aws-lc supports default TLS versions")
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+        )
+    });
+    let stream = crate::openai_transport::dialer::connect(request.uri(), true, tls.clone()).await?;
+    Ok(
+        tokio_tungstenite::client_async_tls_with_config(request, stream, Some(config), None)
+            .await?,
+    )
+}
+
 /// Use the same system-proxy recovery as HTTP for the supplier control tunnel.
 /// Redirects and automatic retries are disabled before any registration is sent.
 pub(crate) async fn connect_websocket(
@@ -211,6 +282,106 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize};
     use warp::Filter;
+
+    #[tokio::test]
+    async fn channel_http_proxy_is_opt_in_and_pool_modes_do_not_leak() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let direct = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child.args([
+            "--ignored",
+            "--exact",
+            "http_client::tests::channel_proxy_child",
+            "--nocapture",
+        ]);
+        for name in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "no_proxy",
+            "REQUEST_METHOD",
+        ] {
+            child.env_remove(name);
+        }
+        child
+            .env(
+                "HTTP_PROXY",
+                format!("http://{}", proxy.local_addr().unwrap()),
+            )
+            .env(
+                "CONST_CHANNEL_PROXY_TEST_URL",
+                format!("http://{}/check", direct.local_addr().unwrap()),
+            )
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = child.spawn().unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(20), async {
+            for (listener, label) in [(&direct, "direct"), (&proxy, "proxy"), (&direct, "direct")] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                while !bytes.ends_with(b"\r\n\r\n") {
+                    bytes.push(socket.read_u8().await.unwrap());
+                }
+                let head = String::from_utf8(bytes).unwrap();
+                assert_eq!(head.starts_with("GET http://"), label == "proxy");
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            label.len(),
+                            label
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            while child.try_wait().unwrap().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        if result.is_err() {
+            let _ = child.kill();
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            result.is_ok() && output.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "isolated child of channel_http_proxy_is_opt_in_and_pool_modes_do_not_leak"]
+    async fn channel_proxy_child() {
+        let url = std::env::var("CONST_CHANNEL_PROXY_TEST_URL").unwrap();
+        for (enabled, expected) in [(false, "direct"), (true, "proxy"), (false, "direct")] {
+            let client = channel_client(enabled).unwrap();
+            let target = if enabled {
+                "http://channel.invalid/check"
+            } else {
+                &url
+            };
+            assert_eq!(
+                client
+                    .get(target)
+                    .send()
+                    .await
+                    .unwrap()
+                    .text()
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
+    }
 
     #[tokio::test]
     async fn websocket_uses_configured_proxy_and_preserves_frames() {

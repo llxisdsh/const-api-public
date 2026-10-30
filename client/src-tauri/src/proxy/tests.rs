@@ -309,6 +309,7 @@ mod tests {
     include!("tests/surfaces.rs");
     include!("tests/voice_routing.rs");
     include!("tests/platform_voice.rs");
+    include!("tests/websocket_lifecycle.rs");
 
     include!("tests/routing.rs");
     include!("tests/model_discovery.rs");

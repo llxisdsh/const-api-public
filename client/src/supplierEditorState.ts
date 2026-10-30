@@ -41,6 +41,7 @@ type DetectionInput = {
   source_driver: string;
   credential_ref: string;
   user_agent_profile?: string;
+  use_system_proxy?: boolean;
   executor: unknown;
   default_target: unknown;
   discovery: unknown;
@@ -87,6 +88,7 @@ function detectionInput(channel: DetectionInput) {
     source_driver: channel.source_driver,
     credential_ref: channel.credential_ref,
     user_agent_profile: (channel.user_agent_profile ?? "").trim().toLowerCase(),
+    use_system_proxy: channel.use_system_proxy ?? false,
     executor: channel.executor,
     default_target: channel.default_target,
     discovery: channel.discovery,

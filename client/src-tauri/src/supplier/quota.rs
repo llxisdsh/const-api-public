@@ -954,6 +954,7 @@ pub(crate) struct LocalModelQuotaRouteState {
     pub(crate) runtime_failure_count: u32,
     pub(crate) runtime_failure_sequence: u64,
     pub(crate) runtime_soft_failure: bool,
+    pub(crate) runtime_overload: bool,
     // A timestamp lease prevents a cancelled half-open request from leaving
     // this route blocked forever. Normal completion releases it immediately.
     pub(crate) runtime_probe_until_unix: i64,
@@ -1002,9 +1003,20 @@ impl LocalModelQuotaRouteState {
         // Only ambiguous availability failures without an upstream retry hint
         // may be used as a last resort. Never bypass an existing hard limit.
         self.runtime_soft_failure = soft && retry_after_seconds <= 0 && hard_until <= now;
+        self.runtime_overload = false;
         let shift = self.runtime_failure_count.saturating_sub(1).min(3);
         let cooldown = (60_i64 << shift).min(5 * 60).max(retry_after_seconds);
         self.runtime_cooldown_until_unix = now.saturating_add(cooldown).max(hard_until);
+    }
+
+    pub(crate) fn record_runtime_overload(&mut self, now: i64, retry_after_seconds: i64, soft: bool) {
+        self.record_runtime_failure(now, retry_after_seconds, soft);
+        if self.runtime_soft_failure {
+            self.runtime_overload = true;
+            self.runtime_failure_count = self.runtime_failure_count.min(3);
+            let shift = self.runtime_failure_count.saturating_sub(1);
+            self.runtime_cooldown_until_unix = now.saturating_add(10_i64 << shift);
+        }
     }
 
     pub(crate) fn record_success(&mut self) {
@@ -1015,7 +1027,15 @@ impl LocalModelQuotaRouteState {
         if self.runtime_failure_sequence != sequence {
             return false;
         }
-        self.record_success();
+        if self.runtime_overload && self.runtime_failure_count > 1 {
+            self.runtime_failure_count -= 1;
+            self.runtime_cooldown_until_unix = 0;
+            self.runtime_probe_until_unix = 0;
+            self.runtime_failure_sequence =
+                LOCAL_MODEL_FAILURE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            self.record_success();
+        }
         true
     }
 
@@ -1173,6 +1193,25 @@ mod tests {
         subscription_http_response_payload, subscription_http_response_payload_with_headers,
         LocalModelQuotaRouteState,
     };
+
+    #[test]
+    fn overload_recovers_in_steps_without_erasing_hard_capacity_waits() {
+        let mut state = LocalModelQuotaRouteState::default();
+        for count in 1..=3 {
+            state.record_runtime_overload(1000,0,true);
+            assert_eq!(state.runtime_cooldown_until_unix,1000+(10 << (count-1)));
+        }
+        for remaining in (1..=3).rev() {
+            let sequence=state.runtime_failure_sequence;
+            assert!(!state.record_success_observed(sequence-1));
+            assert!(state.record_success_observed(sequence));
+            assert_eq!(state.runtime_failure_count,remaining-1);
+        }
+        state.record_runtime_failure(1000,1800,false);
+        state.record_runtime_overload(1001,0,true);
+        assert!(!state.runtime_overload);
+        assert!(!state.available_at(2799));
+    }
 
     #[test]
     fn terminal_sse_error_survives_large_prefix_and_oversized_events() {

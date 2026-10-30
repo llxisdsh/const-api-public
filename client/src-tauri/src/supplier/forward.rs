@@ -302,12 +302,14 @@ pub(crate) fn rewrite_retained_subscription_body_model(
 }
 
 pub(crate) async fn forward_supplier_request(
-    client: &Client,
+    _client: &Client,
     config: &SupplierConfig,
     msg: &SupplierMessage,
     stream_requested: bool,
     outbound: &SupplierOutbound,
 ) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
+    let channel_client = crate::http_client::channel_client(config.use_system_proxy)?;
+    let client = &channel_client;
     let wire =
         crate::surface_wire::SurfaceEnvelope::from_payload(&msg.payload).map_err(|error| {
             platform_execution_failure("request_surface_decode", "invalid_surface_wire", error)

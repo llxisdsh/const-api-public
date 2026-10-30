@@ -101,17 +101,20 @@ fn codex_http_continuation_cache() -> &'static StdMutex<CodexHttpContinuationCac
 }
 
 fn codex_http_continuation_key(config: &SupplierConfig, response_id: &str) -> String {
-    let credential_scope = if config.credential_ref.trim().is_empty() {
+    let credential_ref = if config.credential_ref.trim().is_empty() {
         config.subscription.credential_ref.trim()
     } else {
         config.credential_ref.trim()
     };
-    // Persist only a one-way scope key. Credential references can contain local account names or
-    // paths and do not need to be recoverable from the continuation database.
+    let account_scope = crate::detection::subscription_credential_scope_from_ref(credential_ref);
+    // Persist only a one-way scope key. Credential references and account
+    // identities can contain local names or paths and do not need to be
+    // recoverable from the continuation database. A token refresh keeps the
+    // account scope stable; switching the file to another account does not.
     let mut digest = Sha256::new();
     digest.update(config.channel_id.trim().as_bytes());
     digest.update([0x1f]);
-    digest.update(credential_scope.as_bytes());
+    digest.update(account_scope.as_bytes());
     digest.update([0x1f]);
     digest.update(response_id.trim().as_bytes());
     hex::encode(digest.finalize())
@@ -605,7 +608,7 @@ fn codex_websocket_replay_input_is_self_contained(
 
 /// Builds the one safe reconnect request for a store-disabled subscription
 /// continuation. The caller may use it only after pre-send affinity loss or an
-/// explicit upstream previous_response_not_found rejection before any output.
+/// explicit upstream rejection of previous_response_id before any output.
 ///
 /// The legacy cache/collector names mention HTTP because that path introduced
 /// the bounded store. WebSocket recovery intentionally shares that same store
@@ -1609,6 +1612,38 @@ mod codex_http_continuation_collector_tests {
         assert!(prepare_codex_websocket_subscription_replay(&config, &next)
             .expect("missing replay is not an encoding error")
             .is_none());
+    }
+
+    #[test]
+    fn continuation_scope_survives_token_refresh_but_not_account_switch() {
+        let directory = tempfile::tempdir().expect("credential directory");
+        let path = directory.path().join("openai.json");
+        let write_credential = |account_id: &str, access_token: &str| {
+            std::fs::write(
+                &path,
+                serde_json::json!({
+                    "type": "openai",
+                    "account_id": account_id,
+                    "access_token": access_token,
+                    "refresh_token": "refresh"
+                })
+                .to_string(),
+            )
+            .expect("write credential");
+        };
+        let mut config = default_supplier_config();
+        config.channel_id = "continuation-account-scope".into();
+        config.credential_ref = path.to_string_lossy().into_owned();
+
+        write_credential("account-a", "access-a");
+        let first = codex_http_continuation_key(&config, "resp-scope");
+        write_credential("account-a", "access-b");
+        let refreshed = codex_http_continuation_key(&config, "resp-scope");
+        assert_eq!(first, refreshed, "token refresh must keep the account history");
+
+        write_credential("account-b", "access-c");
+        let switched = codex_http_continuation_key(&config, "resp-scope");
+        assert_ne!(first, switched, "account changes must isolate continuation history");
     }
 
     #[test]

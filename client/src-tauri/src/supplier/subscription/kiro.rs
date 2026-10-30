@@ -47,7 +47,7 @@ pub(crate) async fn forward_kiro_subscription_request(
         &channel,
         requested_model_from_body_or_path(body, path).as_deref(),
     );
-    let client = crate::kiro::http_client()?;
+    let client = crate::kiro::channel_http_client(channel.v2.use_system_proxy)?;
     let (mut token, credential, _) =
         ensure_kiro_subscription_access_token(&client, &channel, false).await?;
     let profile = credential["profile_arn"]

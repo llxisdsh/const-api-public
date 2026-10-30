@@ -19,14 +19,26 @@ pub(crate) const CALLBACK: &str = "http://localhost:3128/oauth/callback";
 const MAX_METADATA_BYTES: usize = 2 * 1024 * 1024;
 
 pub(crate) fn http_client() -> Result<Client> {
+    // OAuth login has no channel yet; retain its existing proxy policy.
+    channel_http_client(true)
+}
+
+pub(crate) fn channel_http_client(use_system_proxy: bool) -> Result<Client> {
     static CLIENT: std::sync::OnceLock<crate::http_client::HttpClient> = std::sync::OnceLock::new();
-    Ok(crate::http_client::cached_client(&CLIENT, || {
-        Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(crate::MODEL_REQUEST_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-    })?)
+    static DIRECT: std::sync::OnceLock<crate::http_client::HttpClient> = std::sync::OnceLock::new();
+    Ok(crate::http_client::cached_client(
+        if use_system_proxy { &CLIENT } else { &DIRECT },
+        move || {
+            crate::http_client::proxy_policy(
+                Client::builder()
+                    .connect_timeout(Duration::from_secs(10))
+                    .timeout(crate::MODEL_REQUEST_TIMEOUT)
+                    .redirect(reqwest::redirect::Policy::none())
+                    .retry(reqwest::retry::never()),
+                use_system_proxy,
+            )
+        },
+    )?)
 }
 
 pub(crate) fn validate_credential(value: &Value) -> Result<()> {

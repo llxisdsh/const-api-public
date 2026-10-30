@@ -1762,7 +1762,7 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
             }
         };
         let supplier = crate::config::supplier_from_channel(channel);
-        let client = long_http_client().clone();
+        let client = crate::http_client::channel_client(channel.v2.use_system_proxy)?;
         let legacy_openai_auth =
             if provider == "openai" && openai_identity_profile == "legacy-2026-03" {
                 let (token, credential, _) =

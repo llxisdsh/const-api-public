@@ -1,6 +1,6 @@
 [package]
 name = "const-api-local"
-version = "0.1.63"
+version = "0.1.64"
 description = "CONST API local-only source build"
 license = "MIT"
 edition = "2024"
@@ -29,7 +29,7 @@ flate2 = "1"
 uuid = { version = "1", features = ["v4"] }
 dirs = "7"
 os_info = "3"
-reqwest = { version = "0.13", features = ["brotli", "deflate", "form", "gzip", "http3", "json", "stream", "zstd"] }
+reqwest = { version = "0.13", features = ["brotli", "cookies", "deflate", "form", "gzip", "http3", "json", "stream", "zstd"] }
 ring = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
@@ -40,6 +40,9 @@ tauri = { version = "2.12", features = ["image-png", "tray-icon"] }
 toml_edit = { version = "0.25", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net", "io-util", "time"] }
 tokio-tungstenite = { version = "0.30", features = ["native-tls", "rustls-tls-native-roots"] }
+# OpenAI subscription Responses/Live use the official forks; only Responses enables deflate.
+codex-tokio-tungstenite = { package = "tokio-tungstenite", git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186", features = ["proxy", "rustls-tls-native-roots"] }
+codex-tungstenite = { package = "tungstenite", git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f", features = ["deflate", "proxy"] }
 futures-util = "0.3"
 h3 = "0.0.8"
 http = "1"
@@ -64,6 +67,8 @@ tempfile = "3"
 quinn = { version = "0.11.12", default-features = false, features = ["ring", "runtime-tokio", "rustls-ring"] }
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "ring", "std", "tls12"] }
 rustls-pki-types = "1.15.1"
+rustls-native-certs = "0.8"
+tokio-rustls = { version = "0.26", default-features = false }
 rustls-platform-verifier = "0.7"
 webpki-roots = "1.0.9"
 zstd = "0.14.3"

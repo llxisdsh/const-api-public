@@ -24,7 +24,11 @@ pub(crate) fn value(channel: &ChannelConfig) -> Option<String> {
     }
     match channel.v2.user_agent_profile.trim() {
         PROFILE_CLAUDE_CODE => Some(crate::claude_client_profile::CLAUDE_CODE_USER_AGENT.into()),
-        PROFILE_CODEX => Some(crate::codex_identity::active_codex_identity().user_agent),
+        PROFILE_CODEX => Some(
+            crate::codex_identity::CodexProfile::Tui
+                .identity()
+                .user_agent,
+        ),
         PROFILE_OPENCODE => Some(OPENCODE_COMPAT_USER_AGENT.into()),
         _ => None,
     }

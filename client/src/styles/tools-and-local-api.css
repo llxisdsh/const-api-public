@@ -151,7 +151,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-link);
   line-height: inherit;
   text-decoration-line: underline;
   text-decoration-thickness: 0.75px;
@@ -288,7 +288,7 @@
   padding: 0;
   color: inherit;
   font: inherit;
-  font-weight: 400;
+  font-weight: var(--weight-link);
   line-height: inherit;
   text-decoration-line: underline;
   text-decoration-thickness: 0.75px;

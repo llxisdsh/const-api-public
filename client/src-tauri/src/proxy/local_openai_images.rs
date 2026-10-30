@@ -247,8 +247,10 @@ fn openai_subscription_image_request_builder(
     credential: &serde_json::Value,
     inbound_headers: &warp::http::HeaderMap,
     payload: OpenAiSubscriptionImagePayload,
-) -> reqwest::RequestBuilder {
-    let identity = active_codex_identity();
+    options: crate::openai_transport::TransportOptions,
+) -> Result<reqwest::RequestBuilder> {
+    let client = crate::openai_transport::http_client_with_options(client, url, credential, options)?;
+    let identity = options.profile.identity();
     let request_context =
         codex_subscription_model_request_context_headers(Some(inbound_headers), &identity);
     let mut request = client
@@ -258,6 +260,12 @@ fn openai_subscription_image_request_builder(
         .header("Authorization", format!("Bearer {token}"))
         .headers(request_context)
         .body(payload.body);
+	let mut policy_headers = reqwest::header::HeaderMap::new();
+	crate::subscription_transport_policy::apply_to_headers(
+		crate::source_driver::SourceDriverId::OpenAiSubscription,
+		crate::subscription_transport_policy::HeaderOperation::OpenAiImagesHttp,
+		&mut policy_headers,
+	);
     if let Some(account_id) = json_string(credential, &["account_id"])
         .or_else(|| json_string(credential, &["accountID"]))
         .or_else(|| json_string(credential, &["chatgpt_account_id"]))
@@ -265,7 +273,7 @@ fn openai_subscription_image_request_builder(
     {
         request = request.header("Chatgpt-Account-Id", account_id);
     }
-    request
+    Ok(request.headers(policy_headers))
 }
 
 async fn send_openai_subscription_image_request(
@@ -285,8 +293,8 @@ async fn send_openai_subscription_image_request(
         &token,
         &credential,
         inbound_headers,
-        payload.clone(),
-    );
+        payload.clone(), crate::openai_transport::TransportOptions::for_channel(channel),
+    )?;
     let response = crate::upstream_transport::send(request).await?;
     if response.status() != reqwest::StatusCode::UNAUTHORIZED {
         return Ok(response);
@@ -306,8 +314,8 @@ async fn send_openai_subscription_image_request(
         &fresh_token,
         &fresh_credential,
         inbound_headers,
-        payload,
-    ))
+        payload, crate::openai_transport::TransportOptions::for_channel(channel),
+    )?)
     .await
     .map_err(Into::into)
 }
@@ -322,7 +330,7 @@ async fn forward_openai_subscription_image_request(
     let operation = openai_subscription_image_operation(path)
         .ok_or_else(|| anyhow!("unsupported OpenAI subscription image operation"))?;
     let upstream_url = codex_image_url_from_responses_url(&codex_responses_url(), operation);
-    let response = send_openai_subscription_image_request(
+    let mut response = send_openai_subscription_image_request(
         client,
         channel,
         &upstream_url,
@@ -331,6 +339,9 @@ async fn forward_openai_subscription_image_request(
         body,
     )
     .await?;
+    // reqwest has already retained allowed cookies in the supplier's jar.
+    // These response headers must never establish a cookie in the caller.
+    response.headers_mut().remove(reqwest::header::SET_COOKIE);
 
     // Image responses can contain large base64 payloads. Relay them without a
     // full-body buffer and without synthesizing a Responses-shaped result.

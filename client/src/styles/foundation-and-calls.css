@@ -27,6 +27,10 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+a {
+  font-weight: var(--weight-link);
+}
+
 main {
   display: grid;
   grid-template-columns: 216px minmax(0, 1fr);

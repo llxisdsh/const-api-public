@@ -837,7 +837,8 @@ pub(crate) async fn get_lan_share_channel_status(
         .find(|channel| channel.id == channel_id && channel_is_lan_share(channel))
         .ok_or_else(|| "LAN share channel was not found".to_string())?;
     let url = lan_share_status_url(channel).map_err(|error| error.to_string())?;
-    let request = crate::long_http_client()
+    let request = crate::http_client::channel_client(channel.v2.use_system_proxy)
+        .map_err(|error| error.to_string())?
         .get(url)
         .bearer_auth(channel.v2.credential_ref.trim())
         .header("accept", "application/json");

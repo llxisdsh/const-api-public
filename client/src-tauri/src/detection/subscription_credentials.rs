@@ -301,11 +301,42 @@ pub(crate) fn subscription_account_identity(channel: &ChannelConfig) -> Option<S
     if credential_path.is_empty() {
         return None;
     }
-    let token = read_subscription_credential(Path::new(credential_path)).ok()?;
+    subscription_account_identity_from_ref(credential_path)
+}
+
+/// Returns an opaque account scope for continuation and transport state.
+///
+/// The account identity is deliberately derived from stable credential claims
+/// instead of the access token. A refresh therefore keeps conversation history
+/// available while sockets authenticated with the old token retire after their
+/// already admitted responses finish.
+pub(crate) fn subscription_account_identity_from_ref(credential_ref: &str) -> Option<String> {
+    let credential_ref = credential_ref.trim();
+    if credential_ref.is_empty() {
+        return None;
+    }
+    let token = read_subscription_credential(Path::new(credential_ref)).ok()?;
     subscription_account_identity_from_value(&token)
 }
 
-fn subscription_account_identity_from_value(value: &serde_json::Value) -> Option<String> {
+/// Returns a one-way revision for the credential material used by a live
+/// connection. The raw credential is never logged or returned to callers.
+pub(crate) fn subscription_credential_revision_from_ref(credential_ref: &str) -> String {
+    let credential_ref = credential_ref.trim();
+    let material = if credential_ref.is_empty() {
+        Vec::new()
+    } else {
+        fs::read(credential_ref).unwrap_or_else(|_| credential_ref.as_bytes().to_vec())
+    };
+    hex::encode(sha2::Sha256::digest(&material))
+}
+
+pub(crate) fn subscription_credential_scope_from_ref(credential_ref: &str) -> String {
+    subscription_account_identity_from_ref(credential_ref)
+        .unwrap_or_else(|| credential_ref.trim().to_string())
+}
+
+pub(crate) fn subscription_account_identity_from_value(value: &serde_json::Value) -> Option<String> {
     let provider = infer_subscription_provider(value).unwrap_or_else(|| "subscription".to_string());
     let stable_identity = [
         json_string(value, &["account_id"]),
@@ -787,6 +818,9 @@ pub(crate) async fn exchange_openai_oauth_code(
     let client = long_http_client();
     // Authorization-code exchange uses Codex's raw auth client: no model
     // provider `version` header and no synthesized default identity headers.
+    let client = crate::openai_transport::http_client(
+        &client, OPENAI_OAUTH_TOKEN_URL, &serde_json::Value::Null,
+    )?;
     let mut token = client
         .post("https://auth.openai.com/oauth/token")
         .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)

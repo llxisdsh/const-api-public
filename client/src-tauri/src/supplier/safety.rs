@@ -672,6 +672,12 @@ fn reset_subscription_safety_state_cache_for_tests() {
 }
 
 fn schedule_subscription_safety_write() -> Result<()> {
+    // A live test worker reads the dev snapshot and updates its own admission
+    // state, but must not overwrite the running desktop's process-owned snapshot.
+    #[cfg(test)]
+    if std::env::var("CONST_CAPACITY_LIVE").as_deref() == Ok("1") {
+        return Ok(());
+    }
     match subscription_safety_writer()?.try_send(SubscriptionSafetyWriteCommand::Dirty) {
         Ok(()) | Err(std::sync::mpsc::TrySendError::Full(_)) => Ok(()),
         Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {

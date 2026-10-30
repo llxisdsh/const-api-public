@@ -32,10 +32,16 @@ pub(crate) async fn handle_supplier_request(
 #[derive(Clone, Default)]
 pub(crate) struct SupplierRequestTasks {
     active: Arc<StdMutex<HashMap<String, (u64, tokio::task::AbortHandle)>>>,
-    duplex_commands: Arc<StdMutex<HashMap<String, mpsc::Sender<SupplierMessage>>>>,
+    duplex_commands: Arc<StdMutex<HashMap<String, SupplierDuplexCommands>>>,
     completed: Arc<StdMutex<HashMap<String, Instant>>>,
     next_generation: Arc<std::sync::atomic::AtomicU64>,
     responses_ws_pool: crate::proxy::ResponsesWsPool,
+}
+
+struct SupplierDuplexCommands {
+    channel_id: String,
+    sender: mpsc::Sender<SupplierMessage>,
+    accepting: tokio::sync::watch::Sender<bool>,
 }
 
 impl SupplierRequestTasks {
@@ -124,6 +130,8 @@ impl SupplierRequestTasks {
         let tasks = self.clone();
         let task_id = request_id.clone();
         let (commands_tx, commands_rx) = mpsc::channel(64);
+        let (accepting, admission) = tokio::sync::watch::channel(true);
+        let channel_id = supplier.channel_id.clone();
         let (start_tx, start_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
             if start_rx.await.is_err() {
@@ -147,6 +155,7 @@ impl SupplierRequestTasks {
                         commands_rx,
                         &outbound,
                         tasks.responses_ws_pool.clone(),
+                        admission,
                     ),
                 ),
             )
@@ -208,7 +217,14 @@ impl SupplierRequestTasks {
         }
         match self.duplex_commands.lock() {
             Ok(mut commands) => {
-                commands.insert(request_id.clone(), commands_tx);
+                commands.insert(
+                    request_id.clone(),
+                    SupplierDuplexCommands {
+                        channel_id,
+                        sender: commands_tx,
+                        accepting,
+                    },
+                );
             }
             Err(_) => {
                 task.abort();
@@ -226,10 +242,24 @@ impl SupplierRequestTasks {
             .duplex_commands
             .lock()
             .ok()
-            .and_then(|commands| commands.get(&message.id).cloned());
+            .and_then(|commands| commands.get(&message.id).map(|entry| entry.sender.clone()));
         match sender {
             Some(sender) => sender.send(message).await.is_ok(),
             None => false,
+        }
+    }
+
+    fn stop_removed_duplex_channels(&self, config: &SupplierAgentConfig) {
+        let commands = self
+            .duplex_commands
+            .lock()
+            .expect("supplier duplex commands poisoned");
+        for entry in commands.values() {
+            if config.supplier_for_target(&entry.channel_id, "").is_none() {
+                // Never re-enable an old session on a quick restart. Its current turn
+                // drains; another logical session must obtain fresh admission.
+                entry.accepting.send_replace(false);
+            }
         }
     }
 

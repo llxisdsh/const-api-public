@@ -313,6 +313,7 @@ export type ChannelConfigV5 = {
   default_target: SourceDriverTarget;
   discovery: SourceDriverDiscovery;
   user_agent_profile?: string;
+  use_system_proxy?: boolean;
   default_model: string;
   models: string[];
   price_ratio: number;
@@ -600,6 +601,7 @@ export function sourceDriverInitialChannelV5(
     default_target: { ...defaults.defaultTarget },
     discovery: { ...defaults.discovery },
     user_agent_profile: "",
+    use_system_proxy: false,
     default_model: "",
     models: [],
     price_ratio: 1,
@@ -635,7 +637,11 @@ export function normalizeChannelV5<T extends ChannelConfigV5>(channel: T): T {
   // V5 keeps share_enabled on the wire for older clients, but enabled is the
   // only product switch. LAN share channels are intentionally local-only.
   normalized.share_enabled = normalized.enabled && normalized.source_driver !== "lan_share";
-  const userAgentProfile = (normalized.user_agent_profile ?? "").trim().toLowerCase();
+  normalized.use_system_proxy = normalized.use_system_proxy ?? false;
+  let userAgentProfile = (normalized.user_agent_profile ?? "").trim().toLowerCase();
+  if (normalized.source_driver === "openai_subscription" && userAgentProfile === "codex") {
+    userAgentProfile = "codex_tui";
+  }
   if (userAgentProfile) normalized.user_agent_profile = userAgentProfile;
   else delete normalized.user_agent_profile;
   const legacySubscription = normalized.subscription;
@@ -852,6 +858,7 @@ export function serializeChannelV5(channel: ChannelConfigV5): ChannelConfigV5 {
     surfaces: structuredClone(normalized.surfaces),
     default_target: structuredClone(normalized.default_target),
     discovery: structuredClone(normalized.discovery),
+    use_system_proxy: normalized.use_system_proxy ?? false,
     ...(normalized.user_agent_profile ? { user_agent_profile: normalized.user_agent_profile } : {}),
     default_model: normalized.default_model,
     models: [...normalized.models],

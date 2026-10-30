@@ -42,14 +42,21 @@ struct TokenCache {
     refresh: crate::detection::subscription_refresh::RefreshState,
 }
 
-fn client() -> Result<Client> {
-    Ok(crate::http_client::cached_client(&CLIENT, || {
-        Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-    })?)
+fn client(use_system_proxy: bool) -> Result<Client> {
+    static DIRECT: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
+    Ok(crate::http_client::cached_client(
+        if use_system_proxy { &CLIENT } else { &DIRECT },
+        move || {
+            crate::http_client::proxy_policy(
+                Client::builder()
+                    .connect_timeout(Duration::from_secs(10))
+                    .timeout(Duration::from_secs(30))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .retry(reqwest::retry::never()),
+                use_system_proxy,
+            )
+        },
+    )?)
 }
 
 fn slot(credential: &str) -> Result<TokenSlot> {
@@ -170,8 +177,8 @@ async fn exchange_at(client: &Client, url: &str, credential: &str) -> Result<Ser
     service_token(&value, Instant::now())
 }
 
-async fn token(credential: &str) -> Result<ServiceToken> {
-    token_at(credential, &client()?, TOKEN_URL).await
+async fn token(credential: &str, use_system_proxy: bool) -> Result<ServiceToken> {
+    token_at(credential, &client(use_system_proxy)?, TOKEN_URL).await
 }
 
 async fn token_at(credential: &str, client: &Client, url: &str) -> Result<ServiceToken> {
@@ -316,7 +323,7 @@ pub(crate) async fn prepare_request_with_generation(
     let (client, request) = request.build_split();
     let mut request = request?;
     wire_path(request.url().path())?;
-    let token = token(&channel.v2.credential_ref).await?;
+    let token = token(&channel.v2.credential_ref, channel.v2.use_system_proxy).await?;
     authorize_request(&mut request, &token)?;
     Ok((
         RequestBuilder::from_parts(client, request),
@@ -368,7 +375,7 @@ pub(crate) async fn catalog(
 }
 
 pub(crate) async fn quota(channel: &ChannelConfig) -> Result<Vec<crate::model::QuotaWindow>> {
-    let response = client()?
+    let response = client(channel.v2.use_system_proxy)?
         .get("https://api.github.com/copilot_internal/user")
         .header(
             AUTHORIZATION,
@@ -479,7 +486,7 @@ async fn auth_json(request: RequestBuilder) -> std::result::Result<(u16, Value),
 
 #[tauri::command]
 pub(crate) async fn create_copilot_auth_session() -> std::result::Result<DeviceSession, AuthError> {
-    let client = client().map_err(|_| auth_error("network"))?;
+    let client = client(true).map_err(|_| auth_error("network"))?;
     let (status, value) = auth_json(
         client
             .post("https://github.com/login/device/code")
@@ -549,7 +556,7 @@ pub(crate) async fn poll_copilot_auth_session(
     if device_code.trim().is_empty() || device_code.len() > 2048 {
         return Err(auth_error("invalid_response"));
     }
-    let client = client().map_err(|_| auth_error("network"))?;
+    let client = client(true).map_err(|_| auth_error("network"))?;
     let (status, value) = auth_json(
         client
             .post("https://github.com/login/oauth/access_token")

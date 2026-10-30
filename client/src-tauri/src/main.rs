@@ -110,6 +110,7 @@ mod native_i18n;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod network_recovery;
+mod openai_transport;
 mod opencode;
 mod opencode_client;
 
@@ -1957,10 +1958,13 @@ async fn try_bind_proxy_server(
     let bound_addr = listener
         .local_addr()
         .map_err(|err| format!("failed to read listener address for {addr}: {err}"))?;
+    let websocket_shutdown = shared.websocket_shutdown.clone();
     let server = warp::serve(proxy_routes(shared))
         .incoming(listener)
         .graceful(async move {
             let _ = shutdown_rx.await;
+            // Upgraded sockets are detached Warp tasks, outside HTTP graceful shutdown.
+            websocket_shutdown.send_replace(true);
         })
         .run();
     Ok((bound_addr, server))

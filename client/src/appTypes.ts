@@ -139,6 +139,7 @@ export type ClientConfigV5Wire = Omit<ClientConfig, "channels" | "supplier"> & {
 export type SupplierConfig = {
   source_driver?: SourceDriverId;
   user_agent_profile?: string;
+  use_system_proxy?: boolean;
   enabled: boolean;
   kind: string;
   api_format: string;

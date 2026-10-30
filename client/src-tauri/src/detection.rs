@@ -56,6 +56,7 @@ pub(crate) struct SurfaceProbeContext {
     pub(crate) binding: ChannelSurfaceBinding,
     pub(crate) discovery: DiscoveryProfile,
     pub(crate) user_agent_profile: String,
+    pub(crate) use_system_proxy: bool,
     pub(crate) mode: SurfaceProbeMode,
     pub(crate) is_default_target: bool,
     pub(crate) run_advanced: bool,
@@ -381,6 +382,7 @@ pub(crate) fn surface_probe_contexts(
                 binding: pair_binding,
                 discovery: channel.v2.discovery.clone(),
                 user_agent_profile: channel.v2.user_agent_profile.clone(),
+                use_system_proxy: channel.v2.use_system_proxy,
                 mode,
                 is_default_target,
                 run_advanced: mode == SurfaceProbeMode::Creation
@@ -607,11 +609,16 @@ async fn detect_surface(
             }
         }
         crate::openrouter::prepare_probe_channel(&mut projection);
-        responses_features::enrich(&short_http_client(), &projection, &mut observation).await;
+        responses_features::enrich(
+            &crate::http_client::channel_short_client(projection.v2.use_system_proxy)?,
+            &projection,
+            &mut observation,
+        )
+        .await;
     }
     if context.mode == SurfaceProbeMode::Creation && inspect_operation_families {
         match check_deadline::observe(surface_operation_family_evidence(
-            &short_http_client(),
+            &crate::http_client::channel_short_client(context.use_system_proxy)?,
             &context,
         ))
         .await
@@ -630,7 +637,7 @@ async fn detect_channel_single(
 ) -> Result<ProbeObservation> {
     let mut channel = normalize_probe_channel(channel);
     crate::openrouter::prepare_probe_channel(&mut channel);
-    let client = short_http_client().clone();
+    let client = crate::http_client::channel_short_client(channel.v2.use_system_proxy)?;
     let mut checks = Vec::new();
     let mut warnings = Vec::new();
 
@@ -928,6 +935,7 @@ fn probe_channel_from_context(context: &SurfaceProbeContext) -> Result<ChannelCo
     };
     channel.v2.discovery = context.discovery.clone();
     channel.v2.user_agent_profile = context.user_agent_profile.clone();
+    channel.v2.use_system_proxy = context.use_system_proxy;
     channel.surface_bindings = vec![context.binding.clone()];
     channel.models = context.models.clone();
     channel.upstream_model = context.default_model.clone();
@@ -1204,6 +1212,7 @@ async fn catalog_snapshot(
     crate::coding_plan::validate_key(&channel)?;
     let allow_empty_catalog =
         channel.source_driver() == crate::source_driver::SourceDriverId::Openrouter;
+    let use_system_proxy = channel.v2.use_system_proxy;
     let contexts = surface_probe_contexts(channel, SurfaceProbeMode::Snapshot)?
         .into_iter()
         .filter(|context| !verified_only || snapshot_context_is_verified(context))
@@ -1212,7 +1221,7 @@ async fn catalog_snapshot(
         return Err(anyhow!("periodic snapshot has no verified surface binding"));
     }
 
-    let client = short_http_client().clone();
+    let client = crate::http_client::channel_short_client(use_system_proxy)?;
     let mut catalog_cache: Vec<(
         crate::surface::ApiSurface,
         String,
@@ -3302,6 +3311,7 @@ mod stream_probe_tests {
             binding,
             discovery: channel.v2.discovery.clone(),
             user_agent_profile: channel.v2.user_agent_profile.clone(),
+            use_system_proxy: channel.v2.use_system_proxy,
             mode: SurfaceProbeMode::Creation,
             is_default_target: true,
             run_advanced: true,
@@ -3705,6 +3715,11 @@ mod subscription_catalog_cache_identity_tests {
             before,
             openai_subscription_catalog_cache_key(&second).unwrap()
         );
+        second.v2.user_agent_profile = "codex_tui".into();
+        assert_ne!(
+            before,
+            openai_subscription_catalog_cache_key(&second).unwrap()
+        );
 
         std::fs::write(
             &credential_path,
@@ -3726,7 +3741,13 @@ fn subscription_catalog_cache_key(channel: &ChannelConfig, provider: &str) -> Re
 }
 
 fn openai_subscription_catalog_cache_key(channel: &ChannelConfig) -> Result<String> {
-    subscription_catalog_cache_key(channel, "openai")
+    // The models endpoint gates results by the profile's client_version. Two
+    // profiles on one account must not reuse each other's manifest or etag.
+    Ok(format!(
+        "{}\u{0}{:?}",
+        subscription_catalog_cache_key(channel, "openai")?,
+        crate::openai_transport::TransportOptions::for_channel(channel).profile
+    ))
 }
 
 fn openai_subscription_catalog_cache_slot(key: &str) -> Result<OpenAiSubscriptionCatalogCacheSlot> {
@@ -4001,7 +4022,13 @@ async fn fetch_openai_subscription_catalog_with_policy(
         let (token, credential, refreshed) =
             ensure_openai_subscription_access_token(client, channel).await?;
         quota_refreshed = refreshed;
-        fetch_openai_subscription_quota_windows(client, &token, &credential).await
+        fetch_openai_subscription_quota_windows(
+            client,
+            &token,
+            &credential,
+            crate::openai_transport::TransportOptions::for_channel(channel),
+        )
+        .await
     })
     .await?;
     let slot = openai_subscription_catalog_cache_slot(&key)?;
@@ -4046,15 +4073,17 @@ async fn fetch_openai_subscription_catalog_with_policy(
         .context("prepare OpenAI subscription credential")?;
     let account_id = json_string(&credential, &["account_id"])
         .or_else(|| json_string(&credential, &["accountID"]))
+        .or_else(|| json_string(&credential, &["chatgpt_account_id"]))
         .filter(|value| !value.trim().is_empty());
 
     if refresh_models {
-        let fetched = fetch_codex_manifest_model_observations_with_resolver(
+        let fetched = fetch_codex_manifest_model_observations_for_identity(
             client,
-            codex_identity_resolver(),
             CODEX_MODELS_URL,
             &token,
             account_id.as_deref(),
+            &crate::codex_identity::codex_identity_for_channel(channel),
+            crate::openai_transport::TransportOptions::for_channel(channel),
         )
         .await;
         match fetched {
@@ -4259,6 +4288,7 @@ pub(crate) async fn fetch_codex_manifest_models_with_resolver(
     ))
 }
 
+#[cfg(test)]
 pub(crate) async fn fetch_codex_manifest_model_observations_with_resolver(
     client: &Client,
     resolver: &CodexIdentityResolver,
@@ -4268,7 +4298,12 @@ pub(crate) async fn fetch_codex_manifest_model_observations_with_resolver(
 ) -> Result<Vec<crate::model_catalog::ModelObservation>> {
     let active = resolver.active();
     fetch_codex_manifest_model_observations_for_identity(
-        client, models_url, token, account_id, &active,
+        client,
+        models_url,
+        token,
+        account_id,
+        &active,
+        Default::default(),
     )
     .await
 }
@@ -4279,8 +4314,15 @@ async fn fetch_codex_manifest_model_observations_for_identity(
     token: &str,
     account_id: Option<&str>,
     identity: &CodexClientIdentity,
+    options: crate::openai_transport::TransportOptions,
 ) -> Result<Vec<crate::model_catalog::ModelObservation>> {
     let mut url = reqwest::Url::parse(models_url)?;
+    let client = crate::openai_transport::http_client_with_options(
+        client,
+        models_url,
+        &serde_json::json!({"type": "openai", "account_id": account_id, "access_token": token}),
+        options,
+    )?;
     apply_codex_client_version_query(&mut url, identity);
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
@@ -4292,7 +4334,7 @@ async fn fetch_codex_manifest_model_observations_for_identity(
     if let Some(account_id) = account_id {
         headers.insert("chatgpt-account-id", HeaderValue::from_str(&account_id)?);
     }
-    fetch_model_catalog(client, url, headers, ModelCatalogKind::Codex).await
+    fetch_model_catalog(&client, url, headers, ModelCatalogKind::Codex).await
 }
 
 fn claude_subscription_catalog_cache_key(channel: &ChannelConfig) -> Result<String> {
@@ -4898,16 +4940,25 @@ pub(crate) async fn fetch_openai_subscription_quota_windows(
     client: &Client,
     token: &str,
     credential: &serde_json::Value,
+    options: crate::openai_transport::TransportOptions,
 ) -> Result<Vec<QuotaWindow>> {
-    let identity = active_codex_identity();
+    let client = crate::openai_transport::http_client_with_options(
+        client,
+        CODEX_USAGE_URL,
+        credential,
+        options,
+    )?;
+    let identity = options.profile.identity();
     let headers = codex_control_identity_headers(&identity);
     let mut req = client
         .get(CODEX_USAGE_URL)
+        .timeout(Duration::from_secs(30))
         .header("Accept", "application/json")
         .header("Authorization", format!("Bearer {token}"))
         .headers(headers);
     if let Some(account_id) = json_string(credential, &["account_id"])
         .or_else(|| json_string(credential, &["accountID"]))
+        .or_else(|| json_string(credential, &["chatgpt_account_id"]))
         .filter(|value| !value.trim().is_empty())
     {
         req = req.header("Chatgpt-Account-Id", account_id);
@@ -5096,7 +5147,9 @@ pub(crate) async fn ensure_openai_subscription_access_token_with_options(
             "grant_type": "refresh_token",
             "refresh_token": refresh_token.clone(),
         });
-        let identity = active_codex_identity();
+        let options = crate::openai_transport::TransportOptions::for_channel(channel);
+        let identity = options.profile.identity();
+        let client = crate::openai_transport::http_client_with_options(client, token_url, &credential, options)?;
         let resp = apply_codex_control_identity_headers(
             client
                 .post(token_url)

@@ -105,7 +105,7 @@ pub(super) async fn catalog(
     {
         return Ok((value.models.clone(), false, Vec::new()));
     }
-    let client = crate::kiro::http_client()?;
+    let client = crate::kiro::channel_http_client(channel.v2.use_system_proxy)?;
     let mut refreshed = false;
     let result = async {
         let (mut token, mut credential, did_refresh) =
@@ -159,7 +159,7 @@ pub(super) async fn quota(
     policy: SubscriptionCatalogPolicy,
 ) -> Result<Vec<QuotaWindow>> {
     refresh_subscription_quota(channel, policy, async {
-        let client = crate::kiro::http_client()?;
+        let client = crate::kiro::channel_http_client(channel.v2.use_system_proxy)?;
         let (token, credential, _) =
             ensure_kiro_subscription_access_token(&client, channel, false).await?;
         crate::kiro::quota(&client, &token, credential["profile_arn"].as_str().unwrap()).await

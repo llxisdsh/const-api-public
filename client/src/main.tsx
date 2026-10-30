@@ -57,6 +57,7 @@ import { ToolDockMenuProvider } from "./ToolDockMenu";
 import { SupplierSurfaceConfig } from "./components/SupplierSurfaceConfig";
 import { SupplierChannelChecks } from "./components/SupplierChannelChecks";
 import { SupplierRouteNotice } from "./components/SupplierRouteNotice";
+import { ChannelPriorityTable } from "./components/ChannelPriorityTable";
 import { DeviceCodeAuthorization } from "./components/DeviceCodeAuthorization";
 import { PageFindBar } from "./components/PageFindBar";
 import {
@@ -269,8 +270,6 @@ const OperationCapabilityMatrix = React.lazy(() => import("./components/Operatio
   .then((module) => ({ default: module.OperationCapabilityMatrix })));
 const SupplierModelPoolDialog = React.lazy(() => import("./components/SupplierModelPoolDialog")
   .then((module) => ({ default: module.SupplierModelPoolDialog })));
-const ChannelPriorityDialog = React.lazy(() => import("./components/ChannelPriorityDialog")
-  .then((module) => ({ default: module.ChannelPriorityDialog })));
 type ConstApiWindow = typeof window & {
   __CONST_API_ROOT__?: ReturnType<typeof createRoot>;
   __CONST_API_SCROLLBAR_VISIBILITY_CLEANUP__?: () => void;
@@ -901,7 +900,6 @@ function ProductApp({
     marketPriceCache.clear();
   }, [marketPriceCache, marketPriceScope]);
   const [supplierModelPoolOpen, setSupplierModelPoolOpen] = useState(false);
-  const [priorityEditor, setPriorityEditor] = useState<{ channelId?: string } | null>(null);
   const [lanSharingOpen, setLanSharingOpen] = useState(false);
   const experimentalToolsUnlockedRef = useRef(clientModePolicy.experimental.toolsUnlocked);
   const selectedChannelTransport = supplierChannelTransportForChannel(
@@ -1679,8 +1677,16 @@ function ProductApp({
                     </button>
                   </div>
                 </div>
-                <div className="supplier-channel-table">
-                  <div className="supplier-channel-header" aria-hidden="true">
+                <ChannelPriorityTable
+                  channels={displayChannels}
+                  allChannels={config.channels.length ? config.channels : displayChannels}
+                  disabled={configActionBusy || selectedChannelHasChanges || selectedChannelBusy}
+                  selectedId={selectedChannel.id}
+                  name={(channel) => sourceDriverDisplayName(sourceDriverById(channel.source_driver), channel.name, channel.id)}
+                  onOpen={(id) => void openSupplierChannel(id)}
+                  onSave={saveLocalChannelPriorities}
+                  empty={t("supplier.noChannels")}
+                  header={<>
                     <span />
                     <span>{t("supplier.channel")}</span>
                     <span className="priority">{t("supplier.localPriority")}</span>
@@ -1690,8 +1696,9 @@ function ProductApp({
                     <span className="latency">{t("supplier.latency")}</span>
                     <span className="active-requests">{t("supplier.activeRequests")}</span>
                     <span />
-                  </div>
-                  {displayChannels.map((channel) => {
+                  </>}
+                >
+                  {(channel, priorityHandle) => {
                     const health = supplierStatus.channels?.find((item) => item.channel_id === channel.id);
                     const routeStatus = supplierRouteStatusForChannel(supplierStatus, channel.id);
                     const routeDetail = supplierRouteStatusDetail(routeStatus);
@@ -1718,28 +1725,13 @@ function ProductApp({
                       channel.id,
                     );
                     return (
-                      <div
-                        key={channel.id}
-                        className={`supplier-channel-row ${channel.id === selectedChannel.id ? "active" : ""}`}
-                        onClick={() => void openSupplierChannel(channel.id)}
-                      >
+                      <>
                         <span className={`channel-state ${stateTone}`} title={`${t("supplier.status")}: ${runningLabel}`} />
                         <div className="channel-main">
                           <strong>{channelDisplayName}</strong>
                           <small>{channelKindLabel(channel.kind)} · {modelDisplayName(channel.upstream_model || channel.public_model) || t("supplier.notSelected")}</small>
                         </div>
-                        <button
-                          type="button"
-                          className="supplier-channel-priority"
-                          aria-label={t("supplier.priority.editChannel", { channel: channelDisplayName, priority: channel.local_priority })}
-                          disabled={configActionBusy || selectedChannelHasChanges || selectedChannelBusy}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setPriorityEditor({ channelId: channel.id });
-                          }}
-                        >
-                          {channel.local_priority}
-                        </button>
+                        {priorityHandle}
                         <div className="channel-stat pool">
                           <small>{t("supplier.switch")}</small>
                           <span className={`channel-value-chip ${channelIsPooled(channel) ? "enabled" : "muted"}`}>{channelSwitchLabel(channel)}</span>
@@ -1772,15 +1764,10 @@ function ProductApp({
                         >
                           <ChevronRight size={18} />
                         </button>
-                      </div>
+                      </>
                     );
-                  })}
-                  {displayChannels.length === 0 && (
-                    <div className="supplier-channel-empty">
-                      {t("supplier.noChannels")}
-                    </div>
-                  )}
-                </div>
+                  }}
+                </ChannelPriorityTable>
                 <p className="supplier-market-hint">{t("supplier.channelUsageHint")}</p>
               </div>
 
@@ -2672,21 +2659,39 @@ function ProductApp({
                             </select>
                             <span className="field-hint">{t("supplier.advanced.primaryUpstreamProtocolHint")}</span>
                           </label>)}
-                          {selectedSourceDriver.executor.type === "http_surface" && (
+                          {(selectedSourceDriver.executor.type === "http_surface" || selectedChannel.source_driver === "openai_subscription") && (
                             <label>
                               {t("supplier.advanced.userAgentProfile")}
                               <select
                                 value={selectedChannel.user_agent_profile ?? ""}
                                 onChange={(event) => updateSupplier({ user_agent_profile: event.target.value })}
                               >
-                                <option value="">{t("supplier.advanced.userAgentProfileDefault")}</option>
-                                <option value="claude_code">Claude Code</option>
-                                <option value="codex">Codex</option>
-                                <option value="opencode">OpenCode</option>
+                                {selectedChannel.source_driver === "openai_subscription" ? <>
+                                  <option value="">{t("supplier.advanced.codexDesktopDefault")}</option>
+                                  <option value="codex_tui">Codex TUI</option>
+                                  <option value="codex_cli">Codex CLI</option>
+                                  <option value="codex_exec">Codex Exec</option>
+                                </> : <>
+                                  <option value="">{t("supplier.advanced.userAgentProfileDefault")}</option>
+                                  <option value="claude_code">Claude Code</option>
+                                  <option value="codex">Codex</option>
+                                  <option value="opencode">OpenCode</option>
+                                </>}
                               </select>
-                              <span className="field-hint">{t("supplier.advanced.userAgentProfileHint")}</span>
+                              <span className="field-hint">{t(selectedChannel.source_driver === "openai_subscription" ? "supplier.advanced.codexProfileHint" : "supplier.advanced.userAgentProfileHint")}</span>
                             </label>
                           )}
+                          <div>
+                            <label className={`supply-toggle ${selectedChannel.use_system_proxy ? "checked" : ""}`}>
+                              <input type="checkbox" role="switch"
+                                checked={selectedChannel.use_system_proxy ?? false}
+                                aria-describedby="channel-proxy-hint"
+                                onChange={(event) => updateSupplier({ use_system_proxy: event.target.checked })} />
+                              <span className="supply-toggle-track" aria-hidden="true"><span /></span>
+                              <span>{t("supplier.advanced.useSystemProxy")}</span>
+                            </label>
+                            <p id="channel-proxy-hint" className="field-hint">{t("supplier.advanced.useSystemProxyHint")}</p>
+                          </div>
                           {selectedChannel.kind === "subscription_adapter" && (
                             <>
                               {selectedChannel.source_driver === "claude_subscription" && (
@@ -2788,19 +2793,6 @@ function ProductApp({
                     )}
                   </div>
                 </DialogBackdrop>
-              )}
-
-              {priorityEditor && (
-                <React.Suspense fallback={null}><ChannelPriorityDialog
-                  channels={displayChannels.map((channel) => ({
-                    id: channel.id,
-                    name: sourceDriverDisplayName(sourceDriverById(channel.source_driver), channel.name, channel.id),
-                    local_priority: channel.local_priority,
-                  }))}
-                  initialChannelId={priorityEditor.channelId}
-                  onClose={() => setPriorityEditor(null)}
-                  onSave={saveLocalChannelPriorities}
-                /></React.Suspense>
               )}
 
               {supplierModelPoolOpen && supplierDetailOpen && (

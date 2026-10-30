@@ -255,7 +255,7 @@ main > section > header.about-page-header > p {
   background: transparent;
   color: var(--muted);
   font-size: 13px;
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-link);
   line-height: 1.5;
   white-space: nowrap;
   text-decoration: underline;

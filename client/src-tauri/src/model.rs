@@ -242,6 +242,7 @@ pub(crate) struct SupplierConfig {
     pub(crate) default_target: ChannelTarget,
     pub(crate) discovery: DiscoveryProfile,
     pub(crate) user_agent_profile: String,
+    pub(crate) use_system_proxy: bool,
     pub(crate) channel_id: String,
     pub(crate) enabled: bool,
     pub(crate) kind: String,
@@ -406,6 +407,8 @@ pub(crate) struct ChannelConfigV2Contract {
     pub(crate) discovery: DiscoveryProfile,
     #[serde(default)]
     pub(crate) user_agent_profile: String,
+    #[serde(default)]
+    pub(crate) use_system_proxy: bool,
     #[serde(default = "crate::default_channel_max_concurrency")]
     pub(crate) max_concurrency: u32,
     #[serde(default)]
@@ -449,6 +452,8 @@ pub(crate) struct SupplierConfigV4Read {
     pub(crate) discovery: Option<DiscoveryProfile>,
     #[serde(default)]
     pub(crate) user_agent_profile: String,
+    #[serde(default)]
+    pub(crate) use_system_proxy: bool,
     #[serde(default)]
     pub(crate) channel_id: String,
     pub(crate) enabled: bool,
@@ -494,6 +499,7 @@ struct SupplierConfigWire<'a> {
     discovery: &'a DiscoveryProfile,
     #[serde(skip_serializing_if = "str::is_empty")]
     user_agent_profile: &'a str,
+    use_system_proxy: bool,
     channel_id: &'a str,
     enabled: bool,
     kind: &'a str,
@@ -529,6 +535,8 @@ pub(crate) struct ChannelConfigV4Read {
     pub(crate) discovery: Option<DiscoveryProfile>,
     #[serde(default)]
     pub(crate) user_agent_profile: String,
+    #[serde(default)]
+    pub(crate) use_system_proxy: bool,
     pub(crate) id: String,
     pub(crate) enabled: bool,
     #[serde(default)]
@@ -584,6 +592,8 @@ pub(crate) struct ChannelConfigV2 {
     pub(crate) discovery: DiscoveryProfile,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) user_agent_profile: String,
+    #[serde(default)]
+    pub(crate) use_system_proxy: bool,
     #[serde(default)]
     pub(crate) default_model: String,
     pub(crate) models: ModelSnapshot,
@@ -673,6 +683,7 @@ impl<'a> From<&'a SupplierConfig> for SupplierConfigWire<'a> {
             default_target: &value.default_target,
             discovery: &value.discovery,
             user_agent_profile: &value.user_agent_profile,
+            use_system_proxy: value.use_system_proxy,
             channel_id: &value.channel_id,
             enabled: value.enabled,
             kind: &value.kind,
@@ -758,6 +769,7 @@ impl From<SupplierConfigV4Read> for SupplierConfig {
             default_target,
             discovery,
             user_agent_profile: value.user_agent_profile,
+            use_system_proxy: value.use_system_proxy,
             channel_id: value.channel_id,
             enabled: value.enabled,
             kind: value.kind,
@@ -817,6 +829,7 @@ impl From<ChannelConfig> for ChannelConfigV2 {
             default_target: value.v2.default_target,
             discovery: value.v2.discovery,
             user_agent_profile: value.v2.user_agent_profile,
+            use_system_proxy: value.v2.use_system_proxy,
             default_model,
             models: value.models,
             price_ratio: value.price_ratio,
@@ -891,6 +904,7 @@ impl From<ChannelConfigV2> for ChannelConfig {
             default_target: value.default_target,
             discovery: value.discovery,
             user_agent_profile: value.user_agent_profile,
+            use_system_proxy: value.use_system_proxy,
             max_concurrency,
             quota_reserve_percent,
         };

@@ -143,7 +143,7 @@ pub(crate) fn openai_subscription_response_request(
     request_headers: Option<&reqwest::header::HeaderMap>,
 ) -> Result<reqwest::RequestBuilder> {
     let encoded = encode_openai_subscription_request_body(&body)?;
-    Ok(openai_subscription_response_request_with_encoded_body(
+    openai_subscription_response_request_with_encoded_body(
         client,
         url,
         token,
@@ -151,7 +151,8 @@ pub(crate) fn openai_subscription_response_request(
         &body,
         encoded,
         request_headers,
-    ))
+        crate::openai_transport::TransportOptions::default(),
+    )
 }
 
 fn openai_subscription_response_request_with_encoded_body(
@@ -162,8 +163,10 @@ fn openai_subscription_response_request_with_encoded_body(
     identity_body: &str,
     body: bytes::Bytes,
     request_headers: Option<&reqwest::header::HeaderMap>,
-) -> reqwest::RequestBuilder {
-    let identity = active_codex_identity();
+    options: crate::openai_transport::TransportOptions,
+) -> Result<reqwest::RequestBuilder> {
+    let client = crate::openai_transport::http_client_with_options(client, url, credential, options)?;
+    let identity = options.profile.identity();
     let mut response_headers =
         codex_response_identity_headers(identity_body, request_headers, &identity);
     crate::subscription_transport_policy::apply_to_headers(
@@ -184,7 +187,7 @@ fn openai_subscription_response_request_with_encoded_body(
     {
         req = req.header("Chatgpt-Account-Id", account_id);
     }
-    req.headers(response_headers).body(body)
+    Ok(req.headers(response_headers).body(body))
 }
 
 fn encode_openai_subscription_request_body(body: &str) -> Result<bytes::Bytes> {
@@ -282,6 +285,15 @@ fn codex_response_identity_headers(
     ] {
         insert_codex_response_header_if_absent(&mut headers, name, metadata_string(name));
     }
+    // The caller's hint names its original model. Rebuild it from the final
+    // body after model substitution; the transport policy is applied later and
+    // may intentionally override this derived value.
+    crate::codex_identity::set_codex_routing_hint(
+        &mut headers,
+        body.get("model").and_then(serde_json::Value::as_str),
+        body.get("service_tier")
+            .and_then(serde_json::Value::as_str),
+    );
     headers
 }
 
@@ -329,7 +341,8 @@ pub(crate) async fn send_openai_subscription_response_request(
             &body,
             encoded_body.clone(),
             request_headers,
-        )
+            crate::openai_transport::TransportOptions::for_channel(channel),
+        )?
     } else {
         return Err(anyhow!("OpenAI subscription request body was not encoded"));
     };
@@ -358,7 +371,8 @@ pub(crate) async fn send_openai_subscription_response_request(
             &body,
             encoded_body,
             request_headers,
-        )
+            crate::openai_transport::TransportOptions::for_channel(channel),
+        )?
     } else {
         return Err(anyhow!("OpenAI subscription request body was not encoded"));
     };

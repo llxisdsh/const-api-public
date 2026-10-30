@@ -7,6 +7,7 @@ struct LocalModelOutcomeGuard {
     route_key: String,
     sequence: u64,
     probe_until: i64,
+    promotion: Option<LocalRoutePromotion>,
 }
 
 impl LocalModelOutcomeGuard {
@@ -25,10 +26,21 @@ impl LocalModelOutcomeGuard {
             route_key,
             sequence: state.runtime_failure_sequence,
             probe_until: state.runtime_probe_until_unix,
+            promotion: None,
         }
     }
 
     fn success(&self) {
+        if let Some(promotion) = &self.promotion {
+            self.shared.promote_local_model_route(
+                &promotion.affinity_key,
+                &self.route_key,
+                promotion.context,
+                now_unix(),
+                promotion.selected_at,
+            );
+        }
+
         if let Ok(mut routes) = self.shared.local_model_quota_routes.lock() {
             if let Some(state) = routes.get_mut(&self.route_key) {
                 state.record_success_observed(self.sequence);
@@ -224,6 +236,76 @@ mod model_health_tests {
             .map(|part| Ok::<_, Infallible>(bytes::Bytes::copy_from_slice(part)))
             .collect::<Vec<_>>();
         response_from_stream(StatusCode::OK, &headers, futures_util::stream::iter(chunks)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn local_sticky_changes_only_after_completed_semantic_success() {
+        let shared=degraded_model();
+        let context=local_model_route_preference_context(&default_config(),false,true);
+        let previous=std::time::Instant::now();
+        shared.promote_local_model_route("session","old-route",context,now_unix(),previous);
+        for (raw, succeeds) in [
+            ("data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"status_details\":{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"Selected model is at capacity.\"}}}}\n\n",false),
+            ("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"response-ok\",\"status\":\"completed\",\"output\":[]}}\n\n",true),
+        ] {
+            let mut guard=LocalModelOutcomeGuard::new(shared.clone(),"channel","model-a");
+            guard.promotion=Some(LocalRoutePromotion{affinity_key:"session".into(),context,selected_at:std::time::Instant::now()});
+            let response=observe_local_model_response(stream_response(raw),guard,Some(ProtocolKind::OpenAiResponses));
+            assert_eq!(shared.preferred_local_model_route("session",context,now_unix()).as_deref(),Some("old-route"));
+            let bytes=response.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(bytes.as_ref(),raw.as_bytes());
+            let expected=if succeeds {model_quota_route_key("channel","model-a")} else {"old-route".to_string()};
+            assert_eq!(shared.preferred_local_model_route("session",context,now_unix()).unwrap(),expected);
+        }
+        shared.promote_local_model_route("session","stale-route",context,now_unix(),previous);
+        assert_ne!(shared.preferred_local_model_route("session",context,now_unix()).as_deref(),Some("stale-route"));
+    }
+
+    #[test]
+    fn local_sticky_concurrent_old_success_cannot_block_or_reverse_failover() {
+        for old_finishes_first in [true, false] {
+            let shared = degraded_model();
+            let context = local_model_route_preference_context(&default_config(), false, true);
+            shared.promote_local_model_route(
+                "session", "old-route", context, now_unix(), std::time::Instant::now(),
+            );
+            let failover_selected_at = std::time::Instant::now();
+            // New requests keep using the old stable route until failover succeeds.
+            let parallel_old_selected_at = std::time::Instant::now();
+            let complete_old = || shared.promote_local_model_route(
+                "session", "old-route", context, now_unix(), parallel_old_selected_at,
+            );
+            let complete_failover = || shared.promote_local_model_route(
+                "session", "new-route", context, now_unix(), failover_selected_at,
+            );
+            if old_finishes_first {
+                complete_old();
+                complete_failover();
+            } else {
+                complete_failover();
+                complete_old();
+            }
+            assert_eq!(
+                shared.preferred_local_model_route("session", context, now_unix()).as_deref(),
+                Some("new-route"), "old_finishes_first={old_finishes_first}",
+            );
+            // Another in-flight candidate also cannot displace the completed binding.
+            shared.promote_local_model_route(
+                "session", "third-route", context, now_unix(), parallel_old_selected_at,
+            );
+            assert_eq!(
+                shared.preferred_local_model_route("session", context, now_unix()).as_deref(),
+                Some("new-route"),
+            );
+            // A later, deliberate selection can still replace it after success.
+            shared.promote_local_model_route(
+                "session", "later-route", context, now_unix(), std::time::Instant::now(),
+            );
+            assert_eq!(
+                shared.preferred_local_model_route("session", context, now_unix()).as_deref(),
+                Some("later-route"),
+            );
+        }
     }
 
     #[tokio::test]

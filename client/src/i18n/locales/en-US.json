@@ -727,16 +727,11 @@
     "channel": "Channel",
     "localPriority": "Priority",
     "priority": {
-      "title": "Local channel priority",
-      "hint": "Set this order manually for local routing; it does not follow price. Lower numbers go first. Give accounts the same number to share new sessions; later tiers take over when an earlier tier is unavailable or at capacity. Existing sessions stay on their account when possible.",
-      "scope": "Only affects local and LAN requests; it does not change marketplace prices or ranking.",
-      "editChannel": "Adjust priority for {{channel}}, currently {{priority}}",
-      "channelValue": "Priority for {{channel}}",
-      "selectChannel": "Select {{channel}}",
-      "selectAll": "Select all",
-      "selected": "{{count}} selected",
-      "setTo": "Set to",
-      "invalid": "Priority must be a whole number from 1 to 4294967295."
+      "dragChannel": "Priority {{priority}} for {{channel}}; drag to adjust",
+      "keyboardHint": "Preview with arrow keys; Enter to save, Esc to cancel",
+      "dragSaved": "Priority saved",
+      "dragFailed": "Could not save; previous priorities kept",
+      "undo": "Undo"
     },
     "switch": "Switch",
     "model": "Model",
@@ -875,6 +870,10 @@
     "hideAdvanced": "Less",
     "advancedHint": "Less common options such as protocol bindings, endpoint details, and credential references. Local-only fields are never uploaded.",
     "advanced": {
+      "codexDesktopDefault": "Codex Desktop (default)",
+      "codexProfileHint": "Client identity for OpenAI subscription requests. Applies to new connections after saving.",
+      "useSystemProxy": "Use proxy",
+      "useSystemProxyHint": "Off by default: CONST connects directly. Enable to use the system or environment proxy. TUN routing is controlled by the OS and may apply with this switch on or off.",
       "userAgentProfile": "User-Agent override",
       "userAgentProfileDefault": "Do not override (follow request)",
       "userAgentProfileHint": "Use this only when the upstream restricts or requires a specific client. Channel refreshes, checks, and tool requests will use the selected client's User-Agent; leave it off for normal channels.",

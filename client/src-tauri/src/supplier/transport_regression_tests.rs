@@ -471,6 +471,114 @@ mod transport_regression_tests {
         assert!(config.with_suppliers(vec![]).supplier_for_target("", "").is_none());
     }
 
+    #[tokio::test]
+    async fn websocket_lifecycle_stopped_supplier_drains_active_turn_and_closes_idle_session() {
+        use tokio_tungstenite::tungstenite::Message as Ws;
+        for active in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let observed = calls.clone();
+            let (started, started_rx) = oneshot::channel();
+            let (finish, finish_rx) = oneshot::channel();
+            let upstream = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let mut started = Some(started);
+                let mut finish = Some(finish_rx);
+                while let Some(Ok(message)) = socket.next().await {
+                    if message.is_close() { break; }
+                    if !message.is_text() { continue; }
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    if let Some(started) = started.take() { let _ = started.send(()); }
+                    if let Some(finish) = finish.take() { finish.await.unwrap(); }
+                    socket.send(Ws::Text(r#"{"type":"response.completed","response":{"id":"resp-finished","status":"completed","output":[]}}"#.into())).await.unwrap();
+                }
+            });
+            let mut supplier = default_supplier_config();
+            supplier.channel_id = format!("ws-drain-{active}");
+            supplier.enabled = true;
+            supplier.source_driver = crate::source_driver::SourceDriverId::OpenAiApi;
+            supplier.upstream_base_url = format!("http://{address}/v1");
+            supplier.surface_bindings = crate::source_driver_surface_bindings(supplier.source_driver, &supplier.upstream_base_url);
+            for binding in &mut supplier.surface_bindings {
+                binding.verification.state = "verified".into();
+                for protocol in &mut binding.protocols {
+                    protocol.verification.state = "verified".into();
+                }
+            }
+            supplier.api_format = "openai_responses".into();
+            supplier.models = vec!["lifecycle-model".into()];
+            supplier.public_model = "lifecycle-model".into();
+            supplier.upstream_model = "lifecycle-model".into();
+            let mut config = large_catalog().with_suppliers(vec![supplier.clone()]);
+            let wire = crate::surface_wire::SurfaceEnvelope {
+                surface: Some(crate::surface::ApiSurface::OpenAi),
+                operation: Some(crate::surface::ApiOperation::ResponsesWebSocket),
+                protocol: Some("openai_responses".into()),
+                method: "GET".into(), path: "/v1/responses".into(),
+                requested_model: Some("lifecycle-model".into()),
+                selected_upstream_model: Some("lifecycle-model".into()),
+                ..Default::default()
+            };
+            let mut payload = crate::surface_wire::wire_payload(wire).unwrap();
+            payload.insert("session_kind".into(), "openai_responses".into());
+            let id = format!("existing-ws-{active}");
+            let (output, mut messages) = mpsc::channel(64);
+            let tasks = SupplierRequestTasks::default();
+            let _guard = SupplierRequestTaskGuard::new(tasks.clone());
+            tasks.spawn_duplex(Client::new(), supplier.clone(), SupplierMessage {
+                id: id.clone(), kind: "duplex_open".into(), payload,
+            }, output);
+            let opened = tokio::time::timeout(Duration::from_secs(5), messages.recv()).await.unwrap().unwrap();
+            assert_eq!(opened.kind, "duplex_opened", "{opened:?}");
+            assert_eq!(tasks.len(), 1, "the open session is tracked separately from active requests");
+            assert_eq!(crate::channel_concurrency::current(&supplier.channel_id), 0, "an open idle WS is not an active request");
+            let frame = || SupplierMessage {
+                id: id.clone(), kind: "duplex_client_frame".into(),
+                payload: serde_json::json!({"frame_type":"text","data":
+                    r#"{"type":"response.create","model":"lifecycle-model","input":[]}"#
+                }).as_object().unwrap().clone(),
+            };
+            if active {
+                assert!(tasks.send_duplex(frame()).await);
+                tokio::time::timeout(Duration::from_secs(5), started_rx).await.unwrap().unwrap();
+                assert_eq!(crate::channel_concurrency::current(&supplier.channel_id), 1);
+            }
+            let mut removed = supplier.clone();
+            removed.registration_removed = true;
+            apply_supplier_registration_update(&mut config, SupplierRegistrationUpdate { suppliers:vec![removed], force:true });
+            tasks.stop_removed_duplex_channels(&config);
+            // Restart must not resurrect the old session's admission.
+            apply_supplier_registration_update(&mut config, SupplierRegistrationUpdate { suppliers:vec![supplier.clone()], force:true });
+            tasks.stop_removed_duplex_channels(&config);
+            if active {
+                assert_eq!(crate::channel_concurrency::current(&supplier.channel_id), 1, "withdrawal must not cancel an active turn");
+            } else {
+                let _ = tasks.send_duplex(frame()).await;
+            }
+            let _ = finish.send(());
+            let mut completed = false;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let message = messages.recv().await.unwrap();
+                    if message.kind == "duplex_close" { break; }
+                    assert_eq!(message.kind, "duplex_server_frame", "{message:?}");
+                    if message.payload["turn_terminal"] == true {
+                        assert_eq!(message.payload["status"], 200);
+                        completed = true;
+                        let _ = tasks.send_duplex(frame()).await;
+                    }
+                }
+            }).await.unwrap();
+            assert_eq!(completed, active);
+            tokio::time::timeout(Duration::from_secs(3), upstream).await.unwrap().unwrap();
+            assert_eq!(calls.load(Ordering::SeqCst), usize::from(active), "a stopped WS executed a new turn");
+            assert_eq!(crate::channel_concurrency::current(&supplier.channel_id), 0);
+            assert!(tasks.is_empty(), "the stopped session must leave the drain registry");
+        }
+    }
+
     enum NegotiationPeer {
         WebSocket(tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>),
         Quic {

@@ -78,7 +78,7 @@ pub(crate) async fn forward_cursor_subscription_request(
             )
         })
         .collect();
-    let client = crate::cursor::http_client()?;
+    let client = crate::cursor::channel_http_client(channel.v2.use_system_proxy)?;
     #[cfg(test)]
     let client = if upstream_override.is_some() {
         reqwest::Client::builder()

@@ -327,7 +327,7 @@ mod tests {
                 };
                 let started = std::time::Instant::now();
                 let result = execute_channel_request(
-                    &crate::long_http_client(),
+                    &crate::http_client::channel_client(channel.v2.use_system_proxy).unwrap(),
                     &channel,
                     ChannelRequest {
                         method: reqwest::Method::POST,

@@ -7,6 +7,8 @@ import {
   channelsByLocalPriority,
   isValidLocalPriority,
   withLocalPriorities,
+  prioritiesForChannelDrop,
+  MAX_LOCAL_PRIORITY,
 } from "./channelOrdering";
 
 describe("channelsVisibleInModelMarket", () => {
@@ -46,6 +48,51 @@ describe("channelsVisibleInModelMarket", () => {
   test("does not count the development placeholder as a configured channel", () => {
     expect(configuredModelMarketChannelCount([placeholder])).toBe(0);
     expect(configuredModelMarketChannelCount([placeholder, userChannel])).toBe(1);
+  });
+});
+
+describe("dragging local priority groups", () => {
+  const channels = [
+    { id: "a", local_priority: 1 }, { id: "b", local_priority: 1 },
+    { id: "c", local_priority: 2 }, { id: "d", local_priority: 8 },
+  ];
+  test("joining keeps existing groups and same-group drops are unchanged", () => {
+    expect(prioritiesForChannelDrop(channels, "d", { kind: "join", channelId: "b" })).toEqual({ d: 1 });
+    expect(prioritiesForChannelDrop(channels, "b", { kind: "join", channelId: "a" })).toEqual({});
+  });
+  test("inserts a new tier while preserving every existing group", () => {
+    const edits = prioritiesForChannelDrop(channels, "d", { kind: "insert", beforeChannelId: "a" });
+    expect(edits).toEqual({ d: 1, a: 2, b: 2, c: 3 });
+    expect(applyLocalPriorities(channels, edits).map((channel) => [channel.id, channel.local_priority]))
+      .toEqual([["d", 1], ["a", 2], ["b", 2], ["c", 3]]);
+  });
+  test("splits one member into a separate tier and keeps numbers consecutive", () => {
+    expect(prioritiesForChannelDrop(channels, "b", { kind: "insert", beforeChannelId: "d" })).toEqual({ b: 3, d: 4 });
+    expect(prioritiesForChannelDrop(channels, "b", { kind: "insert", beforeChannelId: null })).toEqual({ d: 3, b: 4 });
+  });
+  test("moving down closes the old tier instead of creating a fifth number", () => {
+    const four = ["a", "b", "c", "d"].map((id, index) => ({ id, local_priority: index + 1 }));
+    const moved = prioritiesForChannelDrop(four, "a", { kind: "insert", beforeChannelId: null });
+    expect(applyLocalPriorities(four, moved).map(channel => [channel.id, channel.local_priority]))
+      .toEqual([["b", 1], ["c", 2], ["d", 3], ["a", 4]]);
+    const joined = prioritiesForChannelDrop(four, "a", { kind: "join", channelId: "c" });
+    expect(applyLocalPriorities(four, joined).map(channel => [channel.id, channel.local_priority]))
+      .toEqual([["b", 1], ["a", 2], ["c", 2], ["d", 3]]);
+  });
+  test("does not renumber unchanged moves or persist missing drag targets", () => {
+    expect(prioritiesForChannelDrop(channels, "c", { kind: "insert", beforeChannelId: "d" })).toEqual({});
+    expect(prioritiesForChannelDrop(channels, "d", { kind: "insert", beforeChannelId: null })).toEqual({});
+    expect(prioritiesForChannelDrop(channels, "deleted", { kind: "join", channelId: "a" })).toEqual({});
+    expect(prioritiesForChannelDrop(channels, "d", { kind: "insert", beforeChannelId: "deleted" })).toEqual({});
+  });
+  test("includes hidden peers and normalizes large valid priorities", () => {
+    const all = [...channels, { id: "hidden", local_priority: 2 }];
+    expect(prioritiesForChannelDrop(all, "d", { kind: "insert", beforeChannelId: "c" }))
+      .toEqual({ d: 2, c: 3, hidden: 3 });
+    const extreme = [{ id: "a", local_priority: 1 }, { id: "b", local_priority: MAX_LOCAL_PRIORITY }, { id: "c", local_priority: MAX_LOCAL_PRIORITY }];
+    const edits = prioritiesForChannelDrop(extreme, "a", { kind: "insert", beforeChannelId: null });
+    expect(edits).toEqual({ b: 1, c: 1, a: 2 });
+    expect(Object.values(edits).every(isValidLocalPriority)).toBe(true);
   });
 });
 

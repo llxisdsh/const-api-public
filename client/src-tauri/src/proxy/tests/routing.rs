@@ -31,7 +31,7 @@
     #[tokio::test]
     async fn local_priority_http_balances_new_sessions_keeps_affinity_and_falls_back_at_capacity() {
         let upstream = warp::path!(String / "v1" / "chat" / "completions")
-            .map(|account: String| warp::reply::json(&serde_json::json!({"account":account,"choices":[]})));
+            .map(|account: String| warp::reply::json(&serde_json::json!({"account":account,"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]})));
         let (addr, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
         let task = tokio::spawn(server);
         let mut config = default_config();
@@ -68,6 +68,14 @@
         assert_eq!(request(&shared, "session-backup").await, "backup", "full first tier falls through without spending upstream attempts");
         drop((a1, a2, b_busy, b2));
         assert_ne!(request(&shared, "session-recovered").await, "backup", "new sessions return to the recovered first tier");
+        assert_eq!(request(&shared, "session-backup").await, "backup", "keep the successful route inside the reselection cooldown");
+        {
+            let mut preferences=shared.local_model_route_preferences.lock().unwrap();
+            for preference in preferences.values_mut() { preference.last_reselection_at_unix -= LOCAL_MODEL_RESELECTION_SECONDS; }
+        }
+        let reselected=request(&shared,"session-backup").await;
+        assert_ne!(reselected,"backup", "normal selection restores higher-priority supply at a new request boundary");
+        assert_eq!(request(&shared,"session-backup").await,reselected,"new stable route remains sticky within its tier");
         task.abort();
     }
 
@@ -423,8 +431,9 @@
             OpenAiSubscriptionImagePayload {
                 body: body.clone(),
                 content_type: "application/json; charset=utf-8".to_string(),
-            },
+            }, Default::default(),
         )
+        .expect("image transport")
         .build()
         .expect("native image request");
 
@@ -523,9 +532,9 @@
         let requests = [
             crate::supplier::openai_subscription_response_request(&client, &url, "fixture-token", &credential, body.into(), Some(&headers)).unwrap(),
             openai_subscription_image_request_builder(&client, &url, "fixture-token", &credential, &headers,
-                OpenAiSubscriptionImagePayload { body: body.into(), content_type:"application/json".into() }),
+                OpenAiSubscriptionImagePayload { body: body.into(), content_type:"application/json".into() }, Default::default(),).unwrap(),
             openai_subscription_realtime_call_request(&client, &url, "fixture-token", &credential, &headers,
-                OpenAiSubscriptionRealtimeCallPayload { body: body.into(), content_type:"application/json", upstream_model:"fixture".into() }),
+                OpenAiSubscriptionRealtimeCallPayload { body: body.into(), content_type:"application/json", upstream_model:"fixture".into() }, Default::default(),).unwrap(),
         ];
         for (index, request) in requests.into_iter().enumerate() {
             assert!(request.send().await.unwrap().status().is_success());
@@ -1185,7 +1194,8 @@
         let platform = warp::any().map(move || {
             if platform_available_filter.load(Ordering::SeqCst) {
                 return warp::reply::json(&serde_json::json!({
-                    "source": "platform-exact", "choices": []
+                    "source": "platform-exact",
+                    "choices": [{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]
                 }))
                 .into_response();
             }
@@ -1221,7 +1231,8 @@
                 .into_response();
             }
             warp::reply::json(&serde_json::json!({
-                "source": format!("local:{model}"), "choices": []
+                "source": format!("local:{model}"),
+                "choices": [{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]
             }))
             .into_response()
         });
@@ -1229,7 +1240,8 @@
         let local_task = tokio::spawn(local_server);
         let challenger = warp::any().map(|| {
             warp::reply::json(&serde_json::json!({
-                "source": "challenger", "choices": []
+                "source": "challenger",
+                "choices": [{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]
             }))
         });
         let (challenger_addr, challenger_server) =
@@ -3360,6 +3372,55 @@
         assert_eq!(evidence.error_code, "response_conversion_failed");
         assert_eq!(*calls.lock().unwrap(), ["first"]);
         assert_ne!(shared.local_channel_readiness.lock().unwrap().get("first"), Some(&false));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn local_owner_success_keeps_general_session_on_last_stable_channel() {
+        let calls = Arc::new(StdMutex::new(Vec::<String>::new()));
+        let recorded = calls.clone();
+        let upstream = warp::path::param::<String>().map(move |channel: String| {
+            recorded.lock().unwrap().push(channel);
+            warp::reply::json(&serde_json::json!({"status":"completed","output":[]}))
+        });
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        let mut config = default_config();
+        config.account_device_api_key.clear();
+        config.endpoints.clear();
+        config.prefer_local_supply = true;
+        config.channels = ["owner", "stable"].into_iter().map(|id| {
+            openai_api_channel(id, "model-a", &format!("http://{address}/{id}/v1"))
+        }).collect();
+        let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-conversation-id", "owner-regression-session".parse().unwrap());
+        let body = br#"{"model":"model-a","input":"continue"}"#;
+        let key = local_model_route_affinity_key("/v1/responses", &headers, body).unwrap();
+        let context = local_model_route_preference_context(&shared.config_snapshot(), false, true);
+        shared.promote_local_model_route(
+            &key, &model_quota_route_key("stable", "model-a"), context, now_unix(), std::time::Instant::now(),
+        );
+        shared.local_resource_owners.bind_many(vec![LocalResourceOwner {
+            key: LocalResourceOwnerKey {
+                surface: crate::surface::ApiSurface::OpenAi,
+                resource_type: "response".into(), resource_id: "resp_sticky_old_owner".into(),
+            },
+            channel_id: "owner".into(), route_model: "model-a".into(), updated_at_unix: now_unix(),
+        }]).await.unwrap();
+        for body in [
+            br#"{"model":"model-a","previous_response_id":"resp_sticky_old_owner","input":"continue"}"#.as_slice(),
+            body.as_slice(),
+        ] {
+            let response = forward_with_failover(
+                warp::http::Method::POST, "/v1/responses", "", headers.clone(),
+                bytes::Bytes::copy_from_slice(body), &shared,
+            ).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            crate::test_body_bytes(response.into_body()).await.unwrap();
+            assert_eq!(shared.preferred_local_model_route(&key, context, now_unix()), Some(model_quota_route_key("stable", "model-a")));
+        }
+        assert_eq!(*calls.lock().unwrap(), ["owner", "stable"]);
         server.abort();
     }
 

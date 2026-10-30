@@ -73,7 +73,7 @@ pub(super) async fn quota(
     policy: SubscriptionCatalogPolicy,
 ) -> Result<Vec<QuotaWindow>> {
     refresh_subscription_quota(channel, policy, async {
-        let client = crate::cursor::http_client()?;
+        let client = crate::cursor::channel_http_client(channel.v2.use_system_proxy)?;
         let (mut token, _, _) =
             ensure_cursor_subscription_access_token(&client, channel, false).await?;
         let mut result = crate::cursor::quota::fetch(&client, &token).await;
@@ -114,7 +114,7 @@ pub(super) async fn catalog(
     {
         return Ok((value.models.clone(), false, Vec::new()));
     }
-    let client = crate::cursor::http_client()?;
+    let client = crate::cursor::channel_http_client(channel.v2.use_system_proxy)?;
     let mut refreshed = false;
     let result = async {
         let (mut token, _, did_refresh) =

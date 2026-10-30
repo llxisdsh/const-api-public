@@ -615,6 +615,7 @@ pre {
 }
 
 .guidance-notice-stack {
+  --guidance-notice-width: 520px;
   --guidance-notice-shadow:
     0 3px 8px rgba(0, 0, 0, 0.1),
     0 1px 3px rgba(0, 0, 0, 0.06);
@@ -624,7 +625,7 @@ pre {
   bottom: 72px;
   z-index: 91;
   display: grid;
-  width: min(390px, calc(100vw - 36px));
+  width: min(var(--guidance-notice-width), calc(100vw - 36px));
   height: auto;
   min-height: 0;
   max-height: min(64vh, 560px);
@@ -641,7 +642,6 @@ pre {
 }
 
 .guidance-notice-stack.is-scrollable {
-  width: min(414px, calc(100vw - 28px));
   padding: 12px;
   overflow-y: auto;
   scrollbar-gutter: stable;
@@ -665,7 +665,7 @@ pre {
   grid-template-columns: 34px minmax(0, 1fr);
   grid-template-areas:
     "icon copy"
-    ". actions";
+    "actions actions";
   align-items: start;
   align-self: end;
   gap: 9px 12px;
@@ -690,7 +690,7 @@ pre {
   grid-template-columns: 34px minmax(0, 1fr) 28px;
   grid-template-areas:
     "icon copy close"
-    ". actions actions";
+    "actions actions actions";
 }
 
 .guidance-notice-tray:focus-visible {
@@ -1125,7 +1125,7 @@ pre {
   .guidance-notice-stack {
     right: 12px;
     bottom: 70px;
-    width: min(390px, calc(100vw - 24px));
+    width: min(var(--guidance-notice-width), calc(100vw - 24px));
     max-height: 64vh;
   }
 

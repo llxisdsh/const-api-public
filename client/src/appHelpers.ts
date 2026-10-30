@@ -84,6 +84,7 @@ export const emptyConfig: ClientConfig = {
   channels: [],
   supplier: {
     user_agent_profile: "",
+    use_system_proxy: false,
     enabled: false,
     kind: "openai_compatible",
     api_format: "openai_chat",
@@ -2107,6 +2108,7 @@ export function channelV5FromRenderer(channel: ChannelConfig): ChannelConfigV5 {
     default_target: structuredClone(channel.default_target),
     discovery: structuredClone(channel.discovery),
     user_agent_profile: channel.user_agent_profile ?? "",
+    use_system_proxy: channel.use_system_proxy ?? false,
     default_model: reconciled.defaultModel,
     models: reconciled.models,
     price_ratio: normalizedPriceRatio(channel.price_ratio),
@@ -2177,6 +2179,7 @@ export function channelFromSupplier(id: string, supplier: SupplierConfig): Chann
   return rendererChannelFromV5(normalizeChannelV5({
     ...initial,
     user_agent_profile: supplier.user_agent_profile ?? "",
+    use_system_proxy: supplier.use_system_proxy ?? false,
     enabled: supplier.enabled,
     share_enabled: supplier.enabled,
     surfaces: configuredSurfaces,
@@ -2196,6 +2199,7 @@ export function supplierFromChannel(channel: ChannelConfig): SupplierConfig {
   return {
     source_driver: channel.source_driver,
     user_agent_profile: channel.user_agent_profile ?? "",
+    use_system_proxy: channel.use_system_proxy ?? false,
     enabled: channel.enabled && channelIsPlatformShareable(channel),
     kind: channel.kind,
     api_format: channel.api_format,

@@ -147,6 +147,7 @@ pub(crate) fn default_supplier_config() -> SupplierConfig {
         default_target: v2.default_target,
         discovery: v2.discovery,
         user_agent_profile: String::new(),
+        use_system_proxy: false,
         channel_id: "channel-1".to_string(),
         enabled: false,
         kind: default_channel_kind(),
@@ -296,6 +297,7 @@ pub(crate) fn channel_v2_contract_for_source(
         default_target,
         discovery,
         user_agent_profile: String::new(),
+        use_system_proxy: false,
         max_concurrency: default_channel_max_concurrency(),
         quota_reserve_percent: 0,
     }
@@ -887,6 +889,7 @@ pub(crate) fn channel_from_supplier(id: String, supplier: &SupplierConfig) -> Ch
             default_target: supplier.default_target.clone(),
             discovery: supplier.discovery.clone(),
             user_agent_profile: supplier.user_agent_profile.clone(),
+            use_system_proxy: supplier.use_system_proxy,
             max_concurrency: supplier.max_concurrency,
             quota_reserve_percent: supplier.quota_reserve_percent.min(100),
         },
@@ -924,6 +927,7 @@ fn migrate_supplier_v4_channel_at_load_boundary(
             default_target: value.default_target.clone(),
             discovery: value.discovery.clone(),
             user_agent_profile: value.user_agent_profile.clone(),
+            use_system_proxy: value.use_system_proxy,
             id: id.to_string(),
             enabled: value.enabled,
             share_enabled: value.enabled,
@@ -981,6 +985,7 @@ fn migrate_channel_v4_at_load_boundary(value: ChannelConfigV4Read, _index: usize
         v2.discovery = discovery;
     }
     v2.user_agent_profile = value.user_agent_profile.trim().to_ascii_lowercase();
+    v2.use_system_proxy = value.use_system_proxy;
 
     let retained_subscription = matches!(
         v2.executor,
@@ -1253,6 +1258,7 @@ pub(crate) fn supplier_from_channel_unfiltered(channel: &ChannelConfig) -> Suppl
         default_target: channel.v2.default_target.clone(),
         discovery: channel.v2.discovery.clone(),
         user_agent_profile: channel.v2.user_agent_profile.clone(),
+        use_system_proxy: channel.v2.use_system_proxy,
         channel_id: channel.id.clone(),
         enabled: channel.enabled && crate::source_driver::channel_is_platform_shareable(channel),
         kind: driver
@@ -2744,6 +2750,34 @@ mod tests {
             supplier_from_channel(&decoded.channels[0]).user_agent_profile,
             "opencode"
         );
+    }
+
+    #[test]
+    fn v5_channel_proxy_defaults_direct_and_survives_supplier_projection() {
+        for source in crate::source_driver::ALL_SOURCE_DRIVER_IDS {
+            let mut cfg = default_config();
+            cfg.channels[0].v2 = channel_v2_contract_for_source(source);
+            cfg.channels[0].surface_bindings = source_driver_surface_bindings(source, "");
+            assert!(!cfg.channels[0].v2.use_system_proxy);
+            cfg.channels[0].v2.use_system_proxy = true;
+            let encoded = serde_json::to_vec(&cfg).unwrap();
+            let decoded: ClientConfig = serde_json::from_slice(&encoded).unwrap();
+            assert!(decoded.channels[0].v2.use_system_proxy);
+            let supplier = supplier_from_channel(&decoded.channels[0]);
+            assert!(supplier.use_system_proxy);
+            assert!(
+                channel_from_supplier("roundtrip".into(), &supplier)
+                    .v2
+                    .use_system_proxy
+            );
+            let mut legacy: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+            legacy["channels"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("use_system_proxy");
+            let decoded: ClientConfig = serde_json::from_value(legacy).unwrap();
+            assert!(!decoded.channels[0].v2.use_system_proxy);
+        }
     }
 
     #[test]

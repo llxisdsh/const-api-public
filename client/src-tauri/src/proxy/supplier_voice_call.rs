@@ -18,10 +18,12 @@ impl std::fmt::Display for VoiceCallSetupError {
 impl std::error::Error for VoiceCallSetupError {}
 
 async fn open_supplier_voice_call(
-    client: &Client,
+    _client: &Client,
     channel: &ChannelConfig,
     wire: &crate::surface_wire::SurfaceEnvelope,
 ) -> Result<(crate::realtime_media::MediaPeer, ResponsesUpstreamSocket)> {
+    let channel_client = crate::http_client::channel_client(channel.v2.use_system_proxy)?;
+    let client = &channel_client;
     let native_live = wire.operation == Some(crate::surface::ApiOperation::RealtimeLiveCallCreate);
     if wire.surface != Some(crate::surface::ApiSurface::OpenAi)
         || (!native_live

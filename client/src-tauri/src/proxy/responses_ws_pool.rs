@@ -10,7 +10,7 @@ const RESPONSES_WS_POOL_EVENT_BUFFER_BYTES: usize = crate::output_buffer::OUTPUT
 const RESPONSES_WS_POOL_WRITE_QUEUE: usize = 64;
 const RESPONSES_WS_POOL_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(not(test))]
-const RESPONSES_WS_POOL_EXCLUSIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const RESPONSES_WS_POOL_EXCLUSIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 #[cfg(test)]
 const RESPONSES_WS_POOL_EXCLUSIVE_IDLE_TIMEOUT: Duration = Duration::from_millis(100);
 const RESPONSES_WS_POOL_DRAIN_AGE: Duration = Duration::from_secs(50 * 60);
@@ -52,8 +52,10 @@ struct ResponsesWsPoolInner {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct ResponsesWsPoolKey {
+    use_system_proxy: bool,
     channel_id: String,
     credential_ref: String,
+    credential_scope: String,
     endpoint: String,
     handshake_fingerprint: String,
     protocol_mode: ResponsesWsPoolProtocolMode,
@@ -63,6 +65,7 @@ struct ResponsesWsPoolKey {
 struct ResponsesWsCapabilityKey {
     channel_id: String,
     credential_ref: String,
+    credential_scope: String,
     endpoint: String,
     beta: String,
     protocol_mode: ResponsesWsPoolProtocolMode,
@@ -98,6 +101,8 @@ struct ResponsesWsPoolBucket {
 struct ResponsesWsPoolBucketState {
     connections: Vec<Arc<ResponsesWsPooledConnection>>,
     connecting: usize,
+    credential_revision: String,
+    closed: bool,
 }
 
 struct ResponsesWsPooledConnection {
@@ -109,6 +114,7 @@ struct ResponsesWsPooledConnection {
     diagnostics: std::sync::Mutex<UpstreamWebsocketLease>,
     dial_ms: u64,
     draining: std::sync::atomic::AtomicBool,
+    credential_retired: std::sync::atomic::AtomicBool,
     broken: std::sync::atomic::AtomicBool,
     turns_started: std::sync::atomic::AtomicU64,
     session_pins: std::sync::atomic::AtomicUsize,
@@ -203,6 +209,10 @@ impl ResponsesWsPool {
         let protocol_mode = responses_ws_pool_protocol_mode(route, channel);
         let endpoint = responses_ws_pool_endpoint(route)?;
         let credential_ref = channel.v2.credential_ref.clone();
+        let credential_scope =
+            crate::detection::subscription_credential_scope_from_ref(&credential_ref);
+        let credential_revision =
+            crate::detection::subscription_credential_revision_from_ref(&credential_ref);
         let beta = shared_headers
             .get("openai-beta")
             .and_then(|value| value.to_str().ok())
@@ -210,10 +220,18 @@ impl ResponsesWsPool {
             .to_string();
         let capability = {
             let mut capabilities = self.inner.capabilities.lock().await;
+            capabilities.retain(|old, _| {
+                !(old.channel_id == channel.id
+                    && old.credential_ref == channel.v2.credential_ref
+                    && old.endpoint == endpoint
+                    && old.protocol_mode == protocol_mode
+                    && old.credential_scope != credential_scope)
+            });
             capabilities
                 .entry(ResponsesWsCapabilityKey {
                     channel_id: channel.id.clone(),
                     credential_ref: credential_ref.clone(),
+                    credential_scope: credential_scope.clone(),
                     endpoint: endpoint.clone(),
                     beta,
                     protocol_mode,
@@ -238,8 +256,10 @@ impl ResponsesWsPool {
                 .clone()
         };
         let key = ResponsesWsPoolKey {
+            use_system_proxy: channel.v2.use_system_proxy,
             channel_id: channel.id.clone(),
             credential_ref,
+            credential_scope,
             endpoint,
             handshake_fingerprint: responses_ws_pool_header_fingerprint(&shared_headers),
             protocol_mode,
@@ -251,11 +271,26 @@ impl ResponsesWsPool {
         );
         let bucket = {
             let mut buckets = self.inner.buckets.lock().await;
+            let stale = buckets
+                .keys()
+                .filter(|old| {
+                    old.channel_id == key.channel_id
+                        && old.credential_ref == key.credential_ref
+                        && old.endpoint == key.endpoint
+                        && old.protocol_mode == key.protocol_mode
+                        && old.credential_scope != key.credential_scope
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let stale_buckets = stale
+                .into_iter()
+                .filter_map(|stale_key| buckets.remove(&stale_key))
+                .collect::<Vec<_>>();
             buckets.retain(|_, bucket| {
                 bucket.open_connections.load(Ordering::Acquire) != 0
                     || Arc::strong_count(bucket) > 1
             });
-            buckets
+            let bucket = buckets
                 .entry(key)
                 .or_insert_with(|| {
                     log::info!(
@@ -267,7 +302,10 @@ impl ResponsesWsPool {
                         hard_connections,
                     );
                     Arc::new(ResponsesWsPoolBucket {
-                        state: tokio::sync::Mutex::new(ResponsesWsPoolBucketState::default()),
+                        state: tokio::sync::Mutex::new(ResponsesWsPoolBucketState {
+                            credential_revision: credential_revision.clone(),
+                            ..Default::default()
+                        }),
                         notify: tokio::sync::Notify::new(),
                         capability: capability.clone(),
                         target_connections: std::sync::atomic::AtomicUsize::new(
@@ -287,8 +325,19 @@ impl ResponsesWsPool {
                         },
                     })
                 })
-                .clone()
+                .clone();
+            // Closing outside the map lock avoids blocking unrelated pool
+            // lookups while the old account generation drains its sockets.
+            drop(buckets);
+            for stale_bucket in stale_buckets {
+                stale_bucket.close_all("credential_account_changed").await;
+            }
+            bucket
         };
+        // Refreshing a token keeps the account, capacity budget and session
+        // handles. Retire old authenticated sockets only after admitted turns
+        // finish; subsequent turns reconnect/replay using the current token.
+        bucket.refresh_credentials(&credential_revision).await;
         bucket
             .target_connections
             .store(target_connections, Ordering::Release);
@@ -651,11 +700,17 @@ impl ResponsesWsPoolBucket {
             let capability_notified = self.capability.notify.notified();
             let mut create = false;
             let mut burst = false;
+            let mut connecting_revision = String::new();
             {
                 let mut state = self.state.lock().await;
+                if state.closed {
+                    return Err(anyhow!("Responses WebSocket pool account changed or pool shut down"));
+                }
                 state.connections.retain(|connection| !connection.is_broken());
                 if let Some(preferred) = preferred {
-                    if !preferred.is_broken() {
+                    if !preferred.is_broken()
+                        && !preferred.credential_retired.load(Ordering::Acquire)
+                    {
                         if let Some(lease) = preferred_lane
                             .and_then(|lane| {
                                 preferred.try_allocate_lane_for_session(lane, require_affinity)
@@ -692,6 +747,7 @@ impl ResponsesWsPoolBucket {
                         let target = self.target_connections.load(Ordering::Acquire);
                         burst = current >= target;
                         state.connecting = state.connecting.saturating_add(1);
+                        connecting_revision = state.credential_revision.clone();
                         create = true;
                     }
                 }
@@ -707,6 +763,9 @@ impl ResponsesWsPoolBucket {
                 .await;
                 let mut state = self.state.lock().await;
                 state.connecting = state.connecting.saturating_sub(1);
+                if state.closed {
+                    return Err(anyhow!("Responses WebSocket pool account changed or pool shut down"));
+                }
                 match connected {
                     Ok(socket) => {
                         let connection = ResponsesWsPooledConnection::spawn(
@@ -719,6 +778,9 @@ impl ResponsesWsPoolBucket {
                         let mut lease = connection
                             .try_allocate(false)
                             .ok_or_else(|| anyhow!("new Responses WebSocket has no free lane"))?;
+                        if state.credential_revision != connecting_revision {
+                            connection.retire_for_credential_refresh();
+                        }
                         lease.mark_connection_created();
                         state.connections.push(connection);
                         self.notify.notify_waiters();
@@ -747,9 +809,22 @@ impl ResponsesWsPoolBucket {
         }
     }
 
+    async fn refresh_credentials(&self, revision: &str) {
+        let mut state = self.state.lock().await;
+        if state.credential_revision == revision || state.closed {
+            return;
+        }
+        state.credential_revision = revision.to_owned();
+        for connection in &state.connections {
+            connection.retire_for_credential_refresh();
+        }
+        self.notify.notify_waiters();
+    }
+
     async fn close_all(&self, reason: &'static str) {
         let connections = {
             let mut state = self.state.lock().await;
+            state.closed = true;
             std::mem::take(&mut state.connections)
         };
         for connection in connections {
@@ -767,12 +842,13 @@ impl ResponsesWsPoolBucket {
 
 impl ResponsesWsPooledConnection {
     fn spawn(
-        socket: ResponsesUpstreamSocket,
+        socket: impl Into<ResponsesUpstreamSocket>,
         bucket: &Arc<ResponsesWsPoolBucket>,
         context: &ResponsesWsConnectContext,
         burst: bool,
         dial_ms: u64,
     ) -> Arc<Self> {
+        let socket = socket.into();
         bucket.open_connections.fetch_add(1, Ordering::AcqRel);
         let diagnostics = UpstreamWebsocketLease::open(
             "openai_responses_pool",
@@ -799,6 +875,7 @@ impl ResponsesWsPooledConnection {
             diagnostics: std::sync::Mutex::new(diagnostics),
             dial_ms,
             draining: std::sync::atomic::AtomicBool::new(false),
+            credential_retired: std::sync::atomic::AtomicBool::new(false),
             broken: std::sync::atomic::AtomicBool::new(false),
             turns_started: std::sync::atomic::AtomicU64::new(0),
             session_pins: std::sync::atomic::AtomicUsize::new(0),
@@ -860,6 +937,9 @@ impl ResponsesWsPooledConnection {
             .slots
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.credential_retired.load(Ordering::Acquire) {
+            return None;
+        }
         let (lane, slot) = slots
             .iter_mut()
             .take(capacity)
@@ -917,6 +997,9 @@ impl ResponsesWsPooledConnection {
             .slots
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.credential_retired.load(Ordering::Acquire) {
+            return None;
+        }
         let slot = slots.get_mut(lane)?;
         if slot.sender.is_some() {
             return None;
@@ -939,6 +1022,20 @@ impl ResponsesWsPooledConnection {
 
     fn is_broken(&self) -> bool {
         self.broken.load(Ordering::Acquire)
+    }
+
+    fn retire_for_credential_refresh(&self) {
+        let idle = {
+            let slots = self.slots.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            // Serialize retirement with lane admission. Already allocated lanes
+            // retain their response streams; even affinity cannot admit a new one.
+            self.credential_retired.store(true, Ordering::Release);
+            self.draining.store(true, Ordering::Release);
+            slots.iter().all(|slot| slot.sender.is_none())
+        };
+        if idle {
+            self.request_close("credential_refreshed");
+        }
     }
 
     fn occupied(&self) -> usize {
@@ -1320,6 +1417,7 @@ impl ResponsesWsPooledConnection {
         };
         if bucket.capability.value.load(Ordering::Acquire) == RESPONSES_WS_CAPABILITY_PROBING
             && response_scoped
+            && event_type != "response.metadata"
             && self.probing_stream_active()
         {
             bucket.observe_stream_id_capability(stream_id.is_some());
@@ -1634,7 +1732,7 @@ fn responses_ws_pool_shared_headers(
         // The adapter keeps only a native caller's beta negotiation, as over HTTP.
         let mut shared = codex_subscription_model_request_context_headers(
             Some(headers),
-            &active_codex_identity(),
+            &crate::codex_identity::codex_identity_for_channel(route.channel()),
         );
         crate::subscription_transport_policy::apply_to_headers(
             crate::source_driver::SourceDriverId::OpenAiSubscription,
@@ -1643,7 +1741,12 @@ fn responses_ws_pool_shared_headers(
         );
         return shared;
     }
-    let mut shared = codex_model_request_context_headers(Some(headers), &active_codex_identity());
+    // A generic gateway keeps its existing compatibility fallback. The
+    // subscription's Desktop default must not change other channel identities.
+    let mut shared = codex_model_request_context_headers(
+        Some(headers),
+        &crate::codex_identity::CodexProfile::Tui.identity(),
+    );
     if let Some(beta) = headers.get("openai-beta") {
         shared.insert("openai-beta", beta.clone());
     }
@@ -1792,6 +1895,109 @@ mod responses_ws_pool_tests {
         })
         .await
         .expect("buffered events");
+    }
+
+    #[tokio::test]
+    async fn credential_refresh_drains_active_responses_and_blocks_new_affinity_lanes() {
+        use tokio_tungstenite::tungstenite::Message;
+        for multiplex in [false, true] {
+            let (bucket, connection, mut server) = buffered_test_connection().await;
+            bucket.state.lock().await.credential_revision = "before-refresh".into();
+            if multiplex {
+                bucket.capability.value.store(RESPONSES_WS_CAPABILITY_MULTIPLEX, Ordering::Release);
+            }
+            let mut leases = Vec::new();
+            for _ in 0..if multiplex { 2 } else { 1 } {
+                let mut lease = connection.try_allocate(false).unwrap();
+                let create = r#"{"type":"response.create","input":[]}"#;
+                let body = if multiplex {
+                    responses_ws_pool_add_stream_id(create, lease.stream_id()).unwrap()
+                } else {
+                    create.into()
+                };
+                lease.start_turn(body).await.unwrap();
+                assert!(server.next().await.unwrap().unwrap().is_text());
+                leases.push(lease);
+            }
+            bucket.refresh_credentials("after-refresh").await;
+            assert!(!connection.is_broken(), "refresh interrupted an admitted response");
+            assert!(connection.try_allocate_for_session(true).is_none());
+            let error = bucket.acquire(Some(&connection), Some(0), true).await.err().unwrap();
+            assert!(responses_ws_pool_error_requires_full_replay(&error));
+            while let Some(mut lease) = leases.pop() {
+                let mut completed = serde_json::json!({
+                    "type":"response.completed", "response":{"id":"resp-refreshed","status":"completed"}
+                });
+                if multiplex {
+                    completed["stream_id"] = lease.stream_id().into();
+                }
+                server.send(Message::Text(completed.to_string().into())).await.unwrap();
+                let event = tokio::time::timeout(Duration::from_secs(3), lease.receiver.recv())
+                    .await.unwrap().unwrap().message.unwrap();
+                assert_eq!(responses_websocket_terminal_status(event.to_text().unwrap()), Some(200));
+                lease.finish();
+                if !leases.is_empty() {
+                    assert!(!connection.is_broken(), "another admitted lane was interrupted");
+                }
+            }
+            let close = tokio::time::timeout(Duration::from_secs(3), server.next())
+                .await.unwrap().unwrap().unwrap();
+            assert!(close.is_close(), "retired socket stayed open after the last response");
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_refresh_reuses_account_pool_and_account_switch_retires_old_pool() {
+        let directory = tempfile::tempdir().unwrap();
+        let credential = directory.path().join("account.json");
+        let write_credential = |account: &str, token: &str| {
+            std::fs::write(&credential, serde_json::json!({
+                "type":"openai", "account_id":account, "access_token":token
+            }).to_string()).unwrap();
+        };
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut tasks = tokio::task::JoinSet::new();
+            for _ in 0..3 {
+                let (tcp, _) = listener.accept().await.unwrap();
+                tasks.spawn(async move {
+                    let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                    while let Some(Ok(message)) = socket.next().await {
+                        if message.is_close() { break; }
+                    }
+                });
+            }
+            while tasks.join_next().await.is_some() {}
+        });
+        let mut channel = channel_from_supplier("rotation-test".into(), &default_supplier_config());
+        channel.v2.credential_ref = credential.to_string_lossy().into_owned();
+        let route = ResponsesWebsocketNativeRoute::HttpSurface {
+            channel: Box::new(channel.clone()),
+            target: crate::channel_surface::ChannelSurfaceTarget {
+                surface: crate::surface::ApiSurface::OpenAi,
+                base_url: format!("http://{address}"),
+                endpoint_profile: "openai".into(),
+                auth_scheme: "none".into(),
+                protocol: crate::protocol::kind::ProtocolKind::OpenAiResponses,
+            },
+        };
+        let pool = ResponsesWsPool::default();
+        let client = Client::new();
+        let headers = warp::http::HeaderMap::new();
+        write_credential("account-a", "token-a");
+        let first = pool.prepare_session(&client, &route, &channel, &headers, "test").await.unwrap();
+        write_credential("account-a", "token-refreshed");
+        let second = pool.prepare_session(&client, &route, &channel, &headers, "test").await.unwrap();
+        assert!(Arc::ptr_eq(&first.bucket, &second.bucket));
+        assert!(Arc::ptr_eq(&first.bucket.capability, &second.bucket.capability));
+        assert!(first.preferred.as_ref().unwrap().is_broken(), "idle old credential socket was not retired");
+        write_credential("account-b", "token-b");
+        let third = pool.prepare_session(&client, &route, &channel, &headers, "test").await.unwrap();
+        assert!(!Arc::ptr_eq(&second.bucket, &third.bucket));
+        assert!(second.bucket.acquire(None, None, false).await.is_err(), "old account pool reconnected");
+        pool.shutdown();
+        tokio::time::timeout(Duration::from_secs(3), server).await.unwrap().unwrap();
     }
 
     #[tokio::test]
@@ -2078,6 +2284,40 @@ mod responses_ws_pool_tests {
             "false".parse().expect("changed timing metrics"),
         );
         assert_ne!(baseline, responses_ws_pool_header_fingerprint(&changed));
+    }
+
+    #[test]
+    fn generic_gateway_pool_keeps_native_identity_and_existing_fallback() {
+        let supplier = default_supplier_config();
+        let mut channel = channel_from_supplier("generic-gateway".to_string(), &supplier);
+        channel.set_source_driver(crate::source_driver::SourceDriverId::CustomEndpoint);
+        let route = ResponsesWebsocketNativeRoute::HttpSurface {
+            channel: Box::new(channel),
+            target: crate::channel_surface::ChannelSurfaceTarget {
+                surface: crate::surface::ApiSurface::OpenAi,
+                base_url: "https://gateway.example.test".to_string(),
+                endpoint_profile: "openai".to_string(),
+                auth_scheme: "api_key".to_string(),
+                protocol: crate::protocol::kind::ProtocolKind::OpenAiResponses,
+            },
+        };
+        let mut input = warp::http::HeaderMap::new();
+        input.insert("originator", "Codex Desktop".parse().unwrap());
+        input.insert("user-agent", "Codex Desktop/0.999.0 (Windows; x86_64)".parse().unwrap());
+        input.insert("version", "0.999.0".parse().unwrap());
+        input.insert("session-id", "caller-session".parse().unwrap());
+        input.insert("openai-beta", "responses=future".parse().unwrap());
+        let shared = responses_ws_pool_shared_headers(&route, &input);
+        for name in ["originator", "user-agent", "version", "session-id", "openai-beta"] {
+            assert_eq!(shared[name], input[name], "{name}");
+        }
+
+        let fallback = responses_ws_pool_shared_headers(&route, &warp::http::HeaderMap::new());
+        let tui = crate::codex_identity::CodexProfile::Tui.identity();
+        assert_eq!(fallback["originator"], "codex-tui");
+        assert_eq!(fallback["user-agent"], tui.user_agent);
+        assert_eq!(fallback["version"], tui.version);
+        assert!(!fallback.contains_key("session-id"));
     }
 
     #[test]
@@ -2602,15 +2842,25 @@ mod responses_ws_pool_tests {
 
     #[tokio::test]
     async fn pre_send_affinity_loss_replays_complete_subscription_context_once() {
-        check_subscription_continuation_replay(false).await;
+        check_subscription_continuation_replay(None).await;
     }
 
     #[tokio::test]
     async fn rejected_reference_replays_complete_subscription_context_once() {
-        check_subscription_continuation_replay(true).await;
+        check_subscription_continuation_replay(Some(
+            r#"{"type":"error","status":400,"error":{"type":"invalid_request_error","code":"previous_response_not_found","param":"previous_response_id","message":"previous response expired"}}"#,
+        )).await;
     }
 
-    async fn check_subscription_continuation_replay(reject_reference: bool) {
+    #[tokio::test]
+    async fn rejected_reference_without_code_replays_complete_subscription_context_once() {
+        check_subscription_continuation_replay(Some(
+            r#"{"type":"error","status":400,"error":{"type":"invalid_request_error","code":null,"param":null,"message":"Invalid `previous_response_id`."}}"#,
+        )).await;
+    }
+
+    async fn check_subscription_continuation_replay(rejection_event: Option<&'static str>) {
+        let reject_reference = rejection_event.is_some();
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("mock listener");
@@ -2635,12 +2885,9 @@ mod responses_ws_pool_tests {
                     .expect("mock request text")
                     .to_string();
                 seen_tx.send(request).expect("capture request");
-                if reject_reference && connection_index == 1 {
+                if let Some(rejection) = rejection_event.filter(|_| connection_index == 1) {
                     socket.send(tokio_tungstenite::tungstenite::Message::Text(
-                        serde_json::json!({"type": "error", "status": 400, "error": {
-                            "type": "invalid_request_error", "code": "previous_response_not_found",
-                            "param": "previous_response_id", "message": "previous response expired"
-                        }}).to_string().into()
+                        rejection.into()
                     )).await.unwrap();
                     let replay = socket.next().await.unwrap().unwrap().into_text().unwrap().to_string();
                     seen_tx.send(replay).unwrap();
@@ -2701,7 +2948,7 @@ mod responses_ws_pool_tests {
         });
 
         let mut supplier = default_supplier_config();
-        supplier.channel_id = format!("pool-replay-integration-{reject_reference}");
+        supplier.channel_id = format!("pool-replay-integration-{:032x}", rand::random::<u128>());
         supplier.credential_ref = "pool-replay-account".to_string();
         supplier.subscription.credential_ref = supplier.credential_ref.clone();
         let mut channel = channel_from_supplier(supplier.channel_id.clone(), &supplier);
@@ -2823,34 +3070,39 @@ mod responses_ws_pool_tests {
             let metadata = responses_websocket_terminal_metadata(&rejection).unwrap();
             // Even a reference error must not restart a turn already visible to the caller.
             assert!(sender.replay_rejected_subscription_continuation(
-                &mut receiver, &supplier, &continuation, Some(&metadata), true,
+                &mut receiver, &supplier, &continuation, Some(&metadata), &rejection, true,
             ).await.unwrap().is_none());
             let mut unrelated = metadata.clone();
             unrelated.error_code = Some("rate_limit_exceeded".into());
             assert!(sender.replay_rejected_subscription_continuation(
-                &mut receiver, &supplier, &continuation, Some(&unrelated), false,
+                &mut receiver, &supplier, &continuation, Some(&unrelated), &rejection, false,
             ).await.unwrap().is_none());
             unrelated = metadata.clone();
             unrelated.status = 502;
             assert!(sender.replay_rejected_subscription_continuation(
-                &mut receiver, &supplier, &continuation, Some(&unrelated), false,
+                &mut receiver, &supplier, &continuation, Some(&unrelated), &rejection, false,
             ).await.unwrap().is_none());
             unrelated = metadata.clone();
             unrelated.event_type = "response.failed".into();
             assert!(sender.replay_rejected_subscription_continuation(
-                &mut receiver, &supplier, &continuation, Some(&unrelated), false,
+                &mut receiver, &supplier, &continuation, Some(&unrelated), &rejection, false,
             ).await.unwrap().is_none());
             let mut unavailable: serde_json::Value = serde_json::from_str(&continuation).unwrap();
+            unavailable["store"] = true.into();
+            assert!(sender.replay_rejected_subscription_continuation(
+                &mut receiver, &supplier, &unavailable.to_string(), Some(&metadata), &rejection, false,
+            ).await.unwrap().is_none());
+            unavailable["store"] = false.into();
             unavailable["previous_response_id"] = "resp_uncached_reference".into();
             assert!(sender.replay_rejected_subscription_continuation(
-                &mut receiver, &supplier, &unavailable.to_string(), Some(&metadata), false,
+                &mut receiver, &supplier, &unavailable.to_string(), Some(&metadata), &rejection, false,
             ).await.unwrap().is_none());
             let recovered = sender.replay_rejected_subscription_continuation(
-                &mut receiver, &supplier, &continuation, Some(&metadata), false,
+                &mut receiver, &supplier, &continuation, Some(&metadata), &rejection, false,
             ).await.unwrap().expect("explicit rejection should recover from complete history");
             // The full body has no reference; a second rejection must reach the caller.
             assert!(sender.replay_rejected_subscription_continuation(
-                &mut receiver, &supplier, &recovered, Some(&metadata), false,
+                &mut receiver, &supplier, &recovered, Some(&metadata), &rejection, false,
             ).await.unwrap().is_none());
             recovered
         } else {

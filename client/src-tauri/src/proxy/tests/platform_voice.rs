@@ -523,7 +523,7 @@ fn voice_preserves_native_dialect_headers_for_calls_and_sideband() {
     headers.insert("user-agent", "codex_cli_rs/0.150.1".parse().unwrap());
     headers.insert("openai-alpha", "quicksilver=v1".parse().unwrap());
     headers.insert("openai-beta", "future-voice=v1".parse().unwrap());
-    let copied = codex_realtime_request_context_headers(&headers);
+    let copied = codex_realtime_request_context_headers(&headers, Default::default(),);
     assert_eq!(copied["originator"], active_codex_identity().originator);
     assert_eq!(copied["user-agent"], active_codex_identity().user_agent);
     assert_eq!(copied["version"], active_codex_identity().version);
@@ -534,7 +534,7 @@ fn voice_preserves_native_dialect_headers_for_calls_and_sideband() {
         "",
         "test",
         &serde_json::json!({}),
-        &headers,
+        &headers, Default::default(),
     )
     .unwrap();
     assert_eq!(sideband.headers()["openai-alpha"], copied["openai-alpha"]);

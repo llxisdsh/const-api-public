@@ -490,6 +490,95 @@
     }
 
     #[tokio::test]
+    async fn native_websocket_completed_failover_stays_sticky_across_old_socket_turns() {
+        use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+        let upstream = warp::path!(String / "v1" / "responses").and(warp::ws())
+            .map(|_: String, ws: warp::ws::Ws| ws.on_upgrade(|mut socket| async move {
+                while let Some(Ok(message)) = socket.next().await {
+                    let Ok(text) = message.to_str() else { break; };
+                    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else { break; };
+                    assert_eq!(value["future"]["preserved"], true);
+                    let event = if value["mock_failure"] == true {
+                        r#"{"type":"response.failed","response":{"status":"failed","error":{"code":"invalid_request_error","message":"fixture rejection"}}}"#
+                    } else {
+                        r#"{"type":"response.completed","response":{"status":"completed","output":[]}}"#
+                    };
+                    if socket.send(warp::ws::Message::text(event)).await.is_err() { break; }
+                }
+            }));
+        let (upstream_address, upstream_server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let upstream_task = tokio::spawn(upstream_server);
+        let mut config = default_config();
+        config.api_key = "mock-sticky-key".into();
+        config.account_device_api_key.clear();
+        config.prefer_local_supply = true;
+        config.channels = ["ws-stable-old", "ws-stable-new"].into_iter().map(|id| {
+            let mut channel = openai_api_channel(id, "model-ws", &format!("http://{upstream_address}/{id}/v1"));
+            channel.v2.local_priority = Some(1);
+            channel.detection_checks.push(ChannelDetectionCheck {
+                name: "responses_operation".into(), capability: "openai.responses_websocket".into(),
+                status: "verified".into(), ..Default::default()
+            });
+            channel
+        }).collect();
+        let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+        shared.set_local_channel_ready("ws-stable-new", false);
+        let (proxy_address, proxy_server) = crate::bind_ephemeral!(crate::proxy_routes(shared.clone()), ([127, 0, 0, 1], 0));
+        let proxy_task = tokio::spawn(proxy_server);
+        let connect = async || {
+            let mut request = format!("ws://{proxy_address}/v1/responses").into_client_request().unwrap();
+            request.headers_mut().insert("authorization", "Bearer mock-sticky-key".parse().unwrap());
+            request.headers_mut().insert("session_id", "ws-stable-session".parse().unwrap());
+            tokio_tungstenite::connect_async(request).await.unwrap().0
+        };
+        let mut old = connect().await;
+        let success = r#"{"type":"response.create","model":"model-ws","input":[],"future":{"preserved":true}}"#;
+        let failure = r#"{"type":"response.create","model":"model-ws","input":[],"future":{"preserved":true},"mock_failure":true}"#;
+        let mut headers = HeaderMap::new();
+        headers.insert("session_id", "ws-stable-session".parse().unwrap());
+        let key = local_model_route_affinity_key("/v1/responses", &headers, success.as_bytes()).unwrap();
+        let context = local_model_route_preference_context(&shared.config_snapshot(), false, true);
+        let wait_idle = async |id: &str| {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while crate::channel_concurrency::current(id) != 0 { tokio::task::yield_now().await; }
+            }).await.unwrap();
+        };
+        old.send(Message::Text(success.into())).await.unwrap();
+        let completed = tokio::time::timeout(Duration::from_secs(5), old.next()).await.unwrap().unwrap().unwrap();
+        assert!(completed.to_text().unwrap().contains("response.completed"));
+        wait_idle("ws-stable-old").await;
+        assert_eq!(shared.preferred_local_model_route(&key, context, now_unix()), Some(model_quota_route_key("ws-stable-old", "model-ws")));
+
+        shared.set_local_channel_ready("ws-stable-old", false);
+        shared.set_local_channel_ready("ws-stable-new", true);
+        let mut new = connect().await;
+        new.send(Message::Text(failure.into())).await.unwrap();
+        let rejected = tokio::time::timeout(Duration::from_secs(5), new.next()).await.unwrap().unwrap().unwrap();
+        assert!(rejected.to_text().unwrap().contains("response.failed"));
+        wait_idle("ws-stable-new").await;
+        assert_eq!(shared.preferred_local_model_route(&key, context, now_unix()), Some(model_quota_route_key("ws-stable-old", "model-ws")), "failure cannot promote a newly connected route");
+
+        shared.set_local_channel_ready("ws-stable-old", true);
+        new.send(Message::Text(success.into())).await.unwrap();
+        let completed = tokio::time::timeout(Duration::from_secs(5), new.next()).await.unwrap().unwrap().unwrap();
+        assert!(completed.to_text().unwrap().contains("response.completed"));
+        wait_idle("ws-stable-new").await;
+        old.send(Message::Text(success.into())).await.unwrap();
+        let completed = tokio::time::timeout(Duration::from_secs(5), old.next()).await.unwrap().unwrap().unwrap();
+        assert!(completed.to_text().unwrap().contains("response.completed"));
+        wait_idle("ws-stable-old").await;
+        assert_eq!(shared.preferred_local_model_route(&key, context, now_unix()), Some(model_quota_route_key("ws-stable-new", "model-ws")), "an older bound socket cannot pull the shared session back");
+        match select_responses_websocket_route(&shared, &headers, success.as_bytes()) {
+            ResponsesWebsocketRoute::Native(route) => assert_eq!(route.channel().id, "ws-stable-new"),
+            _ => panic!("expected the last completed native route"),
+        }
+        let _ = old.close(None).await;
+        let _ = new.close(None).await;
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
+    #[tokio::test]
     async fn native_websocket_holds_channel_admission_only_while_a_turn_is_active() {
         use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();

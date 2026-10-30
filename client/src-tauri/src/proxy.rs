@@ -55,6 +55,10 @@ include!("proxy/gemini_upload_session.rs");
 include!("proxy/local_priority.rs");
 include!("proxy/runtime.rs");
 include!("proxy/model_health.rs");
+
+#[path = "proxy/responses_ws_transport.rs"]
+mod responses_ws_transport;
+use responses_ws_transport::ResponsesUpstreamSocket;
 include!("proxy/websocket.rs");
 include!("proxy/websocket_failure.rs");
 include!("proxy/native_platform.rs");

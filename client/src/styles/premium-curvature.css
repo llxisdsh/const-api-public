@@ -11,7 +11,8 @@
   --floating-border: var(--surface-floating-border);
 }
 
-button {
+button,
+.supplier-channel-priority {
   border-radius: var(--radius-control) !important;
 }
 

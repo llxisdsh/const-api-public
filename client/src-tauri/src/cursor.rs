@@ -21,13 +21,25 @@ const API: &str = "https://api2.cursor.sh";
 pub(crate) const CLIENT_VERSION: &str = "cli-2026.10.16-e3cb207";
 
 pub(crate) fn http_client() -> Result<Client> {
+    // OAuth login has no channel yet; retain its existing proxy policy.
+    channel_http_client(true)
+}
+
+pub(crate) fn channel_http_client(use_system_proxy: bool) -> Result<Client> {
     static CLIENT: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
-    Ok(crate::http_client::cached_client(&CLIENT, || {
-        Client::builder()
-            .connect_timeout(Duration::from_secs(15))
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-    })?)
+    static DIRECT: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
+    Ok(crate::http_client::cached_client(
+        if use_system_proxy { &CLIENT } else { &DIRECT },
+        move || {
+            crate::http_client::proxy_policy(
+                Client::builder()
+                    .connect_timeout(Duration::from_secs(15))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .retry(reqwest::retry::never()),
+                use_system_proxy,
+            )
+        },
+    )?)
 }
 
 pub(crate) fn headers(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {

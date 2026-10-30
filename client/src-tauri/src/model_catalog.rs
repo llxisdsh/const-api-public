@@ -629,11 +629,16 @@ pub(crate) async fn fetch_model_catalog(
     let mut all = Vec::new();
     let mut seen_cursors = HashSet::new();
     for page_index in 0..100 {
-        let response = client
-            .get(url.clone())
-            .headers(headers.clone())
-            .send_adaptive()
-            .await?;
+        let request = client.get(url.clone()).headers(headers.clone());
+        // Codex's account-scoped client also serves long model streams. Keep
+        // catalog reads at the previous short-client deadline and preserve a
+        // reqwest timeout error so cached-catalog recovery can classify it.
+        let request = if matches!(kind, ModelCatalogKind::Codex) {
+            request.timeout(std::time::Duration::from_secs(30))
+        } else {
+            request
+        };
+        let response = request.send_adaptive().await?;
         let status = response.status();
         let status_error = response.error_for_status_ref().err();
         let mut response_url = response.url().clone();

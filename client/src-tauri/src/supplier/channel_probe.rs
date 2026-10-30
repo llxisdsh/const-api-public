@@ -163,7 +163,7 @@ async fn test_channel_upstream_attempt(
         return Err("upstream base url is required".to_string().into());
     }
 
-    let client = long_http_client().clone();
+    let client = crate::http_client::channel_client(channel.v2.use_system_proxy).map_err(|e| e.to_string())?;
     let started_at = std::time::Instant::now();
     let (url, body, auth_header) =
         test_request_for_channel(&channel, &model, &prompt).map_err(|err| err.to_string())?;
@@ -319,7 +319,7 @@ async fn test_opencode_console_channel_upstream(
     };
     let started_at = std::time::Instant::now();
     let execution = crate::channel_executor::execute_channel_request(
-        &long_http_client(),
+        &crate::http_client::channel_client(channel.v2.use_system_proxy).map_err(|e| e.to_string())?,
         channel,
         request,
     )
@@ -380,7 +380,7 @@ pub(crate) async fn test_subscription_channel_upstream(
 ) -> Result<ChannelUpstreamTestResult> {
     let platform = channel.subscription.platform.trim();
     let started_at = std::time::Instant::now();
-    let client = long_http_client().clone();
+    let client = crate::http_client::channel_client(channel.v2.use_system_proxy)?;
     if requested_model.is_none() && channel.models.is_empty() {
         return Err(anyhow!(
             "subscription model catalog is empty; refresh the channel before testing"

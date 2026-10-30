@@ -3,6 +3,8 @@ use crate::model::CodexClientIdentity;
 use crate::model_catalog::{ModelCatalogKind, model_observations_from_value};
 use reqwest::header::{HeaderMap, HeaderValue};
 use std::sync::OnceLock;
+mod installation;
+pub(crate) use installation::installation_id;
 
 /// The latest stable Codex wire version validated with this client release.
 /// It changes together with the adapter; discovering a newer package version
@@ -13,40 +15,113 @@ pub(crate) const BUNDLED_CODEX_CLIENT_VERSION: &str = "0.163.0";
 /// The User-Agent prefix, `originator`, and `version` header must always name
 /// the same client family. This is a compatibility invariant, not evidence
 /// about upstream capacity or risk-control decisions.
-pub(crate) const CODEX_ORIGINATOR: &str = "codex-tui";
+pub(crate) const CODEX_ORIGINATOR: &str = "Codex Desktop";
+// Verified against the Windows Desktop package on 2026-10-30: owl-app.ini
+// declares this app version; packaged codex.exe matches the running Core by SHA256.
+const DESKTOP_CORE_VERSION: &str = "0.166.0-alpha.5.1";
+const DESKTOP_APP_VERSION: &str = "26.1027.30824";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) enum CodexProfile {
+    #[default]
+    Desktop,
+    Tui,
+    Cli,
+    Exec,
+}
+
+impl CodexProfile {
+    pub(crate) fn from_setting(value: &str) -> Self {
+        match value.trim() {
+            "codex_tui" | "codex" => Self::Tui,
+            "codex_cli" => Self::Cli,
+            "codex_exec" => Self::Exec,
+            _ => Self::Desktop,
+        }
+    }
+
+    pub(crate) fn identity(self) -> CodexClientIdentity {
+        static DESKTOP: OnceLock<CodexClientIdentity> = OnceLock::new();
+        static TUI: OnceLock<CodexClientIdentity> = OnceLock::new();
+        static CLI: OnceLock<CodexClientIdentity> = OnceLock::new();
+        static EXEC: OnceLock<CodexClientIdentity> = OnceLock::new();
+        let slot = match self {
+            Self::Desktop => &DESKTOP,
+            Self::Tui => &TUI,
+            Self::Cli => &CLI,
+            Self::Exec => &EXEC,
+        };
+        slot.get_or_init(|| self.build_identity()).clone()
+    }
+
+    fn build_identity(self) -> CodexClientIdentity {
+        let (originator, version, app_version) = match self {
+            Self::Desktop => (
+                CODEX_ORIGINATOR,
+                DESKTOP_CORE_VERSION,
+                Some(DESKTOP_APP_VERSION),
+            ),
+            Self::Tui => (
+                "codex-tui",
+                BUNDLED_CODEX_CLIENT_VERSION,
+                Some(BUNDLED_CODEX_CLIENT_VERSION),
+            ),
+            Self::Cli => ("codex_cli_rs", BUNDLED_CODEX_CLIENT_VERSION, None),
+            Self::Exec => ("codex_exec", BUNDLED_CODEX_CLIENT_VERSION, None),
+        };
+        build_codex_identity(originator, version, app_version, "bundled", 0)
+    }
+}
+
+pub(crate) fn codex_identity_for_channel(
+    channel: &crate::model::ChannelConfig,
+) -> CodexClientIdentity {
+    CodexProfile::from_setting(&channel.v2.user_agent_profile).identity()
+}
 /// Older Codex HTTP calls negotiated this beta. Current Codex sends no beta over
 /// HTTP and only `responses_websockets=…` in its WebSocket handshake.
 const CODEX_LEGACY_RESPONSES_BETA: &str = "responses=experimental";
 
-pub(crate) fn codex_identity_for_version(
+fn build_codex_identity(
+    originator: &str,
     version: &str,
+    app_version: Option<&str>,
     source: &str,
     checked_at_unix: i64,
 ) -> CodexClientIdentity {
     let os_info = os_info::get();
     let prefix = format!(
-        "{CODEX_ORIGINATOR}/{version} ({} {}; {}) {}",
+        "{originator}/{version} ({} {}; {}) {}",
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),
-        codex_terminal_user_agent_token(),
+        if originator == CODEX_ORIGINATOR {
+            "unknown".into()
+        } else {
+            codex_terminal_user_agent_token()
+        },
     );
     // The official TUI reaches the model through its app-server, which appends
     // the initialized client's `(name; version)` to every User-Agent.
-    let user_agent =
-        sanitize_codex_user_agent(format!("{prefix} ({CODEX_ORIGINATOR}; {version})"), &prefix);
+    let user_agent = sanitize_codex_user_agent(
+        app_version.map_or_else(
+            || prefix.clone(),
+            |app| format!("{prefix} ({originator}; {app})"),
+        ),
+        &prefix,
+    );
 
     log::debug!(
         "[const-api][codex] identity constructed: user_agent={}, originator={}, version={}",
         user_agent,
-        CODEX_ORIGINATOR,
+        originator,
         version
     );
 
     CodexClientIdentity {
         version: version.to_string(),
         user_agent,
-        originator: CODEX_ORIGINATOR.to_string(),
+        originator: originator.to_string(),
         checked_at_unix,
         source: source.to_string(),
     }
@@ -107,8 +182,9 @@ fn codex_terminal_user_agent_token() -> String {
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn bundled_codex_identity() -> CodexClientIdentity {
-    codex_identity_for_version(BUNDLED_CODEX_CLIENT_VERSION, "bundled", 0)
+    CodexProfile::Desktop.identity()
 }
 
 #[cfg(test)]
@@ -140,6 +216,29 @@ pub(crate) fn codex_model_identity_headers(identity: &CodexClientIdentity) -> He
         headers.insert("version", version);
     }
     headers
+}
+
+/// Rebuild the ChatGPT-backend routing hint from the final upstream request.
+///
+/// A caller's hint describes its own model and can become stale after CONST
+/// model substitution. The subscription transport applies operator header
+/// policy after this helper, so an explicit configured override still wins.
+pub(crate) fn set_codex_routing_hint(
+    headers: &mut HeaderMap,
+    model: Option<&str>,
+    service_tier: Option<&str>,
+) {
+    headers.remove("x-codex-routing-hint");
+    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
+        return;
+    };
+    let hint = match service_tier.map(str::trim).filter(|tier| !tier.is_empty()) {
+        Some(tier) => format!("model={model};tier={tier}"),
+        None => format!("model={model}"),
+    };
+    if let Ok(value) = HeaderValue::from_str(&hint) {
+        headers.insert("x-codex-routing-hint", value);
+    }
 }
 
 /// Drop only the legacy Responses beta from forwarded native context; keep any
@@ -301,7 +400,13 @@ fn copy_codex_request_context_headers(inbound: &HeaderMap, headers: &mut HeaderM
 
 fn copy_codex_subscription_context_headers(inbound: &HeaderMap, headers: &mut HeaderMap) {
     for &name in CODEX_SUBSCRIPTION_CONTEXT_HEADERS {
-        let Some(value) = bounded_ascii_header(inbound, name, 32 * 1024) else {
+        let Some(value) = bounded_ascii_header(inbound, name, 32 * 1024).and_then(|value| {
+            if name == "x-codex-turn-metadata" {
+                sanitize_codex_turn_metadata_header(value)
+            } else {
+                Some(value.clone())
+            }
+        }) else {
             continue;
         };
         headers.insert(
@@ -341,6 +446,18 @@ fn bounded_ascii_header<'a>(
     (!text.is_empty() && text.len() <= max_len && text.is_ascii()).then_some(value)
 }
 
+fn sanitize_codex_turn_metadata_header(value: &HeaderValue) -> Option<HeaderValue> {
+    let raw = value.to_str().ok()?.trim();
+    let mut metadata = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    let object = metadata.as_object_mut()?;
+    let mut changed = object.remove("installation_id").is_some();
+    changed |= object.remove("x-codex-installation-id").is_some();
+    if !changed {
+        return Some(value.clone());
+    }
+    HeaderValue::from_str(&serde_json::to_string(&metadata).ok()?).ok()
+}
+
 pub(crate) fn apply_codex_client_version_query(
     url: &mut reqwest::Url,
     identity: &CodexClientIdentity,
@@ -358,10 +475,12 @@ pub(crate) fn apply_codex_client_version_query(
     query.append_pair("client_version", &identity.version);
 }
 
+#[cfg(test)]
 pub(crate) struct CodexIdentityResolver {
     active: CodexClientIdentity,
 }
 
+#[cfg(test)]
 impl CodexIdentityResolver {
     fn pinned() -> Self {
         Self {
@@ -379,12 +498,15 @@ impl CodexIdentityResolver {
     }
 }
 
+#[cfg(test)]
 static CODEX_IDENTITY_RESOLVER: OnceLock<CodexIdentityResolver> = OnceLock::new();
 
+#[cfg(test)]
 pub(crate) fn codex_identity_resolver() -> &'static CodexIdentityResolver {
     CODEX_IDENTITY_RESOLVER.get_or_init(CodexIdentityResolver::pinned)
 }
 
+#[cfg(test)]
 pub(crate) fn active_codex_identity() -> CodexClientIdentity {
     codex_identity_resolver().active()
 }
@@ -396,14 +518,16 @@ mod tests {
     #[test]
     fn codex_identity_user_agent_matches_official_shape() {
         let identity = bundled_codex_identity();
-        assert!(identity.user_agent.starts_with(&format!(
-            "{CODEX_ORIGINATOR}/{BUNDLED_CODEX_CLIENT_VERSION} ("
-        )));
+        assert!(
+            identity
+                .user_agent
+                .starts_with(&format!("{CODEX_ORIGINATOR}/{DESKTOP_CORE_VERSION} ("))
+        );
         assert!(identity.user_agent.contains(std::env::consts::ARCH));
         assert!(!identity.user_agent.contains("CONST API"));
-        let version = semver::Version::parse(BUNDLED_CODEX_CLIENT_VERSION)
+        let version = semver::Version::parse(DESKTOP_CORE_VERSION)
             .expect("bundled Codex wire version must be semver");
-        assert!(version.pre.is_empty());
+        assert_eq!(version.to_string(), DESKTOP_CORE_VERSION);
     }
 
     #[test]
@@ -431,13 +555,13 @@ mod tests {
         assert!(!request.headers().contains_key("version"));
 
         let headers = codex_model_identity_headers(&identity);
-        assert_eq!(headers["version"], BUNDLED_CODEX_CLIENT_VERSION);
+        assert_eq!(headers["version"], DESKTOP_CORE_VERSION);
 
         let mut url = reqwest::Url::parse("https://example.test/models?other=1").expect("url");
         apply_codex_client_version_query(&mut url, &identity);
         assert_eq!(
             url.query(),
-            Some(format!("other=1&client_version={BUNDLED_CODEX_CLIENT_VERSION}").as_str())
+            Some(format!("other=1&client_version={DESKTOP_CORE_VERSION}").as_str())
         );
     }
 
@@ -461,7 +585,7 @@ mod tests {
         );
         let headers = codex_model_request_context_headers(Some(&partial), &fallback);
         assert_eq!(headers["originator"], CODEX_ORIGINATOR);
-        assert_eq!(headers["version"], BUNDLED_CODEX_CLIENT_VERSION);
+        assert_eq!(headers["version"], DESKTOP_CORE_VERSION);
         assert!(!headers.contains_key("x-codex-turn-state"));
 
         partial.insert("user-agent", HeaderValue::from_static("codex_vscode/1.2.3"));
@@ -483,7 +607,7 @@ mod tests {
         let headers = codex_model_request_context_headers(Some(&partial), &fallback);
         assert_eq!(headers["originator"], CODEX_ORIGINATOR);
         assert_eq!(headers["user-agent"], fallback.user_agent);
-        assert_eq!(headers["version"], BUNDLED_CODEX_CLIENT_VERSION);
+        assert_eq!(headers["version"], DESKTOP_CORE_VERSION);
         assert!(!headers.contains_key("x-codex-turn-state"));
     }
 
@@ -502,6 +626,12 @@ mod tests {
             "x-codex-installation-id",
             HeaderValue::from_static("caller-installation"),
         );
+        inbound.insert(
+            "x-codex-turn-metadata",
+            HeaderValue::from_static(
+                r#"{"installation_id":"nested-installation","x-codex-installation-id":"prefixed-installation","session_id":"caller-session"}"#,
+            ),
+        );
         inbound.insert("x-not-codex", HeaderValue::from_static("drop-me"));
 
         let headers = codex_subscription_model_request_context_headers(Some(&inbound), &fallback);
@@ -511,6 +641,11 @@ mod tests {
         assert_eq!(headers["version"], fallback.version);
         assert_eq!(headers["x-codex-turn-state"], "sticky-turn");
         assert!(!headers.contains_key("x-codex-installation-id"));
+        let turn_metadata: serde_json::Value =
+            serde_json::from_str(headers["x-codex-turn-metadata"].to_str().unwrap()).unwrap();
+        assert!(turn_metadata.get("installation_id").is_none());
+        assert!(turn_metadata.get("x-codex-installation-id").is_none());
+        assert_eq!(turn_metadata["session_id"], "caller-session");
         assert!(!headers.contains_key("x-not-codex"));
 
         // Another client's attestation and the legacy HTTP beta are not forwarded.
@@ -537,10 +672,30 @@ mod tests {
     }
 
     #[test]
-    fn codex_adapter_user_agent_matches_the_official_tui_shape() {
+    fn routing_hint_is_rebuilt_from_effective_model_and_tier() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-codex-routing-hint",
+            HeaderValue::from_static("model=caller-model;tier=stale"),
+        );
+        set_codex_routing_hint(&mut headers, Some("gpt-effective"), Some("priority"));
+        assert_eq!(
+            headers["x-codex-routing-hint"],
+            "model=gpt-effective;tier=priority"
+        );
+
+        set_codex_routing_hint(&mut headers, Some("gpt-effective"), None);
+        assert_eq!(headers["x-codex-routing-hint"], "model=gpt-effective");
+
+        set_codex_routing_hint(&mut headers, None, Some("priority"));
+        assert!(!headers.contains_key("x-codex-routing-hint"));
+    }
+
+    #[test]
+    fn codex_adapter_user_agent_matches_the_verified_desktop_shape() {
         let identity = bundled_codex_identity();
-        let expected_prefix = format!("{CODEX_ORIGINATOR}/{BUNDLED_CODEX_CLIENT_VERSION} (");
-        let expected_suffix = format!(" ({CODEX_ORIGINATOR}; {BUNDLED_CODEX_CLIENT_VERSION})");
+        let expected_prefix = format!("{CODEX_ORIGINATOR}/{DESKTOP_CORE_VERSION} (");
+        let expected_suffix = format!(" ({CODEX_ORIGINATOR}; {DESKTOP_APP_VERSION})");
         assert!(
             identity.user_agent.starts_with(&expected_prefix),
             "{}",

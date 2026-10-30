@@ -59,6 +59,11 @@ impl SupplierRuntime {
                 channels.push(health);
             }
         }
+        // Health snapshots refresh independently of request lifetimes. UI activity
+        // must use current admitted requests, never a cached concurrency sample.
+        for health in &mut channels {
+            health.current_concurrency = crate::channel_concurrency::current(&health.channel_id);
+        }
         channels.sort_by(|a, b| a.channel_id.cmp(&b.channel_id));
         SupplierStatus {
             running: self.running,
@@ -1437,6 +1442,10 @@ pub(crate) enum SupplierInboundOutcome {
         registered_count: usize,
         catalog_release_id: String,
         channel_results: Vec<SupplierRegistrationChannelResult>,
+        subscription_transport_policy: Option<serde_json::Value>,
+    },
+    SubscriptionTransportPolicy {
+        policy: serde_json::Value,
     },
     RegistrationRejected {
         reason: String,
@@ -1469,7 +1478,15 @@ pub(crate) fn handle_supplier_inbound_outcome(
             registered_count,
             catalog_release_id,
             channel_results,
+            subscription_transport_policy,
         } => {
+            if let Some(policy) = subscription_transport_policy {
+                if let Err(error) = crate::subscription_transport_policy::apply_remote_policy_value(
+                    &config.server_ws_url, &supplier_access_token(config), &policy,
+                ) {
+                    log::warn!("[const-api][supplier] remote subscription transport policy rejected: {error:#}");
+                }
+            }
             update_supplier_agent_transport_state(transport_state, config, active_transport, "");
             if channel_results.is_empty() && registered_count > 0 {
                 for supplier_unit_id_value in config.supplier_unit_ids() {
@@ -1574,6 +1591,13 @@ pub(crate) fn handle_supplier_inbound_outcome(
                 }
             }
         }
+        SupplierInboundOutcome::SubscriptionTransportPolicy { policy } => {
+            if let Err(error) = crate::subscription_transport_policy::apply_remote_policy_value(
+                &config.server_ws_url, &supplier_access_token(config), &policy,
+            ) {
+                log::warn!("[const-api][supplier] remote subscription transport policy rejected: {error:#}");
+            }
+        }
         SupplierInboundOutcome::RegistrationRejected { reason, message } => {
             log::warn!(
                 "[const-api][supplier] channel registration rejected reason={} message={}",
@@ -1663,6 +1687,13 @@ pub(crate) fn handle_supplier_connection_outcome(
             registrations.invalidate();
             if !supplier_access_token(config).is_empty() {
                 config.account_refresh_notify.notify_one();
+            }
+        }
+        SupplierInboundOutcome::SubscriptionTransportPolicy { policy } => {
+            if let Err(error) = crate::subscription_transport_policy::apply_remote_policy_value(
+                &config.server_ws_url, &supplier_access_token(config), &policy,
+            ) {
+                log::warn!("[const-api][supplier] remote subscription transport policy rejected: {error:#}");
             }
         }
         SupplierInboundOutcome::RegisterAck { .. } => {
@@ -1890,6 +1921,10 @@ async fn handle_supplier_inbound_text_with_tasks(
                         .unwrap_or_default() as usize,
                     catalog_release_id: payload_string(&message.payload, "catalog_release_id"),
                     channel_results: supplier_registration_channel_results(&message.payload),
+                    subscription_transport_policy: message
+                        .payload
+                        .get("subscription_transport_policy")
+                        .cloned(),
                 };
             }
             if payload_string(&message.payload, "reason") == "auth_required" {
@@ -1904,6 +1939,11 @@ async fn handle_supplier_inbound_text_with_tasks(
                 },
                 message: payload_string(&message.payload, "message"),
             };
+        }
+        if message.kind == "subscription_transport_policy" {
+            if let Some(policy) = message.payload.get("policy").cloned() {
+                return SupplierInboundOutcome::SubscriptionTransportPolicy { policy };
+            }
         }
         if message.kind == "node_status_update" {
             return SupplierInboundOutcome::NodeStatusUpdate(
@@ -2264,14 +2304,20 @@ pub(crate) fn supplier_quic_allows_insecure_cert(target: &SupplierQuicUrl) -> bo
 pub(crate) fn rustls_client_config_for_supplier_quic(
     target: &SupplierQuicUrl,
 ) -> rustls::ClientConfig {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    // QUIC's ring provider belongs to this connection. Installing it globally
+    // changes the TLS provider of subsequently built reqwest clients as well.
+    let builder = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("ring supports the default TLS protocol versions");
     let mut crypto = if supplier_quic_allows_insecure_cert(target) {
-        rustls::ClientConfig::builder()
+        builder
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(NoCertificateVerification))
             .with_no_client_auth()
     } else if let Some(cert_sha256) = target.cert_sha256 {
-        rustls::ClientConfig::builder()
+        builder
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(PinnedCertificateVerification {
                 cert_sha256,
@@ -2280,7 +2326,7 @@ pub(crate) fn rustls_client_config_for_supplier_quic(
     } else {
         let mut roots = rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        rustls::ClientConfig::builder()
+        builder
             .with_root_certificates(roots)
             .with_no_client_auth()
     };

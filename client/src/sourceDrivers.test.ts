@@ -20,6 +20,23 @@ import {
 } from "./sourceDrivers";
 
 describe("source drivers", () => {
+  test("OpenAI subscriptions default to direct Desktop and preserve explicit connection options", () => {
+    const channel = sourceDriverInitialChannelV5(sourceDriverById("openai_subscription"), {
+      id: "openai-profile", name: "OpenAI", credentialRef: "credential://test",
+    });
+    expect(channel.use_system_proxy).toBe(false);
+    expect(channel.user_agent_profile ?? "").toBe("");
+    channel.use_system_proxy = true;
+    channel.user_agent_profile = "codex_cli";
+    const loaded = reloadChannelV5(JSON.parse(JSON.stringify(serializeChannelV5(channel))));
+    expect(loaded.use_system_proxy).toBe(true);
+    expect(loaded.user_agent_profile).toBe("codex_cli");
+    delete channel.use_system_proxy;
+    channel.user_agent_profile = "codex";
+    const legacy = normalizeChannelV5(channel);
+    expect(legacy.use_system_proxy).toBe(false);
+    expect(legacy.user_agent_profile).toBe("codex_tui");
+  });
   test("round trips explicit local priority and rejects invalid wire values", () => {
     const channel = sourceDriverInitialChannelV5(sourceDriverById("custom_endpoint"), { id: "priority", name: "Priority" });
     expect(serializeChannelV5(channel).local_priority).toBeUndefined();

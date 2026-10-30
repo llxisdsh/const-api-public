@@ -261,9 +261,10 @@ async fn normalize_openai_subscription_realtime_call_payload(
 }
 fn codex_realtime_request_context_headers(
     inbound: &warp::http::HeaderMap,
+    options: crate::openai_transport::TransportOptions,
 ) -> reqwest::header::HeaderMap {
     let mut headers =
-        codex_subscription_model_request_context_headers(Some(inbound), &active_codex_identity());
+        codex_subscription_model_request_context_headers(Some(inbound), &options.profile.identity());
     // Voice versions negotiate their own dialect. Preserve the native tool's
     // negotiation headers without changing the identity used for text requests.
     if crate::codex_request_is_native(Some(inbound)) {
@@ -287,14 +288,20 @@ fn openai_subscription_realtime_call_request(
     credential: &serde_json::Value,
     inbound_headers: &warp::http::HeaderMap,
     payload: OpenAiSubscriptionRealtimeCallPayload,
-) -> reqwest::RequestBuilder {
-    let request_headers = codex_realtime_request_context_headers(inbound_headers);
+    options: crate::openai_transport::TransportOptions,
+) -> Result<reqwest::RequestBuilder> {
+    let client = crate::openai_transport::http_client_with_options(client, url, credential, options)?;
+	let mut request_headers = codex_realtime_request_context_headers(inbound_headers, options);
+	crate::subscription_transport_policy::apply_to_headers(
+		crate::source_driver::SourceDriverId::OpenAiSubscription,
+		crate::subscription_transport_policy::HeaderOperation::OpenAiRealtimeHttp,
+		&mut request_headers,
+	);
     let mut request = client
         .post(url)
         .header(reqwest::header::ACCEPT, "application/sdp")
         .header(reqwest::header::CONTENT_TYPE, payload.content_type)
         .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
-        .headers(request_headers)
         .body(payload.body);
     if let Some(account_id) = json_string(credential, &["account_id"])
         .or_else(|| json_string(credential, &["accountID"]))
@@ -303,7 +310,7 @@ fn openai_subscription_realtime_call_request(
     {
         request = request.header("Chatgpt-Account-Id", account_id);
     }
-    request
+    Ok(request.headers(request_headers))
 }
 
 async fn send_openai_subscription_realtime_call(
@@ -320,8 +327,8 @@ async fn send_openai_subscription_realtime_call(
         &token,
         &credential,
         inbound_headers,
-        payload.clone(),
-    ))
+        payload.clone(), crate::openai_transport::TransportOptions::for_channel(channel),
+    )?)
     .await?;
     if response.status() != reqwest::StatusCode::UNAUTHORIZED {
         return Ok(response);
@@ -341,8 +348,8 @@ async fn send_openai_subscription_realtime_call(
         &token,
         &credential,
         inbound_headers,
-        payload,
-    ))
+        payload, crate::openai_transport::TransportOptions::for_channel(channel),
+    )?)
     .await
     .map_err(Into::into)
 }
@@ -363,7 +370,7 @@ async fn forward_openai_subscription_realtime_call(
         .map_err(crate::channel_executor::surface_operation_not_supported_error)?;
     let upstream_model = payload.upstream_model.clone();
     let url = codex_realtime_calls_url()?;
-    let response = send_openai_subscription_realtime_call(
+    let mut response = send_openai_subscription_realtime_call(
         client,
         channel,
         &url,
@@ -371,6 +378,7 @@ async fn forward_openai_subscription_realtime_call(
         payload,
     )
     .await?;
+    response.headers_mut().remove(reqwest::header::SET_COOKIE);
     response_from_reqwest_with_upstream_model(response, false, Some(&upstream_model)).await
 }
 
