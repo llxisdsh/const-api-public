@@ -842,7 +842,21 @@ fn http_surface_turn_admission(
     channel: Option<&ChannelConfig>,
     subscription: Option<&SupplierConfig>,
     frame: &str,
+    known_model: Option<&str>,
 ) -> Result<Option<crate::channel_concurrency::Guard>> {
+    if let Some(channel) = channel {
+        if let Some(model) = requested_model_from_body_or_path(frame, "/v1/responses")
+            .or_else(|| known_model.map(str::to_string))
+        {
+            let model = channel_upstream_model_for_request(channel, Some(&model));
+            crate::channel_executor::check_request_context_capacity(
+                channel,
+                "/v1/responses",
+                frame.as_bytes(),
+                &model,
+            )?;
+        }
+    }
     let Some(channel) = channel.filter(|_| subscription.is_none()) else {
         return Ok(None);
     };
@@ -2234,6 +2248,7 @@ pub(crate) async fn run_supplier_responses_duplex(
                             Some(route.channel()),
                             subscription_config.as_ref(),
                             &outbound_text,
+                            wire.selected_upstream_model.as_deref().or(wire.requested_model.as_deref()),
                         )?;
                         let Some(next_update_guard) =
                             crate::update_activity::try_begin_supplier_request(&open.id)
@@ -3061,7 +3076,7 @@ async fn run_responses_websocket_proxy(
     // Nothing was sent yet: a channel filled since routing hands the turn to
     // the HTTP router, which fails over like the subscription path above.
     let mut active_turn_capacity =
-        match http_surface_turn_admission(channel.as_ref(), subscription_config.as_ref(), &first_text) {
+        match http_surface_turn_admission(channel.as_ref(), subscription_config.as_ref(), &first_text, None) {
             Ok(capacity) => capacity,
             Err(_) => {
                 run_responses_websocket_http_bridge(
@@ -3322,6 +3337,7 @@ async fn run_responses_websocket_proxy(
                         channel.as_ref(),
                         subscription_config.as_ref(),
                         text,
+                        Some(&active_model),
                     ) {
                         Ok(capacity) => capacity,
                         Err(_) => {

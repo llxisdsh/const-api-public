@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_revision": "d18efdfe1362194edfb98d814c85307af35d2038",
+  "source_revision": "aea0e4f2d42a3471e5ef1f8329e2d381e246f579",
   "compatibility_version_id": "compat-v30-2026-10-31",
   "compatibility_groups": [
     {
@@ -2365,6 +2365,7 @@
     "chat-latest": {
       "display_name": "chat-latest",
       "context_tokens": 400000,
+      "input_tokens": 400000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2399,6 +2400,8 @@
       "display_name": "Claude Fable 5",
       "family": "claude-5",
       "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2423,6 +2426,8 @@
       "display_name": "Claude Fable 5.1",
       "family": "claude-5",
       "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2447,6 +2452,7 @@
       "display_name": "Claude Haiku 4.5",
       "family": "claude-haiku",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 64000,
       "input_modalities": [
         "image",
@@ -2464,6 +2470,8 @@
       "display_name": "Claude Haiku 5.5",
       "family": "claude-haiku",
       "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2488,6 +2496,7 @@
       "display_name": "Claude Mythos 5",
       "family": "claude-5",
       "context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2512,6 +2521,7 @@
       "display_name": "Claude Mythos 5.1",
       "family": "claude-5",
       "context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2552,6 +2562,7 @@
       "display_name": "Claude Opus 4.5",
       "family": "claude-opus",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 64000,
       "input_modalities": [
         "image",
@@ -2569,6 +2580,8 @@
       "display_name": "Claude 4.6 Opus",
       "family": "claude-opus",
       "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2592,6 +2605,8 @@
       "display_name": "Claude Opus 4.7",
       "family": "claude-opus",
       "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2616,6 +2631,8 @@
       "display_name": "Claude Opus 4.8",
       "family": "claude-opus",
       "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2656,6 +2673,8 @@
       "display_name": "Claude Opus 5",
       "family": "claude-opus",
       "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2679,6 +2698,8 @@
     "claude-opus-5-5": {
       "display_name": "Claude Opus 5.5",
       "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2719,6 +2740,7 @@
       "display_name": "Claude Sonnet 4.5",
       "family": "claude-sonnet",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 64000,
       "input_modalities": [
         "image",
@@ -2736,6 +2758,8 @@
       "display_name": "Claude Sonnet 4.6 (Thinking)",
       "family": "claude-sonnet",
       "context_tokens": 200000,
+      "max_context_tokens": 200000,
+      "input_tokens": 1000000,
       "output_tokens": 64000,
       "input_modalities": [
         "image",
@@ -2759,6 +2783,8 @@
       "display_name": "Claude Sonnet 5",
       "family": "claude-sonnet",
       "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2782,6 +2808,8 @@
     "claude-sonnet-5-5": {
       "display_name": "Claude Sonnet 5.5",
       "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2805,6 +2833,7 @@
     "codestral-2508": {
       "display_name": "codestral-2508",
       "context_tokens": 256000,
+      "input_tokens": 128000,
       "output_tokens": 204800,
       "input_modalities": [
         "pdf",
@@ -2820,6 +2849,7 @@
       "display_name": "Codex Auto Review",
       "family": "gpt-codex",
       "context_tokens": 272000,
+      "max_context_tokens": 872000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -2869,6 +2899,7 @@
     "command-r-08-2024": {
       "display_name": "command-r-08-2024",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 4000,
       "input_modalities": [
         "text"
@@ -2882,6 +2913,7 @@
     "command-r-plus-08-2024": {
       "display_name": "command-r-plus-08-2024",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 4000,
       "input_modalities": [
         "text"
@@ -2895,6 +2927,7 @@
     "command-r7b-12-2024": {
       "display_name": "command-r7b-12-2024",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 4000,
       "input_modalities": [
         "text"
@@ -2960,6 +2993,7 @@
       "display_name": "DeepSeek V4.1 Flash",
       "family": "deepseek-v4",
       "context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 393216,
       "input_modalities": [
         "image",
@@ -2975,6 +3009,7 @@
     "deepseek-r1": {
       "display_name": "deepseek-r1",
       "context_tokens": 64000,
+      "input_tokens": 65536,
       "output_tokens": 16000,
       "input_modalities": [
         "text"
@@ -3030,6 +3065,7 @@
     "deepseek-v3.2": {
       "display_name": "deepseek-v3.2",
       "context_tokens": 163840,
+      "input_tokens": 163840,
       "output_tokens": 65536,
       "input_modalities": [
         "text"
@@ -3059,6 +3095,7 @@
       "display_name": "DeepSeek V4 Flash 0731",
       "family": "deepseek-v4",
       "context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 393216,
       "input_modalities": [
         "image",
@@ -3080,6 +3117,7 @@
       "display_name": "DeepSeek V4 Flash Vision Exp",
       "family": "deepseek-v4",
       "context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 393216,
       "input_modalities": [
         "image",
@@ -3096,6 +3134,7 @@
       "display_name": "DeepSeek V4 Pro 0813",
       "family": "deepseek-v4",
       "context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 384000,
       "input_modalities": [
         "text"
@@ -3145,6 +3184,7 @@
       "display_name": "DeepSeek V4.1 Flash 1017",
       "family": "deepseek-v4",
       "context_tokens": 1000000,
+      "input_tokens": 1048576,
       "output_tokens": 393216,
       "input_modalities": [
         "image",
@@ -3186,6 +3226,7 @@
     "doubao-seed-2-1-pro-260628": {
       "display_name": "doubao-seed-2-1-pro-260628",
       "context_tokens": 256000,
+      "input_tokens": 256000,
       "output_tokens": 256000,
       "input_modalities": [
         "image",
@@ -3201,6 +3242,7 @@
     "doubao-seed-2-1-turbo-260628": {
       "display_name": "doubao-seed-2-1-turbo-260628",
       "context_tokens": 256000,
+      "input_tokens": 256000,
       "output_tokens": 256000,
       "input_modalities": [
         "image",
@@ -3216,6 +3258,7 @@
     "embed-v5.0-fast": {
       "display_name": "embed-v5.0-fast",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 128000,
       "input_modalities": [
         "text"
@@ -3228,6 +3271,7 @@
     "embed-v5.0-pro": {
       "display_name": "embed-v5.0-pro",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 128000,
       "input_modalities": [
         "text"
@@ -3317,6 +3361,7 @@
       "display_name": "Gemini 2.5 Flash",
       "family": "gemini-flash",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65535,
       "input_modalities": [
         "audio",
@@ -3336,6 +3381,7 @@
       "display_name": "Gemini 2.5 Flash Lite",
       "family": "gemini-flash",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65535,
       "input_modalities": [
         "audio",
@@ -3355,6 +3401,7 @@
       "display_name": "Gemini 2.5 Pro",
       "family": "gemini-pro",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65535,
       "input_modalities": [
         "audio",
@@ -3409,6 +3456,7 @@
       "display_name": "Gemini 3 Flash Preview",
       "family": "gemini-flash",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65535,
       "input_modalities": [
         "audio",
@@ -3434,6 +3482,7 @@
       "display_name": "Gemini 3.1 Flash Image",
       "family": "gemini-3.1",
       "context_tokens": 65536,
+      "input_tokens": 65536,
       "output_tokens": 32768,
       "input_modalities": [
         "image",
@@ -3454,6 +3503,8 @@
       "display_name": "Gemini 3.1 Flash Lite",
       "family": "gemini-flash",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65535,
       "input_modalities": [
         "audio",
@@ -3478,6 +3529,7 @@
     "gemini-3.1-flash-lite-preview": {
       "display_name": "Gemini 3.1 Flash Lite Preview",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65536,
       "input_modalities": [
         "audio",
@@ -3503,6 +3555,7 @@
       "display_name": "Gemini 3.1 Flash Live Preview",
       "family": "gemini-live",
       "context_tokens": 131072,
+      "input_tokens": 131072,
       "output_tokens": 65536,
       "input_modalities": [
         "audio",
@@ -3522,6 +3575,7 @@
       "display_name": "Gemini 3.1 Flash TTS Preview",
       "family": "gemini-tts",
       "context_tokens": 8192,
+      "input_tokens": 8192,
       "output_tokens": 16384,
       "input_modalities": [
         "text"
@@ -3535,6 +3589,7 @@
       "display_name": "Gemini 3.1 Pro Preview",
       "family": "gemini-pro",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65536,
       "input_modalities": [
         "audio",
@@ -3559,6 +3614,7 @@
       "display_name": "Gemini 3.5 Flash",
       "family": "gemini-flash",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65535,
       "input_modalities": [
         "audio",
@@ -3584,6 +3640,8 @@
       "display_name": "Gemini 3.5 Flash Lite",
       "family": "gemini-flash",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65536,
       "input_modalities": [
         "audio",
@@ -3609,6 +3667,7 @@
       "display_name": "Gemini 3.6 Flash",
       "family": "gemini-flash",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65536,
       "input_modalities": [
         "audio",
@@ -3634,6 +3693,7 @@
       "display_name": "Gemini 3.7 Flash",
       "family": "gemini-flash",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65536,
       "input_modalities": [
         "audio",
@@ -3658,6 +3718,8 @@
       "display_name": "Gemini 3.8 Flash",
       "family": "gemini-flash",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65536,
       "input_modalities": [
         "audio",
@@ -3681,6 +3743,7 @@
     "gemini-3.8-flash-lite-tts": {
       "display_name": "gemini-3.8-flash-lite-tts",
       "context_tokens": 8192,
+      "input_tokens": 8192,
       "output_tokens": 16384,
       "input_modalities": [
         "text"
@@ -3693,6 +3756,7 @@
     "gemini-3.8-flash-tts": {
       "display_name": "gemini-3.8-flash-tts",
       "context_tokens": 8192,
+      "input_tokens": 8192,
       "output_tokens": 16384,
       "input_modalities": [
         "text"
@@ -3705,6 +3769,7 @@
     "gemini-3.8-live": {
       "display_name": "gemini-3.8-live",
       "context_tokens": 131072,
+      "input_tokens": 131072,
       "output_tokens": 65536,
       "input_modalities": [
         "audio",
@@ -3722,6 +3787,7 @@
     "gemini-3.8-live-extended-thinking": {
       "display_name": "gemini-3.8-live-extended-thinking",
       "context_tokens": 131072,
+      "input_tokens": 131072,
       "output_tokens": 65536,
       "input_modalities": [
         "audio",
@@ -3741,6 +3807,8 @@
       "display_name": "Gemini 4 Argon",
       "family": "gemini-argon",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 1048576,
       "input_modalities": [
         "audio",
@@ -3764,6 +3832,7 @@
     "gemini-nano-banana-2.1": {
       "display_name": "gemini-nano-banana-2.1",
       "context_tokens": 131072,
+      "input_tokens": 131072,
       "output_tokens": 32768,
       "input_modalities": [
         "image",
@@ -3782,6 +3851,7 @@
       "display_name": "Gemini Omni Flash Preview",
       "family": "gemini-omni",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 65535,
       "input_modalities": [
         "audio",
@@ -3819,6 +3889,7 @@
       "display_name": "Gemini Robotics ER 2 Preview",
       "family": "gemini-robotics",
       "context_tokens": 131072,
+      "input_tokens": 131072,
       "output_tokens": 65536,
       "input_modalities": [
         "audio",
@@ -3838,6 +3909,7 @@
       "display_name": "Gemini Robotics ER 2 Streaming Preview",
       "family": "gemini-robotics",
       "context_tokens": 131072,
+      "input_tokens": 131072,
       "output_tokens": 65536,
       "input_modalities": [
         "audio",
@@ -3881,6 +3953,7 @@
     "gemma-3-27b-it": {
       "display_name": "gemma-3-27b-it",
       "context_tokens": 131072,
+      "input_tokens": 131072,
       "output_tokens": 117964,
       "input_modalities": [
         "image",
@@ -3908,6 +3981,7 @@
     "gemma-4-26b-a4b-it": {
       "display_name": "gemma-4-26b-a4b-it",
       "context_tokens": 262144,
+      "input_tokens": 262144,
       "output_tokens": 235929,
       "input_modalities": [
         "image",
@@ -3924,6 +3998,7 @@
     "gemma-4-31b-it": {
       "display_name": "gemma-4-31b-it",
       "context_tokens": 262144,
+      "input_tokens": 262144,
       "output_tokens": 16384,
       "input_modalities": [
         "image",
@@ -3940,6 +4015,7 @@
     "glm-4.5": {
       "display_name": "glm-4.5",
       "context_tokens": 131072,
+      "input_tokens": 128000,
       "output_tokens": 98304,
       "input_modalities": [
         "text"
@@ -3954,6 +4030,7 @@
     "glm-4.5-air": {
       "display_name": "glm-4.5-air",
       "context_tokens": 131072,
+      "input_tokens": 128000,
       "output_tokens": 98304,
       "input_modalities": [
         "text"
@@ -3968,6 +4045,7 @@
     "glm-4.5v": {
       "display_name": "glm-4.5v",
       "context_tokens": 65536,
+      "input_tokens": 128000,
       "output_tokens": 16384,
       "input_modalities": [
         "image",
@@ -3983,6 +4061,7 @@
     "glm-4.6": {
       "display_name": "glm-4.6",
       "context_tokens": 198000,
+      "input_tokens": 200000,
       "output_tokens": 16384,
       "input_modalities": [
         "text"
@@ -4014,6 +4093,7 @@
       "display_name": "GLM-4.7",
       "family": "glm-4",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 128000,
       "input_modalities": [
         "text"
@@ -4028,6 +4108,7 @@
     "glm-4.7-flash": {
       "display_name": "glm-4.7-flash",
       "context_tokens": 131072,
+      "input_tokens": 200000,
       "output_tokens": 117964,
       "input_modalities": [
         "text"
@@ -4043,6 +4124,7 @@
       "display_name": "GLM-5",
       "family": "glm-5",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 128000,
       "input_modalities": [
         "text"
@@ -4073,6 +4155,7 @@
       "display_name": "GLM-5.1",
       "family": "glm-5",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 128000,
       "input_modalities": [
         "text"
@@ -4088,6 +4171,7 @@
       "display_name": "GLM-5.2",
       "family": "glm-5",
       "context_tokens": 1048576,
+      "input_tokens": 1000000,
       "output_tokens": 131072,
       "input_modalities": [
         "text"
@@ -4103,6 +4187,7 @@
       "display_name": "GLM-5.3",
       "family": "glm-5",
       "context_tokens": 1048576,
+      "input_tokens": 1000000,
       "output_tokens": 131072,
       "input_modalities": [
         "text"
@@ -4123,6 +4208,7 @@
       "display_name": "GLM-5.3-Flash",
       "family": "glm-5",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4169,6 +4255,7 @@
       "display_name": "GLM-5V Turbo",
       "family": "glm-5v",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4185,6 +4272,7 @@
     "gpt-3.5-turbo": {
       "display_name": "gpt-3.5-turbo",
       "context_tokens": 16385,
+      "input_tokens": 16385,
       "output_tokens": 4096,
       "input_modalities": [
         "text"
@@ -4211,6 +4299,7 @@
     "gpt-3.5-turbo-16k": {
       "display_name": "gpt-3.5-turbo-16k",
       "context_tokens": 16385,
+      "input_tokens": 16385,
       "output_tokens": 4096,
       "input_modalities": [
         "text"
@@ -4224,6 +4313,7 @@
     "gpt-3.5-turbo-instruct": {
       "display_name": "gpt-3.5-turbo-instruct",
       "context_tokens": 4095,
+      "input_tokens": 8192,
       "output_tokens": 3685,
       "input_modalities": [
         "text"
@@ -4236,6 +4326,7 @@
     "gpt-4": {
       "display_name": "gpt-4",
       "context_tokens": 8191,
+      "input_tokens": 8192,
       "output_tokens": 4096,
       "input_modalities": [
         "text"
@@ -4249,6 +4340,7 @@
     "gpt-4-turbo": {
       "display_name": "gpt-4-turbo",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 4096,
       "input_modalities": [
         "image",
@@ -4278,6 +4370,7 @@
     "gpt-4.1": {
       "display_name": "gpt-4.1",
       "context_tokens": 1047576,
+      "input_tokens": 1047576,
       "output_tokens": 32768,
       "input_modalities": [
         "image",
@@ -4293,6 +4386,7 @@
     "gpt-4.1-mini": {
       "display_name": "gpt-4.1-mini",
       "context_tokens": 1047576,
+      "input_tokens": 1047576,
       "output_tokens": 32768,
       "input_modalities": [
         "image",
@@ -4308,6 +4402,7 @@
     "gpt-4.1-nano": {
       "display_name": "gpt-4.1-nano",
       "context_tokens": 1047576,
+      "input_tokens": 1047576,
       "output_tokens": 32768,
       "input_modalities": [
         "image",
@@ -4323,6 +4418,7 @@
     "gpt-4o": {
       "display_name": "gpt-4o",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 16384,
       "input_modalities": [
         "image",
@@ -4338,6 +4434,7 @@
     "gpt-4o-2024-05-13": {
       "display_name": "gpt-4o-2024-05-13",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 4096,
       "input_modalities": [
         "image",
@@ -4353,6 +4450,7 @@
     "gpt-4o-2024-08-06": {
       "display_name": "gpt-4o-2024-08-06",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 16384,
       "input_modalities": [
         "image",
@@ -4368,6 +4466,7 @@
     "gpt-4o-2024-11-20": {
       "display_name": "gpt-4o-2024-11-20",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 16384,
       "input_modalities": [
         "image",
@@ -4383,6 +4482,7 @@
     "gpt-4o-mini": {
       "display_name": "gpt-4o-mini",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 16384,
       "input_modalities": [
         "image",
@@ -4398,6 +4498,7 @@
     "gpt-4o-mini-2024-07-18": {
       "display_name": "gpt-4o-mini-2024-07-18",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 16384,
       "input_modalities": [
         "image",
@@ -4413,6 +4514,7 @@
     "gpt-4o-mini-transcribe": {
       "display_name": "gpt-4o-mini-transcribe",
       "context_tokens": 16000,
+      "input_tokens": 16000,
       "output_tokens": 2000,
       "input_modalities": [
         "text"
@@ -4425,6 +4527,7 @@
     "gpt-4o-transcribe": {
       "display_name": "gpt-4o-transcribe",
       "context_tokens": 16000,
+      "input_tokens": 16000,
       "output_tokens": 2000,
       "input_modalities": [
         "text"
@@ -4437,6 +4540,7 @@
     "gpt-5": {
       "display_name": "gpt-5",
       "context_tokens": 400000,
+      "input_tokens": 272000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4491,6 +4595,7 @@
     "gpt-5-mini": {
       "display_name": "gpt-5-mini",
       "context_tokens": 400000,
+      "input_tokens": 272000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4513,6 +4618,7 @@
     "gpt-5-nano": {
       "display_name": "gpt-5-nano",
       "context_tokens": 400000,
+      "input_tokens": 272000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4535,6 +4641,7 @@
     "gpt-5-pro": {
       "display_name": "gpt-5-pro",
       "context_tokens": 400000,
+      "input_tokens": 400000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4557,6 +4664,7 @@
     "gpt-5.1": {
       "display_name": "gpt-5.1",
       "context_tokens": 400000,
+      "input_tokens": 272000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4580,6 +4688,7 @@
     "gpt-5.1-codex": {
       "display_name": "gpt-5.1-codex",
       "context_tokens": 400000,
+      "input_tokens": 400000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4602,6 +4711,7 @@
     "gpt-5.1-codex-max": {
       "display_name": "gpt-5.1-codex-max",
       "context_tokens": 400000,
+      "input_tokens": 400000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4625,6 +4735,7 @@
     "gpt-5.1-codex-mini": {
       "display_name": "gpt-5.1-codex-mini",
       "context_tokens": 400000,
+      "input_tokens": 400000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4648,6 +4759,7 @@
       "display_name": "GPT-5.2",
       "family": "gpt-5",
       "context_tokens": 272000,
+      "input_tokens": 272000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4688,6 +4800,7 @@
       "display_name": "GPT-5.2 Codex",
       "family": "gpt-codex",
       "context_tokens": 272000,
+      "input_tokens": 272000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4711,6 +4824,7 @@
     "gpt-5.2-pro": {
       "display_name": "gpt-5.2-pro",
       "context_tokens": 400000,
+      "input_tokens": 272000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4735,6 +4849,7 @@
       "display_name": "GPT-5.3 Codex",
       "family": "gpt-codex",
       "context_tokens": 272000,
+      "input_tokens": 272000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4759,6 +4874,7 @@
       "display_name": "GPT-5.3 Codex Spark",
       "family": "gpt-codex",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 128000,
       "input_modalities": [
         "text"
@@ -4780,6 +4896,7 @@
       "display_name": "GPT-5.4",
       "family": "gpt-5",
       "context_tokens": 272000,
+      "input_tokens": 1050000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4820,6 +4937,7 @@
       "display_name": "GPT-5.4 mini",
       "family": "gpt-5",
       "context_tokens": 272000,
+      "input_tokens": 272000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4844,6 +4962,7 @@
       "display_name": "GPT-5.4 nano",
       "family": "gpt-5",
       "context_tokens": 1050000,
+      "input_tokens": 272000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4868,6 +4987,7 @@
       "display_name": "GPT-5.4 Pro",
       "family": "gpt-5",
       "context_tokens": 1050000,
+      "input_tokens": 1050000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4891,6 +5011,8 @@
       "display_name": "GPT-5.5",
       "family": "gpt-5",
       "context_tokens": 272000,
+      "max_context_tokens": 272000,
+      "input_tokens": 1050000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4925,6 +5047,7 @@
       "display_name": "GPT-5.5 Pro",
       "family": "gpt-5",
       "context_tokens": 1050000,
+      "input_tokens": 1050000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4946,6 +5069,7 @@
     "gpt-5.6-cyber": {
       "display_name": "gpt-5.6-cyber",
       "context_tokens": 400000,
+      "input_tokens": 400000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -4963,6 +5087,8 @@
       "display_name": "GPT-5.6-Luna",
       "family": "gpt-5",
       "context_tokens": 372000,
+      "max_context_tokens": 872000,
+      "input_tokens": 922000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -5003,6 +5129,8 @@
       "display_name": "GPT-5.6-Sol",
       "family": "gpt-5",
       "context_tokens": 372000,
+      "max_context_tokens": 872000,
+      "input_tokens": 922000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -5044,6 +5172,8 @@
       "display_name": "GPT-5.6-Terra",
       "family": "gpt-5",
       "context_tokens": 372000,
+      "max_context_tokens": 872000,
+      "input_tokens": 922000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -5085,6 +5215,8 @@
       "display_name": "GPT-6-Astra",
       "family": "gpt-6",
       "context_tokens": 922000,
+      "max_context_tokens": 1050000,
+      "input_tokens": 922000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -5125,6 +5257,8 @@
     "gpt-6-luna": {
       "display_name": "GPT-6-Luna",
       "context_tokens": 272000,
+      "max_context_tokens": 872000,
+      "input_tokens": 922000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -5164,6 +5298,8 @@
     "gpt-6-sol": {
       "display_name": "GPT-6-Sol",
       "context_tokens": 272000,
+      "max_context_tokens": 872000,
+      "input_tokens": 922000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -5204,6 +5340,8 @@
     "gpt-6.1-sol": {
       "display_name": "GPT-6.1-Sol",
       "context_tokens": 922000,
+      "max_context_tokens": 1050000,
+      "input_tokens": 922000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -5244,6 +5382,8 @@
     "gpt-6.1-terra": {
       "display_name": "gpt-6.1-terra",
       "context_tokens": 922000,
+      "max_context_tokens": 1050000,
+      "input_tokens": 922000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -5406,6 +5546,7 @@
       "display_name": "GPT Realtime",
       "family": "gpt-realtime",
       "context_tokens": 32000,
+      "input_tokens": 32000,
       "output_tokens": 4096,
       "input_modalities": [
         "audio",
@@ -5423,6 +5564,7 @@
       "display_name": "GPT Realtime 2.1",
       "family": "gpt-audio",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 32000,
       "input_modalities": [
         "audio",
@@ -5441,6 +5583,7 @@
       "display_name": "GPT Realtime 2.1 Mini",
       "family": "gpt-audio",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 32000,
       "input_modalities": [
         "audio",
@@ -5459,6 +5602,7 @@
       "display_name": "GPT Realtime Translate",
       "family": "gpt-audio",
       "context_tokens": 16000,
+      "input_tokens": 16000,
       "output_tokens": 2000,
       "input_modalities": [
         "audio"
@@ -5510,6 +5654,7 @@
     "grok-4.20": {
       "display_name": "grok-4.20",
       "context_tokens": 2000000,
+      "input_tokens": 1000000,
       "output_tokens": 1800000,
       "input_modalities": [
         "image",
@@ -5527,6 +5672,8 @@
       "display_name": "Grok 4.20 0309 Non Reasoning",
       "family": "grok-4",
       "context_tokens": 1000000,
+      "max_context_tokens": 2000000,
+      "input_tokens": 1000000,
       "output_tokens": 1000000,
       "input_modalities": [
         "image",
@@ -5541,6 +5688,7 @@
     "grok-4.20-multi-agent": {
       "display_name": "grok-4.20-multi-agent",
       "context_tokens": 2000000,
+      "input_tokens": 1000000,
       "output_tokens": 1800000,
       "input_modalities": [
         "image",
@@ -5557,6 +5705,8 @@
       "display_name": "Grok 4.20 Multi Agent 0309",
       "family": "grok-4",
       "context_tokens": 1000000,
+      "max_context_tokens": 2000000,
+      "input_tokens": 1000000,
       "output_tokens": 1000000,
       "input_modalities": [
         "image",
@@ -5578,6 +5728,8 @@
       "display_name": "Grok 4.3",
       "family": "grok-4",
       "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 65536,
       "input_modalities": [
         "image",
@@ -5600,6 +5752,8 @@
       "display_name": "Grok 4.5",
       "family": "grok-4",
       "context_tokens": 500000,
+      "max_context_tokens": 500000,
+      "input_tokens": 500000,
       "output_tokens": 65536,
       "input_modalities": [
         "image",
@@ -5621,6 +5775,8 @@
       "display_name": "Grok 4.6",
       "family": "grok-4",
       "context_tokens": 500000,
+      "max_context_tokens": 500000,
+      "input_tokens": 500000,
       "output_tokens": 65536,
       "input_modalities": [
         "image",
@@ -5642,6 +5798,8 @@
     "grok-4.7": {
       "display_name": "Grok 4.7",
       "context_tokens": 500000,
+      "max_context_tokens": 500000,
+      "input_tokens": 500000,
       "output_tokens": 500000,
       "input_modalities": [
         "image",
@@ -5664,6 +5822,8 @@
       "display_name": "Grok Build 0.1",
       "family": "grok-code",
       "context_tokens": 256000,
+      "max_context_tokens": 256000,
+      "input_tokens": 256000,
       "output_tokens": 256000,
       "input_modalities": [
         "image",
@@ -5899,6 +6059,7 @@
     "kimi-k2": {
       "display_name": "Kimi K2",
       "context_tokens": 131072,
+      "max_context_tokens": 131072,
       "output_tokens": 98304,
       "input_modalities": [
         "text"
@@ -5925,6 +6086,7 @@
     "kimi-k2-thinking": {
       "display_name": "Kimi K2 Thinking",
       "context_tokens": 262144,
+      "max_context_tokens": 262144,
       "output_tokens": 98304,
       "input_modalities": [
         "text"
@@ -5944,6 +6106,8 @@
       "display_name": "Kimi K2.5",
       "family": "kimi-k2",
       "context_tokens": 262144,
+      "max_context_tokens": 262144,
+      "input_tokens": 262144,
       "output_tokens": 32768,
       "input_modalities": [
         "image",
@@ -5965,6 +6129,8 @@
       "display_name": "Kimi K2.6",
       "family": "kimi-k2",
       "context_tokens": 262144,
+      "max_context_tokens": 262144,
+      "input_tokens": 262144,
       "output_tokens": 65536,
       "input_modalities": [
         "image",
@@ -5986,6 +6152,8 @@
       "display_name": "Kimi K2.7 Code",
       "family": "kimi-k2",
       "context_tokens": 262144,
+      "max_context_tokens": 262144,
+      "input_tokens": 262144,
       "output_tokens": 65536,
       "input_modalities": [
         "image",
@@ -6007,6 +6175,7 @@
       "display_name": "Kimi K2.7 Code HighSpeed",
       "family": "kimi-k2",
       "context_tokens": 262144,
+      "max_context_tokens": 262144,
       "output_tokens": 65536,
       "input_modalities": [
         "text"
@@ -6025,6 +6194,8 @@
       "display_name": "Kimi K3",
       "family": "kimi-k3",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 1048576,
       "input_modalities": [
         "image",
@@ -6046,6 +6217,7 @@
     "kimi-k3.1-pro": {
       "display_name": "kimi-k3.1-pro",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 1048576,
       "input_modalities": [
         "image",
@@ -6305,6 +6477,7 @@
     "mercury-2": {
       "display_name": "mercury-2",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 50000,
       "input_modalities": [
         "text"
@@ -6319,6 +6492,7 @@
     "mercury-2.5": {
       "display_name": "mercury-2.5",
       "context_tokens": 260000,
+      "input_tokens": 260000,
       "output_tokens": 65536,
       "input_modalities": [
         "text"
@@ -6366,6 +6540,7 @@
     "mimo-v2.6-flash": {
       "display_name": "mimo-v2.6-flash",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 131072,
       "input_modalities": [
         "audio",
@@ -6383,6 +6558,7 @@
     "mimo-v2.6-pro": {
       "display_name": "mimo-v2.6-pro",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 131072,
       "input_modalities": [
         "audio",
@@ -6443,6 +6619,7 @@
     "minimax-m2": {
       "display_name": "minimax-m2",
       "context_tokens": 204800,
+      "input_tokens": 200000,
       "output_tokens": 131072,
       "input_modalities": [
         "text"
@@ -6469,6 +6646,7 @@
     "minimax-m2.1": {
       "display_name": "minimax-m2.1",
       "context_tokens": 204800,
+      "input_tokens": 1000000,
       "output_tokens": 131072,
       "input_modalities": [
         "text"
@@ -6484,6 +6662,7 @@
       "display_name": "MiniMax M2.5",
       "family": "minimax-m2",
       "context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 8192,
       "input_modalities": [
         "text"
@@ -6514,6 +6693,7 @@
       "display_name": "MiniMax M3",
       "family": "minimax-m3",
       "context_tokens": 1000000,
+      "input_tokens": 1000000,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -6529,6 +6709,7 @@
     "ministral-14b-2512": {
       "display_name": "ministral-14b-2512",
       "context_tokens": 262144,
+      "input_tokens": 262144,
       "output_tokens": 209715,
       "input_modalities": [
         "image",
@@ -6543,6 +6724,7 @@
     "ministral-3b-2512": {
       "display_name": "ministral-3b-2512",
       "context_tokens": 131072,
+      "input_tokens": 131072,
       "output_tokens": 104857,
       "input_modalities": [
         "image",
@@ -6557,6 +6739,7 @@
     "ministral-8b-2512": {
       "display_name": "ministral-8b-2512",
       "context_tokens": 262144,
+      "input_tokens": 262144,
       "output_tokens": 209715,
       "input_modalities": [
         "image",
@@ -6599,6 +6782,7 @@
     "mistral-large-2512": {
       "display_name": "mistral-large-2512",
       "context_tokens": 262144,
+      "input_tokens": 262144,
       "output_tokens": 209715,
       "input_modalities": [
         "image",
@@ -6614,6 +6798,7 @@
     "mistral-large-4": {
       "display_name": "Mistral Large 4",
       "context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 1048576,
       "input_modalities": [
         "image",
@@ -6634,6 +6819,7 @@
       "display_name": "Mistral Large 3",
       "family": "mistral-large",
       "context_tokens": 262144,
+      "input_tokens": 262144,
       "output_tokens": 262144,
       "input_modalities": [
         "image",
@@ -6648,6 +6834,7 @@
     "mistral-medium-3": {
       "display_name": "mistral-medium-3",
       "context_tokens": 131072,
+      "input_tokens": 262144,
       "output_tokens": 104857,
       "input_modalities": [
         "image",
@@ -6668,6 +6855,7 @@
     "mistral-medium-3-5": {
       "display_name": "mistral-medium-3-5",
       "context_tokens": 262144,
+      "input_tokens": 262144,
       "output_tokens": 209715,
       "input_modalities": [
         "image",
@@ -6704,6 +6892,7 @@
       "display_name": "Mistral Medium 3.5",
       "family": "mistral-medium",
       "context_tokens": 262144,
+      "input_tokens": 262144,
       "output_tokens": 262144,
       "input_modalities": [
         "image",
@@ -6763,6 +6952,7 @@
       "display_name": "Mistral Small 2603",
       "family": "mistral-small",
       "context_tokens": 262144,
+      "input_tokens": 262144,
       "output_tokens": 262144,
       "input_modalities": [
         "image",
@@ -6811,6 +7001,7 @@
       "display_name": "Mistral Small 4",
       "family": "mistral-small",
       "context_tokens": 131072,
+      "input_tokens": 262144,
       "output_tokens": 131072,
       "input_modalities": [
         "image",
@@ -6844,6 +7035,7 @@
     "morph-v3-fast": {
       "display_name": "morph-v3-fast",
       "context_tokens": 81920,
+      "input_tokens": 16000,
       "output_tokens": 38000,
       "input_modalities": [
         "text"
@@ -6856,6 +7048,7 @@
     "morph-v3-large": {
       "display_name": "morph-v3-large",
       "context_tokens": 262144,
+      "input_tokens": 16000,
       "output_tokens": 131072,
       "input_modalities": [
         "text"
@@ -6884,6 +7077,8 @@
       "display_name": "Muse Spark 1.1",
       "family": "muse-spark",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 131072,
       "input_modalities": [
         "image",
@@ -6909,6 +7104,8 @@
       "display_name": "Muse Spark 1.2",
       "family": "muse-spark",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 131072,
       "input_modalities": [
         "image",
@@ -6933,6 +7130,8 @@
     "muse-spark-1.2-contributor": {
       "display_name": "Muse Spark 1.2 Contributor",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 943718,
       "input_modalities": [
         "audio",
@@ -6959,6 +7158,8 @@
       "display_name": "Muse Spark 1.3",
       "family": "muse-spark",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 131072,
       "input_modalities": [
         "image",
@@ -6983,6 +7184,8 @@
     "muse-spark-1.3-contributor": {
       "display_name": "Muse Spark 1.3 Contributor",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 943718,
       "input_modalities": [
         "audio",
@@ -7009,6 +7212,8 @@
       "display_name": "Muse Wonder 1.0",
       "family": "muse-wonder",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
       "output_tokens": 131072,
       "input_modalities": [
         "image",
@@ -7035,6 +7240,7 @@
       "display_name": "Muse Wonder Full 1.0",
       "family": "muse-wonder",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
       "output_tokens": 128000,
       "input_modalities": [
         "image",
@@ -7170,6 +7376,7 @@
     "nova-2-5-sonic": {
       "display_name": "nova-2-5-sonic",
       "context_tokens": 256000,
+      "input_tokens": 256000,
       "output_tokens": 64000,
       "input_modalities": [
         "audio",
@@ -7256,6 +7463,7 @@
     "o1": {
       "display_name": "o1",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 100000,
       "input_modalities": [
         "image",
@@ -7272,6 +7480,7 @@
     "o1-pro": {
       "display_name": "o1-pro",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 100000,
       "input_modalities": [
         "image",
@@ -7288,6 +7497,7 @@
     "o3": {
       "display_name": "o3",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 100000,
       "input_modalities": [
         "image",
@@ -7304,6 +7514,7 @@
     "o3-mini": {
       "display_name": "o3-mini",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 100000,
       "input_modalities": [
         "pdf",
@@ -7334,6 +7545,7 @@
     "o3-pro": {
       "display_name": "o3-pro",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 100000,
       "input_modalities": [
         "image",
@@ -7350,6 +7562,7 @@
     "o4-mini": {
       "display_name": "o4-mini",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 100000,
       "input_modalities": [
         "image",
@@ -7490,6 +7703,7 @@
     "qwen-3.8-27b": {
       "display_name": "qwen-3.8-27b",
       "context_tokens": 65536,
+      "input_tokens": 65536,
       "output_tokens": 32768,
       "input_modalities": [
         "image",
@@ -8160,6 +8374,7 @@
       "display_name": "Qwen 3.8 27B",
       "family": "qwen-open",
       "context_tokens": 131042,
+      "input_tokens": 131072,
       "output_tokens": 16384,
       "input_modalities": [
         "image",
@@ -8176,6 +8391,7 @@
       "display_name": "Qwen 3.8 Flash",
       "family": "qwen-flash",
       "context_tokens": 991808,
+      "input_tokens": 991808,
       "output_tokens": 131072,
       "input_modalities": [
         "image",
@@ -8193,6 +8409,7 @@
       "display_name": "Qwen 3.8 Max",
       "family": "qwen-max",
       "context_tokens": 991808,
+      "input_tokens": 991808,
       "output_tokens": 131072,
       "input_modalities": [
         "image",
@@ -8240,6 +8457,7 @@
     "qwen3.8-omni-flash": {
       "display_name": "qwen3.8-omni-flash",
       "context_tokens": 991808,
+      "input_tokens": 991808,
       "output_tokens": 131072,
       "input_modalities": [
         "audio",
@@ -8512,6 +8730,7 @@
     "sonar": {
       "display_name": "sonar",
       "context_tokens": 127072,
+      "input_tokens": 128000,
       "output_tokens": 114364,
       "input_modalities": [
         "image",
@@ -8525,6 +8744,7 @@
     "sonar-deep-research": {
       "display_name": "sonar-deep-research",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 115200,
       "input_modalities": [
         "text"
@@ -8538,6 +8758,7 @@
     "sonar-pro": {
       "display_name": "sonar-pro",
       "context_tokens": 200000,
+      "input_tokens": 200000,
       "output_tokens": 8000,
       "input_modalities": [
         "image",
@@ -8565,6 +8786,7 @@
     "sonar-reasoning-pro": {
       "display_name": "sonar-reasoning-pro",
       "context_tokens": 128000,
+      "input_tokens": 128000,
       "output_tokens": 115200,
       "input_modalities": [
         "image",
@@ -8625,6 +8847,7 @@
       "display_name": "Text Embedding 3 Large",
       "family": "text-embedding-3",
       "context_tokens": 8191,
+      "input_tokens": 8191,
       "output_tokens": 8191,
       "input_modalities": [
         "text"
@@ -8638,6 +8861,7 @@
       "display_name": "Text Embedding 3 Small",
       "family": "text-embedding-3",
       "context_tokens": 8191,
+      "input_tokens": 8191,
       "output_tokens": 8191,
       "input_modalities": [
         "text"
@@ -8651,6 +8875,7 @@
       "display_name": "Text Embedding Ada 002",
       "family": "text-embedding-ada",
       "context_tokens": 8191,
+      "input_tokens": 8191,
       "output_tokens": 8191,
       "input_modalities": [
         "text"

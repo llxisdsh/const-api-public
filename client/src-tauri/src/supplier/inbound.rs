@@ -455,7 +455,11 @@ fn supplier_execution_error_payload(
     let structured = error
         .chain()
         .find_map(|cause| structured_capability_mismatch(&cause.to_string()));
-    let (status, body) = if ambiguous_transport {
+    let (status, body) = if evidence.error_code == "context_length_exceeded"
+        && !evidence.upstream_attempted
+    {
+        (400, serde_json::json!({"error":{"type":"invalid_request_error","code":"context_length_exceeded","message":error_text}}).to_string())
+    } else if ambiguous_transport {
         (
             502,
             serde_json::json!({

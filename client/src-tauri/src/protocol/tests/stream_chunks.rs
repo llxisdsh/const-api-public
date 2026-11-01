@@ -312,6 +312,180 @@ fn tool_call_identity_and_partial_arguments_roundtrip_across_every_target() {
 }
 
 #[test]
+fn chat_custom_tool_input_roundtrips_through_responses_stream_without_json_coercion() {
+    let raw = concat!(
+        "data: {\"id\":\"chatcmpl-custom\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_patch\",\"type\":\"custom\",\"custom\":{\"name\":\"apply_patch\",\"input\":\"\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"custom\":{\"input\":\"*** Begin Patch\\n\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"custom\":{\"input\":\"世界\\n*** End Patch\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let mut events = parse_chunks(
+        ProtocolKind::OpenAiChat,
+        raw.as_bytes(),
+        &every_boundary(raw.len()),
+    );
+    for target in [ProtocolKind::OpenAiResponses, ProtocolKind::OpenAiChat] {
+        let mut renderer = StreamRenderer::new(target, "target-model");
+        let mut wire = Vec::new();
+        for event in &events {
+            wire.extend(renderer.push(event).unwrap());
+        }
+        wire.extend(renderer.finish().unwrap());
+        events = parse_chunks(target, &wire, &every_boundary(wire.len()));
+        let response = final_response(&events);
+        let calls = response
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::ToolCall(call) => Some(call),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].kind, crate::protocol::ir::ToolKind::Custom);
+        assert_eq!(calls[0].id, "call_patch");
+        assert_eq!(calls[0].name, "apply_patch");
+        assert_eq!(
+            calls[0].raw_arguments.as_deref(),
+            Some("*** Begin Patch\n世界\n*** End Patch")
+        );
+    }
+}
+
+#[test]
+fn chat_usage_after_finish_reason_survives_all_stream_targets_and_eof() {
+    for terminator in ["", "data: [DONE]\n\n"] {
+        let raw = format!(
+            "{}{}",
+            concat!(
+                "data: {\"id\":\"chatcmpl-usage\",\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"length\"}]}\n\n",
+                "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":11,\"total_tokens\":28,\"prompt_tokens_details\":{\"cached_tokens\":8},\"completion_tokens_details\":{\"reasoning_tokens\":6}}}\n\n"
+            ),
+            terminator
+        );
+        let events = parse_chunks(
+            ProtocolKind::OpenAiChat,
+            raw.as_bytes(),
+            &every_boundary(raw.len()),
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, CanonicalStreamEvent::ResponseDone(_)))
+                .count(),
+            1
+        );
+        for target in PROTOCOLS {
+            let mut renderer = StreamRenderer::new(target, "target-model")
+                .with_source_protocol(ProtocolKind::OpenAiChat);
+            let mut wire = Vec::new();
+            for event in &events {
+                wire.extend(renderer.push(event).unwrap());
+            }
+            wire.extend(renderer.finish().unwrap());
+            let response = final_response(&parse_chunks(
+                target,
+                &wire,
+                &randomized_boundaries(wire.len()),
+            ));
+            assert_eq!(response.finish.reason, FinishReason::Length, "{target}");
+            let usage = response
+                .usage
+                .translated_for_protocol(target, ProtocolKind::OpenAiChat);
+            assert_eq!(usage.input_tokens.value, Some(17), "{target}");
+            assert_eq!(usage.output_tokens.value, Some(11), "{target}");
+            assert_eq!(usage.cache_read_tokens.value, Some(8), "{target}");
+            assert_eq!(usage.reasoning_tokens.value, Some(6), "{target}");
+        }
+    }
+}
+
+#[test]
+fn gemini_tools_in_separate_chunks_have_distinct_identity_and_arguments() {
+    for include_ids in [false, true] {
+        let mut raw = String::new();
+        for (name, id) in [("read_a", "call_a"), ("read_b", "call_b")] {
+            let mut call = serde_json::json!({"name":name,"args":{"path":name}});
+            if include_ids {
+                call["id"] = serde_json::json!(id);
+            }
+            raw.push_str(&format!("data: {}\n\n", serde_json::json!({"candidates":[{"content":{"role":"model","parts":[{"functionCall":call}]}}]})));
+        }
+        raw.push_str("data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":13,\"candidatesTokenCount\":5,\"totalTokenCount\":18}}\n\n");
+        raw.push_str("data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n");
+        let source_events = parse_chunks(
+            ProtocolKind::GeminiNative,
+            raw.as_bytes(),
+            &every_boundary(raw.len()),
+        );
+        if !include_ids {
+            let later = final_response(&parse_chunks(
+                ProtocolKind::GeminiNative,
+                raw.as_bytes(),
+                &[],
+            ));
+            let first = final_response(&source_events);
+            let ContentBlock::ToolCall(a) = &first.blocks[0] else {
+                panic!("tool call");
+            };
+            let ContentBlock::ToolCall(b) = &later.blocks[0] else {
+                panic!("tool call");
+            };
+            assert_ne!(a.id, b.id);
+        }
+        for target in PROTOCOLS {
+            let mut renderer = StreamRenderer::new(target, "target-model");
+            let mut wire = Vec::new();
+            for event in &source_events {
+                wire.extend(renderer.push(event).unwrap());
+            }
+            wire.extend(renderer.finish().unwrap());
+            let response = final_response(&parse_chunks(
+                target,
+                &wire,
+                &randomized_boundaries(wire.len()),
+            ));
+            let calls = response
+                .blocks
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::ToolCall(call) => Some(call),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(calls.len(), 2, "{target}");
+            assert_ne!(calls[0].id, calls[1].id, "{target}");
+            for (call, (name, id)) in calls
+                .iter()
+                .zip([("read_a", "call_a"), ("read_b", "call_b")])
+            {
+                assert_eq!(call.name, name, "{target}");
+                assert_eq!(call.arguments.as_ref().unwrap()["path"], name, "{target}");
+                if include_ids {
+                    assert_eq!(call.id, id);
+                }
+            }
+            assert_eq!(response.usage.input_tokens.value, Some(13), "{target}");
+            assert_eq!(response.usage.output_tokens.value, Some(5), "{target}");
+        }
+    }
+}
+
+#[test]
+fn gemini_long_decode_stream_does_not_discard_the_continuation_as_a_success() {
+    let raw = "data: {\"candidates\":[{\"finishReason\":\"CONTINUATION\",\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Partial\"}]}}],\"continuationToken\":\"opaque-test-token\",\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":3,\"totalTokenCount\":5}}\n\n";
+    let events = parse_chunks(
+        ProtocolKind::GeminiNative,
+        raw.as_bytes(),
+        &every_boundary(raw.len()),
+    );
+    assert!(events.iter().any(|event| matches!(event, CanonicalStreamEvent::Error(error) if error.code == "unsupported_gemini_continuation")));
+    let response = final_response(&events);
+    assert_eq!(response.status, ResponseStatus::Failed);
+    assert_eq!(response.usage.output_tokens.value, Some(3));
+}
+
+#[test]
 fn anthropic_reasoning_signature_stays_ordered_and_uses_validated_cross_protocol_carrier() {
     let raw = concat!(
         "event: message_start\n",
@@ -821,6 +995,395 @@ fn supplier_utf8_bridge_keeps_split_code_points_without_lossy_replacement() {
         output.push_str(&decoder.finish().unwrap());
         assert_eq!(output, "data: 世界\n\n", "boundary {boundary}");
         assert!(!output.contains('\u{fffd}'));
+    }
+}
+
+#[test]
+fn responses_terminal_event_and_json_agree_on_truncation_and_refusal() {
+    let context = AdapterContext::legacy_bridge("model");
+    for (source, stop, reason) in [
+        (ProtocolKind::OpenAiChat, "stop", None),
+        (
+            ProtocolKind::OpenAiChat,
+            "length",
+            Some("max_output_tokens"),
+        ),
+        (
+            ProtocolKind::OpenAiChat,
+            "content_filter",
+            Some("content_filter"),
+        ),
+        (
+            ProtocolKind::AnthropicMessages,
+            "max_tokens",
+            Some("max_output_tokens"),
+        ),
+        (ProtocolKind::AnthropicMessages, "refusal", None),
+        (
+            ProtocolKind::GeminiNative,
+            "MAX_TOKENS",
+            Some("max_output_tokens"),
+        ),
+        (ProtocolKind::GeminiNative, "SAFETY", Some("content_filter")),
+    ] {
+        let (body, raw) = match source {
+            ProtocolKind::OpenAiChat => (
+                json!({"id":"chat-1","model":"model","choices":[{
+                    "message":{"role":"assistant","content":"partial"},"finish_reason":stop
+                }]}),
+                format!("data: {}\n\ndata: [DONE]\n\n", json!({"id":"chat-1","choices":[{
+                    "delta":{"content":"partial"},"finish_reason":stop
+                }]})),
+            ),
+            ProtocolKind::AnthropicMessages => (
+                json!({"id":"msg-1","model":"model","role":"assistant",
+                    "content":[{"type":"text","text":"partial"}],"stop_reason":stop}),
+                [
+                    ("message_start", json!({"type":"message_start","message":{"id":"msg-1","model":"model"}})),
+                    ("content_block_start", json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"partial"}})),
+                    ("content_block_stop", json!({"type":"content_block_stop","index":0})),
+                    ("message_delta", json!({"type":"message_delta","delta":{"stop_reason":stop}})),
+                    ("message_stop", json!({"type":"message_stop"})),
+                ].into_iter().map(|(event, data)| format!("event: {event}\ndata: {data}\n\n")).collect::<String>(),
+            ),
+            ProtocolKind::GeminiNative => {
+                let body = json!({"modelVersion":"model","candidates":[{
+                    "content":{"role":"model","parts":[{"text":"partial"}]},
+                    "finishReason":stop,"finishMessage":"generation stopped"
+                }]});
+                let raw = format!("data: {body}\n\n");
+                (body, raw)
+            }
+            ProtocolKind::OpenAiResponses => unreachable!(),
+        };
+        let converted = crate::protocol::convert_response_non_stream(
+            source,
+            ProtocolKind::OpenAiResponses,
+            &body,
+            &context,
+            &context,
+        )
+        .unwrap();
+        let mut converter = stream_converter(source, ProtocolKind::OpenAiResponses, "model");
+        let mut wire = Vec::new();
+        for byte in raw.as_bytes() {
+            wire.extend(converter.push(std::slice::from_ref(byte)));
+        }
+        wire.extend(converter.finish());
+        assert!(converter.failure().is_none(), "{source} {stop}");
+        let frames = decode_sse_frames(&wire).unwrap();
+        let terminal = frames.last().unwrap();
+        let event = if reason.is_some() {
+            "response.incomplete"
+        } else {
+            "response.completed"
+        };
+        let status = if reason.is_some() {
+            "incomplete"
+        } else {
+            "completed"
+        };
+        assert_eq!(terminal.0.as_deref(), Some(event), "{source} {stop}");
+        let terminal: serde_json::Value = serde_json::from_str(&terminal.1).unwrap();
+        assert_eq!(terminal["type"], event, "{source} {stop}");
+        for response in [&converted.body, &terminal["response"]] {
+            assert_eq!(response["status"], status, "{source} {stop}");
+            assert_eq!(
+                response["incomplete_details"]["reason"].as_str(),
+                reason,
+                "{source} {stop}"
+            );
+        }
+    }
+}
+
+#[test]
+fn responses_refusal_and_incomplete_reasons_survive_json_and_sse() {
+    let protocol = ProtocolKind::OpenAiResponses;
+    let context = AdapterContext::legacy_bridge("model");
+    for (detail, reason, status) in [
+        (
+            Some("max_output_tokens"),
+            FinishReason::Length,
+            ResponseStatus::Incomplete,
+        ),
+        (
+            Some("content_filter"),
+            FinishReason::ContentFilter,
+            ResponseStatus::Refused,
+        ),
+        (
+            Some("interrupted"),
+            FinishReason::Cancelled,
+            ResponseStatus::Cancelled,
+        ),
+        (
+            Some("steered"),
+            FinishReason::Length,
+            ResponseStatus::Incomplete,
+        ),
+        (None, FinishReason::Refusal, ResponseStatus::Refused),
+    ] {
+        let wire_status = if detail.is_some() {
+            "incomplete"
+        } else {
+            "completed"
+        };
+        let event = format!("response.{wire_status}");
+        let body = json!({"id":"resp-1","model":"model","status":wire_status,
+            "incomplete_details":detail.map(|reason| json!({"reason":reason})),
+            "output":if detail.is_some() { json!([]) } else {
+                json!([{"id":"msg-1","type":"message","role":"assistant","content":[{
+                    "type":"refusal","refusal":"Request refused"
+                }]}])
+            }
+        });
+        let decoded = crate::protocol::decode_response(protocol, &body, &context).unwrap();
+        assert_eq!(decoded.finish.reason, reason, "{detail:?}");
+        assert_eq!(decoded.status, status, "{detail:?}");
+        let encoded = crate::protocol::encode_response(
+            protocol,
+            &decoded,
+            &crate::protocol::conversion::ConversionPlan::native_passthrough(protocol),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(encoded["status"], wire_status, "{detail:?}");
+        assert_eq!(encoded["incomplete_details"]["reason"].as_str(), detail);
+        let raw = format!(
+            "event: {event}\ndata: {}\n\n",
+            json!({"type":event,"response":body})
+        );
+        let events = parse_chunks(protocol, raw.as_bytes(), &every_boundary(raw.len()));
+        let response = final_response(&events);
+        assert_eq!(response.finish.reason, reason, "{detail:?}");
+        assert_eq!(response.status, status, "{detail:?}");
+        let mut renderer = StreamRenderer::new(protocol, "model");
+        let mut wire = Vec::new();
+        for item in &events {
+            wire.extend(renderer.push(item).unwrap());
+        }
+        wire.extend(renderer.finish().unwrap());
+        let frames = decode_sse_frames(&wire).unwrap();
+        let terminal = frames.last().unwrap();
+        assert_eq!(terminal.0.as_deref(), Some(event.as_str()));
+        let terminal: serde_json::Value = serde_json::from_str(&terminal.1).unwrap();
+        assert_eq!(terminal["response"]["status"], wire_status);
+        assert_eq!(
+            terminal["response"]["incomplete_details"]["reason"].as_str(),
+            detail
+        );
+    }
+}
+
+#[test]
+fn wrapped_custom_stream_preserves_upstream_error_before_input_completion() {
+    let mut request = crate::protocol::decode_request(
+        ProtocolKind::OpenAiResponses,
+        &json!({"model":"model","input":[],"tools":[{"type":"custom","name":"run"}]}),
+        &AdapterContext::legacy_bridge("model"),
+    )
+    .unwrap();
+    let mapping = crate::protocol::conversion::bridge_request_tools(&mut request).unwrap();
+    let crate::protocol::ir::ToolDefinition::Function(tool) = &request.tools[0] else {
+        panic!("custom tool must use its function envelope upstream");
+    };
+    let error = "data: {\"error\":{\"type\":\"server_is_overloaded\",\"message\":\"upstream capacity failure\"}}\n\n";
+    for input in ["{\"input\":\"unfinished", "{\"input\":\"finished\"}"] {
+        let prefix = format!(
+            "data: {}\n\n",
+            json!({"choices":[{"delta":{"tool_calls":[{
+                "index":0,"id":"call-1","type":"function","function":{"name":tool.name,"arguments":input}
+            }]}}]})
+        );
+        let raw = format!("{prefix}{error}");
+        for target in [ProtocolKind::OpenAiResponses, ProtocolKind::OpenAiChat] {
+            for chunk_size in [1, raw.len()] {
+                let mut converter = stream_converter(ProtocolKind::OpenAiChat, target, "model")
+                    .with_tool_mapping(mapping.clone());
+                let mut wire = Vec::new();
+                for chunk in raw.as_bytes().chunks(chunk_size) {
+                    wire.extend(converter.push(chunk));
+                }
+                wire.extend(converter.finish());
+                assert!(converter.failure().is_none(), "{target} {chunk_size}");
+                let frames = decode_sse_frames(&wire).unwrap();
+                let last: serde_json::Value =
+                    serde_json::from_str(&frames.last().unwrap().1).unwrap();
+                assert_eq!(last["error"]["message"], "upstream capacity failure");
+                assert_eq!(last["error"]["type"], "server_is_overloaded");
+                let events = parse_chunks(target, &wire, &[]);
+                assert!(
+                    !events.iter().any(|event| matches!(event,
+                        CanonicalStreamEvent::ToolArgumentsDelta { data, .. } if !data.is_empty()
+                    )),
+                    "unfinished custom input must not be emitted"
+                );
+                let response = final_response(&events);
+                assert_eq!(response.status, ResponseStatus::Failed);
+                assert_eq!(response.error.as_ref().unwrap().provider_code, None);
+            }
+        }
+    }
+}
+
+#[test]
+fn truncated_tools_are_not_announced_as_completed() {
+    for custom in [false, true] {
+        let call = if custom {
+            json!({"index":0,"id":"call-1","type":"custom","custom":{"name":"run","input":"unfinished"}})
+        } else {
+            json!({"index":0,"id":"call-1","type":"function","function":{"name":"run","arguments":"{\"path\":"}})
+        };
+        for (stop, reason) in [
+            ("length", "max_output_tokens"),
+            ("content_filter", "content_filter"),
+        ] {
+            let raw = format!(
+                "data: {}\n\ndata: [DONE]\n\n",
+                json!({"choices":[{"delta":{"tool_calls":[call]},"finish_reason":stop}]})
+            );
+            for chunks in [1, raw.len()] {
+                let mut converter = stream_converter(
+                    ProtocolKind::OpenAiChat,
+                    ProtocolKind::OpenAiResponses,
+                    "model",
+                );
+                let mut wire = Vec::new();
+                for chunk in raw.as_bytes().chunks(chunks) {
+                    wire.extend(converter.push(chunk));
+                }
+                wire.extend(converter.finish());
+                assert!(converter.failure().is_none());
+                let frames = decode_sse_frames(&wire).unwrap();
+                assert!(!frames.iter().any(|(event, _)| matches!(
+                    event.as_deref(),
+                    Some(
+                        "response.output_item.done"
+                            | "response.function_call_arguments.done"
+                            | "response.custom_tool_call_input.done"
+                    )
+                )));
+                let terminal: serde_json::Value =
+                    serde_json::from_str(&frames.last().unwrap().1).unwrap();
+                assert_eq!(terminal["type"], "response.incomplete");
+                assert_eq!(terminal["response"]["incomplete_details"]["reason"], reason);
+                assert_eq!(terminal["response"]["output"][0]["status"], "incomplete");
+            }
+            // Complete JSON responses have parseable arguments even when the
+            // overall generation was truncated. The partial SSE case is above.
+            let mut complete_call = call.clone();
+            complete_call.as_object_mut().unwrap().remove("index");
+            if !custom {
+                complete_call["function"]["arguments"] = json!("{\"path\":\"test.rs\"}");
+            }
+            let response = crate::protocol::decode_response(
+                ProtocolKind::OpenAiChat,
+                &json!({"model":"model","choices":[{"message":{"role":"assistant",
+                    "tool_calls":[complete_call]},"finish_reason":stop}]}),
+                &AdapterContext::legacy_bridge("model"),
+            )
+            .unwrap();
+            let (events, _) = events_from_response_with_notices(&response).unwrap();
+            for target in [ProtocolKind::OpenAiResponses, ProtocolKind::GeminiNative] {
+                let mut renderer = StreamRenderer::new(target, "model");
+                let mut wire = Vec::new();
+                for event in &events {
+                    wire.extend(renderer.push(event).unwrap());
+                }
+                wire.extend(renderer.finish().unwrap());
+                let frames = decode_sse_frames(&wire).unwrap();
+                if target == ProtocolKind::OpenAiResponses {
+                    assert!(!frames.iter().any(|(event, _)| event.as_deref() == Some("response.output_item.done")));
+                    assert_eq!(
+                        frames.last().unwrap().0.as_deref(),
+                        Some("response.incomplete")
+                    );
+                } else {
+                    assert!(!String::from_utf8_lossy(&wire).contains("\"functionCall\""));
+                    let terminal: serde_json::Value =
+                        serde_json::from_str(&frames.last().unwrap().1).unwrap();
+                    assert_eq!(
+                        terminal["candidates"][0]["finishReason"],
+                        if stop == "length" {
+                            "MAX_TOKENS"
+                        } else {
+                            "SAFETY"
+                        }
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn truncated_custom_wrapper_preserves_length_without_parsing_partial_json() {
+    let mut request = crate::protocol::decode_request(
+        ProtocolKind::OpenAiResponses,
+        &json!({"model":"model","input":[],"tools":[{"type":"custom","name":"run"}]}),
+        &AdapterContext::legacy_bridge("model"),
+    )
+    .unwrap();
+    let mapping = crate::protocol::conversion::bridge_request_tools(&mut request).unwrap();
+    let raw = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices":[{
+            "delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function",
+                "function":{"name":"run","arguments":"{\"input\":\"unfinished"}}]},"finish_reason":"length"
+        }]})
+    );
+    let mut converter = stream_converter(
+        ProtocolKind::OpenAiChat,
+        ProtocolKind::OpenAiResponses,
+        "model",
+    )
+    .with_tool_mapping(mapping);
+    let mut wire = converter.push(raw.as_bytes()).to_vec();
+    wire.extend(converter.finish());
+    assert!(converter.failure().is_none());
+    let frames = decode_sse_frames(&wire).unwrap();
+    let terminal: serde_json::Value = serde_json::from_str(&frames.last().unwrap().1).unwrap();
+    assert_eq!(terminal["type"], "response.incomplete");
+    assert_eq!(
+        terminal["response"]["incomplete_details"]["reason"],
+        "max_output_tokens"
+    );
+    assert!(!frames.iter().any(|(event, _)| matches!(
+        event.as_deref(),
+        Some(
+            "response.custom_tool_call_input.delta"
+                | "response.custom_tool_call_input.done"
+                | "response.output_item.done"
+        )
+    )));
+}
+
+#[test]
+fn upstream_error_ends_the_stream_before_tool_completion() {
+    let raw = format!(
+        "data: {}\n\ndata: {}\n\n",
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function",
+            "function":{"name":"read_file","arguments":"{\"path\":\"test.rs\"}"}}]}}]}),
+        json!({"error":{"type":"server_is_overloaded","message":"upstream capacity failure"}}),
+    );
+    for target in PROTOCOLS {
+        let mut converter = stream_converter(ProtocolKind::OpenAiChat, target, "model");
+        let mut wire = converter.push(raw.as_bytes()).to_vec();
+        wire.extend(converter.finish());
+        assert!(converter.failure().is_none(), "{target}");
+        let frames = decode_sse_frames(&wire).unwrap();
+        let last: serde_json::Value = serde_json::from_str(&frames.last().unwrap().1).unwrap();
+        assert_eq!(
+            last["error"]["message"], "upstream capacity failure",
+            "{target}"
+        );
+        if target == ProtocolKind::OpenAiResponses {
+            assert_eq!(last["type"], "error");
+            assert_eq!(last["code"], "server_is_overloaded");
+            assert_eq!(last["message"], "upstream capacity failure");
+        }
+        assert!(converter.push(b"data: [DONE]\n\n").is_empty());
     }
 }
 

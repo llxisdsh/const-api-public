@@ -24,7 +24,7 @@ fn zcode_model_config(
             serde_json::json!(model.input_modalities.iter().any(|kind| kind == modality));
     }
     ensure_json_object_field(&mut config, "optionSpecs");
-    if let Some(context) = model.context_tokens.filter(|value| *value > 0) {
+    if let Some(context) = model.maximum_context_tokens().filter(|value| *value > 0) {
         config["properties"]["contextWindow"] = serde_json::json!(context);
     }
     if let Some(output) = model.output_tokens.filter(|value| *value > 0) {

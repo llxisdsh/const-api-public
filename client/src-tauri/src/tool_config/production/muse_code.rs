@@ -96,7 +96,7 @@ fn muse_code_model_row(model: &ToolModelInfo, order: usize, is_default: bool) ->
         "visibility": "visible",
         "display_order": order,
         "is_default": is_default,
-        "context_limit": model.context_tokens.filter(|v| *v > 0),
+        "context_limit": model.maximum_context_tokens().filter(|v| *v > 0),
         "output_limit": model.output_tokens.filter(|v| *v > 0),
         "reasoning_effort_variants": efforts,
     })

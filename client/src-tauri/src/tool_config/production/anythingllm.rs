@@ -39,7 +39,7 @@ fn upsert_anythingllm_env(
     ];
     // Only publish limits that the selected model actually declares. The app's
     // existing max-output preference remains in charge, capped to the model.
-    if let Some(context) = model.context_tokens.filter(|value| *value > 0) {
+    if let Some(context) = model.maximum_context_tokens().filter(|value| *value > 0) {
         updates.push(("GENERIC_OPEN_AI_MODEL_TOKEN_LIMIT", context.to_string()));
     }
     if let Some(output) = model.output_tokens.filter(|value| *value > 0) {

@@ -57,6 +57,10 @@ pub(crate) struct ModelCompatibilityCatalogModel {
     #[serde(default)]
     pub(crate) context_tokens: u64,
     #[serde(default)]
+    pub(crate) max_context_tokens: u64,
+    #[serde(default)]
+    pub(crate) input_tokens: u64,
+    #[serde(default)]
     pub(crate) output_tokens: u64,
     #[serde(default)]
     pub(crate) input_modalities: Vec<String>,
@@ -1418,6 +1422,10 @@ pub(crate) struct ChannelCapabilityProfile {
     /// Numeric limits from this channel's live model catalog, not the bundled catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) context_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_context_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) output_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

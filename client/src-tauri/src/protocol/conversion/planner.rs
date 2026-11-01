@@ -758,8 +758,15 @@ fn evaluate_provider_extensions(
             });
             continue;
         }
+        // Production may approximate optional provider behavior, but cannot
+        // omit referenced context or override an explicit storage policy.
+        let requires_exact_semantics = extension.namespace == "gemini_native"
+            && matches!(
+                extension.name.as_str(),
+                "cachedContent" | "continuationToken" | "store"
+            );
         if extension.criticality == ExtensionCriticality::Critical
-            && policy == ConversionPolicy::Diagnostic
+            && (policy == ConversionPolicy::Diagnostic || requires_exact_semantics)
         {
             *blocked = true;
             feature_actions.push(FeatureAction {
@@ -1296,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn namespaces_flatten_only_when_collision_free_and_custom_grammars_block() {
+    fn namespaces_require_collision_free_names_and_custom_tools_require_wire_support() {
         let source = issuer("openai", "responses", "account");
         let target = issuer("openai", "chat", "account");
         let mut request = text_request();
@@ -1373,7 +1380,7 @@ mod tests {
             description: None,
             grammar: json!({"type":"grammar","syntax":"lark","definition":"start: WORD"}),
         }));
-        let blocked = plan_conversion(
+        let native_custom = plan_conversion(
             &custom,
             ProtocolKind::OpenAiResponses,
             ProtocolKind::OpenAiChat,
@@ -1382,14 +1389,27 @@ mod tests {
             &CapabilityProfile::default(),
             ConversionPolicy::Production,
         )
-        .unwrap_err();
-        assert!(
-            blocked
-                .report()
-                .issues
-                .iter()
-                .any(|issue| issue.feature == Some(Feature::CustomTools))
-        );
+        .unwrap();
+        assert_ne!(native_custom.level(), ConversionLevel::Blocked);
+        for protocol in [ProtocolKind::AnthropicMessages, ProtocolKind::GeminiNative] {
+            let blocked = plan_conversion(
+                &custom,
+                ProtocolKind::OpenAiResponses,
+                protocol,
+                &source,
+                &target,
+                &CapabilityProfile::default(),
+                ConversionPolicy::Production,
+            )
+            .unwrap_err();
+            assert!(
+                blocked
+                    .report()
+                    .issues
+                    .iter()
+                    .any(|issue| issue.feature == Some(Feature::CustomTools))
+            );
+        }
     }
 
     #[test]

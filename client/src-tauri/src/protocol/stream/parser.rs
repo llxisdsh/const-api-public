@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::protocol::ir::{
     ArtifactAffinity, ArtifactCriticality, ArtifactKind, BlockHeader, CanonicalError,
     CanonicalStreamEvent, ContentBlockKind, FinishDetail, FinishReason, OpaqueArtifact,
-    ReplayPolicy, ResponseMeta, ResponseStatus, Usage, UsageProvenance, UsageValue,
+    ReplayPolicy, ResponseMeta, ResponseStatus, ToolKind, Usage, UsageProvenance, UsageValue,
 };
 use crate::protocol::kind::ProtocolKind;
 
@@ -18,10 +18,12 @@ pub(crate) struct StreamParser {
     decoder: SseDecoder,
     started: bool,
     done: bool,
+    chat_finish: Option<(FinishReason, String)>,
     next_index: u32,
     blocks: HashMap<String, u32>,
     open_blocks: BTreeMap<u32, ContentBlockKind>,
     tool_headers: HashMap<u32, BlockHeader>,
+    has_refusal: bool,
     notices: Vec<StreamConversionNotice>,
 }
 
@@ -33,10 +35,12 @@ impl StreamParser {
             decoder: SseDecoder::default(),
             started: false,
             done: false,
+            chat_finish: None,
             next_index: 0,
             blocks: HashMap::new(),
             open_blocks: BTreeMap::new(),
             tool_headers: HashMap::new(),
+            has_refusal: false,
             notices: Vec::new(),
         }
     }
@@ -48,7 +52,11 @@ impl StreamParser {
 
     pub(crate) fn finish(&mut self) -> Result<Vec<CanonicalStreamEvent>, StreamError> {
         let frames = self.decoder.finish()?;
-        self.parse_frames(frames)
+        let mut events = self.parse_frames(frames)?;
+        if let Some((reason, original)) = self.chat_finish.take() {
+            self.finish_events(reason, Some(original), Usage::default(), &mut events);
+        }
+        Ok(events)
     }
 
     pub(crate) fn take_notices(&mut self) -> Vec<StreamConversionNotice> {
@@ -65,6 +73,10 @@ impl StreamParser {
                 continue;
             }
             if frame.data.trim() == "[DONE]" {
+                if let Some((reason, original)) = self.chat_finish.take() {
+                    self.finish_events(reason, Some(original), Usage::default(), &mut events);
+                    continue;
+                }
                 let reason = if self.tool_headers.is_empty() {
                     FinishReason::Stop
                 } else {
@@ -174,6 +186,7 @@ impl StreamParser {
         self.next_index += 1;
         self.blocks.insert(key, index);
         self.open_blocks.insert(index, header.kind);
+        self.has_refusal |= header.kind == ContentBlockKind::Refusal;
         if header.kind == ContentBlockKind::ToolCall {
             self.tool_headers.insert(index, header.clone());
         }
@@ -212,6 +225,15 @@ impl StreamParser {
             return;
         }
         self.ensure_start(None, None, None, events);
+        let reason = if reason == FinishReason::Stop && self.has_refusal {
+            FinishReason::Refusal
+        } else {
+            reason
+        };
+        // Consumers must know why generation stopped before closing unfinished tools.
+        events.push(CanonicalStreamEvent::StatusUpdate(status_from_finish(
+            reason,
+        )));
         let open = self.open_blocks.keys().copied().collect::<Vec<_>>();
         for index in open {
             self.close_block(index, events);
@@ -219,8 +241,6 @@ impl StreamParser {
         if usage != Usage::default() {
             events.push(CanonicalStreamEvent::UsageUpdate(Box::new(usage)));
         }
-        let status = status_from_finish(reason);
-        events.push(CanonicalStreamEvent::StatusUpdate(status));
         events.push(CanonicalStreamEvent::ResponseDone(FinishDetail {
             reason,
             original_reason,
@@ -243,6 +263,12 @@ impl StreamParser {
             None,
             events,
         );
+        // With include_usage the final chunk has no choices and arrives after
+        // finish_reason. Keep that usage before completing on [DONE] or EOF.
+        let usage = usage_from_chat(value.get("usage"));
+        if usage != Usage::default() {
+            events.push(CanonicalStreamEvent::UsageUpdate(Box::new(usage)));
+        }
         let Some(choice) = value
             .get("choices")
             .and_then(Value::as_array)
@@ -299,12 +325,17 @@ impl StreamParser {
                 .get("index")
                 .and_then(Value::as_u64)
                 .unwrap_or(tool_position as u64) as u32;
-            let function = tool.get("function").unwrap_or(&Value::Null);
             let key = format!("chat:tool:{wire_index}");
             let existing = self
                 .blocks
                 .get(&key)
                 .and_then(|index| self.tool_headers.get(index));
+            let custom = tool.get("type").and_then(Value::as_str) == Some("custom")
+                || tool.get("custom").is_some()
+                || existing.is_some_and(|header| header.tool_kind == Some(ToolKind::Custom));
+            let function = tool
+                .get(if custom { "custom" } else { "function" })
+                .unwrap_or(&Value::Null);
             let mut header = tool_header(
                 tool.get("id")
                     .and_then(Value::as_str)
@@ -317,6 +348,11 @@ impl StreamParser {
                     .unwrap_or("tool"),
                 None,
             );
+            header.tool_kind = Some(if custom {
+                ToolKind::Custom
+            } else {
+                ToolKind::Function
+            });
             let signature = tool
                 .pointer("/extra_content/google/thought_signature")
                 .or_else(|| tool.pointer("/extra_content/google/thoughtSignature"))
@@ -332,7 +368,7 @@ impl StreamParser {
             }
             let index = self.ensure_block(key, header, events);
             if let Some(data) = function
-                .get("arguments")
+                .get(if custom { "input" } else { "arguments" })
                 .and_then(Value::as_str)
                 .filter(|data| !data.is_empty())
             {
@@ -343,12 +379,7 @@ impl StreamParser {
             }
         }
         if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
-            self.finish_events(
-                finish_from_chat(reason),
-                Some(reason.to_string()),
-                usage_from_chat(value.get("usage")),
-                events,
-            );
+            self.chat_finish = Some((finish_from_chat(reason), reason.to_string()));
         }
     }
 
@@ -416,7 +447,15 @@ impl StreamParser {
             }
             "response.refusal.delta" => {
                 if let Some(text) = value.get("delta").and_then(Value::as_str) {
-                    let index = self.ensure_block("responses:refusal", refusal_header(), events);
+                    let wire_index = value
+                        .get("output_index")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let index = self.ensure_block(
+                        format!("responses:refusal:{wire_index}"),
+                        refusal_header(),
+                        events,
+                    );
                     events.push(CanonicalStreamEvent::RefusalDelta {
                         index,
                         text: text.to_string(),
@@ -533,24 +572,34 @@ impl StreamParser {
         {
             match item.get("type").and_then(Value::as_str) {
                 Some("message") => {
-                    let key = format!("responses:text:{wire_index}");
-                    if self.blocks.contains_key(&key) {
-                        continue;
-                    }
-                    let text = item
-                        .get("content")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|part| {
-                            part.get("text")
-                                .or_else(|| part.get("output_text"))
+                    for (refusal, header) in [(false, text_header()), (true, refusal_header())] {
+                        let kind = if refusal { "refusal" } else { "text" };
+                        let key = format!("responses:{kind}:{wire_index}");
+                        if self.blocks.contains_key(&key) {
+                            continue;
+                        }
+                        let text = item
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|part| {
+                                if refusal {
+                                    part.get("refusal")
+                                } else {
+                                    part.get("text").or_else(|| part.get("output_text"))
+                                }
                                 .and_then(Value::as_str)
-                        })
-                        .collect::<String>();
-                    if !text.is_empty() {
-                        let index = self.ensure_block(key, text_header(), events);
-                        events.push(CanonicalStreamEvent::TextDelta { index, text });
+                            })
+                            .collect::<String>();
+                        if !text.is_empty() {
+                            let index = self.ensure_block(key, header, events);
+                            events.push(if refusal {
+                                CanonicalStreamEvent::RefusalDelta { index, text }
+                            } else {
+                                CanonicalStreamEvent::TextDelta { index, text }
+                            });
+                        }
                     }
                 }
                 Some("reasoning") => {
@@ -826,6 +875,10 @@ impl StreamParser {
             None,
             events,
         );
+        let usage = usage_from_gemini(response.get("usageMetadata"));
+        if usage != Usage::default() {
+            events.push(CanonicalStreamEvent::UsageUpdate(Box::new(usage)));
+        }
         let Some(candidate) = response
             .get("candidates")
             .and_then(Value::as_array)
@@ -833,12 +886,23 @@ impl StreamParser {
         else {
             return;
         };
-        for (part_index, part) in candidate
+        if response
+            .get("continuationToken")
+            .and_then(Value::as_str)
+            .is_some_and(|token| !token.is_empty())
+            || candidate.get("finishReason").and_then(Value::as_str) == Some("CONTINUATION")
+        {
+            self.provider_error(&serde_json::json!({
+                "type":"unsupported_gemini_continuation",
+                "message":"Gemini long-decode continuation requires native GenerateContent with unchanged contents; cross-protocol streaming cannot resume this response."
+            }), events);
+            return;
+        }
+        for part in candidate
             .pointer("/content/parts")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .enumerate()
         {
             let signature = part
                 .get("thoughtSignature")
@@ -865,11 +929,17 @@ impl StreamParser {
                 .get("functionCall")
                 .or_else(|| part.get("function_call"))
             {
-                let key = format!("gemini:tool:{part_index}");
+                // GenerateContent sends complete FunctionCall parts. A new
+                // chunk's part 0 is not a continuation of the previous part 0.
+                let key = format!("gemini:tool:{}", self.next_index);
+                let call_id = call
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.trim().is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("call_gemini_{}", uuid::Uuid::new_v4().simple()));
                 let mut header = tool_header(
-                    call.get("id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("call_gemini_stream"),
+                    &call_id,
                     call.get("name").and_then(Value::as_str).unwrap_or("tool"),
                     None,
                 );
@@ -912,7 +982,7 @@ impl StreamParser {
             self.finish_events(
                 finish_from_gemini(original, !self.tool_headers.is_empty()),
                 Some(original.to_string()),
-                usage_from_gemini(response.get("usageMetadata")),
+                Usage::default(),
                 events,
             );
         }
@@ -932,11 +1002,14 @@ impl StreamParser {
                 .unwrap_or("upstream stream error")
                 .to_string(),
             retryable: false,
-            provider_code: value.get("code").map(|code| {
-                code.as_str()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| code.to_string())
-            }),
+            provider_code: value
+                .get("code")
+                .filter(|code| !code.is_null())
+                .map(|code| {
+                    code.as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| code.to_string())
+                }),
             details: Some(value.clone()),
         }));
         self.finish_events(

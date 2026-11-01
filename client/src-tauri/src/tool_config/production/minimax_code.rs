@@ -129,7 +129,7 @@ fn configure_minimax_code(
             entry.insert("capabilities".into(), capabilities.into());
             let mut limits = serde_json::Map::new();
             for (key, value) in [
-                ("context", model.context_tokens),
+                ("context", model.maximum_context_tokens()),
                 ("output", model.output_tokens),
             ] {
                 if let Some(value) = value.filter(|v| *v > 0) {
@@ -139,7 +139,7 @@ fn configure_minimax_code(
             if !limits.is_empty() {
                 entry.insert("limit".into(), limits.into());
             }
-            if let Some(context) = model.context_tokens.filter(|value| *value > 0) {
+            if let Some(context) = model.maximum_context_tokens().filter(|value| *value > 0) {
                 // These are local conversation/compaction budgets, not claims
                 // about upstream context tiers or their prices.
                 let choices = tool_context_budget_choices(
@@ -193,7 +193,10 @@ fn configure_minimax_code(
                 .get("defaultModelContextWindow")
                 .and_then(serde_json::Value::as_u64)
                 .is_some_and(|value| {
-                    value == 0 || model.context_tokens.is_some_and(|maximum| value > maximum)
+                    value == 0
+                        || model
+                            .maximum_context_tokens()
+                            .is_some_and(|maximum| value > maximum)
                 })
             {
                 root.remove("defaultModelContextWindow");

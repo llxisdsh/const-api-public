@@ -397,13 +397,13 @@ fn opencode_models_object(
         if !model.family.trim().is_empty() {
             value["family"] = serde_json::json!(model.family.trim());
         }
-        if let (Some(context), Some(output)) = (model.context_tokens, model.output_tokens) {
+        if let (Some(context), Some(output)) = (model.maximum_context_tokens(), model.output_tokens)
+        {
             let mut limit = serde_json::json!({
                 "context": context,
                 "output": output
             });
-            let input = context.saturating_sub(output);
-            if input > 0 {
+            if let Some(input) = model.maximum_input_tokens() {
                 limit["input"] = serde_json::json!(input);
             }
             value["limit"] = limit;

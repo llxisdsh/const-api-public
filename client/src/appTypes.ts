@@ -634,6 +634,11 @@ export type ChannelUpstreamTestResult = LocalProxyTestResult & {
 
 export type ChannelCapabilityProfile = {
   protocol: string;
+  catalog_metadata?: boolean;
+  context_tokens?: number;
+  max_context_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
   model_pattern?: string;
   capability_layer?: "model_wire" | "driver" | "client_host" | "product_service" | string;
   input_modalities_authoritative?: boolean;
@@ -813,6 +818,8 @@ export type ModelCompatibilityCatalogModel = {
   vendor?: string;
   family?: string;
   context_tokens?: number;
+  max_context_tokens?: number;
+  input_tokens?: number;
   output_tokens?: number;
   input_modalities?: string[];
   output_modalities?: string[];

@@ -734,6 +734,268 @@ fn responses_custom_history_is_not_misreported_as_invalid_json() {
     );
 }
 
+#[test]
+fn chat_custom_tools_and_choices_preserve_raw_input_in_responses() {
+    let raw = "*** Begin Patch\n世界\n*** End Patch";
+    let grammar = json!({"type":"grammar","grammar":{"syntax":"lark","definition":"start: /.+/"}});
+    for choice in [
+        json!({"type":"custom","custom":{"name":"apply_patch"}}),
+        json!({"type":"allowed_tools","allowed_tools":{"mode":"required","tools":[
+            {"type":"custom","custom":{"name":"apply_patch"}},
+            {"type":"function","function":{"name":"read_file"}}
+        ]}}),
+    ] {
+        let body = json!({"model":"source-model","messages":[
+            {"role":"user","content":"Edit the file"},
+            {"role":"assistant","tool_calls":[{"id":"call_patch","type":"custom","custom":{"name":"apply_patch","input":raw}}]},
+            {"role":"tool","tool_call_id":"call_patch","content":"Done"}
+        ],"tools":[
+            {"type":"custom","custom":{"name":"apply_patch","format":grammar}},
+            {"type":"function","function":{"name":"read_file","parameters":{"type":"object","properties":{}}}}
+        ],"tool_choice":choice});
+        let ctx = context(ProtocolKind::OpenAiChat, "source-model", "source-account");
+        let request = decode_request(ProtocolKind::OpenAiChat, &body, &ctx).unwrap();
+        assert!(request.extensions.is_empty());
+        let plan = plan_request(
+            &request,
+            ProtocolKind::OpenAiChat,
+            ProtocolKind::OpenAiChat,
+            &ctx,
+            &ctx,
+            &CapabilityProfile::default(),
+            ConversionPolicy::Production,
+        )
+        .unwrap();
+        let encoded = encode_request(ProtocolKind::OpenAiChat, &request, &plan, &ctx).unwrap();
+        assert_eq!(encoded["tools"][0], body["tools"][0]);
+        assert_eq!(encoded["tool_choice"], choice);
+        assert_eq!(
+            encoded["messages"][1]["tool_calls"][0]["custom"]["input"],
+            raw
+        );
+
+        let converted = converted_request_body(
+            ProtocolKind::OpenAiChat,
+            ProtocolKind::OpenAiResponses,
+            &body,
+        );
+        assert_eq!(converted["tools"][0]["type"], "custom");
+        assert_eq!(converted["tools"][0]["format"], grammar);
+        assert_eq!(converted["input"][1]["type"], "custom_tool_call");
+        assert_eq!(converted["input"][1]["input"], raw);
+        assert_eq!(converted["input"][2]["type"], "custom_tool_call_output");
+        if choice["type"] == "custom" {
+            assert_eq!(
+                converted["tool_choice"],
+                json!({"type":"custom","name":"apply_patch"})
+            );
+        } else {
+            assert_eq!(
+                converted["tool_choice"],
+                json!({"type":"allowed_tools","mode":"required","tools":[
+                    {"type":"custom","name":"apply_patch"}, {"type":"function","name":"read_file"}
+                ]})
+            );
+        }
+    }
+}
+
+#[test]
+fn chat_custom_tools_use_managed_function_bridge_for_claude_and_gemini() {
+    let body = json!({"model":"source-model","messages":[{"role":"user","content":"Apply a patch"}],
+        "tools":[{"type":"custom","custom":{"name":"apply_patch","format":{"type":"text"}}}],
+        "tool_choice":{"type":"custom","custom":{"name":"apply_patch"}}
+    });
+    for target in [ProtocolKind::AnthropicMessages, ProtocolKind::GeminiNative] {
+        let source_ctx = context(ProtocolKind::OpenAiChat, "source-model", "source-account");
+        let target_ctx = target_context(ProtocolKind::OpenAiChat, target);
+        let converted = convert_non_stream(
+            ProtocolKind::OpenAiChat,
+            target,
+            &body,
+            &source_ctx,
+            &target_ctx,
+            &CapabilityProfile::default(),
+            ConversionPolicy::Production,
+        )
+        .unwrap();
+        assert!(!converted.plan.tool_mapping.is_empty());
+        let request = decode_request(target, &converted.body, &target_ctx).unwrap();
+        let ToolDefinition::Function(tool) = &request.tools[0] else {
+            panic!("wrapped function");
+        };
+        assert_eq!(tool.input_schema["properties"]["input"]["type"], "string");
+        let upstream = match target {
+            ProtocolKind::AnthropicMessages => {
+                json!({"id":"msg_1","type":"message","role":"assistant","model":"target-model","content":[{"type":"tool_use","id":"call_patch","name":"apply_patch","input":{"input":"raw patch"}}],"stop_reason":"tool_use"})
+            }
+            ProtocolKind::GeminiNative => {
+                json!({"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"call_patch","name":"apply_patch","args":{"input":"raw patch"}}}]},"finishReason":"STOP"}]})
+            }
+            _ => unreachable!(),
+        };
+        let mut response = decode_response(target, &upstream, &target_ctx).unwrap();
+        converted
+            .plan
+            .tool_mapping
+            .restore_response(&mut response)
+            .unwrap();
+        let restored = crate::protocol::convert_canonical_response(
+            target,
+            ProtocolKind::OpenAiChat,
+            response,
+            &upstream,
+            &target_ctx,
+            &source_ctx,
+        )
+        .unwrap();
+        assert_eq!(
+            restored.body["choices"][0]["message"]["tool_calls"][0],
+            json!({"id":"call_patch","type":"custom","custom":{"name":"apply_patch","input":"raw patch"}})
+        );
+    }
+}
+
+#[test]
+fn chat_allowed_tools_rejects_unrepresentable_members_instead_of_dropping_them() {
+    let body = json!({"model":"source-model","messages":[{"role":"user","content":"search"}],
+        "tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"web_search"}]}}
+    });
+    let ctx = context(ProtocolKind::OpenAiChat, "source-model", "source-account");
+    assert!(decode_request(ProtocolKind::OpenAiChat, &body, &ctx).is_err());
+    // Same-protocol dispatch does not impose the cross-protocol IR on extensions.
+    assert_eq!(
+        converted_request_body(ProtocolKind::OpenAiChat, ProtocolKind::OpenAiChat, &body),
+        body
+    );
+}
+
+#[test]
+fn allowed_function_choices_cross_between_openai_protocols() {
+    let responses = json!({"model":"source-model","input":"Read the file", "tools":[responses_function("read_file")],
+        "tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"read_file"}]}});
+    let chat = converted_request_body(
+        ProtocolKind::OpenAiResponses,
+        ProtocolKind::OpenAiChat,
+        &responses,
+    );
+    assert_eq!(
+        chat["tool_choice"],
+        json!({"type":"allowed_tools","allowed_tools":{"mode":"auto","tools":[{"type":"function","function":{"name":"read_file"}}]}})
+    );
+    let roundtrip = converted_request_body(
+        ProtocolKind::OpenAiChat,
+        ProtocolKind::OpenAiResponses,
+        &chat,
+    );
+    assert_eq!(roundtrip["tool_choice"], responses["tool_choice"]);
+}
+
+#[test]
+fn responses_hosted_allowlist_is_never_silently_reduced_to_function_names() {
+    let body = json!({"model":"source-model","input":"Search then read", "tools":[responses_function("read_file"),{"type":"web_search"}],
+        "tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"read_file"},{"type":"web_search"}]}});
+    let ctx = context(
+        ProtocolKind::OpenAiResponses,
+        "source-model",
+        "source-account",
+    );
+    let error = decode_request(ProtocolKind::OpenAiResponses, &body, &ctx).unwrap_err();
+    assert_eq!(error.code(), "unsupported_tool_choice_member");
+    assert_eq!(
+        converted_request_body(
+            ProtocolKind::OpenAiResponses,
+            ProtocolKind::OpenAiResponses,
+            &body
+        ),
+        body
+    );
+}
+
+#[test]
+fn gemini_continuation_and_storage_policy_are_preserved_or_explicitly_blocked() {
+    let ctx = context(ProtocolKind::GeminiNative, "source-model", "source-account");
+    for (key, value) in [
+        ("continuationToken", json!("opaque-test-token")),
+        ("store", json!(false)),
+    ] {
+        let mut body = json!({"model":"source-model","contents":[{"role":"user","parts":[{"text":"Continue"}]}]});
+        body[key] = value;
+        assert_eq!(
+            converted_request_body(
+                ProtocolKind::GeminiNative,
+                ProtocolKind::GeminiNative,
+                &body
+            ),
+            body
+        );
+        for target in PROTOCOLS
+            .into_iter()
+            .filter(|target| *target != ProtocolKind::GeminiNative)
+        {
+            let error = convert_non_stream(
+                ProtocolKind::GeminiNative,
+                target,
+                &body,
+                &ctx,
+                &target_context(ProtocolKind::GeminiNative, target),
+                &CapabilityProfile::default(),
+                ConversionPolicy::Production,
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), "conversion_blocked", "{key} -> {target}");
+        }
+    }
+    let body = json!({"modelVersion":"source-model","continuationToken":"opaque-test-token", "candidates":[{
+        "content":{"role":"model","parts":[{"text":"Partial answer"}]},"finishReason":"CONTINUATION"
+    }]});
+    assert_eq!(
+        convert_response_non_stream(
+            ProtocolKind::GeminiNative,
+            ProtocolKind::GeminiNative,
+            &body,
+            &ctx,
+            &ctx
+        )
+        .unwrap()
+        .body,
+        body
+    );
+    let error = convert_response_non_stream(
+        ProtocolKind::GeminiNative,
+        ProtocolKind::OpenAiResponses,
+        &body,
+        &ctx,
+        &target_context(ProtocolKind::GeminiNative, ProtocolKind::OpenAiResponses),
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "conversion_blocked");
+}
+
+#[test]
+fn gemini_generated_response_tool_ids_do_not_collide_across_turns() {
+    let body = json!({"candidates":[{"content":{"role":"model","parts":[{
+        "functionCall":{"name":"read_file","args":{"path":"README.md"}}
+    }]},"finishReason":"STOP"}]});
+    let ctx = context(ProtocolKind::GeminiNative, "source-model", "source-account");
+    let first = decode_response(ProtocolKind::GeminiNative, &body, &ctx).unwrap();
+    let second = decode_response(ProtocolKind::GeminiNative, &body, &ctx).unwrap();
+    let ContentBlock::ToolCall(a) = &first.blocks[0] else {
+        panic!("tool call");
+    };
+    let ContentBlock::ToolCall(b) = &second.blocks[0] else {
+        panic!("tool call");
+    };
+    assert_ne!(a.id, b.id);
+    let mut explicit = body;
+    explicit["candidates"][0]["content"]["parts"][0]["functionCall"]["id"] = json!("upstream-id");
+    let response = decode_response(ProtocolKind::GeminiNative, &explicit, &ctx).unwrap();
+    let ContentBlock::ToolCall(call) = &response.blocks[0] else {
+        panic!("tool call");
+    };
+    assert_eq!(call.id, "upstream-id");
+}
+
 fn fixture(protocol: ProtocolKind) -> super::fixtures::FixtureCase {
     load_fixture(
         match protocol {
@@ -2036,7 +2298,7 @@ fn gemini_advisory_extensions_are_omitted_but_context_references_still_block() {
         "category":"HARM_CATEGORY_DANGEROUS_CONTENT",
         "threshold":"BLOCK_ONLY_HIGH"
     }]);
-    body["store"] = serde_json::json!(true);
+    body["labels"] = serde_json::json!({"test":"advisory"});
     body["generationConfig"]["thinkingConfig"] = serde_json::json!({
         "thinkingBudget": 256,
         "futureThinkingOption": {"mode":"balanced"}
@@ -2065,7 +2327,7 @@ fn gemini_advisory_extensions_are_omitted_but_context_references_still_block() {
     );
 
     body["cachedContent"] = serde_json::json!("cachedContents/context-1");
-    let converted = convert_non_stream(
+    let error = convert_non_stream(
         source,
         target,
         &body,
@@ -2074,15 +2336,14 @@ fn gemini_advisory_extensions_are_omitted_but_context_references_still_block() {
         &CapabilityProfile::default(),
         ConversionPolicy::Production,
     )
-    .expect("production prioritizes an available cross-protocol request");
-    assert_eq!(converted.plan.level(), ConversionLevel::Lossy);
+    .expect_err("referenced cached context cannot be discarded in production");
     assert!(
-        converted
-            .plan
+        error
             .report()
+            .unwrap()
             .issues
             .iter()
-            .any(|issue| issue.code == "provider_extension_approximated"
+            .any(|issue| issue.code == "provider_extension_not_portable"
                 && issue.path == "$.cachedContent")
     );
 }

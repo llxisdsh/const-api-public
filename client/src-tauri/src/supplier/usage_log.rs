@@ -424,6 +424,16 @@ pub(crate) fn append_subscription_usage(
         serde_json::json!(input_tokens_include_cache_write);
     record["usage_meters"] =
         serde_json::json!(upstream_usage.as_ref().map(|usage| &usage.usage_meters));
+    record["cache_write_30m_tokens"] = serde_json::json!(
+        upstream_usage
+            .as_ref()
+            .and_then(|usage| usage.cache_write_30m_tokens)
+    );
+    record["cache_write_12h_tokens"] = serde_json::json!(
+        upstream_usage
+            .as_ref()
+            .and_then(|usage| usage.cache_write_12h_tokens)
+    );
     record["first_sse_event_ms"] = serde_json::json!(first_sse_event_ms);
     record["first_meaningful_event_ms"] = serde_json::json!(first_meaningful_event_ms);
     record["routing_latency_ms"] = serde_json::json!(routing_latency_ms);

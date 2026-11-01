@@ -104,7 +104,7 @@ pub(crate) fn protocol_wire_supports(protocol: ProtocolKind, feature: Feature) -
                 OpenAiResponses | OpenAiChat | AnthropicMessages | GeminiNative
             )
         }
-        ToolChoiceAllowed => matches!(protocol, OpenAiResponses | GeminiNative),
+        ToolChoiceAllowed => matches!(protocol, OpenAiResponses | OpenAiChat | GeminiNative),
         ReasoningSummary => matches!(protocol, OpenAiResponses | GeminiNative),
         EncryptedReasoning => matches!(protocol, OpenAiResponses),
         AnthropicSignatureReplay => matches!(protocol, AnthropicMessages),
@@ -131,7 +131,8 @@ pub(crate) fn protocol_wire_supports(protocol: ProtocolKind, feature: Feature) -
         | HostedMcp | HostedUrlContext | HostedProviderTool => {
             matches!(protocol, OpenAiResponses | GeminiNative)
         }
-        CustomTools | NamespaceTools => matches!(protocol, OpenAiResponses),
+        CustomTools => matches!(protocol, OpenAiResponses | OpenAiChat),
+        NamespaceTools => matches!(protocol, OpenAiResponses),
         ToolDeferLoading | ToolAllowedCallers => {
             matches!(protocol, OpenAiResponses | AnthropicMessages)
         }

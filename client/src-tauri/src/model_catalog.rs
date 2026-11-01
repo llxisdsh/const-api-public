@@ -15,6 +15,10 @@ pub(crate) struct ModelObservation {
     pub(crate) input_modalities: Vec<String>,
     pub(crate) output_modalities: Vec<String>,
     pub(crate) context_tokens: Option<u64>,
+    /// A separately declared expandable window; context_tokens may be a default.
+    pub(crate) max_context_tokens: Option<u64>,
+    /// Input-only limit. Do not subtract the output allowance from it again.
+    pub(crate) input_tokens: Option<u64>,
     pub(crate) output_tokens: Option<u64>,
     /// Optional parameter declarations populated by source-specific discovery.
     pub(crate) supported_parameters: Option<Vec<String>>,
@@ -55,6 +59,12 @@ pub(crate) fn stable_dedupe_models(observations: Vec<ModelObservation>) -> Vec<M
                 conservative_limit(unique[index].context_tokens, observation.context_tokens);
             unique[index].output_tokens =
                 conservative_limit(unique[index].output_tokens, observation.output_tokens);
+            unique[index].max_context_tokens = conservative_limit(
+                unique[index].max_context_tokens,
+                observation.max_context_tokens,
+            );
+            unique[index].input_tokens =
+                conservative_limit(unique[index].input_tokens, observation.input_tokens);
             if unique[index].priority.is_none() && observation.priority.is_some() {
                 unique[index].priority = observation.priority;
             }
@@ -303,6 +313,9 @@ pub(crate) fn model_observations_from_value(
                     &["max_context_window_tokens", "max_prompt_tokens"],
                 );
                 model.output_tokens = positive_token_limit(limits, &["max_output_tokens"]);
+                model.max_context_tokens =
+                    positive_token_limit(limits, &["max_context_window_tokens"]);
+                model.input_tokens = positive_token_limit(limits, &["max_prompt_tokens"]);
                 model.input_modalities = vec!["text".into()];
                 model.output_modalities = vec!["text".into()];
                 let supports = &item["capabilities"]["supports"];
@@ -523,6 +536,29 @@ fn push_model_observation_with_id(
                 .get("top_provider")
                 .and_then(|provider| positive_token_limit(provider, &["context_length"])),
         ),
+        max_context_tokens: positive_token_limit(
+            entry,
+            &["max_context_window", "max_context_tokens"],
+        )
+        .or_else(|| {
+            positive_token_limit(entry, &["max_input_tokens", "inputTokenLimit"])?;
+            positive_token_limit(
+                entry,
+                &["context_length", "context_window", "contextWindow"],
+            )
+            .or_else(|| {
+                entry
+                    .get("top_provider")
+                    .and_then(|provider| positive_token_limit(provider, &["context_length"]))
+            })
+        })
+        .map(|maximum| {
+            entry
+                .get("top_provider")
+                .and_then(|provider| positive_token_limit(provider, &["context_length"]))
+                .map_or(maximum, |limit| maximum.min(limit))
+        }),
+        input_tokens: positive_token_limit(entry, &["max_input_tokens", "inputTokenLimit"]),
         output_tokens: conservative_limit(
             positive_token_limit(
                 entry,
@@ -800,6 +836,8 @@ pub(crate) fn models_from_quota_observations<'a>(
             .into_iter()
             .map(|model| ModelObservation {
                 context_tokens: None,
+                max_context_tokens: None,
+                input_tokens: None,
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
@@ -820,6 +858,36 @@ pub(crate) fn models_from_quota_observations<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_limits_discovery_preserves_input_and_codex_maximum() {
+        let models = model_observations_from_value(
+            ModelCatalogKind::Codex,
+            &serde_json::json!({"models": [{"slug": "codex-model",
+                "context_window": 272000, "max_context_window": 922000}]}),
+            "fixture",
+        );
+        assert_eq!(models[0].context_tokens, Some(272000));
+        assert_eq!(models[0].max_context_tokens, Some(922000));
+        assert_eq!(models[0].input_tokens, None);
+        let models = model_observations_from_value(
+            ModelCatalogKind::OpenAI,
+            &serde_json::json!({"data": [{"id": "api-model", "context_length": 1050000,
+                "max_input_tokens": 922000, "max_output_tokens": 128000}]}),
+            "fixture",
+        );
+        assert_eq!(models[0].context_tokens, Some(1050000));
+        assert_eq!(models[0].max_context_tokens, Some(1050000));
+        assert_eq!(models[0].input_tokens, Some(922000));
+        assert_eq!(models[0].output_tokens, Some(128000));
+        let gemini = model_observations_from_value(
+            ModelCatalogKind::Gemini,
+            &serde_json::json!({"models":[{"name":"models/input-only","inputTokenLimit":1048576,"outputTokenLimit":65536}]}),
+            "fixture",
+        );
+        assert_eq!(gemini[0].input_tokens, Some(1048576));
+        assert_eq!(gemini[0].max_context_tokens, None);
+    }
     use std::collections::HashMap;
     use warp::Filter;
 
@@ -1066,6 +1134,8 @@ mod tests {
         let observations = vec![
             ModelObservation {
                 context_tokens: None,
+                max_context_tokens: None,
+                input_tokens: None,
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
@@ -1081,6 +1151,8 @@ mod tests {
             },
             ModelObservation {
                 context_tokens: None,
+                max_context_tokens: None,
+                input_tokens: None,
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
@@ -1160,6 +1232,8 @@ mod tests {
         let observations = vec![
             ModelObservation {
                 context_tokens: None,
+                max_context_tokens: None,
+                input_tokens: None,
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
@@ -1175,6 +1249,8 @@ mod tests {
             },
             ModelObservation {
                 context_tokens: None,
+                max_context_tokens: None,
+                input_tokens: None,
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
@@ -1190,6 +1266,8 @@ mod tests {
             },
             ModelObservation {
                 context_tokens: None,
+                max_context_tokens: None,
+                input_tokens: None,
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,

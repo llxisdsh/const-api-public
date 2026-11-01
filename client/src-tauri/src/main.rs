@@ -86,6 +86,7 @@ mod coding_gateway;
 mod coding_plan;
 mod conditional_document;
 mod config;
+mod context_capacity;
 mod copilot;
 mod cursor;
 mod debug_console;

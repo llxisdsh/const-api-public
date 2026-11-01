@@ -125,13 +125,22 @@ pub(crate) fn build_codex_model_catalog(
         entry["supported_in_api"] = serde_json::json!(true);
         // Native Codex defaults may be smaller than a model's maximum. Keep
         // that headroom; a smaller detected route capacity always wins.
-        if let Some(limit) = model.context_tokens.filter(|limit| *limit > 0) {
+        if let Some(limit) = model.maximum_context_tokens().filter(|limit| *limit > 0) {
             for key in ["context_window", "max_context_window"] {
-                let limit = entry
-                    .get(key)
-                    .and_then(serde_json::Value::as_u64)
-                    .filter(|current| *current > 0)
-                    .map_or(limit, |current| current.min(limit));
+                let limit = if key == "max_context_window" && model.max_context_tokens.is_some() {
+                    // An observed route ceiling supersedes a stale bundled
+                    // maximum; the native default below remains unchanged.
+                    limit
+                } else {
+                    let limit = model
+                        .context_tokens
+                        .map_or(limit, |default| default.min(limit));
+                    entry
+                        .get(key)
+                        .and_then(serde_json::Value::as_u64)
+                        .filter(|current| *current > 0)
+                        .map_or(limit, |current| current.min(limit))
+                };
                 entry[key] = serde_json::json!(limit.min(CODEX_MAX_CATALOG_CONTEXT));
             }
         }
@@ -196,12 +205,21 @@ fn generic_codex_catalog_model(model: &ToolModelInfo) -> serde_json::Value {
         .map(|effort| effort["effort"].clone());
     // Unknown route capacity must not turn into Codex's large OpenAI fallback.
     let context = model
-        .context_tokens
+        .maximum_context_tokens()
         .filter(|limit| *limit > 0)
         .unwrap_or(32_768)
         .min(CODEX_MAX_CATALOG_CONTEXT);
-    let compact = (context - context / 10)
-        .min(context.saturating_sub(model.output_tokens.unwrap_or(4_096).min(context / 2)));
+    let default_context = model
+        .context_tokens
+        .map_or(context, |default| default.min(context));
+    let compact = (default_context - default_context / 10).min(
+        default_context.saturating_sub(
+            model
+                .output_tokens
+                .unwrap_or(4_096)
+                .min(default_context / 2),
+        ),
+    );
     let instructions = "You are a coding assistant working in the user's workspace. Follow the user's instructions and repository guidance. Inspect relevant files before editing, preserve unrelated changes, use the available tools to complete the task, and verify your work. Report results and any remaining limitations clearly.";
     serde_json::json!({
         "slug": model.id,
@@ -226,7 +244,7 @@ fn generic_codex_catalog_model(model: &ToolModelInfo) -> serde_json::Value {
         "default_verbosity": null,
         "apply_patch_tool_type": null,
         "truncation_policy": {"mode": "tokens", "limit": 10_000},
-        "context_window": context,
+        "context_window": default_context,
         "max_context_window": context,
         "auto_compact_token_limit": compact,
         "effective_context_window_percent": 95,

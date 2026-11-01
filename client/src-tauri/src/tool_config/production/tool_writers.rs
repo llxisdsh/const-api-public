@@ -946,14 +946,12 @@ fn configure_workbuddy_reasoning(
             serde_json::json!(supported_efforts),
         );
     }
-    if can_disable_thinking {
-        reasoning_object.insert(
-            "canDisableThinking".to_string(),
-            serde_json::Value::Bool(true),
-        );
-    } else {
-        reasoning_object.remove("canDisableThinking");
-    }
+    // WorkBuddy defaults an absent flag to true. A declared effort list without
+    // `none` must explicitly disable the off switch, not leave it unspecified.
+    reasoning_object.insert(
+        "canDisableThinking".to_string(),
+        serde_json::Value::Bool(can_disable_thinking),
+    );
     for field in ["effort", "defaultEffort"] {
         let keep = reasoning_object
             .get(field)
@@ -1008,14 +1006,14 @@ fn configure_workbuddy_model_entry(
         serde_json::json!(model.reasoning),
     );
     configure_workbuddy_reasoning(object, model);
-    if let Some(context_tokens) = model.context_tokens.filter(|tokens| *tokens > 0) {
+    if let Some(context_tokens) = model.maximum_context_tokens().filter(|tokens| *tokens > 0) {
         // WorkBuddy names this field maxInputTokens, but internally treats it
         // as the complete context window (the denominator of context usage).
         object.insert(
             "maxInputTokens".to_string(),
             serde_json::json!(context_tokens),
         );
-        configure_workbuddy_context_window(object, context_tokens);
+        configure_workbuddy_context_window(object, context_tokens, model.context_tokens);
     } else {
         // A refreshed route with unknown limits must not inherit a stale 1M claim.
         object.remove("maxInputTokens");
@@ -1035,6 +1033,7 @@ fn configure_workbuddy_model_entry(
 fn configure_workbuddy_context_window(
     object: &mut serde_json::Map<String, serde_json::Value>,
     context_tokens: u64,
+    preferred_context: Option<u64>,
 ) {
     // WorkBuddy 5.5.6's CLI and renderer both consume this budget schema.
     // Budgets may be smaller than the physical limit, never larger. Keep the
@@ -1043,7 +1042,13 @@ fn configure_workbuddy_context_window(
         .remove("contextWindow")
         .filter(serde_json::Value::is_object)
         .unwrap_or_else(|| serde_json::json!({}));
-    let lengths = tool_context_budget_choices(window.get("supportedLengths"), context_tokens, None);
+    let mut lengths =
+        tool_context_budget_choices(window.get("supportedLengths"), context_tokens, None);
+    if let Some(preferred) = preferred_context.filter(|n| *n > 0 && *n <= context_tokens) {
+        lengths.push(preferred);
+        lengths.sort_unstable();
+        lengths.dedup();
+    }
     if lengths.len() < 2 {
         return;
     }
@@ -1051,6 +1056,7 @@ fn configure_workbuddy_context_window(
         .get("defaultLength")
         .and_then(serde_json::Value::as_u64)
         .filter(|value| lengths.contains(value))
+        .or_else(|| preferred_context.filter(|n| lengths.contains(n)))
         .unwrap_or(context_tokens);
     window["supportedLengths"] = serde_json::json!(lengths);
     window["defaultLength"] = serde_json::json!(default);
@@ -1072,8 +1078,10 @@ fn tool_context_budget_choices(
         .filter_map(serde_json::Value::as_u64)
         .filter(|value| *value > minimum && *value <= context)
         .collect::<Vec<_>>();
-    if context > 200_000 && minimum < 200_000 {
-        choices.push(200_000);
+    for budget in [200_000, 500_000] {
+        if context > budget && minimum < budget {
+            choices.push(budget);
+        }
     }
     choices.push(context);
     choices.sort_unstable();
@@ -1485,12 +1493,14 @@ fn vscode_model_entry(
     if let Some(output_tokens) = model.output_tokens {
         entry["maxOutputTokens"] = serde_json::json!(output_tokens);
     }
-    if let Some(context_tokens) = model.context_tokens {
+    if let Some(context_tokens) = model.maximum_context_tokens() {
         // Current VS Code treats contextWindow as the source of truth. Keep
         // maxInputTokens too for compatibility with older BYOK schemas.
         entry["contextWindow"] = serde_json::json!(context_tokens);
-        let input_tokens = context_tokens.saturating_sub(model.output_tokens.unwrap_or_default());
-        if input_tokens > 0 {
+        if let Some(input_tokens) = model
+            .maximum_input_tokens()
+            .or_else(|| model.output_tokens.is_none().then_some(context_tokens))
+        {
             entry["maxInputTokens"] = serde_json::json!(input_tokens);
         }
     }
@@ -1866,7 +1876,7 @@ fn openclaw_model_entries(
                 "input": input,
                 "compat": compat
             });
-            if let Some(context_tokens) = model.context_tokens {
+            if let Some(context_tokens) = model.maximum_context_tokens() {
                 entry["contextWindow"] = serde_json::json!(context_tokens);
             }
             if let Some(output_tokens) = model.output_tokens {

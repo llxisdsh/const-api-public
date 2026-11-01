@@ -138,7 +138,7 @@ fn configure_grok_build(
                 entry["reasoning_efforts"] = Item::Value(toml_edit::Value::Array(menu));
             }
             for (field, value) in [
-                ("context_window", model.context_tokens),
+                ("context_window", model.maximum_context_tokens()),
                 ("max_completion_tokens", model.output_tokens),
             ] {
                 if let Some(value) = value.filter(|v| *v > 0) {

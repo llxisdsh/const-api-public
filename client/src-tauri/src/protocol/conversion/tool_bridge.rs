@@ -8,7 +8,8 @@ use sha2::{Digest, Sha256};
 use crate::protocol::adapters::AdapterError;
 use crate::protocol::ir::{
     CanonicalRequestV2, CanonicalResponseV2, CanonicalStreamEvent, ContentBlock, CustomTool,
-    FunctionTool, NamespaceToolDefinition, ToolCall, ToolChoice, ToolDefinition, ToolKind,
+    FunctionTool, NamespaceToolDefinition, ResponseStatus, ToolCall, ToolChoice, ToolDefinition,
+    ToolKind,
 };
 use crate::protocol::stream::StreamError;
 
@@ -73,6 +74,9 @@ impl ToolWireMap {
         &self,
         response: &mut CanonicalResponseV2,
     ) -> Result<(), AdapterError> {
+        if response.error.is_some() {
+            return Ok(());
+        }
         for block in &mut response.blocks {
             if let ContentBlock::ToolCall(call) = block {
                 self.restore_call(call)?;
@@ -351,6 +355,21 @@ impl ToolStreamMapper {
                     }
                     buffer.push_str(data);
                 }
+                CanonicalStreamEvent::Error(_) => {
+                    // The provider error terminates the call. Do not parse an
+                    // unfinished envelope and replace the original failure.
+                    self.pending.clear();
+                    out.push(event.clone());
+                }
+                CanonicalStreamEvent::StatusUpdate(
+                    ResponseStatus::Incomplete
+                    | ResponseStatus::Refused
+                    | ResponseStatus::Cancelled
+                    | ResponseStatus::Failed,
+                ) => {
+                    self.pending.clear();
+                    out.push(event.clone());
+                }
                 CanonicalStreamEvent::BlockDone { index, .. } => {
                     self.flush(*index, &mut out)?;
                     out.push(event.clone());
@@ -517,6 +536,27 @@ mod tests {
         assert!(mapper.flush(0, &mut Vec::new()).is_err());
         assert!(unwrap_input("\"text without envelope\"").is_err());
         assert!(unwrap_input("{\"input\":\"incomplete").is_err());
+    }
+
+    #[test]
+    fn failed_json_response_keeps_its_error_with_unfinished_custom_input() {
+        let mut request = request(json!({"model":"test-model","input":[],
+            "tools":[{"type":"custom","name":"run"}]}));
+        let mapping = bridge_request_tools(&mut request).unwrap();
+        let mut response = crate::protocol::decode_response(
+            ProtocolKind::OpenAiResponses,
+            &json!({"id":"resp-1","model":"test-model","status":"failed",
+                "error":{"type":"server_is_overloaded","message":"upstream capacity failure"},
+                "output":[{"type":"function_call","call_id":"call-1","name":"run",
+                    "arguments":"{\"input\":\"unfinished"}]
+            }),
+            &AdapterContext::legacy_bridge("test-model"),
+        )
+        .unwrap();
+        let error = response.error.clone();
+        mapping.restore_response(&mut response).unwrap();
+        assert_eq!(response.error, error);
+        assert_eq!(response.status, ResponseStatus::Failed);
     }
 
     #[test]

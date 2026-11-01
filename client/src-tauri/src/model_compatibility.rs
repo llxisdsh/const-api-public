@@ -204,6 +204,8 @@ fn client_default_model_compatibility_profile() -> LocalModelCompatibilityProfil
             vendor: model.vendor,
             family: model.family,
             context_tokens: model.context_tokens,
+            max_context_tokens: model.max_context_tokens,
+            input_tokens: model.input_tokens,
             output_tokens: model.output_tokens,
             input_modalities: model.input_modalities,
             output_modalities: model.output_modalities,

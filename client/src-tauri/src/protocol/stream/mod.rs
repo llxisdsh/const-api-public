@@ -221,6 +221,7 @@ pub(crate) fn events_from_response_with_notices(
         .collect::<Vec<_>>();
     let mut output_index = 0_u32;
     let mut previous_output_index = None;
+    events.push(CanonicalStreamEvent::StatusUpdate(response.status));
     for (source_index, block) in response.blocks.iter().enumerate() {
         let source_path = format!("$.blocks[{source_index}]");
         if let ContentBlock::ProviderArtifact(artifact) = block {
@@ -387,7 +388,6 @@ pub(crate) fn events_from_response_with_notices(
             response.usage.clone(),
         )));
     }
-    events.push(CanonicalStreamEvent::StatusUpdate(response.status));
     if let Some(error) = &response.error {
         // A complete JSON error can be returned even when the caller requested SSE. Preserve the
         // terminal error as a canonical event so the target renderer emits its native error shape

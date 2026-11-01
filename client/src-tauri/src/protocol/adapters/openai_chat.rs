@@ -29,6 +29,22 @@ impl ProtocolAdapter for OpenAiChatAdapter {
         body: &Value,
         context: &AdapterContext,
     ) -> Result<CanonicalRequestV2, AdapterError> {
+        // Native Chat remains transparent. Cross-protocol execution must not
+        // silently drop deprecated function definitions or their call policy.
+        if body
+            .get("functions")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+            || body
+                .get("function_call")
+                .is_some_and(|value| !value.is_null())
+        {
+            return Err(AdapterError::new(
+                "legacy_function_wire_not_supported",
+                "$.functions",
+                "Cross-protocol tool calls require tools/tool_choice instead of functions/function_call",
+            ));
+        }
         let model = body
             .get("model")
             .and_then(Value::as_str)
@@ -49,6 +65,16 @@ impl ProtocolAdapter for OpenAiChatAdapter {
         request.metadata.source_protocol = Some(ProtocolKind::OpenAiChat);
         let mut call_names = std::collections::HashMap::new();
         for (index, message) in messages.iter().enumerate() {
+            if message
+                .get("function_call")
+                .is_some_and(|value| !value.is_null())
+            {
+                return Err(AdapterError::new(
+                    "legacy_function_wire_not_supported",
+                    format!("$.messages[{index}].function_call"),
+                    "Cross-protocol tool history requires tool_calls with call IDs instead of function_call",
+                ));
+            }
             let role = message.get("role").and_then(Value::as_str).ok_or_else(|| {
                 AdapterError::new(
                     "message_role_missing",
@@ -230,7 +256,7 @@ impl ProtocolAdapter for OpenAiChatAdapter {
             body["tools"] = encode_tools(&request.tools, plan)?;
         }
         if !matches!(request.tool_choice, ToolChoice::Auto) {
-            body["tool_choice"] = encode_tool_choice(&request.tool_choice)?;
+            body["tool_choice"] = encode_tool_choice(&request.tool_choice, &request.tools)?;
         }
         if !matches!(request.response_format, ResponseFormat::Text) {
             body["response_format"] = encode_response_format(&request.response_format)?;
@@ -587,11 +613,13 @@ fn decode_tool_call(
     fallback_signature: Option<&Value>,
     mut carrier_artifacts: Vec<OpaqueArtifact>,
 ) -> Result<ToolCall, AdapterError> {
-    let function = value.get("function").ok_or_else(|| {
+    let custom = value.get("type").and_then(Value::as_str) == Some("custom");
+    let field = if custom { "custom" } else { "function" };
+    let function = value.get(field).ok_or_else(|| {
         AdapterError::new(
             "tool_function_missing",
-            format!("$.messages[{message}].tool_calls[{index}].function"),
-            "function is required",
+            format!("$.messages[{message}].tool_calls[{index}].{field}"),
+            format!("{field} is required"),
         )
     })?;
     let name = function
@@ -601,7 +629,7 @@ fn decode_tool_call(
         .ok_or_else(|| {
             AdapterError::new(
                 "tool_name_missing",
-                format!("$.messages[{message}].tool_calls[{index}].function.name"),
+                format!("$.messages[{message}].tool_calls[{index}].{field}.name"),
                 "tool name is required",
             )
         })?;
@@ -617,13 +645,22 @@ fn decode_tool_call(
                 "tool call ID is required",
             )
         })?;
+    let input_field = if custom { "input" } else { "arguments" };
     let raw = function
-        .get("arguments")
+        .get(input_field)
         .and_then(Value::as_str)
         .map(str::to_string);
-    let arguments = match function.get("arguments") {
+    if custom && raw.is_none() {
+        return Err(AdapterError::new(
+            "custom_tool_input_missing",
+            format!("$.messages[{message}].tool_calls[{index}].custom.input"),
+            "custom tool input must be a string",
+        ));
+    }
+    let arguments = match function.get("arguments").filter(|_| !custom) {
         Some(Value::String(raw)) => serde_json::from_str(raw).ok(),
         Some(value) => Some(value.clone()),
+        None if custom => None,
         None => Some(json!({})),
     };
     let signature = value
@@ -660,7 +697,11 @@ fn decode_tool_call(
     Ok(ToolCall {
         id: id.to_string(),
         source_item_id: None,
-        kind: ToolKind::Function,
+        kind: if custom {
+            ToolKind::Custom
+        } else {
+            ToolKind::Function
+        },
         name: name.to_string(),
         arguments,
         raw_arguments: raw,
@@ -811,16 +852,38 @@ fn decode_tools(value: Option<&Value>) -> Result<Vec<ToolDefinition>, AdapterErr
         .flatten()
         .enumerate()
     {
-        if item
+        let kind = item
             .get("type")
             .and_then(Value::as_str)
-            .unwrap_or("function")
-            != "function"
-        {
+            .unwrap_or("function");
+        if kind == "custom" {
+            let custom = item.get("custom").unwrap_or(&Value::Null);
+            let name = custom
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty())
+                .ok_or_else(|| {
+                    AdapterError::new(
+                        "tool_name_missing",
+                        format!("$.tools[{index}].custom.name"),
+                        "tool name is required",
+                    )
+                })?;
+            tools.push(ToolDefinition::Custom(CustomTool {
+                name: name.to_string(),
+                description: custom
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                grammar: custom.get("format").cloned().unwrap_or(Value::Null),
+            }));
+            continue;
+        }
+        if kind != "function" {
             return Err(AdapterError::new(
                 "unsupported_tool_type",
                 format!("$.tools[{index}]"),
-                "only function tools are decoded by Chat adapter",
+                "Chat adapter supports function and custom tools",
             ));
         }
         let function = item.get("function").unwrap_or(item);
@@ -885,8 +948,53 @@ fn decode_tool_choice(value: Option<&Value>) -> Result<ToolChoice, AdapterError>
             _ => ToolChoice::Auto,
         });
     }
+    if value.get("type").and_then(Value::as_str) == Some("allowed_tools") {
+        let allowed = value.get("allowed_tools").unwrap_or(&Value::Null);
+        let mode = match allowed.get("mode").and_then(Value::as_str) {
+            Some("auto") => AllowedMode::Auto,
+            Some("required") => AllowedMode::Required,
+            _ => {
+                return Err(AdapterError::new(
+                    "invalid_tool_choice",
+                    "$.tool_choice.allowed_tools.mode",
+                    "allowed tools mode must be auto or required",
+                ));
+            }
+        };
+        let tools = allowed
+            .get("tools")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                AdapterError::new(
+                    "invalid_tool_choice",
+                    "$.tool_choice.allowed_tools.tools",
+                    "allowed tools must be an array",
+                )
+            })?;
+        let names = tools
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| {
+                let kind = tool.get("type").and_then(Value::as_str).unwrap_or("");
+                tool.get(kind)
+                    .and_then(|tool| tool.get("name"))
+                    .and_then(Value::as_str)
+                    .filter(|name| matches!(kind, "function" | "custom") && !name.trim().is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        AdapterError::new(
+                            "invalid_tool_choice",
+                            format!("$.tool_choice.allowed_tools.tools[{index}]"),
+                            "allowed tools must name a function or custom tool",
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(ToolChoice::Allowed { mode, names });
+    }
     let name = value
         .pointer("/function/name")
+        .or_else(|| value.pointer("/custom/name"))
         .or_else(|| value.get("name"))
         .and_then(Value::as_str)
         .filter(|name| !name.trim().is_empty())
@@ -1324,7 +1432,14 @@ fn scan_chat_tool_calls(
             extensions,
             "openai_chat",
             Some(call),
-            &["id", "call_id", "type", "function", "extra_content"],
+            &[
+                "id",
+                "call_id",
+                "type",
+                "function",
+                "custom",
+                "extra_content",
+            ],
             &call_path,
             context,
             model,
@@ -1335,6 +1450,15 @@ fn scan_chat_tool_calls(
             call.get("function"),
             &["name", "arguments"],
             &format!("{call_path}.function"),
+            context,
+            model,
+        );
+        collect_nested_unknown_fields(
+            extensions,
+            "openai_chat",
+            call.get("custom"),
+            &["name", "input"],
+            &format!("{call_path}.custom"),
             context,
             model,
         );
@@ -1540,51 +1664,13 @@ fn decode_nested_extensions(
                 );
             }
         }
-        for (call_index, call) in message
-            .get("tool_calls")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .enumerate()
-        {
-            let call_path = format!("{message_path}.tool_calls[{call_index}]");
-            collect_nested_unknown_fields(
-                &mut extensions,
-                "openai_chat",
-                Some(call),
-                &["id", "call_id", "type", "function", "extra_content"],
-                &call_path,
-                context,
-                model,
-            );
-            collect_nested_unknown_fields(
-                &mut extensions,
-                "openai_chat",
-                call.get("function"),
-                &["name", "arguments"],
-                &format!("{call_path}.function"),
-                context,
-                model,
-            );
-            collect_nested_unknown_fields(
-                &mut extensions,
-                "openai_chat",
-                call.get("extra_content"),
-                &["google"],
-                &format!("{call_path}.extra_content"),
-                context,
-                model,
-            );
-            collect_nested_unknown_fields(
-                &mut extensions,
-                "openai_chat",
-                call.pointer("/extra_content/google"),
-                &["thought_signature", "thoughtSignature"],
-                &format!("{call_path}.extra_content.google"),
-                context,
-                model,
-            );
-        }
+        scan_chat_tool_calls(
+            &mut extensions,
+            message.get("tool_calls"),
+            &format!("{message_path}.tool_calls"),
+            context,
+            model,
+        );
     }
     for (tool_index, tool) in body
         .get("tools")
@@ -1598,11 +1684,23 @@ fn decode_nested_extensions(
             &mut extensions,
             "openai_chat",
             Some(tool),
-            &["type", "function"],
+            &["type", "function", "custom"],
             &tool_path,
             context,
             model,
         );
+        if tool.get("type").and_then(Value::as_str) == Some("custom") {
+            collect_nested_unknown_fields(
+                &mut extensions,
+                "openai_chat",
+                tool.get("custom"),
+                &["name", "description", "format"],
+                &format!("{tool_path}.custom"),
+                context,
+                model,
+            );
+            continue;
+        }
         collect_nested_unknown_fields(
             &mut extensions,
             "openai_chat",
@@ -1628,7 +1726,7 @@ fn decode_nested_extensions(
         &mut extensions,
         "openai_chat",
         body.get("tool_choice"),
-        &["type", "function", "name"],
+        &["type", "function", "custom", "allowed_tools", "name"],
         "$.tool_choice",
         context,
         model,
@@ -1639,6 +1737,24 @@ fn decode_nested_extensions(
         body.pointer("/tool_choice/function"),
         &["name"],
         "$.tool_choice.function",
+        context,
+        model,
+    );
+    collect_nested_unknown_fields(
+        &mut extensions,
+        "openai_chat",
+        body.pointer("/tool_choice/custom"),
+        &["name"],
+        "$.tool_choice.custom",
+        context,
+        model,
+    );
+    collect_nested_unknown_fields(
+        &mut extensions,
+        "openai_chat",
+        body.pointer("/tool_choice/allowed_tools"),
+        &["mode", "tools"],
+        "$.tool_choice.allowed_tools",
         context,
         model,
     );
@@ -1946,7 +2062,11 @@ fn encode_assistant_text(blocks: &[ContentBlock]) -> Value {
     }
 }
 fn encode_tool_call(call: &ToolCall, plan: &ConversionPlan, path: &str) -> Value {
-    let mut value = json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.raw_arguments.clone().unwrap_or_else(||serde_json::to_string(call.arguments.as_ref().unwrap_or(&json!({}))).unwrap_or_else(|_|"{}".to_string()))}});
+    let mut value = if call.kind == ToolKind::Custom {
+        json!({"id":call.id,"type":"custom","custom":{"name":call.name,"input":call.raw_arguments.as_deref().unwrap_or("")}})
+    } else {
+        json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.raw_arguments.clone().unwrap_or_else(||serde_json::to_string(call.arguments.as_ref().unwrap_or(&json!({}))).unwrap_or_else(|_|"{}".to_string()))}})
+    };
     let preserved = call
         .artifacts
         .iter()
@@ -2130,6 +2250,16 @@ fn encode_tools(tools: &[ToolDefinition], plan: &ConversionPlan) -> Result<Value
         .iter()
         .map(|tool| match tool {
             ToolDefinition::Function(tool) => Ok(encode_function_tool(tool)),
+            ToolDefinition::Custom(tool) => {
+                let mut custom = json!({"name":tool.name});
+                if let Some(description) = &tool.description {
+                    custom["description"] = json!(description);
+                }
+                if !tool.grammar.is_null() {
+                    custom["format"] = tool.grammar.clone();
+                }
+                Ok(json!({"type":"custom","custom":custom}))
+            }
             _ => Err(AdapterError::new(
                 "encoder_plan_violation",
                 "$.tools",
@@ -2151,19 +2281,31 @@ fn encode_function_tool(tool: &FunctionTool) -> Value {
         }
     })
 }
-fn encode_tool_choice(choice: &ToolChoice) -> Result<Value, AdapterError> {
+fn encode_tool_choice(
+    choice: &ToolChoice,
+    definitions: &[ToolDefinition],
+) -> Result<Value, AdapterError> {
+    let named = |name: &str| {
+        if definitions
+            .iter()
+            .any(|tool| matches!(tool, ToolDefinition::Custom(tool) if tool.name == name))
+        {
+            json!({"type":"custom","custom":{"name":name}})
+        } else {
+            json!({"type":"function","function":{"name":name}})
+        }
+    };
     Ok(match choice {
         ToolChoice::Auto => json!("auto"),
         ToolChoice::None => json!("none"),
         ToolChoice::Required => json!("required"),
-        ToolChoice::Named { name } => json!({"type":"function","function":{"name":name}}),
-        ToolChoice::Allowed { .. } => {
-            return Err(AdapterError::new(
-                "encoder_plan_violation",
-                "$.tool_choice",
-                "allowed-list choice is not Chat-compatible",
-            ));
-        }
+        ToolChoice::Named { name } => named(name),
+        ToolChoice::Allowed { mode, names } => json!({
+            "type":"allowed_tools", "allowed_tools":{
+                "mode": if *mode == AllowedMode::Required { "required" } else { "auto" },
+                "tools": names.iter().map(|name| named(name)).collect::<Vec<_>>(),
+            }
+        }),
     })
 }
 fn encode_response_format(format: &ResponseFormat) -> Result<Value, AdapterError> {

@@ -169,7 +169,12 @@ impl ProtocolAdapter for GeminiNativeAdapter {
                 ));
             }
         };
-        let mut tracker = CallTracker::default();
+        // Generated output IDs return in later Chat/Responses history. They
+        // must not collide with IDs generated for an earlier response.
+        let mut tracker = CallTracker {
+            id_prefix: format!("{}_", uuid::Uuid::new_v4().simple()),
+            ..CallTracker::default()
+        };
         let blocks = decode_parts(
             parts,
             TurnRole::Assistant,
@@ -250,6 +255,7 @@ impl ProtocolAdapter for GeminiNativeAdapter {
 
 #[derive(Default)]
 struct CallTracker {
+    id_prefix: String,
     next_id: usize,
     pending: HashMap<String, VecDeque<String>>,
 }
@@ -260,7 +266,7 @@ impl CallTracker {
             .filter(|id| !id.trim().is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| {
-                let id = format!("call_gemini_{}", self.next_id);
+                let id = format!("call_gemini_{}{}", self.id_prefix, self.next_id);
                 self.next_id += 1;
                 id
             });
@@ -1113,7 +1119,12 @@ fn decode_request_extensions(
         if recognized.contains(&name.as_str()) {
             continue;
         }
-        let criticality = if name == "cachedContent" {
+        // These fields carry external state or an explicit storage policy.
+        // Dropping them can restart a continuation or enable server-side logging.
+        let criticality = if matches!(
+            name.as_str(),
+            "cachedContent" | "continuationToken" | "store"
+        ) {
             ExtensionCriticality::Critical
         } else {
             ExtensionCriticality::Advisory
@@ -1319,7 +1330,7 @@ fn provider_extension(
         namespace: "gemini_native".to_string(),
         name: name.to_string(),
         value,
-        affinity: if criticality == ExtensionCriticality::Critical {
+        affinity: if criticality == ExtensionCriticality::Critical && name != "store" {
             exact_issuer_affinity(context, model)
         } else {
             protocol_affinity(ProtocolKind::GeminiNative)
@@ -1494,7 +1505,11 @@ fn decode_response_extensions(
             value.clone(),
             context,
             model,
-            ExtensionCriticality::Advisory,
+            if name == "continuationToken" {
+                ExtensionCriticality::Critical
+            } else {
+                ExtensionCriticality::Advisory
+            },
         ));
     }
     if let Some(candidates) = body.get("candidates").and_then(Value::as_array) {
@@ -2769,9 +2784,32 @@ mod tests {
     fn replaces_foreign_gemini_signatures_with_external_history_bypass_and_decodes_errors() {
         let adapter = GeminiNativeAdapter;
         let fixture = fixture();
-        let request = adapter
+        let mut request = adapter
             .decode_request(&fixture["request"], &context("account-1"))
             .unwrap();
+        let error = plan_conversion(
+            &request,
+            ProtocolKind::GeminiNative,
+            ProtocolKind::GeminiNative,
+            &context("account-1").issuer,
+            &context("account-2").issuer,
+            &CapabilityProfile::default(),
+            ConversionPolicy::Production,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .report()
+                .issues
+                .iter()
+                .any(|issue| issue.code == "provider_extension_not_portable"
+                    && issue.path == "$.cachedContent")
+        );
+        // A full visible transcript without an external cache reference can
+        // still use the existing foreign-signature compatibility treatment.
+        request
+            .extensions
+            .retain(|extension| extension.name != "cachedContent");
         let plan = plan_conversion(
             &request,
             ProtocolKind::GeminiNative,

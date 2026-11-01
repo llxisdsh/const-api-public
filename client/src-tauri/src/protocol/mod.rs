@@ -6,6 +6,7 @@ pub(crate) mod conversion;
 pub(crate) mod error;
 pub(crate) mod ir;
 pub(crate) mod kind;
+pub(crate) mod openai_compatibility;
 pub(crate) mod stream;
 
 #[cfg(test)]
@@ -253,7 +254,12 @@ fn convert_non_stream_inner(
             reason: "Target tools are request-wide; input tool declarations were retained in stable order in the target tool list.".to_string(),
         });
     }
-    let tool_mapping = if source == ProtocolKind::OpenAiResponses && target != source {
+    let tool_mapping = if (source == ProtocolKind::OpenAiResponses && target != source)
+        || (source == ProtocolKind::OpenAiChat
+            && matches!(
+                target,
+                ProtocolKind::AnthropicMessages | ProtocolKind::GeminiNative
+            )) {
         let mapping = conversion::bridge_request_tools(&mut request)?;
         if !mapping.is_empty() {
             repairs.push(conversion::ConversionRepair {

@@ -633,7 +633,7 @@ fn upsert_kimicode_toml(
         }
         entry["capabilities"] = Item::Value(toml_edit::Value::Array(capabilities));
         let context = model
-            .context_tokens
+            .maximum_context_tokens()
             .filter(|value| *value > 0)
             .unwrap_or(128_000);
         entry["max_context_size"] = toml_value(i64::try_from(context).unwrap_or(i64::MAX));
@@ -645,7 +645,7 @@ fn upsert_kimicode_toml(
         entry["display_name"] = toml_value(display_name);
         if let Some(output) = model.output_tokens.filter(|value| *value > 0) {
             entry["max_output_size"] = toml_value(i64::try_from(output).unwrap_or(i64::MAX));
-            if let Some(input) = context.checked_sub(output).filter(|value| *value > 0) {
+            if let Some(input) = model.maximum_input_tokens() {
                 entry["max_input_size"] = toml_value(i64::try_from(input).unwrap_or(i64::MAX));
             }
         }
@@ -881,7 +881,7 @@ fn qwen_model_entries(models: &[ToolModelInfo], base_url: &str) -> Vec<serde_jso
                 "baseUrl": tool_surface_url(base_url, "v1"),
                 "capabilities": {"vision": model.input_modalities.iter().any(|modality| modality == "image")}
             });
-            if let Some(context) = model.context_tokens.filter(|value| *value > 0) {
+            if let Some(context) = model.maximum_context_tokens().filter(|value| *value > 0) {
                 value["generationConfig"] = serde_json::json!({
                     "contextWindowSize": context
                 });
@@ -1353,7 +1353,7 @@ fn upsert_pi_config(
                         "api": pi_sdk_api_mode(selected),
                         "baseUrl": pi_sdk_base_url(base_url, selected),
                         "name": if model.display_name.trim().is_empty() { id } else { model.display_name.trim() },
-                        "contextWindow": model.context_tokens.unwrap_or(128_000),
+                        "contextWindow": model.maximum_context_tokens().unwrap_or(128_000),
                         "maxTokens": model.output_tokens.unwrap_or(16_384),
                         "reasoning": model.reasoning,
                         "input": if model.input_modalities.iter().any(|value| value == "image") {
@@ -1603,7 +1603,7 @@ fn upsert_cline_configs(
             let mut entry = serde_json::json!({
                 "id": id,
                 "name": if model.display_name.trim().is_empty() { id } else { model.display_name.trim() },
-                "contextWindow": model.context_tokens.unwrap_or(128_000),
+                "contextWindow": model.maximum_context_tokens().unwrap_or(128_000),
                 "maxTokens": model.output_tokens.unwrap_or(16_384),
                 "capabilities": capabilities,
             });
@@ -1732,7 +1732,7 @@ fn upsert_named_toml_provider(
                 None => Table::new(),
             };
             for (field, value) in [
-                ("context_window", model.context_tokens),
+                ("context_window", model.maximum_context_tokens()),
                 ("max_output_tokens", model.output_tokens),
             ] {
                 if let Some(value) = value.filter(|value| *value > 0) {
@@ -1917,7 +1917,7 @@ fn deepseek_harness_model_entry(model: &ToolModelInfo) -> serde_yaml::Value {
     if !model.display_name.trim().is_empty() {
         entry.insert(yaml_key("name"), yaml_string(model.display_name.trim()));
     }
-    if let Some(context) = model.context_tokens.filter(|value| *value > 0) {
+    if let Some(context) = model.maximum_context_tokens().filter(|value| *value > 0) {
         if let Ok(value) = serde_yaml::to_value(context) {
             entry.insert(yaml_key("contextWindow"), value);
         }
@@ -2287,7 +2287,7 @@ fn upsert_goose_provider_config(
             .map(|model| {
                 serde_json::json!({
                     "name": model.id.trim(),
-                    "context_limit": model.context_tokens.unwrap_or(128_000),
+                    "context_limit": model.maximum_context_tokens().unwrap_or(128_000),
                     "reasoning": model.reasoning,
                 })
             })
@@ -2633,7 +2633,7 @@ fn qoder_protocol_fields(protocol: ToolProtocol) -> Result<(&'static str, &'stat
 
 fn qoder_model_context_window(model: &ToolModelInfo) -> u64 {
     model
-        .context_tokens
+        .maximum_context_tokens()
         .or_else(|| model.supports_1m.then_some(1_000_000))
         .unwrap_or(200_000)
 }

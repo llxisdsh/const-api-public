@@ -154,11 +154,11 @@
         assert_eq!(
             entry["contextWindow"],
             serde_json::json!({
-                "supportedLengths": [200_000, 1_000_000], "defaultLength": 1_000_000
+                "supportedLengths": [200_000, 500_000, 1_000_000], "defaultLength": 1_000_000
             })
         );
         entry["contextWindow"] = serde_json::json!({
-            "supportedLengths": [1_000_000, 128_000, 128_000, 0, -1, "bad", 2_000_000],
+            "supportedLengths": [1_000_000, 500_000, 128_000, 128_000, 0, -1, "bad", 2_000_000],
             "defaultLength": 128_000, "userField": "keep"
         });
         model.context_tokens = Some(272_000);
@@ -717,6 +717,7 @@
             serde_json::json!(["low", "medium", "high", "xhigh", "max"])
         );
         assert!(entry["reasoning"].get("defaultEffort").is_none());
+        assert_eq!(entry["reasoning"]["canDisableThinking"], false);
 
         let mut disable_capable = workbuddy_test_models()[0].clone();
         disable_capable.reasoning_efforts = vec!["none".to_string()];
@@ -1002,7 +1003,8 @@
                 sol["reasoning"],
                 serde_json::json!({
                     "effort": "high",
-                    "supportedEfforts": ["low", "medium", "high", "xhigh", "max"]
+                    "supportedEfforts": ["low", "medium", "high", "xhigh", "max"],
+                    "canDisableThinking": false
                 })
             );
             assert_eq!(sol["maxInputTokens"], 372_000);

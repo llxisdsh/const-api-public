@@ -3,12 +3,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use bytes::Bytes;
 use serde_json::{Map, Value, json};
 
+use crate::protocol::adapters::responses_finish_fields;
 use crate::protocol::continuation::{
     encode_carrier, previous_part_entries, reasoning_entries, stream_artifact, tool_call_entries,
 };
 use crate::protocol::ir::{
     ArtifactKind, BlockHeader, CanonicalError, CanonicalStreamEvent, ContentBlockKind,
-    FinishDetail, FinishReason, ResponseMeta, ToolKind, Usage, UsageValue,
+    FinishDetail, FinishReason, ResponseMeta, ResponseStatus, ToolKind, Usage, UsageValue,
 };
 use crate::protocol::kind::ProtocolKind;
 
@@ -22,6 +23,7 @@ pub(crate) struct StreamRenderer {
     started: bool,
     done: bool,
     failed: bool,
+    interrupted: bool,
     blocks: HashMap<u32, BlockHeader>,
     chat_tool_indices: HashMap<u32, u32>,
     next_chat_tool_index: u32,
@@ -46,6 +48,7 @@ impl StreamRenderer {
             started: false,
             done: false,
             failed: false,
+            interrupted: false,
             blocks: HashMap::new(),
             chat_tool_indices: HashMap::new(),
             next_chat_tool_index: 0,
@@ -134,11 +137,20 @@ impl StreamRenderer {
             }
             CanonicalStreamEvent::BlockDone { index, .. } => self.block_done(*index, &mut output),
             CanonicalStreamEvent::UsageUpdate(usage) => merge_usage(&mut self.usage, usage),
-            CanonicalStreamEvent::StatusUpdate(_) => {}
+            CanonicalStreamEvent::StatusUpdate(status) => {
+                self.interrupted = matches!(
+                    status,
+                    ResponseStatus::Incomplete
+                        | ResponseStatus::Refused
+                        | ResponseStatus::Cancelled
+                        | ResponseStatus::Failed
+                );
+            }
             CanonicalStreamEvent::Error(error) => {
                 self.ensure_started(&mut output);
                 self.render_error(error, &mut output);
                 self.failed = true;
+                self.done = true;
             }
             CanonicalStreamEvent::ResponseDone(finish) => self.response_done(finish, &mut output),
         }
@@ -238,10 +250,11 @@ impl StreamRenderer {
             ProtocolKind::OpenAiChat if block.kind == ContentBlockKind::ToolCall => {
                 let tool_index = self.chat_tool_index(index);
                 let signature = chat_tool_signature(block);
-                let mut tool_call = json!({
-                    "index":tool_index,"id":block.call_id,"type":"function",
-                    "function":{"name":block.name,"arguments":""}
-                });
+                let mut tool_call = if block.tool_kind == Some(ToolKind::Custom) {
+                    json!({"index":tool_index,"id":block.call_id,"type":"custom", "custom":{"name":block.name,"input":""}})
+                } else {
+                    json!({"index":tool_index,"id":block.call_id,"type":"function", "function":{"name":block.name,"arguments":""}})
+                };
                 let mut delta = json!({"tool_calls":[tool_call.clone()]});
                 if let Some(signature) = signature {
                     tool_call["extra_content"] =
@@ -582,13 +595,20 @@ impl StreamRenderer {
         match self.protocol {
             ProtocolKind::OpenAiChat => {
                 let tool_index = self.chat_tool_index(index);
+                let tool = if self
+                    .blocks
+                    .get(&index)
+                    .is_some_and(|header| header.tool_kind == Some(ToolKind::Custom))
+                {
+                    json!({"index":tool_index,"custom":{"input":data}})
+                } else {
+                    json!({"index":tool_index,"function":{"arguments":data}})
+                };
                 data_event(
                     output,
                     json!({
                         "id":chat_id(&self.response_id),"object":"chat.completion.chunk","model":self.model,
-                        "choices":[{"index":0,"delta":{"tool_calls":[{
-                            "index":tool_index,"function":{"arguments":data}
-                        }]},"finish_reason":Value::Null}]
+                        "choices":[{"index":0,"delta":{"tool_calls":[tool]},"finish_reason":Value::Null}]
                     }),
                 )
             }
@@ -661,7 +681,9 @@ impl StreamRenderer {
         let wire_index = self.wire_index(index);
         if self.protocol == ProtocolKind::GeminiNative {
             self.flush_gemini_reasoning_carrier(index, output);
-            self.flush_gemini_tool(index, output);
+            if !self.interrupted {
+                self.flush_gemini_tool(index, output);
+            }
             self.flush_previous_part_carrier(index, output);
         } else if self.protocol == ProtocolKind::AnthropicMessages {
             self.flush_anthropic_reasoning_carrier(index, wire_index, output);
@@ -690,16 +712,19 @@ impl StreamRenderer {
                         "response.function_call_arguments.done"
                     };
                     let field = if custom { "input" } else { "arguments" };
-                    named_event(
-                        output,
-                        event,
-                        json!({
-                            "type":event,"output_index":wire_index,
-                            "item_id":item_id,"call_id":header.call_id,field:arguments
-                        }),
-                    );
+                    if !self.interrupted {
+                        named_event(
+                            output,
+                            event,
+                            json!({
+                                "type":event,"output_index":wire_index,
+                                "item_id":item_id,"call_id":header.call_id,field:arguments
+                            }),
+                        );
+                    }
                     let mut item = json!({
-                        "id":item_id,"type":if custom {"custom_tool_call"} else {"function_call"},"status":"completed",
+                        "id":item_id,"type":if custom {"custom_tool_call"} else {"function_call"},
+                        "status":if self.interrupted {"incomplete"} else {"completed"},
                         "call_id":header.call_id,"name":header.name,field:arguments
                     });
                     if let Some(namespace) = &header.tool_namespace {
@@ -781,11 +806,13 @@ impl StreamRenderer {
                     "role":"assistant","content":[]
                 }),
             };
-            named_event(
-                output,
-                "response.output_item.done",
-                json!({"type":"response.output_item.done","output_index":wire_index,"item":item}),
-            );
+            if !(self.interrupted && header.kind == ContentBlockKind::ToolCall) {
+                named_event(
+                    output,
+                    "response.output_item.done",
+                    json!({"type":"response.output_item.done","output_index":wire_index,"item":item}),
+                );
+            }
             self.response_output.insert(wire_index, item);
             self.flush_previous_part_carrier(index, output);
         }
@@ -1027,7 +1054,16 @@ impl StreamRenderer {
             "error":{"type":error.code,"message":error.message,"code":error.provider_code}
         });
         match self.protocol {
-            ProtocolKind::OpenAiResponses => named_event(output, "error", payload),
+            ProtocolKind::OpenAiResponses => {
+                // Public Responses uses top-level fields; Codex also reads the
+                // nested provider error. Both require the JSON event type.
+                let mut payload = payload;
+                payload["type"] = json!("error");
+                payload["code"] = json!(error.provider_code.as_ref().unwrap_or(&error.code));
+                payload["message"] = json!(error.message);
+                payload["param"] = Value::Null;
+                named_event(output, "error", payload);
+            }
             ProtocolKind::AnthropicMessages => named_event(
                 output,
                 "error",
@@ -1046,7 +1082,7 @@ impl StreamRenderer {
             self.done = true;
             return;
         }
-        if self.protocol == ProtocolKind::GeminiNative {
+        if self.protocol == ProtocolKind::GeminiNative && !self.interrupted {
             for index in self.tool_arguments.keys().copied().collect::<Vec<_>>() {
                 self.flush_gemini_tool(index, output);
             }
@@ -1069,19 +1105,20 @@ impl StreamRenderer {
                 );
                 output.extend_from_slice(b"data: [DONE]\n\n");
             }
-            ProtocolKind::OpenAiResponses => named_event(
-                output,
-                "response.completed",
-                json!({
-                    "type":"response.completed",
-                    "response":self.responses_response(match finish.reason {
-                        FinishReason::Length => "incomplete",
-                        FinishReason::Cancelled => "cancelled",
-                        FinishReason::Refusal | FinishReason::ContentFilter => "refused",
-                        _ => "completed",
-                    })
-                }),
-            ),
+            ProtocolKind::OpenAiResponses => {
+                let (status, incomplete_details) =
+                    responses_finish_fields(ResponseStatus::Completed, finish);
+                let event = if status == "incomplete" {
+                    "response.incomplete"
+                } else {
+                    "response.completed"
+                };
+                let mut response = self.responses_response(status);
+                if let Some(details) = incomplete_details {
+                    response["incomplete_details"] = details;
+                }
+                named_event(output, event, json!({"type":event,"response":response}));
+            }
             ProtocolKind::AnthropicMessages => {
                 named_event(
                     output,

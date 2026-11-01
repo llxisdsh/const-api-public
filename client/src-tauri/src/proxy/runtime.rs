@@ -2673,6 +2673,11 @@ fn reselect_preferred_local_channel<'a>(
 
 fn proxy_execution_error_response(error: &anyhow::Error) -> warp::reply::Response {
     let evidence = crate::supplier::execution_evidence_for_error(error);
+    if evidence.error_code == "context_length_exceeded" && !evidence.upstream_attempted {
+        return warp::reply::with_status(warp::reply::json(&serde_json::json!({
+            "error": {"type":"invalid_request_error", "code":"context_length_exceeded", "message":error.to_string()}
+        })), StatusCode::BAD_REQUEST).into_response();
+    }
     if evidence.error_code == "concurrency_full" && !evidence.upstream_attempted {
         return error_response(
             StatusCode::TOO_MANY_REQUESTS,
@@ -3116,6 +3121,8 @@ struct LocalModelEntry {
 #[derive(Clone, Default)]
 struct LocalModelCapability {
     context_tokens: Option<u64>,
+    max_context_tokens: Option<u64>,
+    input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     protocols: Vec<String>,
     reasoning: bool,
@@ -3139,7 +3146,11 @@ impl LocalModelCapability {
     fn from_channel(channel: &ChannelConfig, model: &str) -> Self {
         let mut capability = Self::default();
         let native = crate::coding_gateway::channel_model_protocol(channel, model);
-        (capability.context_tokens, capability.output_tokens) = crate::tool_model_metadata::channel_token_limits(channel, model);
+        let limits = crate::tool_model_metadata::channel_model_token_limits(channel, model);
+        capability.context_tokens = limits.context_tokens;
+        capability.max_context_tokens = limits.max_context_tokens;
+        capability.input_tokens = limits.input_tokens;
+        capability.output_tokens = limits.output_tokens;
         for protocol in &channel.supported_protocols {
             if native.is_none_or(|native| native.as_str() == protocol) {
                 push_unique_string(&mut capability.protocols, protocol);
@@ -3183,8 +3194,22 @@ impl LocalModelCapability {
     }
 
     fn merge(&mut self, other: &Self) {
-        self.context_tokens = self.context_tokens.zip(other.context_tokens).map(|(a, b)| a.min(b));
-        self.output_tokens = self.output_tokens.zip(other.output_tokens).map(|(a, b)| a.min(b));
+        self.context_tokens = self
+            .context_tokens
+            .zip(other.context_tokens)
+            .map(|(a, b)| a.min(b));
+        self.output_tokens = self
+            .output_tokens
+            .zip(other.output_tokens)
+            .map(|(a, b)| a.min(b));
+        self.max_context_tokens = self
+            .max_context_tokens
+            .zip(other.max_context_tokens)
+            .map(|(a, b)| a.max(b));
+        self.input_tokens = self
+            .input_tokens
+            .zip(other.input_tokens)
+            .map(|(a, b)| a.max(b));
         for protocol in &other.protocols {
             push_unique_string(&mut self.protocols, protocol);
         }
@@ -3219,8 +3244,10 @@ impl LocalModelCapability {
         serde_json::json!({
             "source": "local_supplier",
             "context_tokens": self.context_tokens,
+            "max_context_tokens": self.max_context_tokens,
+            "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
-            "supports_1m": self.context_tokens.is_some_and(|tokens| tokens >= 1_000_000),
+            "supports_1m": self.max_context_tokens.or(self.input_tokens).or(self.context_tokens).is_some_and(|tokens| tokens >= 1_000_000),
             "supported_protocols": self.protocols,
             "preferred_protocol": preferred_protocol,
             "reasoning": self.reasoning,
@@ -3697,11 +3724,18 @@ fn render_models_for_surface(
                     break;
                 }
             }
-            // Keep preferred capabilities, but intersect capacity across every
-            // eligible compatibility fallback. Never promise the largest window.
-            let (context, output, supports_1m) = crate::tool_model_metadata::route_token_limits(config, &route_name, &model_info);
-            rendered["const_api"]["context_tokens"] = serde_json::json!(context);
-            rendered["const_api"]["output_tokens"] = serde_json::json!(output);
+            // Keep preferred capabilities and a conservative default budget;
+            // capacity-aware routes can also advertise their larger option.
+            let (limits, supports_1m) = crate::tool_model_metadata::route_model_token_limits(
+                config,
+                &route_name,
+                &model_info,
+            );
+            rendered["const_api"]["context_tokens"] = serde_json::json!(limits.context_tokens);
+            rendered["const_api"]["max_context_tokens"] =
+                serde_json::json!(limits.max_context_tokens);
+            rendered["const_api"]["input_tokens"] = serde_json::json!(limits.input_tokens);
+            rendered["const_api"]["output_tokens"] = serde_json::json!(limits.output_tokens);
             rendered["const_api"]["supports_1m"] = serde_json::json!(supports_1m);
             rendered
         })
@@ -3741,17 +3775,49 @@ fn merge_model_entry_metadata(preferred: &mut serde_json::Value, additional: &se
     if !preferred_metadata.is_object() {
         *preferred_metadata = serde_json::json!({});
     }
-    let old_limits = ["context_tokens", "output_tokens"].map(|key| preferred_metadata.get(key).cloned());
-    let supports_1m = preferred_metadata.get("supports_1m").and_then(serde_json::Value::as_bool) != Some(false)
-        && additional_metadata.get("supports_1m").and_then(serde_json::Value::as_bool) != Some(false);
-    merge_metadata_value(preferred_metadata, additional_metadata);
-    for (index, key) in ["context_tokens", "output_tokens"].iter().enumerate() {
-        let next = crate::tool_model_metadata::metadata_token_limit(additional_metadata.get(key), if index == 0 { additional_fallback.0 } else { additional_fallback.1 });
-        let old = crate::tool_model_metadata::metadata_token_limit(old_limits[index].as_ref(), if index == 0 { preferred_fallback.0 } else { preferred_fallback.1 });
-        let limit = old.zip(next).map(|(a,b)| a.min(b));
-        preferred_metadata[*key] = serde_json::json!(limit);
+    let mut limits = crate::tool_model_metadata::ModelTokenLimits::from_metadata(
+        preferred_metadata,
+        preferred_fallback,
+    );
+    let additional_limits = crate::tool_model_metadata::ModelTokenLimits::from_metadata(
+        additional_metadata,
+        additional_fallback,
+    );
+    let legacy_maximum = limits
+        .maximum_context_tokens()
+        .zip(additional_limits.maximum_context_tokens())
+        .map(|(a, b)| a.min(b));
+    let capacity_aware = preferred_metadata.get("max_context_tokens").is_some()
+        && additional_metadata.get("max_context_tokens").is_some();
+    limits.merge_routes(additional_limits);
+    if !capacity_aware {
+        // An older platform cannot filter by request size. Keep its advertised
+        // legacy ceiling when combining it with local larger-context routes.
+        limits.max_context_tokens = legacy_maximum;
     }
-    preferred_metadata["supports_1m"] = serde_json::json!(supports_1m && preferred_metadata.get("context_tokens").and_then(serde_json::Value::as_u64).is_some_and(|tokens| tokens >= 1_000_000));
+    let supports_1m = preferred_metadata
+        .get("supports_1m")
+        .and_then(serde_json::Value::as_bool)
+        != Some(false)
+        || additional_metadata
+            .get("supports_1m")
+            .and_then(serde_json::Value::as_bool)
+            != Some(false);
+    merge_metadata_value(preferred_metadata, additional_metadata);
+    for (key, limit) in [
+        ("context_tokens", limits.context_tokens),
+        ("output_tokens", limits.output_tokens),
+        ("max_context_tokens", limits.max_context_tokens),
+        ("input_tokens", limits.input_tokens),
+    ] {
+        preferred_metadata[key] = serde_json::json!(limit);
+    }
+    preferred_metadata["supports_1m"] = serde_json::json!(
+        supports_1m
+            && limits
+                .maximum_context_tokens()
+                .is_some_and(|tokens| tokens >= 1_000_000)
+    );
 }
 
 fn merge_metadata_value(preferred: &mut serde_json::Value, additional: &serde_json::Value) {
@@ -4256,6 +4322,8 @@ fn select_local_channel_route_where_with_model_and_match<'a>(
     let requires_claude_server_side_compaction = protocol == "anthropic_messages"
         && crate::supplier::claude_request_uses_server_side_compaction(&body);
     let required_channel_evidence = request_features_requiring_channel_evidence(path, &body);
+    let context_requirement = crate::context_capacity::Requirement::for_request(path, body.as_bytes());
+    let tool_request = crate::protocol::openai_compatibility::ToolRequest::from_body(body.as_bytes());
     let compatibility =
         || crate::model_compatibility::model_compatibility_candidates(cfg, requested);
     let route_models = match match_mode {
@@ -4283,9 +4351,10 @@ fn select_local_channel_route_where_with_model_and_match<'a>(
                     return None;
                 }
                 let upstream_model = channel_upstream_model_for_request(channel, Some(&route_model));
+                if !context_requirement.fits_channel(channel, &upstream_model) { return None; }
                 let native = crate::coding_gateway::channel_model_protocol(channel, &upstream_model);
                 let protocol_rank =
-                    local_channel_protocol_fidelity_rank(channel, &protocol, &upstream_model)?;
+                    local_channel_protocol_fidelity_rank(channel, &protocol, &upstream_model, tool_request)?;
                 channel_profiles_required_request_features_rank(
                     native.map(|protocol| protocol.as_str()).unwrap_or(&channel.api_format),
                     &upstream_model,
@@ -4489,7 +4558,12 @@ fn local_execution_error_marks_channel_unready(error: &anyhow::Error) -> bool {
     !crate::upstream_transport::is_ambiguous_transport_error(error)
         && !matches!(
             crate::channel_executor::channel_execution_error_code(error),
-            Some("surface_operation_not_supported" | "conversion_failed" | "ambiguous_transport")
+            Some(
+                "surface_operation_not_supported"
+                    | "conversion_failed"
+                    | "ambiguous_transport"
+                    | "context_length_exceeded"
+            )
         )
 }
 
@@ -4572,6 +4646,7 @@ fn local_channel_protocol_fidelity_rank(
     channel: &ChannelConfig,
     protocol: &str,
     model: &str,
+    tools: crate::protocol::openai_compatibility::ToolRequest,
 ) -> Option<u8> {
     let protocol = crate::protocol::kind::ProtocolKind::parse(protocol).ok()?;
     let surface = match protocol {
@@ -4585,7 +4660,7 @@ fn local_channel_protocol_fidelity_rank(
     let target =
         crate::channel_surface::channel_surface_target(channel, surface, Some(protocol), false)?;
     let target =
-        crate::channel_executor::resolve_model_protocol_target(channel, model, target, false).ok()?;
+        crate::channel_executor::resolve_model_protocol_target(channel, model, target, false, tools).ok()?;
     Some(if target.protocol == protocol {
         0
     } else if target.surface == surface {

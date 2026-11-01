@@ -45,6 +45,12 @@ pub(crate) struct SupplierUpstreamUsage {
     cache_write_tokens: Option<u64>,
     cache_write_5m_tokens: Option<u64>,
     cache_write_1h_tokens: Option<u64>,
+    // Optional wire fields keep older servers on aggregate billing. Sending
+    // these as additional usage_meters would double-charge on those servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_write_30m_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_write_12h_tokens: Option<u64>,
     input_tokens_include_cache_read: bool,
     input_tokens_include_cache_write: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -354,6 +360,20 @@ impl SupplierUpstreamUsage {
     fn absorb_usage_meters(&mut self, protocol: &str, usage: &serde_json::Value) {
         match protocol {
             "openai_chat" | "openai_responses" => {
+                if let Some(details) = usage
+                    .pointer("/input_tokens_details/cache_write_tokens_details")
+                    .or_else(|| usage.pointer("/input_token_details/cache_write_tokens_details"))
+                    .or_else(|| usage.pointer("/prompt_tokens_details/cache_write_tokens_details"))
+                {
+                    replace(
+                        &mut self.cache_write_30m_tokens,
+                        details.get("ttl_30m_tokens"),
+                    );
+                    replace(
+                        &mut self.cache_write_12h_tokens,
+                        details.get("ttl_12h_tokens"),
+                    );
+                }
                 for (meter_kind, included_in_total, pointers) in [
                     (
                         "audio_input_tokens",
@@ -677,6 +697,8 @@ impl SupplierUpstreamUsage {
             || self.cache_write_tokens.is_some()
             || self.cache_write_5m_tokens.is_some()
             || self.cache_write_1h_tokens.is_some()
+            || self.cache_write_30m_tokens.is_some()
+            || self.cache_write_12h_tokens.is_some()
             || !self.usage_meters.is_empty()
             || !self.service_tier.is_empty()
             || !self.speed.is_empty()
@@ -933,7 +955,10 @@ impl SupplierUpstreamUsageAccumulator {
         let mut scan_from = self.line.len();
         self.line.extend_from_slice(chunk);
         let mut consumed = 0;
-        while let Some(relative) = self.line[scan_from..].iter().position(|byte| *byte == b'\n') {
+        while let Some(relative) = self.line[scan_from..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+        {
             let end = scan_from + relative;
             absorb_upstream_usage_event_line(
                 &mut self.usage,
@@ -1074,6 +1099,35 @@ fn trim_ascii(mut value: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod upstream_usage_tests {
     use super::*;
+
+    #[test]
+    fn openai_cache_write_lifetimes_preserve_aggregate_for_older_servers() {
+        let value = serde_json::json!({"response": {"usage": {
+            "input_tokens": 12000, "output_tokens": 0,
+            "input_tokens_details": {"cached_tokens": 4000, "cache_write_tokens": 7000,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 3000, "ttl_12h_tokens": 4000}}
+        }}});
+        let mut usage = SupplierUpstreamUsage::from_json("openai_responses", &value);
+        usage.absorb_json(&value);
+        assert_eq!(usage.cache_write_tokens, Some(7000));
+        assert_eq!(usage.cache_write_30m_tokens, Some(3000));
+        assert_eq!(usage.cache_write_12h_tokens, Some(4000));
+        assert!(
+            usage
+                .usage_meters
+                .iter()
+                .all(|m| m.meter_kind != "cache_write_tokens")
+        );
+        let wire = serde_json::to_value(&usage).unwrap();
+        assert_eq!(wire["cache_write_30m_tokens"], 3000);
+        assert_eq!(wire["cache_write_12h_tokens"], 4000);
+        usage.absorb_json(&serde_json::json!({"response":{"usage":{
+            "input_tokens_details":{"cache_write_tokens":7000,
+                "cache_write_tokens_details":{"ttl_30m_tokens":7000,"ttl_12h_tokens":0}}
+        }}}));
+        assert_eq!(usage.cache_write_30m_tokens, Some(7000));
+        assert_eq!(usage.cache_write_12h_tokens, Some(0));
+    }
 
     #[test]
     fn actual_service_mode_survives_fragmented_streams_and_missing_later_fields() {

@@ -2097,6 +2097,8 @@ fn model_observations_from_tool_catalog(
         .into_iter()
         .map(|model| crate::model_catalog::ModelObservation {
             context_tokens: None,
+            max_context_tokens: None,
+            input_tokens: None,
             output_tokens: None,
             supported_parameters: None,
             supported_endpoints: None,
@@ -2142,6 +2144,14 @@ fn model_observations_from_saved_channel(
                     observation.output_tokens = crate::model_catalog::conservative_limit(
                         observation.output_tokens,
                         profile.output_tokens,
+                    );
+                    observation.max_context_tokens = crate::model_catalog::conservative_limit(
+                        observation.max_context_tokens,
+                        profile.max_context_tokens,
+                    );
+                    observation.input_tokens = crate::model_catalog::conservative_limit(
+                        observation.input_tokens,
+                        profile.input_tokens,
                     );
                     for (name, supported) in [
                         ("image", profile.vision || profile.image_input),
@@ -2242,6 +2252,8 @@ fn model_modality_capability_profiles(
             !model.input_modalities.is_empty()
                 || !model.output_modalities.is_empty()
                 || model.context_tokens.is_some()
+                || model.max_context_tokens.is_some()
+                || model.input_tokens.is_some()
                 || model.output_tokens.is_some()
                 || model.supported_parameters.is_some()
                 || model.supported_endpoints.is_some()
@@ -2262,6 +2274,8 @@ fn model_modality_capability_profiles(
             let mut profile = ChannelCapabilityProfile {
                 protocol: base.protocol.clone(),
                 context_tokens: model.context_tokens,
+                max_context_tokens: model.max_context_tokens,
+                input_tokens: model.input_tokens,
                 probe_cost_nanos: model.probe_cost_nanos,
                 catalog_text_output: (!model.output_modalities.is_empty())
                     .then(|| model.output_modalities.iter().any(|m| m == "text")),
@@ -3095,6 +3109,8 @@ mod stream_probe_tests {
             &base,
             &[crate::model_catalog::ModelObservation {
                 context_tokens: None,
+                max_context_tokens: None,
+                input_tokens: None,
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
@@ -3135,6 +3151,8 @@ mod stream_probe_tests {
             &base,
             &[crate::model_catalog::ModelObservation {
                 context_tokens: None,
+                max_context_tokens: None,
+                input_tokens: None,
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
@@ -3196,6 +3214,8 @@ mod stream_probe_tests {
         let mut models = vec![
             crate::model_catalog::ModelObservation {
                 context_tokens: None,
+                max_context_tokens: None,
+                input_tokens: None,
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
@@ -3211,6 +3231,8 @@ mod stream_probe_tests {
             },
             crate::model_catalog::ModelObservation {
                 context_tokens: None,
+                max_context_tokens: None,
+                input_tokens: None,
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,

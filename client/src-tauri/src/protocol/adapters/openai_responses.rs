@@ -187,13 +187,18 @@ impl ProtocolAdapter for OpenAiResponsesAdapter {
         let blocks = decode_output_items(output, context, model)?;
         let status = response_status(body.get("status").and_then(Value::as_str));
         let error = decode_error(body.get("error"));
+        let incomplete_reason = body
+            .pointer("/incomplete_details/reason")
+            .and_then(Value::as_str);
         let finish = FinishDetail {
-            reason: response_finish_reason(status, &blocks, error.is_some()),
-            original_reason: body
-                .pointer("/incomplete_details/reason")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            reason: response_finish_reason(status, &blocks, error.is_some(), incomplete_reason),
+            original_reason: incomplete_reason.map(str::to_string),
             incomplete_details: body.get("incomplete_details").cloned(),
+        };
+        let status = match finish.reason {
+            FinishReason::ContentFilter | FinishReason::Refusal => ResponseStatus::Refused,
+            FinishReason::Cancelled => ResponseStatus::Cancelled,
+            _ => status,
         };
         Ok(CanonicalResponseV2 {
             id: body.get("id").and_then(Value::as_str).map(str::to_string),
@@ -217,10 +222,12 @@ impl ProtocolAdapter for OpenAiResponsesAdapter {
         context: &AdapterContext,
     ) -> Result<Value, AdapterError> {
         ensure_encoding_plan(plan, ProtocolKind::OpenAiResponses)?;
+        let (status, incomplete_details) =
+            responses_finish_fields(response.status, &response.finish);
         let mut body = json!({
             "id": response.id.clone().unwrap_or_else(|| "resp_const_api".to_string()),
             "object": "response",
-            "status": encode_response_status(response.status),
+            "status": status,
             "model": response.model.clone().unwrap_or_default(),
             "output": encode_response_blocks(
                 &response.blocks,
@@ -229,8 +236,8 @@ impl ProtocolAdapter for OpenAiResponsesAdapter {
             )?,
             "usage": encode_usage(&response.usage),
         });
-        if let Some(details) = &response.finish.incomplete_details {
-            body["incomplete_details"] = details.clone();
+        if let Some(details) = incomplete_details {
+            body["incomplete_details"] = details;
         }
         if let Some(error) = &response.error {
             body["error"] = json!({
@@ -1245,14 +1252,20 @@ fn decode_tool_choice(value: Option<&Value>) -> Result<ToolChoice, AdapterError>
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|tool| {
-                let name = tool.get("name").and_then(Value::as_str)?;
-                Some(tool.get("namespace").and_then(Value::as_str).map_or_else(
+            .enumerate()
+            .map(|(index, tool)| {
+                let name = tool.get("name").and_then(Value::as_str)
+                    .filter(|name| !name.trim().is_empty())
+                    .ok_or_else(|| AdapterError::new(
+                        "unsupported_tool_choice_member", format!("$.tool_choice.tools[{index}]"),
+                        "Hosted tool selectors cannot be represented by the cross-protocol named-tool allowlist; use native Responses",
+                    ))?;
+                Ok(tool.get("namespace").and_then(Value::as_str).map_or_else(
                     || name.to_string(),
                     |namespace| format!("{namespace}.{name}"),
                 ))
             })
-            .collect();
+            .collect::<Result<Vec<_>, AdapterError>>()?;
         return Ok(ToolChoice::Allowed {
             mode: if value.get("mode").and_then(Value::as_str) == Some("required") {
                 AllowedMode::Required
@@ -2246,7 +2259,9 @@ fn encode_tool_choice(
         ToolChoice::Auto => json!("auto"),
         ToolChoice::None => json!("none"),
         ToolChoice::Required => json!("required"),
-        ToolChoice::Named { name } => json!({"type":"function","name":name}),
+        ToolChoice::Named { name } => {
+            json!({"type":tool_choice_kind(name, definitions),"name":name})
+        }
         ToolChoice::Allowed { mode, names } => json!({
             "type":"allowed_tools",
             "mode":if *mode == AllowedMode::Required { "required" } else { "auto" },
@@ -2597,21 +2612,41 @@ fn response_status(value: Option<&str>) -> ResponseStatus {
     }
 }
 
-fn encode_response_status(value: ResponseStatus) -> &'static str {
-    match value {
-        ResponseStatus::InProgress => "in_progress",
-        ResponseStatus::Completed => "completed",
-        ResponseStatus::Incomplete => "incomplete",
-        ResponseStatus::Failed => "failed",
-        ResponseStatus::Cancelled => "cancelled",
-        ResponseStatus::Refused => "refused",
-    }
+pub(crate) fn responses_finish_fields(
+    status: ResponseStatus,
+    finish: &FinishDetail,
+) -> (&'static str, Option<Value>) {
+    let incomplete_reason = finish
+        .incomplete_details
+        .as_ref()
+        .and_then(|details| details.get("reason"))
+        .and_then(Value::as_str);
+    let status = match (finish.reason, status) {
+        (FinishReason::Error, _) | (_, ResponseStatus::Failed) => "failed",
+        _ if incomplete_reason.is_some() => "incomplete",
+        (FinishReason::Cancelled, _) | (_, ResponseStatus::Cancelled) => "cancelled",
+        (FinishReason::Length | FinishReason::ContentFilter, _)
+        | (_, ResponseStatus::Incomplete) => "incomplete",
+        (_, ResponseStatus::InProgress) => "in_progress",
+        _ => "completed",
+    };
+    let reason = if status == "incomplete" {
+        incomplete_reason.or(match finish.reason {
+            FinishReason::Length => Some("max_output_tokens"),
+            FinishReason::ContentFilter => Some("content_filter"),
+            _ => None,
+        })
+    } else {
+        None
+    };
+    (status, reason.map(|reason| json!({"reason": reason})))
 }
 
 fn response_finish_reason(
     status: ResponseStatus,
     blocks: &[ContentBlock],
     has_error: bool,
+    incomplete_reason: Option<&str>,
 ) -> FinishReason {
     if has_error || status == ResponseStatus::Failed {
         return FinishReason::Error;
@@ -2619,11 +2654,20 @@ fn response_finish_reason(
     if status == ResponseStatus::Cancelled {
         return FinishReason::Cancelled;
     }
-    if status == ResponseStatus::Refused {
-        return FinishReason::Refusal;
-    }
     if status == ResponseStatus::Incomplete {
-        return FinishReason::Length;
+        return match incomplete_reason {
+            Some("content_filter") => FinishReason::ContentFilter,
+            Some("interrupted") => FinishReason::Cancelled,
+            _ => FinishReason::Length,
+        };
+    }
+    if status == ResponseStatus::Refused
+        || (status == ResponseStatus::Completed
+            && blocks
+                .iter()
+                .any(|block| matches!(block, ContentBlock::Refusal(_))))
+    {
+        return FinishReason::Refusal;
     }
     if blocks
         .iter()

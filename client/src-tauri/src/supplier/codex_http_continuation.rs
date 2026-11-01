@@ -462,6 +462,36 @@ fn codex_http_continuation_state(
     Some(state)
 }
 
+// Do not perform a SQLite lookup for every candidate account while routing.
+// Execution/replay remains responsible for restoring persisted history.
+pub(crate) fn codex_continuation_capacity(
+    config: &SupplierConfig,
+    response_id: &str,
+    current_input: Option<&serde_json::Value>,
+) -> Option<(u64, bool)> {
+    let cache = CODEX_HTTP_CONTINUATION_CACHE.get()?;
+    let key = codex_http_continuation_key(config, response_id);
+    let history = {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = cache.entries.get(&key)?;
+        if entry.touched_at.elapsed() > CODEX_HTTP_CONTINUATION_CACHE_TTL {
+            return None;
+        }
+        entry.history.clone()
+    };
+    if current_input
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|current| {
+            current.len() >= history.len() && current[..history.len()] == history[..]
+        })
+    {
+        return Some((0, false));
+    }
+    Some(crate::context_capacity::history_tokens(&history))
+}
+
 fn insert_codex_http_continuation_memory(key: String, state: CodexHttpContinuationState) {
     let Ok(serialized) = state.serialized() else {
         return;
@@ -700,7 +730,27 @@ pub(crate) fn prepare_codex_websocket_subscription_replay(
     log::info!(
         "[const-api][upstream-ws] continuation_replay_prepared code=codex_ws_previous_response_expanded history_items={history_len} delta_items={current_len}"
     );
-    Ok(Some(serde_json::to_string(&value)?))
+    let replay = serde_json::to_string(&value)?;
+    check_codex_replay_context_capacity(config, &replay, &value)?;
+    Ok(Some(replay))
+}
+
+fn check_codex_replay_context_capacity(
+    config: &SupplierConfig,
+    body: &str,
+    value: &serde_json::Value,
+) -> Result<()> {
+    let model = supplier_upstream_model_for_request(
+        config,
+        value.get("model").and_then(serde_json::Value::as_str),
+    );
+    let channel = crate::channel_from_supplier(config.channel_id.clone(), config);
+    crate::channel_executor::check_request_context_capacity(
+        &channel,
+        "/v1/responses",
+        body.as_bytes(),
+        &model,
+    )
 }
 
 /// The ChatGPT Codex HTTP endpoint requires self-contained input and rejects
@@ -745,6 +795,7 @@ pub(crate) fn prepare_codex_http_subscription_request(
     };
     let (history_len, current_len) = apply_codex_continuation_state(object, state);
     let repaired = serde_json::to_string(&value)?;
+    check_codex_replay_context_capacity(config, &repaired, &value)?;
     log::info!(
         "[const-api][protocol] subscription continuation replayed code=codex_previous_response_expanded history_items={history_len} delta_items={current_len}"
     );

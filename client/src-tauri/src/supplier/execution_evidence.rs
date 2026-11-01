@@ -199,6 +199,14 @@ fn channel_error_evidence(error: &anyhow::Error) -> Option<ExecutionEvidence> {
         return Some(ambiguous_transport_evidence());
     }
     let (stage, domain, attempted, settlement, penalty, retry) = match code {
+        "context_length_exceeded" => (
+            "request_context_capacity",
+            "capability",
+            false,
+            "deny",
+            "ineligible",
+            "other_channel",
+        ),
         "conversion_failed" => (
             "request_protocol_convert",
             "platform",

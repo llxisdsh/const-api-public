@@ -29,7 +29,7 @@ fn toonflow_model_entries(models: &[ToolModelInfo]) -> Result<Vec<serde_json::Va
                 "label".to_string(),
                 serde_json::Value::String(label.to_string()),
             );
-            if let Some(value) = model.context_tokens {
+            if let Some(value) = model.maximum_context_tokens() {
                 entry.insert(
                     "contextWindow".to_string(),
                     serde_json::Value::Number(value.into()),

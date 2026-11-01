@@ -23,6 +23,58 @@ fn capability_test_models() -> Vec<ToolModelInfo> {
 }
 
 #[test]
+fn context_limits_are_written_in_each_tools_own_units() {
+    let model = ToolModelInfo {
+        context_tokens: Some(272000),
+        max_context_tokens: Some(1050000),
+        input_tokens: Some(922000),
+        output_tokens: Some(128000),
+        ..capability_test_models()[0].clone()
+    };
+    let opencode = opencode_models_object(&[model.clone()]);
+    assert_eq!(
+        opencode[&model.id]["limit"],
+        serde_json::json!({
+            "context": 1050000, "input": 922000, "output": 128000
+        })
+    );
+    let vscode = vscode_model_entry(
+        &model,
+        "http://localhost/v1/responses",
+        "fixture",
+        ToolProtocol::OpenAiResponses,
+    )
+    .unwrap();
+    assert_eq!(vscode["contextWindow"], 1050000);
+    assert_eq!(vscode["maxInputTokens"], 922000);
+    let mut buddy = serde_json::json!({});
+    configure_workbuddy_model_entry(
+        &mut buddy,
+        &model,
+        "http://localhost/v1/chat/completions",
+        "fixture",
+    );
+    assert_eq!(buddy["maxInputTokens"], 1050000);
+    assert_eq!(
+        buddy["contextWindow"]["supportedLengths"],
+        serde_json::json!([200000, 272000, 500000, 1050000])
+    );
+    assert_eq!(buddy["contextWindow"]["defaultLength"], 272000);
+    buddy["contextWindow"]["defaultLength"] = serde_json::json!(500000);
+    configure_workbuddy_model_entry(
+        &mut buddy,
+        &model,
+        "http://localhost/v1/chat/completions",
+        "fixture",
+    );
+    assert_eq!(buddy["contextWindow"]["defaultLength"], 500000);
+    let codex = generic_codex_catalog_model(&model);
+    assert_eq!(codex["context_window"], 272000);
+    assert_eq!(codex["max_context_window"], 1050000);
+    assert!(codex["auto_compact_token_limit"].as_u64().unwrap() < 272000);
+}
+
+#[test]
 fn tool_image_flags_do_not_confuse_audio_or_pdf_attachments_with_vision() {
     for image in [false, true] {
         let model = ToolModelInfo {

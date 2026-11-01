@@ -57,6 +57,7 @@ pub(crate) enum ChannelExecutionErrorCode {
     SurfaceOperationNotSupported,
     AuthenticationFailed,
     UpstreamTimeout,
+    ContextCapacityExceeded,
 }
 
 impl ChannelExecutionErrorCode {
@@ -68,6 +69,7 @@ impl ChannelExecutionErrorCode {
             Self::SurfaceOperationNotSupported => "surface_operation_not_supported",
             Self::AuthenticationFailed => "authentication_failed",
             Self::UpstreamTimeout => "upstream_timeout",
+            Self::ContextCapacityExceeded => "context_length_exceeded",
         }
     }
 }
@@ -137,6 +139,29 @@ pub(crate) fn surface_operation_not_supported_error(error: impl fmt::Display) ->
     )
 }
 
+pub(crate) fn check_request_context_capacity(
+    channel: &ChannelConfig,
+    path: &str,
+    body: &[u8],
+    model: &str,
+) -> Result<()> {
+    let requirement = crate::context_capacity::Requirement::for_request(path, body);
+    if !requirement.fits_channel(channel, model) {
+        let recovery = if requirement.incomplete {
+            "compact the conversation or resend its full history on a larger-context route"
+        } else {
+            "compact the conversation or use a larger-context route"
+        };
+        return Err(execution_error(
+            ChannelExecutionErrorCode::ContextCapacityExceeded,
+            format!(
+                "context_length_exceeded: the estimated input or requested output budget exceeds this channel's reported limits; {recovery}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 // Selection and execution must agree on whether this model has an executable
 // dialect. A usable channel default alone is not sufficient for coding gateways.
 pub(crate) fn resolve_model_protocol_target(
@@ -144,7 +169,19 @@ pub(crate) fn resolve_model_protocol_target(
     upstream_model: &str,
     target: ChannelSurfaceTarget,
     explicitly_selected: bool,
+    tools: crate::protocol::openai_compatibility::ToolRequest,
 ) -> Result<ChannelSurfaceTarget> {
+    if channel.source_driver() == crate::source_driver::SourceDriverId::OpenAiApi
+        && target.protocol == crate::protocol::kind::ProtocolKind::OpenAiChat
+        && tools.requires_responses(upstream_model)
+    {
+        // Also repair a Chat hint from an adjacent older server version. Both
+        // endpoints belong to this channel; never change account/model or drop tools.
+        return channel_protocol_target(channel, crate::protocol::kind::ProtocolKind::OpenAiResponses)
+            .ok_or_else(|| surface_operation_not_supported_error(format!(
+                "OpenAI model {upstream_model} requires an available openai_responses binding for this tool request"
+            )));
+    }
     let Some(protocol) = crate::coding_gateway::channel_model_protocol(channel, upstream_model)
     else {
         return Ok(target);
@@ -348,11 +385,13 @@ pub(crate) async fn execute_channel_request(
         upstream_model = crate::config::without_context_hint(&upstream_model).to_string();
     }
     if route.protocol.is_some() {
+        check_request_context_capacity(channel, &request.path, &request.body, &upstream_model)?;
         target = resolve_model_protocol_target(
             channel,
             &upstream_model,
             target,
             selected_target_protocol.is_some(),
+            crate::protocol::openai_compatibility::ToolRequest::from_body(&request.body),
         )?;
     }
     let inbound_stream_requested = request.stream_requested.unwrap_or_else(|| {
@@ -585,6 +624,18 @@ pub(crate) async fn execute_channel_request(
             )
         };
 
+    if channel.source_driver() == crate::source_driver::SourceDriverId::OpenAiApi
+        && target.protocol == crate::protocol::kind::ProtocolKind::OpenAiChat
+        && inbound_protocol.is_some()
+        && !resource_native_operation
+    {
+        if let Some(normalized) = crate::protocol::openai_compatibility::normalize_chat_token_limit(
+            &upstream_body,
+            &upstream_model,
+        )? {
+            upstream_body = Bytes::from(normalized);
+        }
+    }
     let cross_protocol = inbound_protocol
         .as_deref()
         .is_some_and(|inbound| inbound != target_protocol);
@@ -647,6 +698,11 @@ pub(crate) async fn execute_channel_request(
         {
             upstream_body = Bytes::from(body);
         }
+    }
+    if route.protocol.is_some() && upstream_body != request.body {
+        // Conversion may change output budgets or add tool declarations.
+        // Unchanged native requests do not need another parse.
+        check_request_context_capacity(channel, &request.path, &upstream_body, &upstream_model)?;
     }
     let url = resolve_target_url(
         channel,
@@ -1711,10 +1767,8 @@ mod tests {
                 req.headers
                     .insert("anthropic-beta", HeaderValue::from_static("future-beta"));
                 if stream {
-                    req.headers.insert(
-                        "anthropic-version",
-                        HeaderValue::from_static("future-version"),
-                    );
+                    req.headers
+                        .insert("anthropic-version", HeaderValue::from_static("2026-10-21"));
                 }
                 let execution = execute_channel_request(&Client::new(), &channel, req)
                     .await
@@ -1744,11 +1798,7 @@ mod tests {
                 if protocol == "anthropic_messages" {
                     assert_eq!(
                         captured_header(&captured, "anthropic-version"),
-                        Some(if stream {
-                            "future-version"
-                        } else {
-                            "2023-06-01"
-                        })
+                        Some(if stream { "2026-10-21" } else { "2023-06-01" })
                     );
                 }
                 assert_eq!(
@@ -2235,6 +2285,132 @@ mod tests {
         assert_eq!(captured.target, "/v1/files/raw?upload=1");
         assert_eq!(captured_header(&captured, "content-type"), None);
         assert_eq!(captured.body, body.as_ref());
+    }
+
+    #[tokio::test]
+    async fn official_openai_review_routes_tools_through_responses() {
+        for stream in [false, true] {
+            let output = serde_json::json!({
+                "id":"resp-review", "object":"response", "status":"completed", "model":"gpt-6-astra",
+                "output":[{"type":"function_call","id":"fc_review","call_id":"call_review","name":"read_file","arguments":"{\"path\":\"src.rs\"}","status":"completed"}],
+                "usage":{"input_tokens":10,"output_tokens":3,"total_tokens":13}
+            });
+            let (content_type, wire) = if stream {
+                (
+                    "text/event-stream",
+                    format!(
+                        "event: response.completed\ndata: {}\n\n",
+                        serde_json::json!({"type":"response.completed","response":output})
+                    ),
+                )
+            } else {
+                ("application/json", output.to_string())
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{wire}",
+                wire.len()
+            );
+            let (base, receiver, server) =
+                capture_server_with_response(response.into_bytes()).await;
+            let mut channel = channel_for_surface(&base, ApiSurface::OpenAi, "verified");
+            channel.set_source_driver(crate::source_driver::SourceDriverId::OpenAiApi);
+            channel.v2.default_target.protocol = crate::protocol::kind::ProtocolKind::OpenAiChat;
+            let mut responses = channel.surface_bindings[0].protocols[0].clone();
+            responses.protocol = "openai_responses".into();
+            responses.preferred = false;
+            channel.surface_bindings[0].protocols.push(responses);
+            let body = serde_json::json!({
+                "model":"gpt-6-astra", "stream":stream, "reasoning_effort":"high", "max_tokens":8192,
+                "messages":[
+                    {"role":"user","content":"Review src.rs"},
+                    {"role":"assistant","tool_calls":[{"id":"call_earlier","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"src.rs\"}"}}]},
+                    {"role":"tool","tool_call_id":"call_earlier","content":"fn main() {}"}
+                ],
+                "tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}]
+            });
+            let mut req = request(
+                Method::POST,
+                "/v1/chat/completions",
+                "",
+                Bytes::from(body.to_string()),
+            );
+            req.selected_upstream_model = Some("gpt-6-astra".into());
+            // An older platform may still supply the pre-fix Chat target.
+            req.selected_target_protocol = Some("openai_chat".into());
+            let execution = execute_channel_request(&Client::new(), &channel, req)
+                .await
+                .unwrap();
+            let captured = receiver.await.unwrap();
+            server.await.unwrap();
+            assert_eq!(captured.target, "/v1/responses");
+            assert_eq!(execution.target_protocol, "openai_responses");
+            assert!(!execution.native_passthrough);
+            let sent: serde_json::Value = serde_json::from_slice(&captured.body).unwrap();
+            assert_eq!(sent["reasoning"]["effort"], "high");
+            assert_eq!(sent["max_output_tokens"], 8192);
+            assert_eq!(sent["tools"][0]["name"], "read_file");
+            assert!(
+                sent["input"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["type"] == "function_call_output"
+                        && item["call_id"] == "call_earlier")
+            );
+            assert_eq!(sent["stream"], stream);
+            let raw = execution.response.text().await.unwrap();
+            let chat = if stream {
+                crate::proxy::responses_sse_to_chat_body(&raw, "gpt-6-astra").unwrap()
+            } else {
+                crate::proxy::responses_body_to_chat_body(&raw, "gpt-6-astra").unwrap()
+            };
+            let chat: serde_json::Value = serde_json::from_str(&chat).unwrap();
+            assert_eq!(
+                chat["choices"][0]["message"]["tool_calls"][0]["id"],
+                "call_review"
+            );
+            assert_eq!(
+                chat["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+                "read_file"
+            );
+            assert_eq!(chat["usage"]["prompt_tokens"], 10);
+            assert_eq!(chat["usage"]["completion_tokens"], 3);
+        }
+    }
+
+    #[tokio::test]
+    async fn official_openai_chat_fixes_legacy_limit_without_changing_gateways() {
+        for official in [true, false] {
+            let (base, receiver, server) = capture_server().await;
+            let mut channel = channel_for_surface(&base, ApiSurface::OpenAi, "verified");
+            if official {
+                channel.set_source_driver(crate::source_driver::SourceDriverId::OpenAiApi);
+                channel.v2.default_target.protocol =
+                    crate::protocol::kind::ProtocolKind::OpenAiChat;
+            }
+            let body = br#"{ "model":"gpt-6.1-sol", "messages":[{"role":"user","content":"hi"}], "max_tokens":4096, "extra":{"keep":1} }"#;
+            let mut req = request(
+                Method::POST,
+                "/v1/chat/completions",
+                "",
+                Bytes::from_static(body),
+            );
+            req.selected_upstream_model = Some("gpt-6.1-sol".into());
+            execute_channel_request(&Client::new(), &channel, req)
+                .await
+                .unwrap();
+            let captured = receiver.await.unwrap();
+            server.await.unwrap();
+            assert_eq!(captured.target, "/v1/chat/completions");
+            if official {
+                let sent: serde_json::Value = serde_json::from_slice(&captured.body).unwrap();
+                assert_eq!(sent["max_completion_tokens"], 4096);
+                assert!(sent.get("max_tokens").is_none());
+                assert_eq!(sent["extra"]["keep"], 1);
+            } else {
+                assert_eq!(captured.body, body);
+            }
+        }
     }
 
     #[tokio::test]

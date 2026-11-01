@@ -18,6 +18,8 @@ pub(crate) struct ToolModelInfo {
     pub(crate) tool_call: bool,
     pub(crate) attachment: bool,
     pub(crate) context_tokens: Option<u64>,
+    pub(crate) max_context_tokens: Option<u64>,
+    pub(crate) input_tokens: Option<u64>,
     pub(crate) output_tokens: Option<u64>,
     pub(crate) supports_1m: bool,
     pub(crate) input_modalities: Vec<String>,
@@ -28,6 +30,103 @@ pub(crate) struct ToolModelInfo {
     // Shared once per fetched list, including when a tool generates Claude
     // aliases after discovery. Never serialized into third-party tool schemas.
     pub(crate) presentation: Option<std::sync::Arc<crate::model_discovery::ModelPresentation>>,
+}
+
+impl ToolModelInfo {
+    pub(crate) fn maximum_context_tokens(&self) -> Option<u64> {
+        self.max_context_tokens
+            .or(self.input_tokens)
+            .or(self.context_tokens)
+    }
+
+    pub(crate) fn maximum_input_tokens(&self) -> Option<u64> {
+        // Only a joint window needs an output reserve. A provider's explicit
+        // input limit already describes how much input the model accepts.
+        self.input_tokens
+            .map(|input| {
+                self.maximum_context_tokens()
+                    .map_or(input, |context| input.min(context))
+            })
+            .or_else(|| {
+                self.maximum_context_tokens()?
+                    .checked_sub(self.output_tokens?)
+                    .filter(|tokens| *tokens > 0)
+            })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ModelTokenLimits {
+    pub(crate) context_tokens: Option<u64>,
+    pub(crate) max_context_tokens: Option<u64>,
+    pub(crate) input_tokens: Option<u64>,
+    pub(crate) output_tokens: Option<u64>,
+}
+
+impl ModelTokenLimits {
+    pub(crate) fn maximum_context_tokens(self) -> Option<u64> {
+        self.max_context_tokens
+            .or(self.input_tokens)
+            .or(self.context_tokens)
+    }
+
+    fn complete(mut self) -> Self {
+        if self.input_tokens.is_none() {
+            self.max_context_tokens = self.max_context_tokens.or(self.context_tokens);
+        }
+        self.context_tokens = self.context_tokens.map(|context| {
+            self.max_context_tokens
+                .or(self.input_tokens)
+                .map_or(context, |maximum| context.min(maximum))
+        });
+        self.input_tokens = self.input_tokens.map(|input| {
+            self.max_context_tokens
+                .map_or(input, |context| input.min(context))
+        });
+        self
+    }
+
+    pub(crate) fn from_metadata(metadata: &Value, fallback: (Option<u64>, Option<u64>)) -> Self {
+        Self {
+            context_tokens: metadata_token_limit(metadata.get("context_tokens"), fallback.0),
+            output_tokens: metadata_token_limit(metadata.get("output_tokens"), fallback.1),
+            max_context_tokens: metadata_token_limit(metadata.get("max_context_tokens"), None),
+            input_tokens: metadata_token_limit(metadata.get("input_tokens"), None),
+        }
+        .complete()
+    }
+
+    // Keep the legacy/default budget conservative. Routing now checks each
+    // request, so the largest declared window/input can be offered as an option.
+    // Unknown limits stay unknown instead of borrowing an unrelated maximum.
+    pub(crate) fn merge_routes(&mut self, other: Self) {
+        self.context_tokens = self
+            .context_tokens
+            .zip(other.context_tokens)
+            .map(|(a, b)| a.min(b));
+        self.max_context_tokens = self
+            .max_context_tokens
+            .zip(other.max_context_tokens)
+            .map(|(a, b)| a.max(b));
+        self.input_tokens = self
+            .input_tokens
+            .zip(other.input_tokens)
+            .map(|(a, b)| a.max(b));
+        self.output_tokens = self
+            .output_tokens
+            .zip(other.output_tokens)
+            .map(|(a, b)| a.min(b));
+    }
+
+    fn from_model(model: &ToolModelInfo) -> Self {
+        Self {
+            context_tokens: model.context_tokens,
+            max_context_tokens: model.max_context_tokens,
+            input_tokens: model.input_tokens,
+            output_tokens: model.output_tokens,
+        }
+        .complete()
+    }
 }
 
 pub(crate) fn tool_model_display_order(
@@ -99,6 +198,10 @@ pub(crate) struct EmbeddedToolCatalogModel {
     #[serde(default)]
     pub(crate) context_tokens: u64,
     #[serde(default)]
+    pub(crate) max_context_tokens: u64,
+    #[serde(default)]
+    pub(crate) input_tokens: u64,
+    #[serde(default)]
     pub(crate) output_tokens: u64,
     #[serde(default)]
     pub(crate) input_modalities: Vec<String>,
@@ -119,6 +222,10 @@ pub(crate) struct ToolModelCatalogEntry {
     family: String,
     #[serde(default)]
     context_tokens: u64,
+    #[serde(default)]
+    max_context_tokens: u64,
+    #[serde(default)]
+    input_tokens: u64,
     #[serde(default)]
     output_tokens: u64,
     #[serde(default)]
@@ -201,6 +308,8 @@ pub(crate) fn active_tool_catalog_models() -> Vec<EmbeddedToolCatalogModel> {
                     }
                     model.family = metadata.family.clone();
                     model.context_tokens = metadata.context_tokens;
+                    model.max_context_tokens = metadata.max_context_tokens;
+                    model.input_tokens = metadata.input_tokens;
                     model.output_tokens = metadata.output_tokens;
                     model.input_modalities = metadata.input_modalities.clone();
                     model.output_modalities = metadata.output_modalities.clone();
@@ -249,15 +358,23 @@ pub(crate) fn tool_models_from_ids(model_ids: &[String]) -> Vec<ToolModelInfo> {
 }
 
 pub(crate) fn catalog_token_limits(id: &str) -> (Option<u64>, Option<u64>) {
+    let limits = catalog_model_token_limits(id);
+    (limits.context_tokens, limits.output_tokens)
+}
+
+pub(crate) fn catalog_model_token_limits(id: &str) -> ModelTokenLimits {
     with_document(|document| {
         document
             .models
             .get(&crate::config::public_model_name(id))
             .map(|model| {
-                (
-                    positive(model.context_tokens),
-                    positive(model.output_tokens),
-                )
+                ModelTokenLimits {
+                    context_tokens: positive(model.context_tokens),
+                    max_context_tokens: positive(model.max_context_tokens),
+                    input_tokens: positive(model.input_tokens),
+                    output_tokens: positive(model.output_tokens),
+                }
+                .complete()
             })
             .unwrap_or_default()
     })
@@ -277,12 +394,23 @@ pub(crate) fn metadata_token_limit(value: Option<&Value>, fallback: Option<u64>)
     }
 }
 
+#[cfg(test)]
 pub(crate) fn channel_token_limits(
     channel: &crate::model::ChannelConfig,
     id: &str,
 ) -> (Option<u64>, Option<u64>) {
+    let limits = channel_model_token_limits(channel, id);
+    (limits.context_tokens, limits.output_tokens)
+}
+
+pub(crate) fn channel_model_token_limits(
+    channel: &crate::model::ChannelConfig,
+    id: &str,
+) -> ModelTokenLimits {
     let mut context = None;
     let mut output = None;
+    let mut maximum = None;
+    let mut input = None;
     for profile in &channel.capability_profiles {
         if profile.catalog_metadata
             && profile.model_pattern.eq_ignore_ascii_case(id)
@@ -291,10 +419,31 @@ pub(crate) fn channel_token_limits(
         {
             context = crate::model_catalog::conservative_limit(context, profile.context_tokens);
             output = crate::model_catalog::conservative_limit(output, profile.output_tokens);
+            maximum = crate::model_catalog::conservative_limit(
+                maximum,
+                profile.max_context_tokens.or_else(|| {
+                    profile
+                        .input_tokens
+                        .is_none()
+                        .then_some(profile.context_tokens)
+                        .flatten()
+                }),
+            );
+            input = crate::model_catalog::conservative_limit(input, profile.input_tokens);
         }
     }
-    let fallback = catalog_token_limits(id);
-    (context.or(fallback.0), output.or(fallback.1))
+    let fallback = catalog_model_token_limits(id);
+    let observed = context.is_some() || maximum.is_some() || input.is_some();
+    ModelTokenLimits {
+        context_tokens: context.or(fallback.context_tokens),
+        output_tokens: output.or(fallback.output_tokens),
+        max_context_tokens: maximum
+            .or_else(|| (!observed).then_some(fallback.max_context_tokens).flatten()),
+        // A channel-specific window can be smaller than the public API. Do
+        // not attach the API's input ceiling to that different window.
+        input_tokens: input.or_else(|| (!observed).then_some(fallback.input_tokens).flatten()),
+    }
+    .complete()
 }
 
 pub(crate) fn route_token_limits(
@@ -302,6 +451,19 @@ pub(crate) fn route_token_limits(
     id: &str,
     models: &[ToolModelInfo],
 ) -> (Option<u64>, Option<u64>, bool) {
+    let (limits, supports_1m) = route_model_token_limits(config, id, models);
+    (
+        limits.maximum_context_tokens(),
+        limits.output_tokens,
+        supports_1m,
+    )
+}
+
+pub(crate) fn route_model_token_limits(
+    config: &crate::model::ClientConfig,
+    id: &str,
+    models: &[ToolModelInfo],
+) -> (ModelTokenLimits, bool) {
     let id = crate::config::public_model_name(id);
     let mut candidates = vec![id.clone()];
     if config.allow_model_equivalence {
@@ -322,7 +484,7 @@ pub(crate) fn route_token_limits(
                     .iter()
                     .any(|model| crate::config::model_name_matches(&model.id, candidate))
         }) {
-            return (None, None, false);
+            return (ModelTokenLimits::default(), false);
         }
     }
     let mut matching = models.iter().filter(|model| {
@@ -331,15 +493,31 @@ pub(crate) fn route_token_limits(
             .any(|candidate| crate::config::model_name_matches(&model.id, candidate))
     });
     let Some(first) = matching.next() else {
-        return (None, None, false);
+        return (ModelTokenLimits::default(), false);
     };
-    let mut limits = (first.context_tokens, first.output_tokens, first.supports_1m);
+    let mut limits = ModelTokenLimits::from_model(first);
+    let mut supports_1m = first.supports_1m;
+    let mut capacity_aware = first.max_context_tokens.is_some();
     for model in matching {
-        limits.0 = limits.0.zip(model.context_tokens).map(|(a, b)| a.min(b));
-        limits.1 = limits.1.zip(model.output_tokens).map(|(a, b)| a.min(b));
-        limits.2 &= model.supports_1m;
+        let next = ModelTokenLimits::from_model(model);
+        let legacy_maximum = limits
+            .maximum_context_tokens()
+            .zip(next.maximum_context_tokens())
+            .map(|(a, b)| a.min(b));
+        capacity_aware &= model.max_context_tokens.is_some();
+        limits.merge_routes(next);
+        if !capacity_aware {
+            limits.max_context_tokens = legacy_maximum;
+        }
+        supports_1m |= model.supports_1m;
     }
-    limits
+    (
+        limits,
+        supports_1m
+            && limits
+                .maximum_context_tokens()
+                .is_some_and(|limit| limit >= 1_000_000),
+    )
 }
 
 fn tool_model_from_entry(
@@ -413,6 +591,26 @@ fn tool_model_from_entry(
         metadata.get("output_tokens"),
         positive(catalog_entry.output_tokens),
     );
+    // A legacy server's explicit window still constrains its routes. New
+    // packaged metadata must not silently enlarge those old-server claims.
+    let has_route_window =
+        metadata.get("context_tokens").is_some() || metadata.get("max_context_tokens").is_some();
+    let max_context_tokens = metadata_token_limit(
+        metadata.get("max_context_tokens"),
+        if has_route_window {
+            None
+        } else {
+            positive(catalog_entry.max_context_tokens)
+        },
+    );
+    let input_tokens = metadata_token_limit(
+        metadata.get("input_tokens"),
+        if has_route_window {
+            None
+        } else {
+            positive(catalog_entry.input_tokens)
+        },
+    );
 
     ToolModelInfo {
         id: id.to_string(),
@@ -426,8 +624,13 @@ fn tool_model_from_entry(
         tool_call,
         attachment,
         context_tokens,
+        max_context_tokens,
+        input_tokens,
         output_tokens,
-        supports_1m: context_tokens.is_some_and(|tokens| tokens >= 1_000_000)
+        supports_1m: max_context_tokens
+            .or(input_tokens)
+            .or(context_tokens)
+            .is_some_and(|tokens| tokens >= 1_000_000)
             && metadata.get("supports_1m").and_then(Value::as_bool) != Some(false),
         input_modalities,
         output_modalities,
@@ -929,6 +1132,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn context_limits_input_only_observation_does_not_invent_joint_window() {
+        let mut channel =
+            crate::channel_from_supplier("input-only".into(), &crate::default_supplier_config());
+        channel.capability_profiles = vec![crate::model::ChannelCapabilityProfile {
+            protocol: "gemini_native".into(),
+            model_pattern: "input-only".into(),
+            catalog_metadata: true,
+            context_tokens: Some(1000),
+            input_tokens: Some(1000),
+            output_tokens: Some(100),
+            ..Default::default()
+        }];
+        let limits = channel_model_token_limits(&channel, "input-only");
+        assert_eq!(limits.max_context_tokens, None);
+        assert_eq!(limits.maximum_context_tokens(), Some(1000));
+        let model = tool_models_from_response(
+            &serde_json::json!({"data":[{"id":"input-only","const_api":{"context_tokens":1000,"input_tokens":1000,"output_tokens":100,"max_context_tokens":null}}]}),
+        );
+        assert_eq!(model[0].maximum_input_tokens(), Some(1000));
+    }
+
+    #[test]
+    fn context_limits_keep_explicit_input_and_expandable_window_distinct() {
+        let models = tool_models_from_response(&serde_json::json!({"data": [{
+            "id": "capacity-fixture", "const_api": {
+                "context_tokens": 272000, "max_context_tokens": 1050000,
+                "input_tokens": 922000, "output_tokens": 128000
+            }
+        }]}));
+        let model = &models[0];
+        assert_eq!(model.context_tokens, Some(272000));
+        assert_eq!(model.maximum_context_tokens(), Some(1050000));
+        assert_eq!(model.maximum_input_tokens(), Some(922000));
+        let mut limits = ModelTokenLimits::from_model(model);
+        limits.merge_routes(ModelTokenLimits::from_metadata(
+            &serde_json::json!({"context_tokens": 500000, "output_tokens": 128000}),
+            (None, None),
+        ));
+        assert_eq!(limits.context_tokens, Some(272000));
+        assert_eq!(limits.maximum_context_tokens(), Some(1050000));
+        assert_eq!(limits.input_tokens, None);
+        limits.merge_routes(ModelTokenLimits::from_metadata(
+            &serde_json::json!({"context_tokens": null}),
+            (Some(2000000), None),
+        ));
+        assert_eq!(limits.maximum_context_tokens(), None);
+    }
+
+    #[test]
     fn model_aliases_follow_online_document_with_legacy_fallback() {
         let mut document = embedded_document().clone();
         document.model_aliases = Some(HashMap::from([(
@@ -963,7 +1215,7 @@ mod tests {
     }
 
     #[test]
-    fn compatible_routes_intersect_context_limits_only_when_enabled() {
+    fn legacy_compatible_routes_intersect_but_capacity_aware_routes_expand() {
         let models = tool_models_from_response(&serde_json::json!({"data": [
             {"id": "claude-sonnet-4-6", "const_api": {"context_tokens": 1000000}},
             {"id": "claude-haiku-4-5", "const_api": {"context_tokens": 200000}}
@@ -995,6 +1247,18 @@ mod tests {
             Some(200000)
         );
         assert!(!route_token_limits(&cfg, "claude-sonnet-4-6", &models).2);
+        let aware = models
+            .iter()
+            .cloned()
+            .map(|mut model| {
+                model.max_context_tokens = model.context_tokens;
+                model
+            })
+            .collect::<Vec<_>>();
+        let (limits, supports_1m) = route_model_token_limits(&cfg, "claude-sonnet-4-6", &aware);
+        assert_eq!(limits.context_tokens, Some(200000));
+        assert_eq!(limits.maximum_context_tokens(), Some(1000000));
+        assert!(supports_1m);
         assert_eq!(
             crate::model_compatibility::model_compatibility_candidates(
                 &cfg,

@@ -3028,6 +3028,23 @@
     }
 
     #[test]
+    fn official_openai_tool_route_rank_uses_executable_protocol() {
+        let mut channel = local_model_channel(&["gpt-6-astra"], "http://127.0.0.1:9/v1");
+        channel.set_source_driver(crate::source_driver::SourceDriverId::OpenAiApi);
+        channel.v2.default_target.protocol = crate::protocol::kind::ProtocolKind::OpenAiChat;
+        let tools = crate::protocol::openai_compatibility::ToolRequest::from_body(br#"{"tools":[{"type":"function"}],"reasoning_effort":"high"}"#);
+        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "openai_chat", "gpt-6-astra", tools), None);
+        let mut responses = channel.surface_bindings[0].protocols[0].clone();
+        responses.protocol = "openai_responses".into();
+        responses.preferred = false;
+        channel.surface_bindings[0].protocols.push(responses);
+        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "openai_chat", "gpt-6-astra", tools), Some(1));
+        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "openai_chat", "gpt-6-astra", Default::default()), Some(0));
+        channel.set_source_driver(crate::source_driver::SourceDriverId::CustomEndpoint);
+        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "openai_chat", "gpt-6-astra", tools), Some(0));
+    }
+
+    #[test]
     fn local_selection_prefers_native_protocol_before_manual_order() {
         let mut responses = local_model_channel(&["shared-model"], "http://127.0.0.1:9/v1");
         responses.id = "responses".to_string();
@@ -3087,22 +3104,22 @@
         // An OpenAI Chat binding exists, but unmatched Responses actually uses
         // the Anthropic default, so this is cross-surface conversion, not rank 1.
         assert_eq!(
-            local_channel_protocol_fidelity_rank(&channel, "openai_responses", "shared-model"),
+            local_channel_protocol_fidelity_rank(&channel, "openai_responses", "shared-model", Default::default()),
             Some(2)
         );
-        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "openai_chat", "shared-model"), Some(0));
+        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "openai_chat", "shared-model", Default::default()), Some(0));
         channel.v2.default_target = crate::model::ChannelTarget {
             surface: crate::surface::ApiSurface::OpenAi,
             protocol: crate::protocol::kind::ProtocolKind::OpenAiChat,
         };
         assert_eq!(
-            local_channel_protocol_fidelity_rank(&channel, "openai_responses", "shared-model"),
+            local_channel_protocol_fidelity_rank(&channel, "openai_responses", "shared-model", Default::default()),
             Some(1)
         );
         // A model-specific gateway dialect overrides the channel-wide default.
         channel.set_source_driver(crate::source_driver::SourceDriverId::OpencodeZen);
-        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "anthropic_messages", "claude-test"), Some(0));
-        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "openai_chat", "claude-test"), Some(2));
+        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "anthropic_messages", "claude-test", Default::default()), Some(0));
+        assert_eq!(local_channel_protocol_fidelity_rank(&channel, "openai_chat", "claude-test", Default::default()), Some(2));
     }
 
     #[test]
@@ -5843,4 +5860,158 @@ data: [DONE]\n\n",
             "/v1/responses",
             StatusCode::FORBIDDEN,
         ));
+    }
+    #[test]
+    fn context_capacity_filters_small_local_routes_before_priority_and_affinity() {
+        let mut config = default_config();
+        config.allow_model_equivalence = false;
+        config.channels = [("context-small", 20000, 1), ("context-large", 200000, 2)]
+            .into_iter()
+            .map(|(id, window, priority)| {
+                let mut channel = local_model_channel(&["model-a"], "https://fixture.invalid/v1");
+                channel.id = id.into();
+                channel.v2.local_priority = Some(priority);
+                channel.capability_profiles = vec![crate::model::ChannelCapabilityProfile {
+                    protocol: "openai_chat".into(),
+                    model_pattern: "model-a".into(),
+                    catalog_metadata: true,
+                    context_tokens: Some(window),
+                    output_tokens: Some(4000),
+                    verification_state: "declared".into(),
+                    ..Default::default()
+                }];
+                channel
+            })
+            .collect();
+        let short = br#"{"model":"model-a","messages":[{"role":"user","content":"hello"}],"max_tokens":4000}"#;
+        assert_eq!(
+            select_local_channel(&config, "/v1/chat/completions", short)
+                .unwrap()
+                .id,
+            "context-small"
+        );
+        let long = serde_json::to_vec(&serde_json::json!({"model":"model-a","messages":[{"role":"user","content":"x".repeat(100000)}],"max_tokens":4000})).unwrap();
+        assert_eq!(
+            select_local_channel(&config, "/v1/chat/completions", &long)
+                .unwrap()
+                .id,
+            "context-large"
+        );
+        assert!(
+            select_local_channel_route_where(&config, "/v1/chat/completions", &long, |channel| {
+                channel.id == "context-small"
+            })
+            .is_none()
+        );
+        let error = crate::channel_executor::check_request_context_capacity(
+            &config.channels[0],
+            "/v1/chat/completions",
+            &long,
+            "model-a",
+        )
+        .unwrap_err();
+        assert!(!local_execution_error_marks_channel_unready(&error));
+        let evidence = crate::supplier::execution_evidence_for_error(&error);
+        assert!(!evidence.upstream_attempted);
+        assert_eq!(evidence.error_code, "context_length_exceeded");
+        assert_eq!(
+            proxy_execution_error_response(&error).status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert!(
+            crate::channel_executor::check_request_context_capacity(
+                &config.channels[0],
+                "/v1/responses/input_tokens",
+                &long,
+                "model-a"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn context_capacity_pool_projection_keeps_legacy_platforms_conservative() {
+        let large = serde_json::json!({"id":"window-fixture","const_api":{"context_tokens":272000,"max_context_tokens":1050000,"input_tokens":922000,"output_tokens":128000,"supports_1m":true}});
+        let mut combined = large.clone();
+        merge_model_entry_metadata(
+            &mut combined,
+            &serde_json::json!({"id":"window-fixture","const_api":{"context_tokens":500000,"output_tokens":128000,"supports_1m":false}}),
+        );
+        assert_eq!(combined["const_api"]["max_context_tokens"], 500000);
+        assert_eq!(combined["const_api"]["supports_1m"], false);
+        let mut combined = large;
+        merge_model_entry_metadata(
+            &mut combined,
+            &serde_json::json!({"id":"window-fixture","const_api":{"context_tokens":500000,"max_context_tokens":500000,"input_tokens":372000,"output_tokens":128000,"supports_1m":false}}),
+        );
+        assert_eq!(combined["const_api"]["context_tokens"], 272000);
+        assert_eq!(combined["const_api"]["max_context_tokens"], 1050000);
+        assert_eq!(combined["const_api"]["input_tokens"], 922000);
+        assert_eq!(combined["const_api"]["supports_1m"], true);
+    }
+
+    #[tokio::test]
+    async fn context_capacity_http_growing_session_skips_small_sticky_upstream() {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let recorded = calls.clone();
+        let upstream = warp::path!(String / "v1" / "chat" / "completions").map(move |account:String| {
+            recorded.lock().unwrap().push(account.clone());
+            warp::reply::json(&serde_json::json!({"account":account,"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}))
+        });
+        let (addr, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let task = tokio::spawn(server);
+        let mut config = default_config();
+        config.endpoints.clear();
+        config.account_device_api_key.clear();
+        config.prefer_local_supply = true;
+        config.allow_model_equivalence = false;
+        config.channels = [("small", 10000, 1), ("large", 200000, 2)]
+            .into_iter()
+            .map(|(name, window, priority)| {
+                let mut channel =
+                    local_model_channel(&["model-a"], &format!("http://{addr}/{name}/v1"));
+                channel.id = format!("context-http-{name}");
+                channel.v2.local_priority = Some(priority);
+                channel.capability_profiles = vec![crate::model::ChannelCapabilityProfile {
+                    protocol: "openai_chat".into(),
+                    model_pattern: "model-a".into(),
+                    catalog_metadata: true,
+                    context_tokens: Some(window),
+                    output_tokens: Some(4000),
+                    verification_state: "declared".into(),
+                    ..Default::default()
+                }];
+                channel
+            })
+            .collect();
+        let shared = Arc::new(ProxyShared::from_config(
+            normalize_config(config),
+            Client::new(),
+        ));
+        for (size, expected) in [(20, "small"), (100000, "large")] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "x-conversation-id",
+                "context-growing-session".parse().unwrap(),
+            );
+            let body=serde_json::to_vec(&serde_json::json!({"model":"model-a","messages":[{"role":"user","content":"x".repeat(size)}],"max_tokens":1000})).unwrap();
+            let response = forward_with_failover(
+                warp::http::Method::POST,
+                "/v1/chat/completions",
+                "",
+                headers,
+                bytes::Bytes::from(body),
+                &shared,
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = crate::test_body_bytes(response.into_body()).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()["account"],
+                expected
+            );
+        }
+        assert_eq!(*calls.lock().unwrap(), vec!["small", "large"]);
+        task.abort();
     }

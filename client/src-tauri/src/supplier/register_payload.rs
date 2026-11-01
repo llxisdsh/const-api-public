@@ -368,9 +368,17 @@ fn supplier_native_capability_evidence(
             if profile.catalog_metadata && !profile.model_pattern.is_empty()
                 && !profile.model_pattern.contains(['*', '?'])
                 && !matches!(profile.release_status.as_str(), "suspended" | "prepared")
-                && profile.verification_state != "rejected" {
-                for (feature, token_limit) in [("context_tokens", profile.context_tokens), ("output_tokens", profile.output_tokens)] {
-                    if let Some(tokens) = token_limit.filter(|tokens| *tokens > 0 && *tokens <= i64::MAX as u64) {
+                && profile.verification_state != "rejected"
+            {
+                for (feature, token_limit) in [
+                    ("context_tokens", profile.context_tokens),
+                    ("max_context_tokens", profile.max_context_tokens),
+                    ("input_tokens", profile.input_tokens),
+                    ("output_tokens", profile.output_tokens),
+                ] {
+                    if let Some(tokens) =
+                        token_limit.filter(|tokens| *tokens > 0 && *tokens <= i64::MAX as u64)
+                    {
                         evidence.push(SupplierCapabilityEvidence {
                             feature: feature.into(), token_limit: Some(tokens), state: "supported".into(),
                             source: "provider_metadata".into(), capability_layer: "model_wire".into(),
@@ -1257,9 +1265,16 @@ mod surface_operation_evidence_tests {
     fn numeric_catalog_limits_are_exact_scoped_and_survive_registration_json() {
         let mut channel = crate::default_config().channels.remove(0);
         channel.capability_profiles = vec![ChannelCapabilityProfile {
-            protocol: "openai_responses".into(), model_pattern:"Vendor/model".into(),
-            catalog_metadata:true, context_tokens:Some(1000000), output_tokens:Some(64000),
-            verification_state:"declared".into(), verified_at_unix:42, ..Default::default()
+            protocol: "openai_responses".into(),
+            model_pattern: "Vendor/model".into(),
+            catalog_metadata: true,
+            context_tokens: Some(1000000),
+            output_tokens: Some(64000),
+            max_context_tokens: Some(1050000),
+            input_tokens: Some(922000),
+            verification_state: "declared".into(),
+            verified_at_unix: 42,
+            ..Default::default()
         }];
         let evidence = supplier_native_capability_evidence(&crate::supplier_from_channel(&channel), &["openai_responses".into()]);
         let limit = evidence.iter().find(|e| e.feature == "context_tokens").unwrap();
@@ -1267,6 +1282,10 @@ mod surface_operation_evidence_tests {
         assert_eq!(json["token_limit"], 1000000);
         assert_eq!(json["model_pattern"], "Vendor/model");
         assert_eq!(json["source"], "provider_metadata");
+        for (feature, expected) in [("max_context_tokens", 1050000), ("input_tokens", 922000)] {
+            let item = evidence.iter().find(|e| e.feature == feature).unwrap();
+            assert_eq!(serde_json::to_value(item).unwrap()["token_limit"], expected);
+        }
         channel.capability_profiles[0].release_status = "suspended".into();
         assert!(!supplier_native_capability_evidence(&crate::supplier_from_channel(&channel), &["openai_responses".into()]).iter().any(|e| e.token_limit.is_some()));
     }

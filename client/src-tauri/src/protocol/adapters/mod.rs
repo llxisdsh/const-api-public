@@ -4,7 +4,7 @@ mod openai_chat;
 mod openai_responses;
 
 pub(crate) use openai_chat::OpenAiChatAdapter;
-pub(crate) use openai_responses::OpenAiResponsesAdapter;
+pub(crate) use openai_responses::{OpenAiResponsesAdapter, responses_finish_fields};
 
 use std::{collections::HashMap, fmt};
 

@@ -17,7 +17,9 @@ fn toonflow_upsert_preserves_existing_custom_provider_and_uses_native_schema() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, json_text(&existing).unwrap()).unwrap();
 
-        let models = tool_models_from_ids(&["gpt-6-luna".to_string(), "gpt-6-sol".to_string()]);
+        let mut models = tool_models_from_ids(&["gpt-6-luna".to_string(), "gpt-6-sol".to_string()]);
+        models[0].context_tokens = Some(272000);
+        models[0].max_context_tokens = Some(872000);
         let applied = apply_toonflow_config(
             TOOL_CONFIG_ROOT_URL,
             "secret-key",
@@ -37,7 +39,7 @@ fn toonflow_upsert_preserves_existing_custom_provider_and_uses_native_schema() {
         assert_eq!(managed["apiUrl"], "http://127.0.0.1:38787/v1");
         assert_eq!(managed["protocol"], "openai-responses");
         assert_eq!(managed["models"][0]["label"], "gpt-6-luna");
-        assert_eq!(managed["models"][0]["contextWindow"], 272000);
+        assert_eq!(managed["models"][0]["contextWindow"], 872000);
 
         assert!(check_toonflow_config(TOOL_CONFIG_ROOT_URL, "secret-key")
             .unwrap()
