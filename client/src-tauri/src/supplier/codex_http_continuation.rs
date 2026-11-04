@@ -169,10 +169,18 @@ fn prune_codex_http_continuation_db(
 ) -> Result<()> {
     let ttl_seconds = i64::try_from(CODEX_HTTP_CONTINUATION_CACHE_TTL.as_secs())
         .unwrap_or(i64::MAX);
-    connection.execute(
-        "DELETE FROM codex_http_continuations WHERE touched_at_unix < ?1",
-        rusqlite::params![now.saturating_sub(ttl_seconds)],
+    let pinned = codex_websocket_pinned_keys();
+    let mut expired = connection.prepare(
+        "DELETE FROM codex_http_continuations WHERE touched_at_unix < ?1 RETURNING cache_key",
     )?;
+    let keys = expired.query_map(rusqlite::params![now.saturating_sub(ttl_seconds)], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(expired);
+    for key in keys {
+        if pinned.contains(&key) {
+            log::info!("[const-api][protocol] continuation_evicted store=disk reason=ttl cache_key={key} pinned=true");
+        }
+    }
 
     let mut statement = connection.prepare(
         "SELECT cache_key, bytes FROM codex_http_continuations
@@ -182,7 +190,6 @@ fn prune_codex_http_continuation_db(
         Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
     })?;
     let mut rows = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-    let pinned = codex_websocket_pinned_keys();
     // Stable sorting retains recency within each priority class. An old turn
     // of a busy session cannot evict the latest turn of another live session.
     rows.sort_by_key(|(key, _)| !pinned.contains(key));
@@ -223,6 +230,7 @@ fn load_codex_http_continuation_from_path(
     )?;
     let mut rows = statement.query(rusqlite::params![key])?;
     let Some(row) = rows.next()? else {
+        log::info!("[const-api][protocol] continuation_lookup_missed store=disk reason=absent cache_key={key}");
         return Ok(None);
     };
     let touched_at_unix = row.get::<_, i64>(0)?;
@@ -236,6 +244,8 @@ fn load_codex_http_continuation_from_path(
         || bytes > CODEX_HTTP_CONTINUATION_CACHE_MAX_ENTRY_BYTES
         || history_json.len() > CODEX_HTTP_CONTINUATION_CACHE_MAX_ENTRY_BYTES
     {
+        let reason = if now.saturating_sub(touched_at_unix) > ttl_seconds { "ttl" } else { "entry_limit" };
+        log::info!("[const-api][protocol] continuation_lookup_missed store=disk reason={reason} cache_key={key} age_seconds={} entry_bytes={bytes}", now.saturating_sub(touched_at_unix));
         connection.execute(
             "DELETE FROM codex_http_continuations WHERE cache_key = ?1",
             rusqlite::params![key],
@@ -258,6 +268,7 @@ fn load_codex_http_continuation_from_path(
         }
     };
     if state.history.is_empty() {
+        log::info!("[const-api][protocol] continuation_lookup_missed store=disk reason=empty_history cache_key={key}");
         connection.execute(
             "DELETE FROM codex_http_continuations WHERE cache_key = ?1",
             rusqlite::params![key],
@@ -396,6 +407,9 @@ fn prune_codex_http_continuation_cache(
     for key in expired {
         if let Some(entry) = cache.entries.remove(&key) {
             cache.bytes = cache.bytes.saturating_sub(entry.bytes);
+            if cache.websocket_pins.values().any(|pinned| pinned == &key) {
+                log::info!("[const-api][protocol] continuation_evicted store=memory reason=ttl cache_key={key} pinned=true");
+            }
             log::debug!("[const-api][protocol] continuation_evicted store=memory reason=ttl cache_key={key}");
         }
     }
@@ -1007,6 +1021,9 @@ impl CodexHttpContinuationCollector {
         let input = match previous_response_id {
             Some(previous_response_id) => {
                 let state = codex_http_continuation_state(config, &previous_response_id);
+                if state.is_none() {
+                    log::info!("[const-api][upstream-ws] continuation_capture_skipped channel_id={} reason=parent_unavailable cache_key={}", config.channel_id, codex_http_continuation_key(config, &previous_response_id));
+                }
                 match (request.as_mut().and_then(serde_json::Value::as_object_mut), state) {
                     (Some(object), Some(state)) => {
                         let _ = apply_codex_continuation_state(object, state);

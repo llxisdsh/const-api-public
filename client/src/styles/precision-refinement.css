@@ -1398,11 +1398,25 @@ textarea:focus-visible,
 }
 
 .detail-drawer .test-controls input,
-.detail-drawer .test-controls button {
+.detail-drawer .test-controls button,
+.detail-drawer .supplier-model-test-controls input,
+.detail-drawer .supplier-model-test-controls button {
   align-self: center;
   height: var(--control-height);
   min-height: var(--control-height);
   max-height: var(--control-height);
+  margin: 0;
+}
+
+.detail-drawer .supplier-proxy-control {
+  align-items: center;
+  min-height: var(--control-height);
+  margin-top: 5px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.detail-drawer .supplier-proxy-control input {
   margin: 0;
 }
 

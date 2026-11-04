@@ -80,7 +80,8 @@ mod tests {
         if !configured {
             let error = crate::create_subscription_oauth_session_data("antigravity").unwrap_err();
             assert!(error.to_string().contains("SOURCE.md"));
-            let error = crate::exchange_antigravity_oauth_code("unused", "unused", "").await.unwrap_err();
+            let client = reqwest::Client::new();
+            let error = crate::exchange_antigravity_oauth_code(&client, "unused", "unused", "").await.unwrap_err();
             assert!(error.to_string().contains("SOURCE.md"));
         }
     }

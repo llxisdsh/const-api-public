@@ -18,11 +18,6 @@ const AUTH: &str = "https://prod.us-east-1.auth.desktop.kiro.dev";
 pub(crate) const CALLBACK: &str = "http://localhost:3128/oauth/callback";
 const MAX_METADATA_BYTES: usize = 2 * 1024 * 1024;
 
-pub(crate) fn http_client() -> Result<Client> {
-    // OAuth login has no channel yet; retain its existing proxy policy.
-    channel_http_client(true)
-}
-
 pub(crate) fn channel_http_client(use_system_proxy: bool) -> Result<Client> {
     static CLIENT: std::sync::OnceLock<crate::http_client::HttpClient> = std::sync::OnceLock::new();
     static DIRECT: std::sync::OnceLock<crate::http_client::HttpClient> = std::sync::OnceLock::new();

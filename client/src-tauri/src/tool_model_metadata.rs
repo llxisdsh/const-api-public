@@ -1629,6 +1629,43 @@ mod tests {
     }
 
     #[test]
+    fn packaged_deepseek_flash_uses_one_visible_identity_with_callable_aliases() {
+        let document = embedded_document();
+        let aliases = identity_aliases(document);
+        for alias in [
+            "deepseek-flash",
+            "deepseek-v4.1-flash-1017",
+            "deepseek/deepseek-v4.1-flash-1017",
+        ] {
+            assert_eq!(
+                aliases.get(alias).map(String::as_str),
+                Some("deepseek-v4.1-flash")
+            );
+            assert!(!document.models.contains_key(alias));
+            assert!(
+                !document
+                    .catalog_models
+                    .iter()
+                    .any(|model| model.id == alias)
+            );
+        }
+        let tier = document
+            .compatibility_groups
+            .iter()
+            .find(|group| group.id == "expert")
+            .unwrap();
+        assert_eq!(
+            tier.models.first().map(String::as_str),
+            Some("deepseek-v4.1-flash")
+        );
+        assert!(
+            tier.match_models
+                .iter()
+                .any(|model| model == "deepseek-v4.1-flash-1017")
+        );
+    }
+
+    #[test]
     fn packaged_model_catalog_identity_matches_embedded_tool_metadata() {
         let version = packaged_model_catalog_version();
         assert!(!version.release_id.is_empty());

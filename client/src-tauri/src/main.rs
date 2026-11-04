@@ -378,9 +378,12 @@ fn startup_elapsed_ms() -> u128 {
 
 pub(crate) fn short_http_client() -> Client {
     http_client::cached_client(&SHORT_HTTP_CLIENT, || {
-        Client::builder()
-            .timeout(Duration::from_secs(30))
-            .retry(reqwest::retry::never())
+        http_client::proxy_policy(
+            Client::builder()
+                .timeout(Duration::from_secs(30))
+                .retry(reqwest::retry::never()),
+            http_client::PLATFORM_USE_SYSTEM_PROXY,
+        )
     })
     .expect("short http client")
 }
@@ -389,10 +392,13 @@ pub(crate) fn long_http_client_source() -> http_client::HttpClient {
     LONG_HTTP_CLIENT
         .get_or_init(|| {
             http_client::HttpClient::new(|| {
-                Client::builder()
-                    .connect_timeout(Duration::from_secs(10))
-                    .timeout(MODEL_REQUEST_TIMEOUT)
-                    .retry(reqwest::retry::never())
+                http_client::proxy_policy(
+                    Client::builder()
+                        .connect_timeout(Duration::from_secs(10))
+                        .timeout(MODEL_REQUEST_TIMEOUT)
+                        .retry(reqwest::retry::never()),
+                    http_client::PLATFORM_USE_SYSTEM_PROXY,
+                )
             })
             .expect("long http client")
         })
@@ -1033,6 +1039,7 @@ async fn run_desktop_host(
             decline_legal_notice,
             get_config,
             save_config,
+            save_routing_preference,
             save_supplier_config,
             get_lan_share_status,
             model_discovery::get_model_presentation,
@@ -1560,6 +1567,49 @@ async fn save_supplier_config(
     )
     .map_err(|err| err.to_string())?;
     config_for_renderer(&authoritative)
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RoutingPreference {
+    PreferLocalSupply,
+    AllowModelEquivalence,
+}
+
+#[tauri::command]
+async fn save_routing_preference(
+    state: State<'_, AppState>,
+    preference: RoutingPreference,
+    enabled: bool,
+) -> Result<bool, String> {
+    save_routing_preference_authoritatively(
+        &state.config_path,
+        &state.proxy_config,
+        preference,
+        enabled,
+    )
+    .map_err(|err| err.to_string())
+}
+
+fn save_routing_preference_authoritatively(
+    config_path: &std::path::PathBuf,
+    live_config: &Arc<StdMutex<ClientConfig>>,
+    preference: RoutingPreference,
+    enabled: bool,
+) -> Result<bool> {
+    // Routing reads this shared configuration on subsequent decisions. Do not
+    // restart listeners or terminate established streams to change a preference.
+    let (config, ()) = commit_config_update(config_path, live_config, |config| {
+        match preference {
+            RoutingPreference::PreferLocalSupply => config.prefer_local_supply = enabled,
+            RoutingPreference::AllowModelEquivalence => config.allow_model_equivalence = enabled,
+        }
+        Ok(())
+    })?;
+    Ok(match preference {
+        RoutingPreference::PreferLocalSupply => config.prefer_local_supply,
+        RoutingPreference::AllowModelEquivalence => config.allow_model_equivalence,
+    })
 }
 
 #[tauri::command]
@@ -2371,6 +2421,7 @@ async fn exchange_subscription_oauth_code(
     state: String,
     code_verifier: String,
     redirect_uri: String,
+    use_system_proxy: Option<bool>,
 ) -> Result<ChannelConfig, String> {
     exchange_subscription_oauth_code_to_channel(
         &provider,
@@ -2378,6 +2429,7 @@ async fn exchange_subscription_oauth_code(
         &state,
         &code_verifier,
         &redirect_uri,
+        use_system_proxy,
     )
     .await
     .map_err(|err| err.to_string())
@@ -2387,8 +2439,10 @@ async fn exchange_subscription_oauth_code(
 async fn import_subscription_token_json(
     provider: String,
     token_json: String,
+    use_system_proxy: Option<bool>,
 ) -> Result<ChannelConfig, String> {
-    import_subscription_token_json_channel(&provider, &token_json).map_err(|err| err.to_string())
+    import_subscription_token_json_channel(&provider, &token_json, use_system_proxy)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -3957,7 +4011,6 @@ async fn discover_endpoints(
             "no registry sources configured",
         );
     }
-    let client = fresh_endpoint_http_client()?;
     let minimum_version = cache
         .as_ref()
         .map(VerifiedEndpointManifest::version)
@@ -3966,7 +4019,7 @@ async fn discover_endpoints(
         .max()
         .unwrap_or_default();
     for source in sources {
-        match fetch_endpoint_manifest(&client, &source, cache_path, minimum_version).await {
+        match fetch_endpoint_manifest(&source, cache_path, minimum_version).await {
             Ok(manifest) => {
                 match endpoint_discovery_from_verified_manifest(source.clone(), &manifest) {
                     Ok(result) => return Ok(result),

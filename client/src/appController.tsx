@@ -849,6 +849,8 @@ export function sourceDriverCardPresentation(driver: SourceDriver): Pick<React.C
 
 export type AppTab = "access" | "supplier" | "about" | "account";
 
+type RoutingPreference = "prefer_local_supply" | "allow_model_equivalence";
+
 type AppControllerOptions = {
   initialTab?: AppTab;
   initialAccountAuthMode?: AccountAuthMode;
@@ -873,6 +875,8 @@ export function useAppController({
   const [savedConfig, setSavedConfig] = useState<ClientConfig>(emptyConfig);
 
   const [configActionBusy, setConfigActionBusy] = useState(false);
+
+  const [routingPreferenceSaving, setRoutingPreferenceSaving] = useState<Partial<Record<RoutingPreference, boolean>>>({});
 
   const [status, setStatus] = useState<ProxyStatus>({ running: false, listen: emptyConfig.listen });
 
@@ -993,6 +997,10 @@ export function useAppController({
   const [supplierModels, setSupplierModels] = useState<string[]>([]);
 
   const [subscriptionWizardProvider, setSubscriptionWizardProvider] = useState<SubscriptionProvider>("openai");
+  const [subscriptionUseSystemProxy, setSubscriptionUseSystemProxy] = useState(
+    sourceDriverById("openai_subscription").defaultUseSystemProxy,
+  );
+  const subscriptionProxyRef = useRef(subscriptionUseSystemProxy);
 
   const [subscriptionWizardOpen, setSubscriptionWizardOpen] = useState(false);
 
@@ -1175,6 +1183,8 @@ export function useAppController({
   const savedConfigRef = useRef(savedConfig);
 
   const configActionInFlightRef = useRef(false);
+
+  const routingPreferenceSavesRef = useRef(new Map<RoutingPreference, Promise<void>>());
 
   const selectedCallRecordRef = useRef<CallRecord | null>(null);
 
@@ -2438,12 +2448,40 @@ export function useAppController({
       proxyStatusEpochRef.current += 1;
       setConfigActionBusy(true);
       try {
+        // A full access save/reload must observe any switches already being saved.
+        await Promise.all(routingPreferenceSavesRef.current.values());
         await action();
       } finally {
         proxyStatusEpochRef.current += 1;
         configActionInFlightRef.current = false;
         setConfigActionBusy(false);
       }
+    }
+
+  async function saveRoutingPreference(
+      preference: RoutingPreference,
+      enabled: boolean,
+    ) {
+      if (configActionInFlightRef.current || routingPreferenceSavesRef.current.has(preference)) return;
+      setRoutingPreferenceSaving((current) => ({ ...current, [preference]: true }));
+      const saving = (async () => {
+        try {
+          const actual = await invoke<boolean>("save_routing_preference", { preference, enabled });
+          // Only this switch is committed. Preserve pending connection/channel
+          // edits and unrelated settings saved while this request was in flight.
+          configRef.current = { ...configRef.current, [preference]: actual };
+          savedConfigRef.current = { ...savedConfigRef.current, [preference]: actual };
+          setConfig(configRef.current);
+          setSavedConfig(savedConfigRef.current);
+        } catch (error) {
+          showToast(tr("access.messages.saveFailed", { error: localizedError(error) }), "error", 5200);
+        } finally {
+          routingPreferenceSavesRef.current.delete(preference);
+          setRoutingPreferenceSaving((current) => ({ ...current, [preference]: false }));
+        }
+      })();
+      routingPreferenceSavesRef.current.set(preference, saving);
+      await saving;
     }
 
   async function saveAccessConfig() {
@@ -4882,15 +4920,13 @@ export function useAppController({
       // access/supplier drafts, restart the proxy, or refresh registration.
       const wire = await invoke<ClientConfigV5Wire>("save_tool_model_injection_settings", { settings });
       const authoritative = hydrateClientConfigV5(wire);
-      const draft = overlayAccessConfig(
-        overlaySupplierConfig(authoritative, configRef.current, savedConfigRef.current),
-        configRef.current,
-        savedConfigRef.current,
-      );
-      configRef.current = draft;
-      savedConfigRef.current = authoritative;
-      setConfig(draft);
-      setSavedConfig(authoritative);
+      // The returned full snapshot may predate another preference save. Merge
+      // only this command's field, preserving both newer saves and pending drafts.
+      const injection = { tool_model_injection: authoritative.tool_model_injection };
+      configRef.current = { ...configRef.current, ...injection };
+      savedConfigRef.current = { ...savedConfigRef.current, ...injection };
+      setConfig(configRef.current);
+      setSavedConfig(savedConfigRef.current);
       const result: ToolModelSyncResult = { synced: 0, errors: [] };
       if (!syncTools) return result;
       // Sequential operations keep process-close confirmations unambiguous.
@@ -5267,7 +5303,7 @@ export function useAppController({
       }
     }
 
-  function openSubscriptionWizard(provider: SubscriptionProvider) {
+  function openSubscriptionWizard(provider: SubscriptionProvider, useSystemProxy: boolean) {
       const previousState = subscriptionOAuthActiveStateRef.current;
       subscriptionOAuthActiveStateRef.current = null;
       subscriptionOAuthExchangeInFlightRef.current = false;
@@ -5275,6 +5311,8 @@ export function useAppController({
         void cancelAutomaticSubscriptionCallback(previousState);
       }
       setSubscriptionWizardProvider(provider);
+      subscriptionProxyRef.current = useSystemProxy;
+      setSubscriptionUseSystemProxy(useSystemProxy);
       // Keep the add-channel dialog mounted so the wizard behaves as a
       // stacked overlay and closing it returns to the source picker.
       setSubscriptionWizardOpen(true);
@@ -5295,6 +5333,21 @@ export function useAppController({
       });
     }
 
+  function changeSubscriptionProxy(useSystemProxy: boolean) {
+      // Changing egress starts a new authorization attempt. An old automatic
+      // callback must not exchange its code using the new connection policy.
+      const previousState = subscriptionOAuthActiveStateRef.current;
+      subscriptionOAuthActiveStateRef.current = null;
+      if (previousState) void cancelAutomaticSubscriptionCallback(previousState);
+      discardPendingSubscriptionImport();
+      setSubscriptionImportRetryChannel(null);
+      setSubscriptionOAuthSession(null);
+      setSubscriptionCallbackInput("");
+      setSubscriptionWizardProgress(null);
+      subscriptionProxyRef.current = useSystemProxy;
+      setSubscriptionUseSystemProxy(useSystemProxy);
+    }
+
   function replaceSubscriptionDraftInput(kind: "callback" | "json", value: string) {
       discardPendingSubscriptionImport();
       setSubscriptionImportRetryChannel(null);
@@ -5309,6 +5362,11 @@ export function useAppController({
   async function createSubscriptionOAuth(provider = subscriptionWizardProvider) {
       setSubscriptionWizardBusy(true);
       const previousState = subscriptionOAuthActiveStateRef.current;
+      // Invalidate locally before awaiting IPC cancellation: the old listener
+      // may already have a callback queued for delivery.
+      subscriptionOAuthActiveStateRef.current = null;
+      setSubscriptionOAuthSession(null);
+      setSubscriptionCallbackInput("");
       if (previousState) {
         await cancelAutomaticSubscriptionCallback(previousState);
       }
@@ -5389,6 +5447,7 @@ export function useAppController({
           state: session!.state,
           codeVerifier: session!.code_verifier,
           redirectUri: session!.redirect_uri,
+          useSystemProxy: subscriptionProxyRef.current,
         });
         setSubscriptionImportRetryChannel(channel);
         const finalizedChannel = await finalizePreparedSubscriptionChannel(channel);
@@ -5426,9 +5485,13 @@ export function useAppController({
       try {
         callback = (await navigator.clipboard.readText()).trim();
       } catch {
+        if (subscriptionOAuthActiveStateRef.current !== session.state) return;
         showToast(tr("subscriptionImport.clipboardReadFallback"), "info", 3600, false);
         return;
       }
+      // Clipboard permission/read can outlive a closed or replaced wizard,
+      // including a proxy change that requires a fresh authorization attempt.
+      if (subscriptionOAuthActiveStateRef.current !== session.state) return;
       if (!callback) {
         showToast(tr("subscriptionImport.clipboardEmptyFallback"), "info", 3600, false);
         return;
@@ -5461,6 +5524,7 @@ export function useAppController({
         const channel = retryChannel ?? await invoke<ChannelConfigV5>("import_subscription_token_json", {
           provider: subscriptionWizardProvider,
           tokenJson: requestedTokenJson,
+          useSystemProxy: subscriptionProxyRef.current,
         });
         setSubscriptionImportRetryChannel(channel);
         const finalizedChannel = await finalizePreparedSubscriptionChannel(channel);
@@ -5617,7 +5681,7 @@ export function useAppController({
         return;
       }
       if (!driver.subscriptionProvider) return;
-      openSubscriptionWizard(driver.subscriptionProvider);
+      openSubscriptionWizard(driver.subscriptionProvider, driver.defaultUseSystemProxy);
     }
 
   async function addPresetChannelWithConnection(driver: SourceDriver, connection?: LanShareConnectionInfo) {
@@ -5757,6 +5821,7 @@ export function useAppController({
     toolConfigChecking,
     refreshVsCodeExtensionConfigStatuses,
     saveToolModelInjectionSettings,
+    saveRoutingPreference,
     toolProtocolDraftTouchedRef,
     toolProtocolSelections,
     codexModelSource,
@@ -5774,6 +5839,8 @@ export function useAppController({
     showMissingToolCandidates,
     setShowMissingToolCandidates,
     subscriptionWizardProvider,
+    subscriptionUseSystemProxy,
+    changeSubscriptionProxy,
     subscriptionWizardOpen,
     subscriptionOAuthSession,
     subscriptionCallbackInput,
@@ -5859,6 +5926,7 @@ export function useAppController({
     copiedField,
     hasChanges,
     configActionBusy,
+    routingPreferenceSaving,
     activeDiagnostics,
     hasDiagnostics,
     localEntryIssue,

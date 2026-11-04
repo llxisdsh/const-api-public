@@ -9,6 +9,7 @@ use std::{
 struct Pending {
     verifier: String,
     expires: Instant,
+    use_system_proxy: bool,
 }
 type Sessions = Mutex<HashMap<String, Arc<tokio::sync::Mutex<Pending>>>>;
 static SESSIONS: OnceLock<Sessions> = OnceLock::new();
@@ -23,7 +24,14 @@ fn failure(code: &'static str, status: Option<u16>) -> AuthError {
 }
 
 #[tauri::command]
-pub(crate) fn create_cursor_auth_session() -> std::result::Result<Value, AuthError> {
+pub(crate) fn create_cursor_auth_session(
+    use_system_proxy: Option<bool>,
+) -> std::result::Result<Value, AuthError> {
+    let use_system_proxy = crate::source_driver::new_channel_proxy(
+        crate::source_driver::SourceDriverId::CursorSubscription,
+        use_system_proxy,
+    )
+    .map_err(|_| failure("invalid_response", None))?;
     let verifier = crate::detection::base64_url_no_pad(
         &crate::detection::random_bytes(64).map_err(|_| failure("invalid_response", None))?,
     );
@@ -51,6 +59,7 @@ pub(crate) fn create_cursor_auth_session() -> std::result::Result<Value, AuthErr
         Arc::new(tokio::sync::Mutex::new(Pending {
             verifier,
             expires: Instant::now() + Duration::from_secs(600),
+            use_system_proxy,
         })),
     );
     Ok(
@@ -74,7 +83,8 @@ pub(crate) async fn poll_cursor_auth_session(
     if pending.expires <= Instant::now() {
         return Err(failure("expired", None));
     }
-    let client = http_client().map_err(|_| failure("network", None))?;
+    let client =
+        channel_http_client(pending.use_system_proxy).map_err(|_| failure("network", None))?;
     // The current CLI/SDK accepts POST. Never place the verifier in a URL,
     // where a proxy or upstream access log would retain it.
     let response = match send(

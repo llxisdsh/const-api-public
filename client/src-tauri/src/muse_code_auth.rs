@@ -10,7 +10,8 @@ const TOKEN_URL: &str = "https://auth.meta.com/oidc/device/token/";
 const KEY_URL: &str = "https://api.meta.ai/muse-code/key";
 const CLIENT_ID: &str = "1031625952748946";
 const API_BASE: &str = "https://api.meta.ai/v1";
-static CLIENT: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
+static DIRECT: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
+static PROXY: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
 
 #[derive(Debug, Serialize)]
 pub(crate) struct AuthError {
@@ -42,14 +43,22 @@ pub(crate) enum PollResult {
     Authorized { api_key: String },
 }
 
-fn client() -> Result<Client, AuthError> {
-    crate::http_client::cached_client(&CLIENT, || {
-        Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            // A 307/308 must never forward the DCA token in the POST body.
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
+fn client(selected: Option<bool>) -> Result<Client, AuthError> {
+    let use_system_proxy = crate::source_driver::new_channel_proxy(
+        crate::source_driver::SourceDriverId::MuseCode,
+        selected,
+    )
+    .map_err(|_| AuthError::new("invalid_response"))?;
+    crate::http_client::cached_client(if use_system_proxy { &PROXY } else { &DIRECT }, move || {
+        crate::http_client::proxy_policy(
+            Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(30))
+                // A 307/308 must never forward the DCA token in the POST body.
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never()),
+            use_system_proxy,
+        )
     })
     .map_err(|_| AuthError::new("network"))
 }
@@ -132,8 +141,10 @@ fn upstream_error(status: StatusCode, body: &Value) -> AuthError {
 }
 
 #[tauri::command]
-pub(crate) async fn create_muse_code_auth_session() -> Result<DeviceSession, AuthError> {
-    start(&client()?, AUTHORIZATION_URL).await
+pub(crate) async fn create_muse_code_auth_session(
+    use_system_proxy: Option<bool>,
+) -> Result<DeviceSession, AuthError> {
+    start(&client(use_system_proxy)?, AUTHORIZATION_URL).await
 }
 
 async fn start(client: &Client, url: &str) -> Result<DeviceSession, AuthError> {
@@ -186,8 +197,9 @@ async fn start(client: &Client, url: &str) -> Result<DeviceSession, AuthError> {
 #[tauri::command]
 pub(crate) async fn poll_muse_code_auth_session(
     device_code: String,
+    use_system_proxy: Option<bool>,
 ) -> Result<PollResult, AuthError> {
-    poll(&client()?, &device_code, TOKEN_URL, KEY_URL).await
+    poll(&client(use_system_proxy)?, &device_code, TOKEN_URL, KEY_URL).await
 }
 
 async fn poll(

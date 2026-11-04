@@ -482,6 +482,32 @@ pub(crate) fn plan_conversion(
         policy,
     );
 
+    if source != target
+        && request.reasoning.token_budget.is_some()
+        && matches!(
+            target,
+            ProtocolKind::OpenAiChat | ProtocolKind::OpenAiResponses
+        )
+    {
+        lossy = true;
+        issues.push(ConversionIssue {
+            code: "reasoning_budget_omitted".to_string(),
+            severity: IssueSeverity::Warning,
+            path: "reasoning.token_budget".to_string(),
+            feature: Some(Feature::Reasoning),
+            target_limitation: "OpenAI reasoning uses effort, not a separate numeric token budget".to_string(),
+            action: IssueAction::Filter,
+            summary: "The separate thinking budget has no standard target field and was omitted; effort and the total output limit were preserved.".to_string(),
+        });
+    }
+
+    if source != target && target == ProtocolKind::GeminiNative {
+        let (_, reasoning_issues) =
+            crate::protocol::adapters::gemini_thinking_config(&request.reasoning, &request.model);
+        lossy |= !reasoning_issues.is_empty();
+        issues.extend(reasoning_issues);
+    }
+
     let reasoning_omissions =
         reasoning_history_omissions(request, source, target, source_issuer, target_issuer);
     for path in &reasoning_omissions {

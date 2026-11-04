@@ -174,6 +174,7 @@ fn subscription_channel_from_managed_credential(
         _ => crate::source_driver::SourceDriverId::ClaudeSubscription,
     };
     let mut v2 = channel_v2_contract_for_source(source_driver);
+    v2.use_system_proxy = crate::source_driver::source_driver(source_driver)?.default_use_system_proxy;
     v2.credential_ref = path_text;
     if provider == "grok" {
         // Match the official CLI adapter's conservative default. Users may raise
@@ -485,43 +486,61 @@ pub(crate) async fn exchange_subscription_oauth_code_to_channel(
     state: &str,
     code_verifier: &str,
     redirect_uri: &str,
+    use_system_proxy: Option<bool>,
 ) -> Result<ChannelConfig> {
     let provider = normalize_subscription_provider(provider)
         .ok_or_else(|| anyhow!("unsupported subscription provider"))?;
+    let use_system_proxy = subscription_import_proxy(&provider, use_system_proxy)?;
     let parsed = parse_oauth_code_or_callback(code_or_callback)?;
     if !state.trim().is_empty() && !parsed.state.trim().is_empty() && parsed.state != state.trim() {
         return Err(anyhow!("OAuth state mismatch"));
     }
+    let client = crate::http_client::channel_client(use_system_proxy)?;
     let token = match provider.as_str() {
-        "openai" => exchange_openai_oauth_code(&parsed.code, code_verifier, redirect_uri).await?,
+        "openai" => exchange_openai_oauth_code(&client, use_system_proxy, &parsed.code, code_verifier, redirect_uri).await?,
         "claude" => {
-            exchange_claude_oauth_code(&parsed.code, code_verifier, redirect_uri, &parsed.state)
+            exchange_claude_oauth_code(&client, &parsed.code, code_verifier, redirect_uri, &parsed.state)
                 .await?
         }
         "antigravity" => {
-            exchange_antigravity_oauth_code(&parsed.code, code_verifier, redirect_uri).await?
+            exchange_antigravity_oauth_code(&client, &parsed.code, code_verifier, redirect_uri).await?
         }
-        "grok" => exchange_grok_oauth_code(&parsed.code, code_verifier, redirect_uri).await?,
+        "grok" => exchange_grok_oauth_code(&client, &parsed.code, code_verifier, redirect_uri).await?,
         "kiro" => {
             let login_provider = crate::kiro::callback_provider(code_or_callback, state)?;
             crate::kiro::exchange_authorization(
-                &crate::kiro::http_client()?, &parsed.code, code_verifier, &login_provider,
+                &crate::kiro::channel_http_client(use_system_proxy)?, &parsed.code, code_verifier, &login_provider,
             ).await?
         }
         _ => return Err(anyhow!("unsupported subscription provider")),
     };
-    prepare_subscription_token_and_import(&provider, token)
+    let mut channel = prepare_subscription_token_and_import(&provider, token)?;
+    channel.v2.use_system_proxy = use_system_proxy;
+    Ok(channel)
+}
+
+// Resolve once before the first auth request and persist that exact choice on
+// the prepared channel, so validation/refresh/inference cannot change egress.
+fn subscription_import_proxy(provider: &str, selected: Option<bool>) -> Result<bool> {
+    let driver = crate::source_driver::source_driver_manifest()?
+        .drivers.iter()
+        .find(|driver| driver.subscription_provider.as_deref() == Some(provider))
+        .ok_or_else(|| anyhow!("unsupported subscription provider"))?;
+    Ok(selected.unwrap_or(driver.default_use_system_proxy))
 }
 
 pub(crate) fn import_subscription_token_json_channel(
     provider: &str,
     token_json: &str,
+    use_system_proxy: Option<bool>,
 ) -> Result<ChannelConfig> {
     let provider = normalize_subscription_provider(provider)
         .ok_or_else(|| anyhow!("unsupported subscription provider"))?;
     let token: serde_json::Value = serde_json::from_str(token_json.trim())
         .map_err(|err| anyhow!("invalid token JSON: {err}"))?;
-    prepare_subscription_token_and_import(&provider, token)
+    let mut channel = prepare_subscription_token_and_import(&provider, token)?;
+    channel.v2.use_system_proxy = subscription_import_proxy(&provider, use_system_proxy)?;
+    Ok(channel)
 }
 
 pub(crate) fn prepare_subscription_token_and_import(
@@ -800,6 +819,8 @@ pub(crate) fn parse_oauth_code_or_callback(input: &str) -> Result<ParsedOAuthCod
 }
 
 pub(crate) async fn exchange_openai_oauth_code(
+    client: &Client,
+    use_system_proxy: bool,
     code: &str,
     code_verifier: &str,
     redirect_uri: &str,
@@ -815,27 +836,28 @@ pub(crate) async fn exchange_openai_oauth_code(
     form.insert("code", code.trim());
     form.insert("redirect_uri", redirect_uri);
     form.insert("code_verifier", code_verifier.trim());
-    let client = long_http_client();
     // Authorization-code exchange uses Codex's raw auth client: no model
     // provider `version` header and no synthesized default identity headers.
-    let client = crate::openai_transport::http_client(
-        &client, OPENAI_OAUTH_TOKEN_URL, &serde_json::Value::Null,
+    let client = crate::openai_transport::http_client_with_options(
+        client, OPENAI_OAUTH_TOKEN_URL, &serde_json::Value::Null,
+        crate::openai_transport::TransportOptions { use_system_proxy, ..Default::default() },
     )?;
-    let mut token = client
-        .post("https://auth.openai.com/oauth/token")
+    let response = client
+        .post(OPENAI_OAUTH_TOKEN_URL)
         .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
         .form(&form)
         .send_adaptive()
-        .await?
-        .error_for_status()?
-        .json::<serde_json::Value>()
         .await?;
+    let mut token = crate::subscription_oauth_error::token_exchange_response(
+        "openai", response, &[code.trim(), code_verifier.trim()],
+    ).await?;
     ensure_subscription_token_provider(&mut token, "openai");
     normalize_token_expiry(&mut token);
     Ok(token)
 }
 
 pub(crate) async fn exchange_claude_oauth_code(
+    client: &Client,
     code: &str,
     code_verifier: &str,
     redirect_uri: &str,
@@ -856,7 +878,7 @@ pub(crate) async fn exchange_claude_oauth_code(
     if !state.trim().is_empty() {
         body["state"] = serde_json::Value::String(state.trim().to_string());
     }
-    let mut token = long_http_client()
+    let mut token = client
         .post(CLAUDE_OAUTH_TOKEN_URL)
         .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
         .header("Accept", "application/json, text/plain, */*")
@@ -874,6 +896,7 @@ pub(crate) async fn exchange_claude_oauth_code(
 }
 
 pub(crate) async fn exchange_antigravity_oauth_code(
+    client: &Client,
     code: &str,
     code_verifier: &str,
     redirect_uri: &str,
@@ -891,7 +914,7 @@ pub(crate) async fn exchange_antigravity_oauth_code(
     form.insert("code", code.trim());
     form.insert("redirect_uri", redirect_uri);
     form.insert("code_verifier", code_verifier.trim());
-    let response = long_http_client()
+    let response = client
         .post(ANTIGRAVITY_OAUTH_TOKEN_URL)
         .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
         .form(&form)
@@ -922,7 +945,7 @@ pub(crate) async fn exchange_antigravity_oauth_code(
     if let Some(access_token) =
         json_string(&token, &["access_token"]).filter(|value| !value.trim().is_empty())
     {
-        if let Ok(response) = long_http_client()
+        if let Ok(response) = client
             .get(ANTIGRAVITY_USERINFO_URL)
             .header("Authorization", format!("Bearer {access_token}"))
             .header("User-Agent", antigravity_user_agent())
@@ -944,6 +967,7 @@ pub(crate) async fn exchange_antigravity_oauth_code(
 }
 
 pub(crate) async fn exchange_grok_oauth_code(
+    client: &Client,
     code: &str,
     code_verifier: &str,
     redirect_uri: &str,
@@ -959,7 +983,7 @@ pub(crate) async fn exchange_grok_oauth_code(
     form.insert("code", code.trim());
     form.insert("redirect_uri", redirect_uri);
     form.insert("code_verifier", code_verifier.trim());
-    let response = long_http_client()
+    let response = client
         .post(GROK_OAUTH_TOKEN_URL)
         .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
         .header("User-Agent", "const-api-grok-oauth/1.0")

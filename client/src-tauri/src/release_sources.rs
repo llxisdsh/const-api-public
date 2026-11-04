@@ -68,7 +68,6 @@ pub(crate) fn trusted_release_sources(_: &Path) -> Result<ActiveReleaseSources> 
     bundled_release_sources()
 }
 pub(crate) async fn refresh_release_sources(
-    _: &reqwest::Client,
     _: &Path,
 ) -> Result<ReleaseSourceRefresh> {
     Ok(ReleaseSourceRefresh {

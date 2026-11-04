@@ -872,8 +872,9 @@
     "advanced": {
       "codexDesktopDefault": "Codex Desktop (default)",
       "codexProfileHint": "Client identity for OpenAI subscription requests. Applies to new connections after saving.",
-      "useSystemProxy": "Use proxy",
-      "useSystemProxyHint": "Off by default: CONST connects directly. Enable to use the system or environment proxy. TUN routing is controlled by the OS and may apply with this switch on or off.",
+      "networkConnection": "Network connection",
+      "useSystemProxy": "Use system proxy",
+      "useSystemProxyHint": "Use the system or environment proxy when enabled; connect directly when off. This switch does not affect OS TUN routing.",
       "userAgentProfile": "User-Agent override",
       "userAgentProfileDefault": "Do not override (follow request)",
       "userAgentProfileHint": "Use this only when the upstream restricts or requires a specific client. Channel refreshes, checks, and tool requests will use the selected client's User-Agent; leave it off for normal channels.",
@@ -2458,6 +2459,7 @@
     "programLocationSaved": "{{tool}} program location saved."
   },
   "subscriptionImport": {
+    "proxyHint": "Applies to authorization, import and subsequent channel requests. Changing it requires a new authorization link. The browser uses its own network settings; OS TUN routing is unaffected.",
     "progress": {
       "creatingLink": "Creating an authorization link",
       "exchanging": "Exchanging the authorization callback",

@@ -442,6 +442,9 @@ async fn send_openai_with_failure_capture(
     // A provider 400 is diagnostic evidence, not permission to rewrite and
     // resend a request. Known subscription incompatibilities must be handled
     // before the first send by the endpoint-specific adapter.
+    crate::upstream_failure::log_reasoning_rejection(
+        &channel.id, target_protocol, 400, body.as_bytes(),
+    );
     let failure = BufferedUpstreamFailure {
         status: response.status().as_u16(),
         content_type: response_content_type(&response),
@@ -575,6 +578,9 @@ async fn send_claude_subscription_response(
             continue;
         }
         if response.status() == reqwest::StatusCode::BAD_REQUEST {
+            crate::upstream_failure::log_reasoning_rejection(
+                &channel.id, "anthropic_messages", 400, body.as_bytes(),
+            );
             let failure = BufferedUpstreamFailure {
                 status: response.status().as_u16(),
                 content_type: response_content_type(&response),

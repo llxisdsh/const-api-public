@@ -89,7 +89,7 @@ export function ToolModelInjectionSettings({ settings, open, onOpenChange, onSav
         </span>
       </div>
     </div>
-    {!open && <InlineActionFeedback feedback={status} />}
+    {!open && <InlineActionFeedback feedback={feedback} />}
     {open && createPortal(<InjectionEditor value={value} onChange={change} saving={saving} feedback={status}
       saveButton={saveButton} onClose={() => { if (!saving) onOpenChange(false); }} />, document.body)}
   </>;

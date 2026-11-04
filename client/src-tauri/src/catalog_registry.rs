@@ -4,7 +4,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::StreamExt;
 use reqwest::{
-    Client, Response, StatusCode, Url,
+    Response, StatusCode, Url,
     header::{ACCEPT, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED},
 };
 use semver::Version;
@@ -140,10 +140,7 @@ pub(crate) fn load_cached_catalog_tool(
     release_from_cache(&paths, manifest, delivery_sources)
 }
 
-pub(crate) async fn refresh_catalog_tool(
-    client: &Client,
-    config_path: &Path,
-) -> Result<CatalogRefresh> {
+pub(crate) async fn refresh_catalog_tool(config_path: &Path) -> Result<CatalogRefresh> {
     let release_sources = crate::release_sources::trusted_release_sources(config_path)?;
     let catalog_sources = release_sources.catalog_sources();
     let manifest_urls = catalog_sources
@@ -153,7 +150,6 @@ pub(crate) async fn refresh_catalog_tool(
     let mut failures = Vec::new();
     for source in &catalog_sources {
         match refresh_catalog_tool_from_source(
-            client,
             config_path,
             &source.manifest_url,
             &source.component_base_url,
@@ -172,12 +168,12 @@ pub(crate) async fn refresh_catalog_tool(
 }
 
 async fn refresh_catalog_tool_from_source(
-    client: &Client,
     config_path: &Path,
     manifest_url: &str,
     component_base_url: &str,
     delivery_sources: &[String],
 ) -> Result<CatalogRefresh> {
+    let client = crate::http_client::public_resource_client(manifest_url)?;
     let paths = cache_paths(config_path)?;
     let keys = compiled_catalog_keys()?;
     let cached_raw = fs::read(&paths.manifest).ok();
@@ -276,7 +272,6 @@ async fn refresh_catalog_tool_from_source(
         ));
     }
     let tool_raw = load_or_fetch_component(
-        client,
         &paths,
         manifest_url,
         component_base_url,
@@ -335,7 +330,6 @@ fn release_from_cache(
 }
 
 async fn load_or_fetch_component(
-    client: &Client,
     paths: &CachePaths,
     manifest_url: &str,
     component_base_url: &str,
@@ -347,7 +341,7 @@ async fn load_or_fetch_component(
     let mut failures = Vec::new();
     for url in component_candidate_urls(component_base_url, manifest_url, &component.url) {
         let result = async {
-            let response = client
+            let response = crate::http_client::public_resource_client(&url)?
                 .get(&url)
                 .timeout(MANIFEST_SOURCE_TIMEOUT)
                 .header(ACCEPT, "application/json")

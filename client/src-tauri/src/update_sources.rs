@@ -86,14 +86,26 @@ async fn check_source(
         let endpoint: reqwest::Url = manifest_url
             .parse()
             .map_err(|error| format!("invalid update endpoint: {error}"))?;
-        let updater = app
+        let use_system_proxy = crate::http_client::public_resource_uses_system_proxy(&endpoint);
+        let builder = app
             .updater_builder()
             .endpoints(vec![endpoint])
             .map_err(|error| error.to_string())?
-            .timeout(timeout)
-            .build()
-            .map_err(|error| error.to_string())?;
-        updater.check().await.map_err(|error| error.to_string())
+            .timeout(timeout);
+        let updater = if use_system_proxy {
+            builder
+        } else {
+            builder.no_proxy()
+        }
+        .build()
+        .map_err(|error| error.to_string())?;
+        let mut update = updater.check().await.map_err(|error| error.to_string())?;
+        if let Some(update) = &mut update {
+            // An update manifest may host the artifact on a different source.
+            update.no_proxy =
+                !crate::http_client::public_resource_uses_system_proxy(&update.download_url);
+        }
+        Ok(update)
     }
     .await;
 
@@ -141,11 +153,14 @@ async fn collect_source_checks(
 }
 
 async fn probe_download(update: &Update) -> DownloadProbe {
-    let client = match reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(4))
-        .timeout(PROBE_TIMEOUT)
-        .user_agent("CONST-API-Updater-Probe")
-        .build()
+    let client = match crate::http_client::proxy_policy(
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(4))
+            .timeout(PROBE_TIMEOUT)
+            .user_agent("CONST-API-Updater-Probe"),
+        !update.no_proxy,
+    )
+    .build()
     {
         Ok(client) => client,
         Err(_) => return DownloadProbe::default(),

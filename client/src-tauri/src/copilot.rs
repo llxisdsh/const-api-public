@@ -485,8 +485,15 @@ async fn auth_json(request: RequestBuilder) -> std::result::Result<(u16, Value),
 }
 
 #[tauri::command]
-pub(crate) async fn create_copilot_auth_session() -> std::result::Result<DeviceSession, AuthError> {
-    let client = client(true).map_err(|_| auth_error("network"))?;
+pub(crate) async fn create_copilot_auth_session(
+    use_system_proxy: Option<bool>,
+) -> std::result::Result<DeviceSession, AuthError> {
+    let use_system_proxy = crate::source_driver::new_channel_proxy(
+        crate::source_driver::SourceDriverId::CopilotSubscription,
+        use_system_proxy,
+    )
+    .map_err(|_| auth_error("invalid_response"))?;
+    let client = client(use_system_proxy).map_err(|_| auth_error("network"))?;
     let (status, value) = auth_json(
         client
             .post("https://github.com/login/device/code")
@@ -552,11 +559,17 @@ fn poll_result(status: u16, value: &Value) -> std::result::Result<PollResult, Au
 #[tauri::command]
 pub(crate) async fn poll_copilot_auth_session(
     device_code: String,
+    use_system_proxy: Option<bool>,
 ) -> std::result::Result<PollResult, AuthError> {
     if device_code.trim().is_empty() || device_code.len() > 2048 {
         return Err(auth_error("invalid_response"));
     }
-    let client = client(true).map_err(|_| auth_error("network"))?;
+    let use_system_proxy = crate::source_driver::new_channel_proxy(
+        crate::source_driver::SourceDriverId::CopilotSubscription,
+        use_system_proxy,
+    )
+    .map_err(|_| auth_error("invalid_response"))?;
+    let client = client(use_system_proxy).map_err(|_| auth_error("network"))?;
     let (status, value) = auth_json(
         client
             .post("https://github.com/login/oauth/access_token")

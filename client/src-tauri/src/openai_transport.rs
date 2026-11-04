@@ -125,8 +125,9 @@ fn account_transport(
         .get(credential, options)
 }
 
-/// Select the subscription client before constructing a request. Injected local
-/// endpoints keep their caller-owned proxy/DNS/timeouts (including test clients).
+// Legacy diagnostic probes use this direct baseline. Production callers must
+// choose their channel/import options explicitly.
+#[cfg(test)]
 pub(crate) fn http_client(
     client: &Client,
     url: &str,
@@ -135,6 +136,8 @@ pub(crate) fn http_client(
     http_client_with_options(client, url, credential, TransportOptions::default())
 }
 
+/// Select the subscription client before constructing a request. Injected local
+/// endpoints keep their caller-owned proxy/DNS/timeouts (including test clients).
 pub(crate) fn http_client_with_options(
     client: &Client,
     url: &str,

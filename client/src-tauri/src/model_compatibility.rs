@@ -1834,13 +1834,17 @@ mod tests {
                 );
             }
         }
-        // Compatibility selects the explicit V4.1 Flash identity; the generic
-        // and older V4 names remain catalog entries, not duplicate choices.
+        // The current 1017 deployment uses one stable compatibility identity;
+        // generic/dated API names remain callable aliases, not duplicate choices.
         assert!(
             ids.iter()
                 .any(|candidate| candidate == "deepseek-v4.1-flash")
         );
         assert!(!ids.iter().any(|candidate| candidate == "deepseek-flash"));
+        assert!(
+            !ids.iter()
+                .any(|candidate| candidate == "deepseek-v4.1-flash-1017")
+        );
         for (model_id, expected_output_tokens, expected_input_modalities) in [
             ("deepseek-v4-pro", 384_000, vec!["text"]),
             ("deepseek-v4-flash", 393_216, vec!["image", "text"]),
@@ -1924,6 +1928,7 @@ mod tests {
             ["T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7"]
         );
         for (model, expected_group) in [
+            ("deepseek-v4.1-flash", "expert"),
             ("muse-spark-1.3", "elite"),
             ("gemini-3.8-flash", "advanced"),
         ] {
@@ -1986,8 +1991,10 @@ mod tests {
         config.allow_model_equivalence = true;
         for (model, first) in [
             ("gpt-5.5", "gpt-6.1-terra"),
-            ("codex-auto-review", "claude-haiku-5-5"),
-            ("gpt-5.4", "claude-haiku-5-5"),
+            ("deepseek-v4.1-flash-1017", "claude-haiku-5-5"),
+            ("deepseek-flash", "claude-haiku-5-5"),
+            ("codex-auto-review", "deepseek-v4.1-flash"),
+            ("gpt-5.4", "deepseek-v4.1-flash"),
             ("gpt-5.3-codex", "gemini-3.8-flash"),
             ("gemini-3-pro-preview", "gemini-3.8-flash"),
             ("gemini-3.1-pro-preview", "gemini-3.8-flash"),
@@ -2011,7 +2018,7 @@ mod tests {
             ("gemini-3.5-flash-lite", "gemini-2.5-pro"),
             ("gemini-3.1-flash-lite", "gemini-2.5-pro"),
             ("gemini-2.5-flash-lite", "gemini-2.5-pro"),
-            ("gemini-3.8-flash", "deepseek-v4.1-flash-1017"),
+            ("gemini-3.8-flash", "gemini-3.1-pro-preview"),
             ("gemma-4-31b-it", "gemini-2.5-pro"),
             ("gemma-4-26b-a4b-it", "gemini-2.5-pro"),
         ] {
@@ -2455,11 +2462,17 @@ mod tests {
         );
 
         // Guardian is a specialized request identity, never a general fallback
-        // candidate. Its Luna-level fallback floor excludes weaker Flash/Spark.
+        // candidate. Its T3 fallback floor excludes lower-tier Gemini Flash/Spark.
         let review_candidates = model_compatibility_candidates(&config, "codex-auto-review");
         assert_eq!(
-            &review_candidates[..4],
-            ["claude-haiku-5-5", "gpt-6-luna", "gpt-5.6-luna", "gpt-5.4",]
+            &review_candidates[..5],
+            [
+                "deepseek-v4.1-flash",
+                "claude-haiku-5-5",
+                "gpt-6-luna",
+                "gpt-5.6-luna",
+                "gpt-5.4",
+            ]
         );
         assert!(
             !review_candidates

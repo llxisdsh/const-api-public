@@ -872,8 +872,9 @@
     "advanced": {
       "codexDesktopDefault": "Codex Desktop（默认）",
       "codexProfileHint": "统一用于 OpenAI 订阅的请求身份。保存后新连接生效。",
-      "useSystemProxy": "使用代理",
-      "useSystemProxyHint": "默认关闭，由 CONST 直接连接；开启后使用系统或环境代理。TUN 属于系统网络路由，不受此开关控制，开或关都可能经过 TUN。",
+      "networkConnection": "网络连接",
+      "useSystemProxy": "使用系统代理",
+      "useSystemProxyHint": "开启后使用系统或环境代理；关闭后直接连接。TUN 属于系统网络路由，不受此开关控制。",
       "userAgentProfile": "User-Agent 覆盖",
       "userAgentProfileDefault": "不覆盖（跟随请求）",
       "userAgentProfileHint": "仅当上游渠道限制或要求特定客户端时选择。渠道刷新、检查和工具请求都会改用所选客户端的 User-Agent；普通渠道保持不覆盖。",
@@ -2458,6 +2459,7 @@
     "programLocationSaved": "{{tool}} 程序位置已保存。"
   },
   "subscriptionImport": {
+    "proxyHint": "此选择用于授权、导入和后续渠道请求。更改后需重新生成授权链接。浏览器使用自身的网络设置；TUN 不受此开关控制。",
     "progress": {
       "creatingLink": "正在创建授权链接",
       "exchanging": "正在交换授权回调",

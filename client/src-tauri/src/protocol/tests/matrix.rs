@@ -1904,6 +1904,351 @@ fn explicit_reasoning_disable_survives_cross_protocol_conversion() {
 }
 
 #[test]
+fn explicit_reasoning_off_overrides_stale_budget_and_output_effort() {
+    for source in PROTOCOLS {
+        let mut body = fixture(source).request;
+        match source {
+            ProtocolKind::OpenAiChat => {
+                body["reasoning_effort"] = json!("high");
+                body["reasoning"] = json!({"enabled":false,"max_tokens":4096,"summary":"auto"});
+            }
+            ProtocolKind::OpenAiResponses => {
+                body["reasoning"] = json!({"effort":"none","max_tokens":4096,"summary":"auto"});
+            }
+            ProtocolKind::AnthropicMessages => {
+                body["thinking"] = json!({"type":"disabled","budget_tokens":4096});
+                body["output_config"] = json!({"effort":"high"});
+            }
+            ProtocolKind::GeminiNative => {
+                body["generationConfig"]["thinkingConfig"] = json!({"thinkingBudget":0});
+            }
+        }
+        for stream in [false, true] {
+            body["stream"] = json!(stream);
+            for target in PROTOCOLS {
+                let converted = converted_request_body(source, target, &body);
+                if target == source {
+                    assert_eq!(converted, body, "native settings must remain untouched");
+                    continue;
+                }
+                match target {
+                    ProtocolKind::OpenAiChat => assert_eq!(converted["reasoning_effort"], "none"),
+                    ProtocolKind::OpenAiResponses => {
+                        assert_eq!(converted["reasoning"], json!({"effort":"none"}));
+                    }
+                    ProtocolKind::AnthropicMessages => {
+                        assert_eq!(converted["thinking"], json!({"type":"disabled"}));
+                        assert!(converted.pointer("/output_config/effort").is_none());
+                    }
+                    ProtocolKind::GeminiNative => {
+                        assert_eq!(
+                            converted["generationConfig"]["thinkingConfig"],
+                            json!({"thinkingBudget":0})
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn anthropic_effort_without_thinking_reaches_both_openai_protocols() {
+    for effort in ["low", "medium", "high", "xhigh", "max"] {
+        let body = json!({
+            "model":"claude-opus-5-5", "max_tokens":4096,
+            "messages":[{"role":"user","content":"Review the patch"}],
+            "output_config":{"effort":effort}
+        });
+        for target in [ProtocolKind::OpenAiChat, ProtocolKind::OpenAiResponses] {
+            let converted = converted_request_body(ProtocolKind::AnthropicMessages, target, &body);
+            let value = if target == ProtocolKind::OpenAiChat {
+                &converted["reasoning_effort"]
+            } else {
+                &converted["reasoning"]["effort"]
+            };
+            assert_eq!(value, effort, "target={target:?}");
+        }
+    }
+}
+
+#[test]
+fn gemini_conversion_does_not_combine_budget_and_level() {
+    for source in [
+        ProtocolKind::OpenAiChat,
+        ProtocolKind::OpenAiResponses,
+        ProtocolKind::AnthropicMessages,
+    ] {
+        let mut body = fixture(source).request;
+        match source {
+            ProtocolKind::OpenAiChat => {
+                body["reasoning"] = json!({"effort":"high","max_tokens":4096})
+            }
+            ProtocolKind::OpenAiResponses => {
+                body["reasoning"] = json!({"effort":"high","max_tokens":4096})
+            }
+            ProtocolKind::AnthropicMessages => {
+                body["thinking"] = json!({"type":"enabled","budget_tokens":4096});
+                body["output_config"] = json!({"effort":"high"});
+            }
+            _ => unreachable!(),
+        }
+        let converted = converted_request_body(source, ProtocolKind::GeminiNative, &body);
+        assert_eq!(
+            converted.pointer("/generationConfig/thinkingConfig/thinkingBudget"),
+            Some(&json!(4096))
+        );
+        assert!(
+            converted
+                .pointer("/generationConfig/thinkingConfig/thinkingLevel")
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn openai_conversion_omits_unsupported_thinking_budget_with_a_warning() {
+    let body = json!({"model":"claude-source", "max_tokens":8192,
+        "thinking":{"type":"enabled","budget_tokens":4096},
+        "output_config":{"effort":"high"},
+        "messages":[{"role":"user","content":"Review the code"}]});
+    for target in [ProtocolKind::OpenAiChat, ProtocolKind::OpenAiResponses] {
+        let converted = convert_non_stream(
+            ProtocolKind::AnthropicMessages,
+            target,
+            &body,
+            &context(
+                ProtocolKind::AnthropicMessages,
+                "claude-source",
+                "source-account",
+            ),
+            &context(target, "gpt-5.6-luna", "target-account"),
+            &CapabilityProfile::default(),
+            ConversionPolicy::Production,
+        )
+        .unwrap();
+        assert!(
+            converted
+                .plan
+                .report()
+                .issues
+                .iter()
+                .any(|issue| issue.code == "reasoning_budget_omitted")
+        );
+        assert!(converted.body.pointer("/reasoning/max_tokens").is_none());
+        if target == ProtocolKind::OpenAiResponses {
+            assert_eq!(converted.body["reasoning"]["effort"], "high");
+            assert_eq!(converted.body["max_output_tokens"], 8192);
+        } else {
+            assert_eq!(converted.body["reasoning_effort"], "high");
+            assert_eq!(converted.body["max_tokens"], 8192);
+        }
+    }
+}
+
+#[test]
+fn gemini_thinking_conversion_respects_documented_model_generations() {
+    let convert = |model: &str, reasoning: Value| {
+        let body = json!({"model":"source-model", "reasoning":reasoning,
+            "messages":[{"role":"user","content":"Review this code"}],
+            "tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object","properties":{}}}}]});
+        let converted = convert_non_stream(
+            ProtocolKind::OpenAiChat,
+            ProtocolKind::GeminiNative,
+            &body,
+            &context(ProtocolKind::OpenAiChat, "source-model", "source-account"),
+            &context(ProtocolKind::GeminiNative, model, "target-account"),
+            &CapabilityProfile::default(),
+            ConversionPolicy::Production,
+        );
+        if let Ok(converted) = &converted {
+            assert_eq!(
+                converted.body["contents"][0]["parts"][0]["text"],
+                "Review this code"
+            );
+            assert_eq!(
+                converted.body["tools"][0]["functionDeclarations"][0]["name"],
+                "read_file"
+            );
+        }
+        converted
+    };
+    for model in ["gemini-4-argon", "google/gemini-4.0-argon"] {
+        let converted = convert(model, json!({"effort":"high","max_tokens":4096}))
+            .unwrap()
+            .body;
+        assert_eq!(
+            converted["generationConfig"]["thinkingConfig"],
+            json!({"thinkingLevel":"HIGH"})
+        );
+        let default = convert(model, json!({"max_tokens":4096})).unwrap();
+        assert!(
+            default
+                .body
+                .pointer("/generationConfig/thinkingConfig/thinkingBudget")
+                .is_none()
+        );
+        assert!(
+            default
+                .body
+                .pointer("/generationConfig/thinkingConfig/thinkingLevel")
+                .is_none()
+        );
+        assert!(
+            default
+                .plan
+                .report()
+                .issues
+                .iter()
+                .any(|issue| issue.code == "reasoning_budget_omitted")
+        );
+        assert_eq!(
+            convert(model, json!({"effort":"minimal"})).unwrap().body["generationConfig"]["thinkingConfig"]
+                ["thinkingLevel"],
+            "LOW"
+        );
+    }
+    for model in ["gemini-3.7-flash", "gemini-3.8-flash"] {
+        assert_eq!(
+            convert(model, json!({"effort":"minimal"})).unwrap().body["generationConfig"]["thinkingConfig"],
+            json!({"thinkingLevel":"LOW"})
+        );
+    }
+    for model in [
+        "gemini-3-pro-preview",
+        "gemini-3.1-pro",
+        "gemini-4-argon",
+        "gemini-2.5-pro",
+    ] {
+        let off = convert(model, json!({"enabled":false})).unwrap();
+        let expected = if model == "gemini-2.5-pro" {
+            json!({"thinkingBudget":128})
+        } else {
+            json!({"thinkingLevel":"LOW"})
+        };
+        assert_eq!(off.body["generationConfig"]["thinkingConfig"], expected);
+        assert!(
+            off.plan
+                .report()
+                .issues
+                .iter()
+                .any(|issue| issue.code == "reasoning_disable_approximated")
+        );
+    }
+    for model in [
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+    ] {
+        let effort = convert(model, json!({"effort":"high"})).unwrap();
+        assert_eq!(
+            effort.body["generationConfig"]["thinkingConfig"],
+            json!({"thinkingBudget":-1})
+        );
+        assert!(
+            effort
+                .plan
+                .report()
+                .issues
+                .iter()
+                .any(|issue| issue.code == "reasoning_effort_approximated")
+        );
+        assert_eq!(
+            convert(model, json!({"enabled":true})).unwrap().body["generationConfig"]["thinkingConfig"],
+            json!({"thinkingBudget":-1})
+        );
+        assert_eq!(
+            convert(model, json!({"max_tokens":4096,"effort":"high"}))
+                .unwrap()
+                .body["generationConfig"]["thinkingConfig"],
+            json!({"thinkingBudget":4096})
+        );
+    }
+    assert_eq!(
+        convert("gemini-2.5-flash", json!({"enabled":false}))
+            .unwrap()
+            .body["generationConfig"]["thinkingConfig"],
+        json!({"thinkingBudget":0})
+    );
+    let body = json!({"model":"gemini-4-argon", "contents":[{"role":"user","parts":[{"text":"Review"}]}],
+        "generationConfig":{"thinkingConfig":{"thinkingBudget":4096,"vendorOption":"keep"}}});
+    assert_eq!(
+        converted_request_body(
+            ProtocolKind::GeminiNative,
+            ProtocolKind::GeminiNative,
+            &body
+        ),
+        body
+    );
+}
+
+#[test]
+fn cross_protocol_gemini_budgets_stay_in_documented_ranges() {
+    for source in [
+        ProtocolKind::OpenAiChat,
+        ProtocolKind::OpenAiResponses,
+        ProtocolKind::AnthropicMessages,
+    ] {
+        for stream in [false, true] {
+            for (model, budget, expected) in [
+                ("gemini-2.5-pro", 0, 128),
+                ("gemini-2.5-pro", 64, 128),
+                ("google/gemini-2.5-pro", 65_536, 32_768),
+                ("gemini-2.5-flash", 32_768, 24_576),
+                ("gemini-2.5-flash-lite", 256, 512),
+                ("gemini-2.5-flash-lite", 32_768, 24_576),
+                ("gemini-2.5-flash-lite", 0, 0),
+                ("gemini-2.5-flash", 0, 0),
+                ("gemini-2.5-flash", 4_096, 4_096),
+                ("compatible-gemini-model", 65_536, 65_536),
+            ] {
+                let mut body = fixture(source).request;
+                body["stream"] = json!(stream);
+                if source == ProtocolKind::AnthropicMessages {
+                    body["thinking"] = json!({"type":"enabled","budget_tokens":budget});
+                } else {
+                    body["reasoning"] = json!({"max_tokens":budget});
+                }
+                let converted = convert_non_stream(
+                    source,
+                    ProtocolKind::GeminiNative,
+                    &body,
+                    &context(source, "source-model", "source-account"),
+                    &context(ProtocolKind::GeminiNative, model, "target-account"),
+                    &CapabilityProfile::default(),
+                    ConversionPolicy::Production,
+                )
+                .unwrap();
+                assert_eq!(
+                    converted.body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+                    expected,
+                    "{source:?} -> {model} budget={budget}"
+                );
+                assert_eq!(
+                    converted
+                        .plan
+                        .report()
+                        .issues
+                        .iter()
+                        .any(|issue| issue.code == "reasoning_budget_clamped"),
+                    budget != expected
+                );
+            }
+        }
+    }
+    let native = json!({"model":"gemini-2.5-pro", "contents":[{"role":"user","parts":[{"text":"Review"}]}],
+        "generationConfig":{"thinkingConfig":{"thinkingBudget":65536}}});
+    assert_eq!(
+        converted_request_body(
+            ProtocolKind::GeminiNative,
+            ProtocolKind::GeminiNative,
+            &native
+        ),
+        native
+    );
+}
+
+#[test]
 fn missing_chat_reasoning_uses_gemini_model_default_but_explicit_disable_does_not() {
     let mut chat = fixture(ProtocolKind::OpenAiChat).request;
     let gemini =

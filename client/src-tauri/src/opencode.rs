@@ -16,7 +16,8 @@ const CLIENT_ID: &str = "opencode-cli";
 const CONSOLE_ORIGIN: &str = "https://opencode.ai/console/";
 const DEVICE_CODE_URL: &str = "https://opencode.ai/console/auth/device/code";
 const DEVICE_TOKEN_URL: &str = "https://opencode.ai/console/auth/device/token";
-static CLIENT: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
+static DIRECT: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
+static PROXY: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
 
 #[derive(Debug, Serialize)]
 pub(crate) struct AuthError {
@@ -54,13 +55,21 @@ pub(crate) enum PollResult {
     Authorized { api_key: String },
 }
 
-fn client() -> Result<Client, AuthError> {
-    crate::http_client::cached_client(&CLIENT, || {
-        Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
+fn client(selected: Option<bool>) -> Result<Client, AuthError> {
+    let use_system_proxy = crate::source_driver::new_channel_proxy(
+        crate::source_driver::SourceDriverId::OpencodeConsole,
+        selected,
+    )
+    .map_err(|_| AuthError::new("invalid_response"))?;
+    crate::http_client::cached_client(if use_system_proxy { &PROXY } else { &DIRECT }, move || {
+        crate::http_client::proxy_policy(
+            Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never()),
+            use_system_proxy,
+        )
     })
     .map_err(|_| AuthError::new("network"))
 }
@@ -263,11 +272,15 @@ fn poll_result(status: StatusCode, body: &Value) -> Result<PollResult, AuthError
 }
 
 #[tauri::command]
-pub(crate) async fn create_opencode_auth_session() -> Result<DeviceSession, AuthError> {
-    let response = response(client()?.post(DEVICE_CODE_URL).json(&serde_json::json!({
-        "client_id": CLIENT_ID,
-        "supports_org_scope": true,
-    })))
+pub(crate) async fn create_opencode_auth_session(
+    use_system_proxy: Option<bool>,
+) -> Result<DeviceSession, AuthError> {
+    let response = response(client(use_system_proxy)?.post(DEVICE_CODE_URL).json(
+        &serde_json::json!({
+            "client_id": CLIENT_ID,
+            "supports_org_scope": true,
+        }),
+    ))
     .await?;
     if !response.status.is_success() {
         return Err(upstream_error(response.status, &response.value));
@@ -300,11 +313,12 @@ pub(crate) async fn create_opencode_auth_session() -> Result<DeviceSession, Auth
 #[tauri::command]
 pub(crate) async fn poll_opencode_auth_session(
     device_code: String,
+    use_system_proxy: Option<bool>,
 ) -> Result<PollResult, AuthError> {
     if device_code.trim().is_empty() || device_code.len() > 4096 {
         return Err(AuthError::new("invalid_response"));
     }
-    let http = client()?;
+    let http = client(use_system_proxy)?;
     let response = response(http.post(DEVICE_TOKEN_URL).json(&serde_json::json!({
         "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
         "device_code": device_code,

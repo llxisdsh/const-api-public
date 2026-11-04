@@ -555,6 +555,37 @@ fn responses_websocket_rejected_continuation(
     )
 }
 
+/// When local replay is unavailable, let Codex request its own full history.
+/// Only normalize an explicit pre-output reference rejection; never convert an
+/// ambiguous send failure, a partial response, or an unrelated 400 into a retry.
+fn normalize_unreplayable_codex_continuation_rejection(
+    text: &str,
+    request_body: &str,
+    response_started: bool,
+) -> Option<String> {
+    if response_started {
+        return None;
+    }
+    let metadata = responses_websocket_terminal_metadata(text)?;
+    if metadata.error_code.is_some() || !responses_websocket_rejected_continuation(&metadata, text) {
+        return None;
+    }
+    let request: serde_json::Value = serde_json::from_str(request_body).ok()?;
+    if request.get("previous_response_id").and_then(serde_json::Value::as_str)
+        .is_none_or(|id| id.trim().is_empty())
+    {
+        return None;
+    }
+    let mut event: serde_json::Value = serde_json::from_str(text).ok()?;
+    for path in ["/error", "/body/error", "/response/error", "/response/status_details/error"] {
+        if let Some(error) = event.pointer_mut(path).and_then(serde_json::Value::as_object_mut) {
+            error.insert("code".into(), "previous_response_not_found".into());
+            return serde_json::to_string(&event).ok();
+        }
+    }
+    None
+}
+
 fn attach_responses_websocket_terminal_metadata(
     payload: &mut serde_json::Map<String, serde_json::Value>,
     metadata: &ResponsesWebsocketTerminalMetadata,
@@ -2466,7 +2497,15 @@ pub(crate) async fn run_supplier_responses_duplex(
                                     }
                                     continue;
                                 }
-                                Ok(None) => {}
+                                Ok(None) => {
+                                    if let Some(normalized) = normalize_unreplayable_codex_continuation_rejection(
+                                        &text, &request.request_body, active_response_started,
+                                    ) {
+                                        text = normalized;
+                                        terminal_metadata = responses_websocket_terminal_metadata(&text);
+                                        log::info!("[const-api][upstream-ws] continuation_recovery_delegated channel_id={} reason=local_replay_unavailable code=previous_response_not_found", subscription.channel_id);
+                                    }
+                                }
                                 Err(error) => {
                                     // Do not expose the earlier, recoverable rejection when
                                     // the actual final failure was sending its replacement.
@@ -6027,6 +6066,37 @@ mod responses_websocket_tests {
         assert_eq!(payload["failure_scope"], "request");
         assert_eq!(payload["provider_event_type"], "error");
         assert!(payload.get("message").is_none());
+    }
+
+    #[test]
+    fn websocket_unreplayable_reference_is_recoverable_without_changing_other_errors() {
+        let request = r#"{"previous_response_id":"parent","store":false,"input":[]}"#;
+        for path in ["/error", "/body/error", "/response/error", "/response/status_details/error"] {
+            let error = serde_json::json!({"type":"invalid_request_error", "message":"Invalid `previous_response_id`.", "code":null});
+            let mut event = match path {
+                "/error" => serde_json::json!({"error":error}),
+                "/body/error" => serde_json::json!({"body":{"error":error}}),
+                "/response/error" => serde_json::json!({"response":{"error":error}}),
+                _ => serde_json::json!({"response":{"status_details":{"error":error}}}),
+            };
+            event["type"] = "error".into();
+            event["status"] = 400.into();
+            event["request_id"] = "upstream-request".into();
+            let original = event.to_string();
+            let normalized = normalize_unreplayable_codex_continuation_rejection(&original, request, false).unwrap();
+            event.pointer_mut(path).unwrap()["code"] = "previous_response_not_found".into();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&normalized).unwrap(), event);
+            let metadata = responses_websocket_terminal_metadata(&normalized).unwrap();
+            assert_eq!(metadata.error_code.as_deref(), Some("previous_response_not_found"));
+            assert!(normalize_unreplayable_codex_continuation_rejection(&original, request, true).is_none());
+            assert!(normalize_unreplayable_codex_continuation_rejection(&original, "{}", false).is_none());
+            assert!(normalize_unreplayable_codex_continuation_rejection(&normalized, request, false).is_none());
+            for message in ["Invalid input.", "Selected model is at capacity."] {
+                event.pointer_mut(path).unwrap()["code"] = serde_json::Value::Null;
+                event.pointer_mut(path).unwrap()["message"] = message.into();
+                assert!(normalize_unreplayable_codex_continuation_rejection(&event.to_string(), request, false).is_none());
+            }
+        }
     }
 
     #[test]

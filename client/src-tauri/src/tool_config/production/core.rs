@@ -820,9 +820,23 @@ fn const_api_test_home() -> Option<PathBuf> {
             return override_home.clone();
         }
     }
-    std::env::var_os("CONST_API_TEST_HOME")
+    let configured = std::env::var_os("CONST_API_TEST_HOME")
         .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
+        .filter(|path| !path.as_os_str().is_empty());
+    #[cfg(test)]
+    {
+        // A test that forgets a scoped override must never fall through to the
+        // developer's real credentials, tool configuration or usage database.
+        static DEFAULT_TEST_HOME: OnceLock<tempfile::TempDir> = OnceLock::new();
+        Some(configured.unwrap_or_else(|| {
+            DEFAULT_TEST_HOME
+                .get_or_init(|| tempfile::tempdir().expect("isolated unit-test home"))
+                .path()
+                .to_path_buf()
+        }))
+    }
+    #[cfg(not(test))]
+    configured
 }
 
 #[cfg(test)]

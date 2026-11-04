@@ -121,7 +121,6 @@ fn endpoint_api_key(raw: &str) -> String {
 }
 
 pub(crate) async fn fetch_endpoint_manifest(
-    client: &Client,
     source: &str,
     cache_path: &Path,
     minimum_version: i64,
@@ -129,6 +128,7 @@ pub(crate) async fn fetch_endpoint_manifest(
     // Registry documents are small. Bound each mirror independently so an
     // unreachable regional source cannot delay the next trusted fallback.
     let keys = compiled_pinned_registry_keys()?;
+    let client = crate::http_client::public_resource_client(source)?;
     crate::conditional_document::public_document_cache()
         .fetch(
             &format!("endpoint:{source}"),
@@ -275,12 +275,15 @@ pub(crate) fn restore_endpoint_registry_cache(
 }
 
 pub(crate) fn fresh_endpoint_http_client() -> Result<Client> {
-    Client::builder()
-        .connect_timeout(ENDPOINT_ACTIVATION_PROBE_TIMEOUT)
-        .timeout(ENDPOINT_ACTIVATION_PROBE_TIMEOUT)
-        .retry(reqwest::retry::never())
-        .build()
-        .context("build endpoint activation client")
+    crate::http_client::proxy_policy(
+        Client::builder()
+            .connect_timeout(ENDPOINT_ACTIVATION_PROBE_TIMEOUT)
+            .timeout(ENDPOINT_ACTIVATION_PROBE_TIMEOUT)
+            .retry(reqwest::retry::never()),
+        crate::http_client::PLATFORM_USE_SYSTEM_PROXY,
+    )
+    .build()
+    .context("build endpoint activation client")
 }
 
 pub(crate) async fn prioritize_reachable_endpoint(

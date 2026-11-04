@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "source_revision": "aea0e4f2d42a3471e5ef1f8329e2d381e246f579",
-  "compatibility_version_id": "compat-v30-2026-10-31",
+  "source_revision": "fd4cef22eafaf5e1c18f3a5af6df252a16fa5cce",
+  "compatibility_version_id": "compat-v31-2026-11-04",
   "compatibility_groups": [
     {
       "id": "apex",
@@ -91,12 +91,20 @@
         "t3"
       ],
       "models": [
+        "deepseek-v4.1-flash",
         "claude-haiku-5-5",
         "gpt-6-luna",
         "gpt-5.6-luna",
         "gpt-5.4"
       ],
       "match_models": [
+        "deepseek/deepseek-v4.1-flash",
+        "deepseek-flash",
+        "deepseek/deepseek-flash",
+        "deepseek-v4.1-flash-1017",
+        "deepseek/deepseek-v4.1-flash-1017",
+        "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        "accounts/fireworks/models/deepseek-v4p1-flash-1017",
         "claude-haiku-5.5",
         "openai/gpt-6-luna",
         "openai/gpt-5.6-luna",
@@ -115,18 +123,12 @@
       ],
       "models": [
         "gemini-3.8-flash",
-        "deepseek-v4.1-flash-1017",
-        "deepseek-v4.1-flash",
         "gemini-3.1-pro-preview",
         "gemini-3.7-flash",
         "gpt-5.3-codex"
       ],
       "match_models": [
         "google/gemini-3.8-flash",
-        "deepseek/deepseek-v4.1-flash-1017",
-        "deepseek-ai/DeepSeek-V4.1-Flash-1017",
-        "accounts/fireworks/models/deepseek-v4p1-flash-1017",
-        "deepseek/deepseek-v4.1-flash",
         "gemini-3.1-pro",
         "gemini-3.1-pro-preview-customtools",
         "google/gemini-3.1-pro-preview-customtools",
@@ -404,11 +406,6 @@
       "vendor": "deepseek"
     },
     {
-      "id": "deepseek-flash",
-      "display_name": "DeepSeek V4.1 Flash",
-      "vendor": "deepseek"
-    },
-    {
       "id": "deepseek-r1",
       "display_name": "deepseek-r1",
       "vendor": "deepseek"
@@ -460,12 +457,7 @@
     },
     {
       "id": "deepseek-v4.1-flash",
-      "display_name": "deepseek-v4.1-flash",
-      "vendor": "deepseek"
-    },
-    {
-      "id": "deepseek-v4.1-flash-1017",
-      "display_name": "DeepSeek V4.1 Flash 1017",
+      "display_name": "DeepSeek V4.1 Flash",
       "vendor": "deepseek"
     },
     {
@@ -2989,23 +2981,6 @@
       "tool_call": true,
       "source_key": "openrouter/deepseek/deepseek-chat-v3.1"
     },
-    "deepseek-flash": {
-      "display_name": "DeepSeek V4.1 Flash",
-      "family": "deepseek-v4",
-      "context_tokens": 1000000,
-      "input_tokens": 1000000,
-      "output_tokens": 393216,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": true,
-      "tool_call": true,
-      "source_key": "deepseek-flash"
-    },
     "deepseek-r1": {
       "display_name": "deepseek-r1",
       "context_tokens": 64000,
@@ -3166,25 +3141,10 @@
       "source_key": "openrouter/deepseek/deepseek-v4-pro-0813"
     },
     "deepseek-v4.1-flash": {
-      "display_name": "deepseek-v4.1-flash",
-      "context_tokens": 1048576,
-      "output_tokens": 384000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": true,
-      "tool_call": true,
-      "source_key": "openrouter/deepseek/deepseek-v4.1-flash"
-    },
-    "deepseek-v4.1-flash-1017": {
-      "display_name": "DeepSeek V4.1 Flash 1017",
+      "display_name": "DeepSeek V4.1 Flash",
       "family": "deepseek-v4",
       "context_tokens": 1000000,
-      "input_tokens": 1048576,
+      "input_tokens": 1000000,
       "output_tokens": 393216,
       "input_modalities": [
         "image",
@@ -3195,7 +3155,7 @@
       ],
       "reasoning": true,
       "tool_call": true,
-      "source_key": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+      "source_key": "deepseek-flash"
     },
     "devstral-2512": {
       "display_name": "devstral-2512",
@@ -8984,7 +8944,7 @@
     }
   },
   "model_aliases": {
-    "accounts/fireworks/models/deepseek-v4p1-flash-1017": "deepseek-v4.1-flash-1017",
+    "accounts/fireworks/models/deepseek-v4p1-flash-1017": "deepseek-v4.1-flash",
     "aion-labs/aion-2.0": "aion-2.0",
     "aion-labs/aion-3.0": "aion-3.0",
     "aion-labs/aion-3.0-mini": "aion-3.0-mini",
@@ -9045,12 +9005,14 @@
     "cohere/embed-v5.0-fast": "embed-v5.0-fast",
     "cohere/embed-v5.0-pro": "embed-v5.0-pro",
     "dashscope/qwen3.8-omni-flash": "qwen3.8-omni-flash",
-    "deepseek-ai/deepseek-v4.1-flash-1017": "deepseek-v4.1-flash-1017",
+    "deepseek-ai/deepseek-v4.1-flash-1017": "deepseek-v4.1-flash",
+    "deepseek-flash": "deepseek-v4.1-flash",
     "deepseek-v4-flash-0731": "deepseek-v4-flash",
     "deepseek-v4-pro:0813": "deepseek-v4-pro-0813",
+    "deepseek-v4.1-flash-1017": "deepseek-v4.1-flash",
     "deepseek/deepseek-chat-v3-0324": "deepseek-chat-v3-0324",
     "deepseek/deepseek-chat-v3.1": "deepseek-chat-v3.1",
-    "deepseek/deepseek-flash": "deepseek-flash",
+    "deepseek/deepseek-flash": "deepseek-v4.1-flash",
     "deepseek/deepseek-r1": "deepseek-r1",
     "deepseek/deepseek-r1-0528": "deepseek-r1-0528",
     "deepseek/deepseek-r1-distill-llama-70b": "deepseek-r1-distill-llama-70b",
@@ -9063,7 +9025,7 @@
     "deepseek/deepseek-v4-pro": "deepseek-v4-pro",
     "deepseek/deepseek-v4-pro-0813": "deepseek-v4-pro-0813",
     "deepseek/deepseek-v4.1-flash": "deepseek-v4.1-flash",
-    "deepseek/deepseek-v4.1-flash-1017": "deepseek-v4.1-flash-1017",
+    "deepseek/deepseek-v4.1-flash-1017": "deepseek-v4.1-flash",
     "gemini-3-flash": "gemini-3-flash-preview",
     "gemini-3.1-pro": "gemini-3.1-pro-preview",
     "gemini-3.1-pro-preview-customtools": "gemini-3.1-pro-preview",

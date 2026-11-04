@@ -340,6 +340,9 @@ pub(crate) async fn send_antigravity_stream_with_fallback(
             };
         }
         let status = response.status().as_u16();
+        crate::upstream_failure::log_reasoning_rejection(
+            &channel.id, "gemini_native", status, body.as_bytes(),
+        );
         if index + 1 < urls.len() && antigravity_runtime_should_fallback(status) {
             let _ = response.text().await;
             continue;

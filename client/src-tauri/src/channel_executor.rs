@@ -830,7 +830,7 @@ pub(crate) async fn execute_channel_request(
     let request = client
         .request(request.method, url)
         .headers(headers)
-        .body(upstream_body);
+        .body(upstream_body.clone());
     // Token-endpoint network/5xx failures are not invalid credentials.
     let (request, copilot_generation) =
         crate::copilot::prepare_request_with_generation(channel, request).await?;
@@ -847,6 +847,12 @@ pub(crate) async fn execute_channel_request(
             execution_error_with_source(code, error)
         })?;
     strip_http_response_headers(response.headers_mut());
+    crate::upstream_failure::log_reasoning_rejection(
+        &channel.id,
+        target.protocol.as_str(),
+        response.status().as_u16(),
+        &upstream_body,
+    );
     crate::copilot::observe_response(channel, response.status(), copilot_generation).await;
     let response = capacity_guard.hold_response(response);
     let response = crate::openrouter::observe_response(channel, response);

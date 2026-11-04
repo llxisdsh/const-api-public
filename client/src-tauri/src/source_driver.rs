@@ -164,6 +164,8 @@ pub(crate) struct SourceDriver {
     pub(crate) advanced: bool,
     #[serde(default)]
     pub(crate) fixed_connection: bool,
+    // Creation recommendation only. Never override a persisted channel choice.
+    pub(crate) default_use_system_proxy: bool,
     pub(crate) execution_kind: ExecutionKind,
     pub(crate) executor: ChannelExecutorLocator,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -349,6 +351,10 @@ pub(crate) fn source_driver_manifest() -> Result<&'static SourceDriverManifest> 
         })
         .as_ref()
         .map_err(|message| anyhow!(message.clone()))
+}
+
+pub(crate) fn new_channel_proxy(id: SourceDriverId, selected: Option<bool>) -> Result<bool> {
+    Ok(selected.unwrap_or(source_driver(id)?.default_use_system_proxy))
 }
 
 pub(crate) fn source_driver(id: SourceDriverId) -> Result<&'static SourceDriver> {

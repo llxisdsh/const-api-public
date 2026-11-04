@@ -28,6 +28,15 @@ describe("channel refresh and inference command boundaries", () => {
     vi.mocked(invoke).mockReset().mockImplementation(async (command, args) => {
       const input = args as Record<string, unknown> | undefined;
       if (command === "get_config") return structuredClone(wire);
+      if (command === "save_routing_preference") {
+        const preference = input?.preference as "prefer_local_supply" | "allow_model_equivalence";
+        wire = { ...wire, [preference]: input?.enabled as boolean };
+        return wire[preference];
+      }
+      if (command === "save_tool_model_injection_settings") {
+        wire = { ...wire, tool_model_injection: input?.settings as typeof wire.tool_model_injection };
+        return structuredClone(wire);
+      }
       if (command === "save_supplier_config") {
         wire = { ...wire, channels: input?.channels as typeof wire.channels };
         return structuredClone(wire);
@@ -59,6 +68,282 @@ describe("channel refresh and inference command boundaries", () => {
     });
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  it.each([true, false])("automatic OAuth exchange uses the chosen proxy setting %s", async (useSystemProxy) => {
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let callback!: (url: string) => void;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "create_subscription_oauth_session") return {
+        provider: "openai", state: "fixture-state", code_verifier: "fixture-verifier",
+        auth_url: "https://example.test/authorize", redirect_uri: "http://localhost/callback", auto_callback: true,
+      };
+      if (command === "wait_subscription_oauth_callback") return new Promise((resolve) => { callback = resolve; });
+      if (command === "cancel_subscription_oauth_callback" || command === "open_external_url") return null;
+      if (command === "exchange_subscription_oauth_code") throw new Error("stop before importing fixture");
+      return base(command, args);
+    });
+    act(() => result.current.addSubscriptionPreset(sourceDriverById("openai_subscription")));
+    expect(result.current.subscriptionUseSystemProxy).toBe(true);
+    act(() => result.current.changeSubscriptionProxy(useSystemProxy));
+    await act(async () => { await result.current.createSubscriptionOAuth(); });
+    await act(async () => { callback("http://localhost/callback?code=fixture&state=fixture-state"); });
+    expect(invoke).toHaveBeenCalledWith("exchange_subscription_oauth_code", expect.objectContaining({ useSystemProxy }));
+  });
+
+  it("changing OAuth egress invalidates the old callback without exchanging a code", async () => {
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let callback!: (url: string) => void;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "create_subscription_oauth_session") return {
+        provider: "openai", state: "old-state", code_verifier: "fixture",
+        auth_url: "https://example.test/authorize", redirect_uri: "http://localhost/callback", auto_callback: true,
+      };
+      if (command === "wait_subscription_oauth_callback") return new Promise((resolve) => { callback = resolve; });
+      if (command === "cancel_subscription_oauth_callback" || command === "open_external_url") return null;
+      return base(command, args);
+    });
+    act(() => result.current.addSubscriptionPreset(sourceDriverById("openai_subscription")));
+    await act(async () => { await result.current.createSubscriptionOAuth(); });
+    act(() => result.current.changeSubscriptionProxy(false));
+    await act(async () => { callback("http://localhost/callback?code=fixture&state=old-state"); });
+    expect(result.current.subscriptionOAuthSession).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("exchange_subscription_oauth_code", expect.anything());
+    expect(invoke).toHaveBeenCalledWith("cancel_subscription_oauth_callback", { oauthState: "old-state" });
+  });
+
+  it.each(["change proxy", "close"])("ignores a delayed clipboard callback after %s", async (action) => {
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let readClipboard!: (value: string) => void;
+    vi.stubGlobal("navigator", { clipboard: {
+      readText: () => new Promise<string>((resolve) => { readClipboard = resolve; }),
+    } });
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "create_subscription_oauth_session") return {
+        provider: "openai", state: "old-state", code_verifier: "fixture",
+        auth_url: "https://example.test/authorize", redirect_uri: "http://localhost/callback", auto_callback: false,
+      };
+      if (command === "cancel_subscription_oauth_callback" || command === "open_external_url") return null;
+      if (command === "exchange_subscription_oauth_code") throw new Error("stale code must not be exchanged");
+      return base(command, args);
+    });
+    act(() => result.current.addSubscriptionPreset(sourceDriverById("openai_subscription")));
+    await act(async () => { await result.current.createSubscriptionOAuth(); });
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.importSubscriptionOAuthFromClipboard(); });
+    act(() => {
+      if (action === "change proxy") result.current.changeSubscriptionProxy(false);
+      else result.current.closeSubscriptionWizard();
+    });
+    await act(async () => {
+      readClipboard("http://localhost/callback?code=fixture&state=old-state");
+      await pending;
+    });
+    expect(invoke).not.toHaveBeenCalledWith("exchange_subscription_oauth_code", expect.anything());
+    expect(result.current.subscriptionCallbackInput).toBe("");
+    expect(result.current.subscriptionWizardProgress).toBeNull();
+  });
+
+  it("invalidates the previous OAuth callback before awaiting listener cancellation", async () => {
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let callback!: (value: string) => void;
+    let finishCancellation!: () => void;
+    let sessionNumber = 0;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "create_subscription_oauth_session") return {
+        provider: "openai", state: `state-${++sessionNumber}`, code_verifier: "fixture",
+        auth_url: "https://example.test/authorize", redirect_uri: "http://localhost/callback", auto_callback: true,
+      };
+      if (command === "wait_subscription_oauth_callback") return new Promise((resolve) => { callback = resolve; });
+      if (command === "cancel_subscription_oauth_callback") return new Promise<void>((resolve) => { finishCancellation = resolve; });
+      if (command === "open_external_url") return null;
+      if (command === "exchange_subscription_oauth_code") throw new Error("superseded code must not be exchanged");
+      return base(command, args);
+    });
+    act(() => result.current.addSubscriptionPreset(sourceDriverById("openai_subscription")));
+    await act(async () => { await result.current.createSubscriptionOAuth(); });
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.createSubscriptionOAuth(); });
+    const finishOldCancellation = finishCancellation;
+    await act(async () => { callback("http://localhost/callback?code=fixture&state=state-1"); });
+    await act(async () => { finishOldCancellation(); await pending; });
+    expect(invoke).not.toHaveBeenCalledWith("exchange_subscription_oauth_code", expect.anything());
+    expect(result.current.subscriptionOAuthSession?.state).toBe("state-2");
+    expect(result.current.subscriptionCallbackInput).toBe("");
+  });
+
+  it.each(["prefer_local_supply", "allow_model_equivalence"] as const)(
+    "immediately saves %s without restarting access or saving other pages", async (preference) => {
+      const { result } = renderHook(() => useAppController());
+      await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+      const enabled = !result.current.config[preference];
+      vi.mocked(invoke).mockClear();
+      await act(async () => { await result.current.saveRoutingPreference(preference, enabled); });
+      expect(invoke).toHaveBeenCalledExactlyOnceWith("save_routing_preference", { preference, enabled });
+      expect(wire[preference]).toBe(enabled);
+      expect(result.current.config[preference]).toBe(enabled);
+      expect(result.current.hasChanges).toBe(false);
+      expect(result.current.configActionBusy).toBe(false);
+      expect(result.current.routingPreferenceSaving[preference]).toBe(false);
+    },
+  );
+
+  it("saves different routing switches independently and blocks duplicate clicks on the same switch", async () => {
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let releaseLocal!: () => void;
+    let releaseCompatibility!: () => void;
+    const localGate = new Promise<void>((resolve) => { releaseLocal = resolve; });
+    const compatibilityGate = new Promise<void>((resolve) => { releaseCompatibility = resolve; });
+    vi.mocked(invoke).mockClear().mockImplementation(async (command, args) => {
+      if (command === "save_routing_preference") {
+        await ((args as { preference: string }).preference === "prefer_local_supply" ? localGate : compatibilityGate);
+      }
+      return base(command, args);
+    });
+    const localEnabled = !result.current.config.prefer_local_supply;
+    const compatibilityEnabled = !result.current.config.allow_model_equivalence;
+    let localSave!: Promise<void>;
+    let compatibilitySave!: Promise<void>;
+    act(() => {
+      localSave = result.current.saveRoutingPreference("prefer_local_supply", localEnabled);
+      compatibilitySave = result.current.saveRoutingPreference("allow_model_equivalence", compatibilityEnabled);
+      void result.current.saveRoutingPreference("prefer_local_supply", !localEnabled);
+    });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result.current.configActionBusy).toBe(false);
+    expect(result.current.routingPreferenceSaving).toEqual({ prefer_local_supply: true, allow_model_equivalence: true });
+    await act(async () => { releaseCompatibility(); await compatibilitySave; });
+    expect(result.current.routingPreferenceSaving).toEqual({ prefer_local_supply: true, allow_model_equivalence: false });
+    expect(result.current.config.allow_model_equivalence).toBe(compatibilityEnabled);
+    await act(async () => { releaseLocal(); await localSave; });
+    expect(result.current.config.prefer_local_supply).toBe(localEnabled);
+    expect(result.current.config.allow_model_equivalence).toBe(compatibilityEnabled);
+    expect(result.current.configActionBusy).toBe(false);
+    expect(result.current.hasChanges).toBe(false);
+  });
+
+  it("waits for pending routing preferences before saving and restarting access", async () => {
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.mocked(invoke).mockClear().mockImplementation(async (command, args) => {
+      if (command === "save_routing_preference") await gate;
+      if (command === "save_config") {
+        wire = { ...wire, ...(args as { config: object }).config };
+        return structuredClone(wire);
+      }
+      if (command === "stop_proxy" || command === "start_proxy") return { running: command === "start_proxy", listen: wire.listen };
+      return base(command, args);
+    });
+    const enabled = !result.current.config.prefer_local_supply;
+    let saving!: Promise<void>;
+    let restarting!: Promise<void>;
+    act(() => { saving = result.current.saveRoutingPreference("prefer_local_supply", enabled); });
+    act(() => result.current.setConfig((current) => ({ ...current, listen: "127.0.0.1:39999" })));
+    act(() => { restarting = result.current.restart(); });
+    expect(result.current.configActionBusy).toBe(true);
+    const accessCommands = () => vi.mocked(invoke).mock.calls.map(([command]) => command).filter((command) =>
+      ["save_routing_preference", "save_config", "stop_proxy", "start_proxy"].includes(command));
+    expect(accessCommands()).toEqual(["save_routing_preference"]);
+    await act(async () => { release(); await saving; await restarting; });
+    expect(accessCommands()).toEqual([
+      "save_routing_preference", "save_config", "stop_proxy", "start_proxy",
+    ]);
+    expect(wire.prefer_local_supply).toBe(enabled);
+    expect(wire.listen).toBe("127.0.0.1:39999");
+    expect(result.current.config.prefer_local_supply).toBe(enabled);
+    expect(result.current.configActionBusy).toBe(false);
+    expect(result.current.hasChanges).toBe(false);
+  });
+
+  it("preserves drafts and other settings saved while a routing preference is in flight", async () => {
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    const original = structuredClone(wire);
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "save_routing_preference") await gate;
+      return base(command, args);
+    });
+    const enabled = !result.current.config.prefer_local_supply;
+    let saving!: Promise<void>;
+    act(() => { saving = result.current.saveRoutingPreference("prefer_local_supply", enabled); });
+    expect(result.current.configActionBusy).toBe(false);
+    expect(result.current.routingPreferenceSaving.prefer_local_supply).toBe(true);
+    expect(result.current.routingPreferenceSaving.allow_model_equivalence).toBeFalsy();
+    expect(result.current.config.prefer_local_supply).not.toBe(enabled);
+    act(() => result.current.setConfig((current) => ({
+      ...current, listen: "127.0.0.1:39999", api_key: "draft-local-key",
+      channels: current.channels.map((channel) => ({ ...channel, name: "Unsaved channel" })),
+    })));
+    const injection = { all_models: false, extra_models: ["vendor/selected"] };
+    await act(async () => { await result.current.saveToolModelInjectionSettings(injection, vi.fn(), false); });
+    await act(async () => { release(); await saving; });
+    expect(result.current.config).toMatchObject({
+      listen: "127.0.0.1:39999", api_key: "draft-local-key", prefer_local_supply: enabled,
+      channels: [expect.objectContaining({ name: "Unsaved channel" })], tool_model_injection: injection,
+    });
+    expect(wire.listen).toBe(original.listen);
+    expect(wire.api_key).toBe(original.api_key);
+    expect(wire.channels).toEqual(original.channels);
+    expect(wire.tool_model_injection).toEqual(injection);
+    expect(result.current.hasChanges).toBe(true);
+    expect(result.current.configActionBusy).toBe(false);
+  });
+
+  it("keeps a newly saved routing preference when an older injection snapshot arrives later", async () => {
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      const response = await base(command, args);
+      if (command === "save_tool_model_injection_settings") await gate;
+      return response;
+    });
+    const injection = { all_models: false, extra_models: [] };
+    let saving!: ReturnType<typeof result.current.saveToolModelInjectionSettings>;
+    act(() => { saving = result.current.saveToolModelInjectionSettings(injection, vi.fn(), false); });
+    await waitFor(() => expect(wire.tool_model_injection).toEqual(injection));
+    const enabled = !result.current.config.prefer_local_supply;
+    await act(async () => { await result.current.saveRoutingPreference("prefer_local_supply", enabled); });
+    await act(async () => { release(); await saving; });
+    expect(result.current.config.prefer_local_supply).toBe(enabled);
+    expect(result.current.config.tool_model_injection).toEqual(injection);
+    expect(result.current.hasChanges).toBe(false);
+  });
+
+  it("keeps the confirmed routing preference and reports a persistence failure", async () => {
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    const original = result.current.config.allow_model_equivalence;
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "save_routing_preference") throw new Error("fixture disk unavailable");
+      return base(command, args);
+    });
+    await act(async () => { await result.current.saveRoutingPreference("allow_model_equivalence", !original); });
+    expect(result.current.config.allow_model_equivalence).toBe(original);
+    expect(wire.allow_model_equivalence).toBe(original);
+    expect(result.current.hasChanges).toBe(false);
+    expect(result.current.configActionBusy).toBe(false);
+    expect(result.current.routingPreferenceSaving.allow_model_equivalence).toBe(false);
+    expect(result.current.toast?.text).toContain("fixture disk unavailable");
+  });
 
   it("saves explicit priority groups without restarting or validating channels", async () => {
     wire.channels.push({ ...originalChannel(), id: "priority-second", name: "Second" });
@@ -117,7 +402,7 @@ describe("channel refresh and inference command boundaries", () => {
     await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
   });
 
-  it("new subscription authorization creates a separate channel without a duplicate prompt", async () => {
+  it.each([true, false])("subscription import persists proxy choice %s through activation", async (useSystemProxy) => {
     const driver = sourceDriverById("openai_subscription");
     wire.channels[0] = sourceDriverInitialChannelV5(driver, {
       id: "refresh-channel", name: "Existing subscription", credentialRef: "old-managed.json",
@@ -126,6 +411,7 @@ describe("channel refresh and inference command boundaries", () => {
     const prepared = sourceDriverInitialChannelV5(driver, {
       id: "new-subscription", name: "New subscription", credentialRef: ".pending/new.json",
     });
+    prepared.use_system_proxy = useSystemProxy;
     const finalized = { ...prepared, credential_ref: "new-managed.json" };
     const base = vi.mocked(invoke).getMockImplementation()!;
     vi.mocked(invoke).mockImplementation(async (command, args) => {
@@ -142,6 +428,7 @@ describe("channel refresh and inference command boundaries", () => {
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
     act(() => { result.current.addSubscriptionPreset(driver); });
+    act(() => { result.current.changeSubscriptionProxy(useSystemProxy); });
     vi.mocked(invoke).mockClear();
     await act(async () => {
       await result.current.importSubscriptionJson('{"refresh_token":"fixture"}');
@@ -149,11 +436,12 @@ describe("channel refresh and inference command boundaries", () => {
     expect(invoke).toHaveBeenCalledWith("import_subscription_token_json", {
       provider: "openai",
       tokenJson: '{"refresh_token":"fixture"}',
+      useSystemProxy,
     });
     expect(invoke).toHaveBeenCalledWith("finalize_subscription_import", { channel: prepared, createDuplicate: true });
     expect(wire.channels).toHaveLength(2);
     expect(wire.channels[0]).toMatchObject(existing);
-    expect(wire.channels[1]).toMatchObject({ id: "new-subscription", credential_ref: "new-managed.json", enabled: true });
+    expect(wire.channels[1]).toMatchObject({ id: "new-subscription", credential_ref: "new-managed.json", enabled: true, use_system_proxy: useSystemProxy });
     expect(result.current.subscriptionWizardOpen).toBe(false);
   });
 

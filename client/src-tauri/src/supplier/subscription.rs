@@ -1397,6 +1397,47 @@ fn openai_responses_completed_body_from_sse(raw: &str) -> Result<String> {
 mod buffered_response_tests {
     use super::*;
 
+    #[test]
+    fn subscription_adapters_preserve_selected_effort_and_unspecified_defaults() {
+        for effort in [None, Some("none"), Some("low"), Some("medium"), Some("high"), Some("xhigh"), Some("max")] {
+            for stream in [false, true] {
+                let mut chat = serde_json::json!({"model":"gpt-5.6-luna", "stream":stream,
+                    "messages":[{"role":"user","content":"Review this function"}],
+                    "tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object","properties":{}}}}]});
+                if let Some(effort) = effort {
+                    chat["reasoning_effort"] = serde_json::json!(effort);
+                }
+                let converted = upstream_request_for_api_format_with_profiles_report(
+                    "openai_responses", "/v1/chat/completions", &chat.to_string(), "gpt-5.6-luna", &[],
+                ).unwrap();
+                let prepared = prepare_codex_subscription_endpoint_request(
+                    &default_supplier_config(), &converted.body, false, "gpt-5.6-luna", None, None,
+                ).unwrap();
+                let payload: serde_json::Value = serde_json::from_str(&prepared.body).unwrap();
+                assert_eq!(payload.pointer("/reasoning/effort").and_then(serde_json::Value::as_str), effort);
+                // Luna uses the subscription's Responses Lite dialect: tools
+                // move into an additional_tools input item, not out of the request.
+                let tools = payload["input"].as_array().unwrap().iter()
+                    .find(|item| item["type"] == "additional_tools").unwrap();
+                assert_eq!(tools["tools"][0]["tools"][0]["name"], "read_file");
+
+                let converted = upstream_request_for_api_format_with_profiles_report(
+                    "anthropic_messages", "/v1/chat/completions", &chat.to_string(), "claude-haiku-5-5", &[],
+                ).unwrap();
+                let adjusted = ensure_claude_messages_body_with_faults(&converted.body, "claude-haiku-5-5").unwrap();
+                let prepared = prepare_claude_subscription_oauth_body(&adjusted.body, "test-credential").unwrap();
+                let payload: serde_json::Value = serde_json::from_str(&prepared).unwrap();
+                if effort == Some("none") {
+                    assert_eq!(payload["thinking"]["type"], "disabled");
+                    assert!(payload.pointer("/output_config/effort").is_none());
+                } else {
+                    assert_eq!(payload.pointer("/output_config/effort").and_then(serde_json::Value::as_str), effort);
+                }
+                assert_eq!(payload["tools"][0]["name"], "read_file");
+            }
+        }
+    }
+
     fn decoded_request_body(request: &reqwest::Request) -> Vec<u8> {
         let encoded = request
             .body()

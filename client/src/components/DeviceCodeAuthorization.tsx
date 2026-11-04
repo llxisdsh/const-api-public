@@ -15,8 +15,9 @@ type PollResult =
   | { state: "authorized"; api_key: string };
 type AuthError = { code: string; status?: number };
 
-export function DeviceCodeAuthorization({ provider = "muse_code", disabled, onStarting, onAuthorized, onOpenUrl }: {
+export function DeviceCodeAuthorization({ provider = "muse_code", useSystemProxy, disabled, onStarting, onAuthorized, onOpenUrl }: {
   provider?: "muse_code" | "copilot" | "cursor" | "opencode";
+  useSystemProxy: boolean;
   disabled: boolean;
   onStarting?: () => void;
   onAuthorized: (key: string) => void;
@@ -25,13 +26,22 @@ export function DeviceCodeAuthorization({ provider = "muse_code", disabled, onSt
   const { t } = useTranslation();
   const labels = provider === "muse_code" ? "museCode" : provider;
   const [starting, setStarting] = useState(false);
-  const [session, setSession] = useState<DeviceSession | null>(null);
+  const [session, setSession] = useState<(DeviceSession & { useSystemProxy: boolean }) | null>(null);
   const [error, setError] = useState<AuthError | null>(null);
   const [status, setStatus] = useState<"idle" | "waiting" | "retrying" | "success">("idle");
   const attempt = useRef(0);
   const onAuthorizedRef = useRef(onAuthorized);
   useEffect(() => { onAuthorizedRef.current = onAuthorized; }, [onAuthorized]);
   useEffect(() => () => { attempt.current += 1; }, []);
+  useEffect(() => {
+    // A flow uses one egress policy from creation to the final key exchange.
+    // Cancel stale in-flight responses before starting under another choice.
+    attempt.current += 1;
+    setStarting(false);
+    setSession(null);
+    setStatus("idle");
+    setError(null);
+  }, [provider, useSystemProxy]);
   useEffect(() => {
     if (provider !== "cursor" || !session) return;
     return () => { void invoke("cancel_cursor_auth_session", { deviceCode: session.device_code }); };
@@ -51,12 +61,12 @@ export function DeviceCodeAuthorization({ provider = "muse_code", disabled, onSt
     setStarting(true);
     setStatus("idle");
     try {
-      const next = await invoke<DeviceSession>(`create_${provider}_auth_session`);
+      const next = await invoke<DeviceSession>(`create_${provider}_auth_session`, { useSystemProxy });
       if (attempt.current !== current) {
         if (provider === "cursor") await invoke("cancel_cursor_auth_session", { deviceCode: next.device_code });
         return;
       }
-      setSession(next);
+      setSession({ ...next, useSystemProxy });
       setStatus("waiting");
     } catch (failure) {
       if (attempt.current === current) setError(authError(failure));
@@ -66,7 +76,7 @@ export function DeviceCodeAuthorization({ provider = "muse_code", disabled, onSt
   }
 
   useEffect(() => {
-    if (!session || disabled) return;
+    if (!session || disabled || session.useSystemProxy !== useSystemProxy) return;
     let cancelled = false;
     let interval = session.interval_seconds * 1000;
     let timer: ReturnType<typeof setTimeout>;
@@ -86,7 +96,7 @@ export function DeviceCodeAuthorization({ provider = "muse_code", disabled, onSt
         return;
       }
       try {
-        const result = await invoke<PollResult>(`poll_${provider}_auth_session`, { deviceCode: session.device_code });
+        const result = await invoke<PollResult>(`poll_${provider}_auth_session`, { deviceCode: session.device_code, useSystemProxy });
         if (cancelled) return;
         if (result.state === "authorized") {
           onAuthorizedRef.current(result.api_key);
@@ -107,7 +117,7 @@ export function DeviceCodeAuthorization({ provider = "muse_code", disabled, onSt
     };
     schedule();
     return () => { cancelled = true; clearTimeout(timer); clearTimeout(expiryTimer); };
-  }, [session, disabled, provider]);
+  }, [session, disabled, provider, useSystemProxy]);
 
   return <div className="grid-wide">
     <p className="field-hint">{t(`${labels}.hint`)}</p>

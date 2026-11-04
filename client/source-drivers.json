@@ -3,6 +3,7 @@
   "drivers": [
     {
       "id": "openai_subscription",
+      "default_use_system_proxy": true,
       "category": "subscription",
       "order": 10,
       "title": "OpenAI 账号订阅",
@@ -70,6 +71,7 @@
     },
     {
       "id": "claude_subscription",
+      "default_use_system_proxy": true,
       "category": "subscription",
       "order": 20,
       "title": "Claude 账号订阅",
@@ -115,6 +117,7 @@
     },
     {
       "id": "gemini_subscription",
+      "default_use_system_proxy": true,
       "category": "subscription",
       "order": 30,
       "title": "Antigravity 账号订阅",
@@ -171,6 +174,7 @@
     },
     {
       "id": "grok_subscription",
+      "default_use_system_proxy": true,
       "category": "subscription",
       "order": 40,
       "title": "Grok 账号订阅",
@@ -204,6 +208,7 @@
     },
     {
       "id": "kiro_subscription",
+      "default_use_system_proxy": true,
       "category": "subscription",
       "order": 45,
       "title": "Kiro 账号订阅",
@@ -237,6 +242,7 @@
     },
     {
       "id": "cursor_subscription",
+      "default_use_system_proxy": true,
       "category": "subscription",
       "order": 47,
       "title": "Cursor 账号订阅",
@@ -270,6 +276,7 @@
     },
     {
       "id": "openai_api",
+      "default_use_system_proxy": true,
       "category": "official_api",
       "order": 10,
       "title": "OpenAI 官方 API",
@@ -290,6 +297,7 @@
     },
     {
       "id": "anthropic_api",
+      "default_use_system_proxy": true,
       "category": "official_api",
       "order": 20,
       "title": "Claude / Anthropic 官方 API",
@@ -310,6 +318,7 @@
     },
     {
       "id": "gemini_api",
+      "default_use_system_proxy": true,
       "category": "official_api",
       "order": 30,
       "title": "Gemini / Google AI Studio API",
@@ -333,6 +342,7 @@
     },
     {
       "id": "xai_api",
+      "default_use_system_proxy": true,
       "category": "official_api",
       "order": 40,
       "title": "xAI 官方 API",
@@ -353,6 +363,7 @@
     },
     {
       "id": "mistral_api",
+      "default_use_system_proxy": true,
       "category": "official_api",
       "order": 50,
       "title": "Mistral AI 官方 API",
@@ -373,6 +384,7 @@
     },
     {
       "id": "deepseek_api",
+      "default_use_system_proxy": false,
       "category": "official_api",
       "order": 60,
       "title": "DeepSeek 官方 API",
@@ -396,6 +408,7 @@
     },
     {
       "id": "dashscope_api",
+      "default_use_system_proxy": false,
       "category": "official_api",
       "order": 70,
       "title": "阿里云百炼 / 通义千问 API",
@@ -416,6 +429,7 @@
     },
     {
       "id": "moonshot_api",
+      "default_use_system_proxy": false,
       "category": "official_api",
       "order": 80,
       "title": "Kimi / Moonshot AI API",
@@ -436,6 +450,7 @@
     },
     {
       "id": "zhipu_api",
+      "default_use_system_proxy": false,
       "category": "official_api",
       "order": 90,
       "title": "智谱 BigModel API",
@@ -456,6 +471,7 @@
     },
     {
       "id": "minimax_api",
+      "default_use_system_proxy": false,
       "category": "official_api",
       "order": 100,
       "title": "MiniMax 官方 API",
@@ -479,6 +495,7 @@
     },
     {
       "id": "stepfun_api",
+      "default_use_system_proxy": false,
       "category": "official_api",
       "order": 110,
       "title": "阶跃星辰 StepFun API",
@@ -502,6 +519,7 @@
     },
     {
       "id": "azure_openai",
+      "default_use_system_proxy": true,
       "category": "cloud_platform",
       "order": 10,
       "title": "Microsoft Foundry / Azure OpenAI 云平台",
@@ -522,6 +540,7 @@
     },
     {
       "id": "bedrock_mantle",
+      "default_use_system_proxy": true,
       "category": "cloud_platform",
       "order": 20,
       "title": "Amazon Bedrock 云平台",
@@ -545,6 +564,7 @@
     },
     {
       "id": "groq_api",
+      "default_use_system_proxy": true,
       "category": "cloud_platform",
       "order": 30,
       "title": "GroqCloud API",
@@ -565,6 +585,7 @@
     },
     {
       "id": "together_api",
+      "default_use_system_proxy": true,
       "category": "cloud_platform",
       "order": 40,
       "title": "Together AI API",
@@ -585,6 +606,7 @@
     },
     {
       "id": "fireworks_api",
+      "default_use_system_proxy": true,
       "category": "cloud_platform",
       "order": 50,
       "title": "Fireworks AI API",
@@ -608,6 +630,7 @@
     },
     {
       "id": "perplexity_api",
+      "default_use_system_proxy": true,
       "category": "cloud_platform",
       "order": 60,
       "title": "Perplexity API",
@@ -628,6 +651,7 @@
     },
     {
       "id": "huggingface_api",
+      "default_use_system_proxy": true,
       "category": "cloud_platform",
       "order": 70,
       "title": "Hugging Face Inference API",
@@ -648,6 +672,7 @@
     },
     {
       "id": "nvidia_api",
+      "default_use_system_proxy": true,
       "category": "cloud_platform",
       "order": 80,
       "title": "NVIDIA NIM API",
@@ -668,6 +693,7 @@
     },
     {
       "id": "siliconflow_api",
+      "default_use_system_proxy": false,
       "category": "cloud_platform",
       "order": 90,
       "title": "硅基流动 SiliconFlow API",
@@ -688,6 +714,7 @@
     },
     {
       "id": "volcengine_ark_api",
+      "default_use_system_proxy": false,
       "category": "cloud_platform",
       "order": 100,
       "title": "火山方舟 Ark API",
@@ -708,6 +735,7 @@
     },
     {
       "id": "baidu_qianfan_api",
+      "default_use_system_proxy": false,
       "category": "cloud_platform",
       "order": 110,
       "title": "百度智能云千帆 API",
@@ -731,6 +759,7 @@
     },
     {
       "id": "tencent_hunyuan_api",
+      "default_use_system_proxy": false,
       "category": "cloud_platform",
       "order": 120,
       "title": "腾讯混元 API",
@@ -751,6 +780,7 @@
     },
     {
       "id": "openrouter",
+      "default_use_system_proxy": true,
       "category": "compatible_gateway",
       "order": 10,
       "title": "OpenRouter 聚合端点",
@@ -774,6 +804,7 @@
     },
     {
       "id": "opencode_go",
+      "default_use_system_proxy": true,
       "fixed_connection": true,
       "category": "compatible_gateway",
       "order": 11,
@@ -804,6 +835,7 @@
     },
     {
       "id": "opencode_zen",
+      "default_use_system_proxy": true,
       "fixed_connection": true,
       "category": "compatible_gateway",
       "order": 12,
@@ -834,6 +866,7 @@
     },
     {
       "id": "opencode_console",
+      "default_use_system_proxy": true,
       "fixed_connection": true,
       "category": "subscription",
       "order": 45,
@@ -865,6 +898,7 @@
     },
     {
       "id": "copilot_subscription",
+      "default_use_system_proxy": true,
       "fixed_connection": true,
       "category": "subscription",
       "order": 50,
@@ -893,6 +927,7 @@
     },
     {
       "id": "kilo_gateway",
+      "default_use_system_proxy": true,
       "fixed_connection": true,
       "category": "compatible_gateway",
       "order": 13,
@@ -918,6 +953,7 @@
     },
     {
       "id": "cline_api",
+      "default_use_system_proxy": true,
       "fixed_connection": true,
       "category": "compatible_gateway",
       "order": 14,
@@ -943,6 +979,7 @@
     },
     {
       "id": "command_code",
+      "default_use_system_proxy": true,
       "fixed_connection": true,
       "category": "compatible_gateway",
       "order": 15,
@@ -964,6 +1001,7 @@
     },
     {
       "id": "kimi_code",
+      "default_use_system_proxy": false,
       "fixed_connection": true,
       "category": "compatible_gateway",
       "order": 16,
@@ -985,6 +1023,7 @@
     },
     {
       "id": "glm_coding_plan",
+      "default_use_system_proxy": false,
       "fixed_connection": true,
       "category": "compatible_gateway",
       "order": 17,
@@ -1006,6 +1045,7 @@
     },
     {
       "id": "minimax_token_plan",
+      "default_use_system_proxy": false,
       "fixed_connection": true,
       "category": "compatible_gateway",
       "order": 18,
@@ -1027,6 +1067,7 @@
     },
     {
       "id": "ollama_cloud",
+      "default_use_system_proxy": true,
       "fixed_connection": true,
       "category": "compatible_gateway",
       "order": 19,
@@ -1048,6 +1089,7 @@
     },
     {
       "id": "muse_code",
+      "default_use_system_proxy": true,
       "fixed_connection": true,
       "category": "subscription",
       "order": 55,
@@ -1069,6 +1111,7 @@
     },
     {
       "id": "abacus_routellm",
+      "default_use_system_proxy": true,
       "fixed_connection": true,
       "category": "compatible_gateway",
       "order": 21,
@@ -1090,6 +1133,7 @@
     },
     {
       "id": "poe_api",
+      "default_use_system_proxy": true,
       "fixed_connection": true,
       "category": "compatible_gateway",
       "order": 22,
@@ -1111,6 +1155,7 @@
     },
     {
       "id": "omniroute",
+      "default_use_system_proxy": false,
       "category": "compatible_gateway",
       "order": 20,
       "title": "OmniRoute 本地聚合端点",
@@ -1131,6 +1176,7 @@
     },
     {
       "id": "ollama",
+      "default_use_system_proxy": false,
       "category": "local_runtime",
       "order": 10,
       "title": "Ollama 本地运行时",
@@ -1151,6 +1197,7 @@
     },
     {
       "id": "lm_studio",
+      "default_use_system_proxy": false,
       "category": "local_runtime",
       "order": 20,
       "title": "LM Studio 本地运行时",
@@ -1171,6 +1218,7 @@
     },
     {
       "id": "vllm",
+      "default_use_system_proxy": false,
       "category": "local_runtime",
       "order": 30,
       "title": "vLLM 本地运行时",
@@ -1191,6 +1239,7 @@
     },
     {
       "id": "lan_share",
+      "default_use_system_proxy": false,
       "category": "compatible_gateway",
       "order": 30,
       "title": "局域网共享渠道",
@@ -1214,6 +1263,7 @@
     },
     {
       "id": "custom_endpoint",
+      "default_use_system_proxy": false,
       "category": "compatible_gateway",
       "order": 90,
       "title": "自定义 API 端点",

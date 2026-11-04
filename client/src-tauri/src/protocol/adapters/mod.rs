@@ -3,6 +3,7 @@ mod gemini_native;
 mod openai_chat;
 mod openai_responses;
 
+pub(crate) use gemini_native::gemini_thinking_config;
 pub(crate) use openai_chat::OpenAiChatAdapter;
 pub(crate) use openai_responses::{OpenAiResponsesAdapter, responses_finish_fields};
 

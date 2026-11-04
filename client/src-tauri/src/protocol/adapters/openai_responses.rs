@@ -1358,8 +1358,18 @@ fn decode_reasoning_config(
     ReasoningConfig {
         mode,
         effort,
-        token_budget,
-        summary,
+        // An explicit off command wins over a stale budget/summary left by a
+        // tool's previous selection. Native Responses bypass re-encoding.
+        token_budget: if effort == Some(ReasoningEffort::None) {
+            None
+        } else {
+            token_budget
+        },
+        summary: if effort == Some(ReasoningEffort::None) {
+            ReasoningSummaryMode::None
+        } else {
+            summary
+        },
         provider_extensions: value
             .as_object()
             .into_iter()
@@ -2313,7 +2323,12 @@ fn encode_reasoning_config(body: &mut Value, reasoning: &ReasoningConfig, plan: 
     if let Some(effort) = reasoning.effort {
         value["effort"] = json!(effort.openai_name());
     }
-    if let Some(max_tokens) = reasoning.token_budget {
+    // Numeric thinking budgets are not a Responses API field. Do not invent
+    // reasoning.max_tokens when bridging Claude/Gemini/Chat; the conversion
+    // plan reports that loss. Native provider extensions still pass through.
+    if plan.report().source_protocol == ProtocolKind::OpenAiResponses
+        && let Some(max_tokens) = reasoning.token_budget
+    {
         value["max_tokens"] = json!(max_tokens);
     }
     let summary = match reasoning.summary {

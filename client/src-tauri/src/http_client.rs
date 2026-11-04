@@ -8,6 +8,43 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 const RECOVERY_INTERVAL: Duration = Duration::from_secs(5);
+
+// Recommended routes for CONST-owned traffic. These are code policy, not user
+// settings. Current platform endpoints are domestic; channel traffic instead
+// always uses its persisted choice (new-channel defaults live in source-drivers).
+pub(crate) const PLATFORM_USE_SYSTEM_PROXY: bool = false;
+const PUBLIC_RESOURCE_USE_SYSTEM_PROXY: bool = true;
+const DOMESTIC_RESOURCE_HOSTS: &[&str] = &["const.tos-cn-shanghai.volces.com"];
+
+/// Public overseas sources (GitHub, its CDN, future overseas mirrors) use the
+/// system proxy. Maintain known domestic origins here; do not infer geography
+/// from a model brand, DNS resolution, or a failed credential-bearing request.
+pub(crate) fn public_resource_uses_system_proxy(url: &reqwest::Url) -> bool {
+    let host = url.host_str().unwrap_or_default().trim_matches(['[', ']']);
+    let local = host == "localhost"
+        || host.ends_with(".localhost")
+        || host.parse::<std::net::IpAddr>().is_ok_and(|ip| match ip {
+            std::net::IpAddr::V4(ip) => {
+                ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+            }
+            std::net::IpAddr::V6(ip) => {
+                ip.is_loopback()
+                    || ip.is_unique_local()
+                    || ip.is_unicast_link_local()
+                    || ip.is_unspecified()
+                    || ip
+                        .to_ipv4_mapped()
+                        .is_some_and(|ip| ip.is_loopback() || ip.is_private() || ip.is_link_local())
+            }
+        });
+    !local && !DOMESTIC_RESOURCE_HOSTS.contains(&host) && PUBLIC_RESOURCE_USE_SYSTEM_PROXY
+}
+
+pub(crate) fn public_resource_client(url: &str) -> anyhow::Result<Client> {
+    Ok(channel_short_client(public_resource_uses_system_proxy(
+        &reqwest::Url::parse(url)?,
+    ))?)
+}
 static NETWORK_GENERATION: AtomicU64 = AtomicU64::new(0);
 static LAST_RECOVERY: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -129,8 +166,7 @@ pub(crate) fn cached_client(
     Ok(slot.get_or_init(|| client).snapshot())
 }
 
-/// Channel data/metadata traffic has its own pools. Platform control traffic
-/// keeps its existing system-proxy policy. Neither setting controls OS TUN routing.
+/// Separate direct/proxy pools; neither setting controls OS TUN routing.
 pub(crate) fn channel_client(use_system_proxy: bool) -> reqwest::Result<Client> {
     static DIRECT: OnceLock<HttpClient> = OnceLock::new();
     static PROXY: OnceLock<HttpClient> = OnceLock::new();
@@ -200,19 +236,22 @@ pub(crate) async fn connect_channel_websocket(
     )
 }
 
-/// Use the same system-proxy recovery as HTTP for the supplier control tunnel.
+/// Use the same direct policy as platform HTTP for the supplier control tunnel.
 /// Redirects and automatic retries are disabled before any registration is sent.
 pub(crate) async fn connect_websocket(
     url: &str,
 ) -> anyhow::Result<tokio_tungstenite::WebSocketStream<reqwest::Upgraded>> {
     static CLIENT: OnceLock<HttpClient> = OnceLock::new();
     let client = cached_client(&CLIENT, || {
-        Client::builder()
-            .http1_only()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(5))
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
+        proxy_policy(
+            Client::builder()
+                .http1_only()
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(5))
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never()),
+            PLATFORM_USE_SYSTEM_PROXY,
+        )
     })?;
     connect_websocket_with_client(&client, url).await
 }
@@ -283,6 +322,37 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize};
     use warp::Filter;
 
+    #[test]
+    fn public_sources_use_domestic_direct_and_overseas_proxy_recommendations() {
+        for url in [
+            "https://const.tos-cn-shanghai.volces.com/catalog-registry/manifest.json",
+            "http://localhost:15420/file",
+            "http://127.0.0.1/check",
+            "http://192.168.1.1/file",
+            "http://[::1]/file",
+            "http://[::ffff:127.0.0.1]/file",
+        ] {
+            assert!(
+                !public_resource_uses_system_proxy(&url.parse().unwrap()),
+                "{url}"
+            );
+        }
+        for url in [
+            "https://github.com/const/releases",
+            "https://api.github.com/repos/const",
+            "https://raw.githubusercontent.com/const/file",
+            "https://release-assets.githubusercontent.com/file",
+            "https://overseas-mirror.example/file",
+            "https://const.tos-cn-shanghai.volces.com.attacker.example/file",
+            "https://const.tos-cn-shanghai.volces.com@overseas.example/file",
+        ] {
+            assert!(
+                public_resource_uses_system_proxy(&url.parse().unwrap()),
+                "{url}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn channel_http_proxy_is_opt_in_and_pool_modes_do_not_leak() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -321,7 +391,15 @@ mod tests {
             .stderr(std::process::Stdio::piped());
         let mut child = child.spawn().unwrap();
         let result = tokio::time::timeout(Duration::from_secs(20), async {
-            for (listener, label) in [(&direct, "direct"), (&proxy, "proxy"), (&direct, "direct")] {
+            for (listener, label) in [
+                (&direct, "direct"),
+                (&proxy, "proxy"),
+                (&direct, "direct"),
+                (&direct, "direct"),
+                (&direct, "direct"),
+                (&direct, "direct"),
+                (&proxy, "proxy"),
+            ] {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut bytes = Vec::new();
                 while !bytes.ends_with(b"\r\n\r\n") {
@@ -341,6 +419,11 @@ mod tests {
                     .await
                     .unwrap();
             }
+            let (socket, _) = direct.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            use futures_util::{SinkExt, StreamExt};
+            let frame = socket.next().await.unwrap().unwrap();
+            socket.send(frame).await.unwrap();
             while child.try_wait().unwrap().is_none() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
@@ -381,6 +464,42 @@ mod tests {
                 expected
             );
         }
+        for client in [
+            crate::short_http_client(),
+            crate::long_http_client(),
+            public_resource_client(&url).unwrap(),
+        ] {
+            assert_eq!(
+                client.get(&url).send().await.unwrap().text().await.unwrap(),
+                "direct"
+            );
+        }
+        assert_eq!(
+            public_resource_client("http://overseas.invalid/file")
+                .unwrap()
+                .get("http://overseas.invalid/file")
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "proxy"
+        );
+        use futures_util::{SinkExt, StreamExt};
+        let mut socket = connect_websocket(&url.replacen("http:", "ws:", 1))
+            .await
+            .unwrap();
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                "direct-platform".into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap().into_text().unwrap(),
+            "direct-platform"
+        );
     }
 
     #[tokio::test]
@@ -428,6 +547,108 @@ mod tests {
             "test-only"
         );
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn openai_oauth_exchange_uses_selected_system_proxy_without_tun() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let certificate =
+            rcgen::generate_simple_self_signed(vec!["auth.openai.com".into()]).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let ca = dir.path().join("ca.pem");
+        std::fs::write(&ca, certificate.cert.pem()).unwrap();
+        let mut tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![certificate.cert.der().clone()],
+            rustls::pki_types::PrivatePkcs8KeyDer::from(certificate.signing_key.serialize_der())
+                .into(),
+        )
+        .unwrap();
+        tls.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "--ignored",
+            "--exact",
+            "http_client::tests::openai_oauth_proxy_child",
+            "--nocapture",
+        ]);
+        for name in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "no_proxy",
+            "REQUEST_METHOD",
+            "SSL_CERT_FILE",
+        ] {
+            command.env_remove(name);
+        }
+        let mut child = command
+            .env(
+                "HTTPS_PROXY",
+                format!("http://{}", listener.local_addr().unwrap()),
+            )
+            .env("CODEX_CA_CERTIFICATE", &ca)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(25), async {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") { head.push(socket.read_u8().await.unwrap()); }
+            assert!(String::from_utf8(head).unwrap().starts_with("CONNECT auth.openai.com:443 HTTP/1.1"));
+            socket.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n").await.unwrap();
+            let mut socket = tokio_rustls::TlsAcceptor::from(Arc::new(tls)).accept(socket).await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") { head.push(socket.read_u8().await.unwrap()); }
+            let head = String::from_utf8(head).unwrap().to_ascii_lowercase();
+            assert!(head.starts_with("post /oauth/token http/1.1"));
+            let length: usize = head.lines().find_map(|line| line.strip_prefix("content-length: ")).unwrap().parse().unwrap();
+            let mut body = vec![0; length];
+            socket.read_exact(&mut body).await.unwrap();
+            let body = String::from_utf8(body).unwrap();
+            assert!(body.contains("grant_type=authorization_code"));
+            assert!(body.contains("code=fixture-code"));
+            assert!(body.contains("code_verifier=fixture-verifier"));
+            let body = r#"{"access_token":"fixture-access","refresh_token":"fixture-refresh","expires_in":3600}"#;
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            while child.try_wait().unwrap().is_none() { tokio::time::sleep(Duration::from_millis(10)).await; }
+        }).await;
+        if result.is_err() {
+            let _ = child.kill();
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            result.is_ok() && output.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "isolated child of openai_oauth_exchange_uses_selected_system_proxy_without_tun"]
+    async fn openai_oauth_proxy_child() {
+        let token = crate::detection::exchange_openai_oauth_code(
+            &channel_client(true).unwrap(),
+            true,
+            "fixture-code",
+            "fixture-verifier",
+            "http://localhost:1455/auth/callback",
+        )
+        .await
+        .unwrap();
+        assert_eq!(token["access_token"], "fixture-access");
     }
 
     #[tokio::test]

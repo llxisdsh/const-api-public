@@ -13,8 +13,8 @@ use crate::protocol::continuation::{
     previous_part_entries, reasoning_artifacts_are_encrypted, reasoning_entries, tool_call_entries,
 };
 use crate::protocol::conversion::{
-    ArtifactDisposition, ConversionPlan, FeatureDisposition, canonicalize_schema,
-    canonicalize_tool_schema, flatten_namespace_tools,
+    ArtifactDisposition, ConversionIssue, ConversionPlan, FeatureDisposition, IssueAction,
+    IssueSeverity, canonicalize_schema, canonicalize_tool_schema, flatten_namespace_tools,
 };
 use crate::protocol::ir::*;
 use crate::protocol::kind::ProtocolKind;
@@ -1044,8 +1044,8 @@ fn decode_reasoning(body: &Value, context: &AdapterContext, model: &str) -> Reas
     ReasoningConfig {
         mode,
         effort,
-        token_budget: budget,
-        summary: if include {
+        token_budget: budget.filter(|budget| *budget > 0),
+        summary: if include && budget != Some(0) {
             ReasoningSummaryMode::Auto
         } else {
             ReasoningSummaryMode::None
@@ -2223,30 +2223,7 @@ fn encode_generation(body: &mut Value, request: &CanonicalRequestV2) -> Result<(
             config.insert("responseJsonSchema".to_string(), schema.clone());
         }
     }
-    let mut thinking = Map::new();
-    if !matches!(request.reasoning.summary, ReasoningSummaryMode::None) {
-        thinking.insert("includeThoughts".to_string(), Value::Bool(true));
-    }
-    if let Some(budget) = request.reasoning.token_budget {
-        thinking.insert("thinkingBudget".to_string(), json!(budget));
-    } else if request.reasoning.is_explicitly_disabled() {
-        // Only an explicit source-protocol disable becomes budget 0. Missing
-        // reasoning settings mean "use the target model default"; emitting 0
-        // there breaks Gemini models that require thinking.
-        thinking.insert("thinkingBudget".to_string(), json!(0));
-    }
-    if let Some(effort) = request.reasoning.effort {
-        // Gemini's documented discrete alphabet stops at HIGH. Preserve its
-        // four exact values and clamp only higher foreign-protocol values to
-        // that semantic ceiling. Explicit `none` is represented by budget 0.
-        // Individual Gemini models expose different subsets; selectors use
-        // catalog metadata for that distinction, while direct requests remain
-        // the provider's decision instead of being guessed from a model name.
-        let level = effort.gemini_level();
-        if let Some(level) = level {
-            thinking.insert("thinkingLevel".to_string(), json!(level));
-        }
-    }
+    let (mut thinking, _) = gemini_thinking_config(&request.reasoning, &request.model);
     for extension in &request.reasoning.provider_extensions {
         if extension.namespace == "gemini_native" && extension.name == "thinking_config_extra" {
             if let Some(extra) = extension.value.as_object() {
@@ -2272,6 +2249,122 @@ fn encode_generation(body: &mut Value, request: &CanonicalRequestV2) -> Result<(
         body["serviceTier"] = json!(tier);
     }
     Ok(())
+}
+
+/// Shared by planning and encoding so every best-effort adjustment is reported
+/// without maintaining a second set of model rules. Native requests bypass it.
+pub(crate) fn gemini_thinking_config(
+    reasoning: &ReasoningConfig,
+    model: &str,
+) -> (Map<String, Value>, Vec<ConversionIssue>) {
+    let mut thinking = Map::new();
+    let mut issues = Vec::new();
+    let mut warn = |code: &str, summary: &str| {
+        issues.push(ConversionIssue {
+            code: code.to_string(),
+            severity: IssueSeverity::Warning,
+            path: "reasoning".to_string(),
+            feature: Some(Feature::Reasoning),
+            target_limitation: "The target Gemini model uses different thinking controls"
+                .to_string(),
+            action: IssueAction::Approximate,
+            summary: summary.to_string(),
+        })
+    };
+    if !matches!(reasoning.summary, ReasoningSummaryMode::None) {
+        thinking.insert("includeThoughts".to_string(), Value::Bool(true));
+    }
+    let model = model
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let gemini_25 = model.starts_with("gemini-2.5-");
+    let gemini_4 = model.starts_with("gemini-4-") || model.starts_with("gemini-4.");
+    let gemini_3 = model.starts_with("gemini-3-") || model.starts_with("gemini-3.");
+    if reasoning.is_explicitly_disabled() {
+        if gemini_3 || gemini_4 {
+            thinking.insert("thinkingLevel".to_string(), json!("LOW"));
+            warn(
+                "reasoning_disable_approximated",
+                "This model cannot disable thinking; used LOW to keep the request usable.",
+            );
+        } else if model.starts_with("gemini-2.5-pro") {
+            thinking.insert("thinkingBudget".to_string(), json!(128));
+            warn(
+                "reasoning_disable_approximated",
+                "Gemini 2.5 Pro cannot disable thinking; used its minimum 128-token budget.",
+            );
+        } else {
+            thinking.insert("thinkingBudget".to_string(), json!(0));
+        }
+    } else if let Some(budget) = reasoning.token_budget.filter(|_| !gemini_4) {
+        // A numeric budget is more specific; never emit both controls.
+        // Clamp only documented text-model budgets at this cross-protocol
+        // boundary. In particular, Flash-Lite supports 0 or 512..=24576,
+        // while Pro cannot disable thinking with a zero budget.
+        let bounds = match model.as_str() {
+            "gemini-2.5-pro" => Some((128, 32_768)),
+            "gemini-2.5-flash-lite" if budget > 0 => Some((512, 24_576)),
+            "gemini-2.5-flash" => Some((0, 24_576)),
+            _ => None,
+        };
+        let effective_budget = bounds.map_or(budget, |(min, max)| budget.clamp(min, max));
+        if effective_budget != budget {
+            warn(
+                "reasoning_budget_clamped",
+                "The requested thinking budget is outside this model's supported range; used the nearest supported budget.",
+            );
+        }
+        thinking.insert("thinkingBudget".to_string(), json!(effective_budget));
+        if reasoning.effort.is_some() {
+            warn(
+                "reasoning_effort_approximated",
+                "Gemini cannot combine a budget and a level; retained the explicit thinking budget.",
+            );
+        }
+    } else if gemini_25 && !matches!(reasoning.mode, ReasoningMode::Disabled) {
+        thinking.insert("thinkingBudget".to_string(), json!(-1));
+        if reasoning.effort.is_some() {
+            warn(
+                "reasoning_effort_approximated",
+                "Gemini 2.5 has no effort levels; used dynamic thinking instead of guessing a token budget.",
+            );
+        }
+    } else {
+        if gemini_4 && reasoning.token_budget.is_some() {
+            warn(
+                "reasoning_budget_omitted",
+                "Gemini 4 does not accept a thinking budget; retained effort when present, otherwise used the model default.",
+            );
+        }
+        if let Some(effort) = reasoning.effort {
+            let minimal_unsupported =
+                gemini_4 || matches!(model.as_str(), "gemini-3.7-flash" | "gemini-3.8-flash");
+            let level = if minimal_unsupported && effort == ReasoningEffort::Minimal {
+                warn(
+                    "reasoning_effort_approximated",
+                    "This model does not support MINIMAL; used LOW.",
+                );
+                Some("LOW")
+            } else {
+                if matches!(
+                    effort,
+                    ReasoningEffort::XHigh | ReasoningEffort::Max | ReasoningEffort::Ultra
+                ) {
+                    warn(
+                        "reasoning_effort_approximated",
+                        "Gemini thinking levels stop at HIGH; used HIGH for the requested higher effort.",
+                    );
+                }
+                effort.gemini_level()
+            };
+            if let Some(level) = level {
+                thinking.insert("thinkingLevel".to_string(), json!(level));
+            }
+        }
+    }
+    (thinking, issues)
 }
 
 fn insert_option<T: serde::Serialize>(map: &mut Map<String, Value>, name: &str, value: Option<T>) {

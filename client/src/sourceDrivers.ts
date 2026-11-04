@@ -180,6 +180,7 @@ export type SourceDriver = {
   readonly homepageUrl?: string;
   readonly advanced: boolean;
   readonly fixedConnection: boolean;
+  readonly defaultUseSystemProxy: boolean;
   readonly executionKind: SourceDriverExecutionKind;
   readonly executor: SourceDriverExecutorLocator;
   readonly defaultTarget: SourceDriverTarget;
@@ -394,6 +395,7 @@ type RawDriver = {
   homepage_url?: string;
   advanced?: boolean;
   fixed_connection?: boolean;
+  default_use_system_proxy: boolean;
   execution_kind: string;
   executor: { type: string; provider?: string };
   default_target: { surface: string; protocol: string };
@@ -601,7 +603,7 @@ export function sourceDriverInitialChannelV5(
     default_target: { ...defaults.defaultTarget },
     discovery: { ...defaults.discovery },
     user_agent_profile: "",
-    use_system_proxy: false,
+    use_system_proxy: driver.defaultUseSystemProxy,
     default_model: "",
     models: [],
     price_ratio: 1,
@@ -997,6 +999,9 @@ function parseManifest(value: unknown): RawManifest {
 function validateRawDriver(driver: RawDriver, ids: Set<string>) {
   if (!DRIVER_IDS.has(driver.id as SourceDriverId) || ids.has(driver.id)) throw new Error(`Invalid or duplicate source driver: ${driver.id}`);
   ids.add(driver.id);
+  if (typeof driver.default_use_system_proxy !== "boolean") {
+    throw new Error(`Source driver ${driver.id} has an invalid proxy default`);
+  }
   if (!CATEGORIES.has(driver.category as SourceDriverCategory) || !ICONS.has(driver.icon_key as SourceDriverIconKey)) {
     throw new Error(`Source driver ${driver.id} has invalid category or icon`);
   }
@@ -1171,6 +1176,7 @@ function toSourceDriver(raw: RawDriver): SourceDriver {
     homepageUrl: raw.homepage_url?.trim() || undefined,
     advanced: Boolean(raw.advanced),
     fixedConnection: Boolean(raw.fixed_connection),
+    defaultUseSystemProxy: raw.default_use_system_proxy,
     executionKind: raw.execution_kind as SourceDriverExecutionKind,
     executor: raw.executor as SourceDriverExecutorLocator,
     defaultTarget: {

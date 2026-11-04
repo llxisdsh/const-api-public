@@ -33,6 +33,50 @@ pub(crate) fn subscription_usage_db_path() -> PathBuf {
         .join("channel-usage.sqlite3")
 }
 
+#[cfg(test)]
+mod usage_storage_isolation_tests {
+    use super::*;
+
+    #[test]
+    fn default_test_storage_ignores_live_profile_overrides() {
+        const PROBE: &str = "CONST_API_TEST_STORAGE_PROBE";
+        if std::env::var_os(PROBE).is_some() {
+            let root = crate::client_data_root();
+            assert_ne!(crate::home_dir(), dirs::home_dir().unwrap());
+            assert_eq!(root, crate::home_dir().join(".const-api"));
+            assert_eq!(crate::config::default_config_path(), root.join("client.json"));
+            append_subscription_usage_record(&serde_json::json!({
+                "ts": now_unix(), "channel_id": "isolation-probe", "status": 200
+            }))
+            .unwrap();
+            let records = query_subscription_usage_records(10, None).unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0]["channel_id"], "isolation-probe");
+            assert!(subscription_usage_db_path().starts_with(root));
+            return;
+        }
+
+        // A fresh test process proves the fallback works without a test-owned
+        // HOME override, including writes from the asynchronous usage writer.
+        let sandbox = tempfile::tempdir().unwrap();
+        let live_profile = sandbox.path().join("live-profile");
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "supplier::usage_storage_isolation_tests::default_test_storage_ignores_live_profile_overrides", "--nocapture"])
+            .env(PROBE, "1")
+            .env_remove("CONST_API_TEST_HOME")
+            .env("CONST_API_CLIENT_DATA_DIR", &live_profile)
+            .env("CONST_API_CLIENT_CONFIG_PATH", live_profile.join("client.json"))
+            .env("TMP", sandbox.path())
+            .env("TEMP", sandbox.path())
+            .env("TMPDIR", sandbox.path())
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+        assert!(String::from_utf8_lossy(&result.stdout).contains("1 passed"));
+        assert!(!live_profile.exists(), "tests must not touch the live profile");
+    }
+}
+
 fn with_subscription_usage_db<T>(
     operation: impl FnOnce(&mut Connection) -> Result<T>,
 ) -> Result<T> {

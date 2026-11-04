@@ -20,22 +20,33 @@ import {
 } from "./sourceDrivers";
 
 describe("source drivers", () => {
-  test("OpenAI subscriptions default to direct Desktop and preserve explicit connection options", () => {
+  test("new OpenAI subscriptions use the proxy preset without migrating existing choices", () => {
     const channel = sourceDriverInitialChannelV5(sourceDriverById("openai_subscription"), {
       id: "openai-profile", name: "OpenAI", credentialRef: "credential://test",
     });
-    expect(channel.use_system_proxy).toBe(false);
+    expect(channel.use_system_proxy).toBe(true);
     expect(channel.user_agent_profile ?? "").toBe("");
-    channel.use_system_proxy = true;
+    channel.use_system_proxy = false;
     channel.user_agent_profile = "codex_cli";
     const loaded = reloadChannelV5(JSON.parse(JSON.stringify(serializeChannelV5(channel))));
-    expect(loaded.use_system_proxy).toBe(true);
+    expect(loaded.use_system_proxy).toBe(false);
     expect(loaded.user_agent_profile).toBe("codex_cli");
     delete channel.use_system_proxy;
     channel.user_agent_profile = "codex";
     const legacy = normalizeChannelV5(channel);
     expect(legacy.use_system_proxy).toBe(false);
     expect(legacy.user_agent_profile).toBe("codex_tui");
+  });
+  test("presets apply per-driver system proxy defaults", () => {
+    for (const id of ["deepseek_api", "dashscope_api", "minimax_api", "zhipu_api", "kimi_code", "minimax_token_plan", "glm_coding_plan", "lan_share", "ollama", "custom_endpoint"] as const) {
+      expect(sourceDriverInitialChannelV5(sourceDriverById(id), { id, name: id }).use_system_proxy).toBe(false);
+    }
+    for (const id of ["claude_subscription", "gemini_subscription", "muse_code", "copilot_subscription", "openrouter"] as const) {
+      expect(sourceDriverInitialChannelV5(sourceDriverById(id), { id, name: id }).use_system_proxy).toBe(true);
+    }
+    const invalid = structuredClone(sourceDriverManifestJson);
+    Reflect.deleteProperty(invalid.drivers[0], "default_use_system_proxy");
+    expect(() => parseSourceDriverManifest(invalid)).toThrow(/proxy default/);
   });
   test("round trips explicit local priority and rejects invalid wire values", () => {
     const channel = sourceDriverInitialChannelV5(sourceDriverById("custom_endpoint"), { id: "priority", name: "Priority" });

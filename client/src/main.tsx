@@ -388,6 +388,7 @@ function ProductApp({
     toolConfigChecking,
     refreshVsCodeExtensionConfigStatuses,
     saveToolModelInjectionSettings,
+    saveRoutingPreference,
     toolProtocolDraftTouchedRef,
     toolProtocolSelections,
     codexModelSource,
@@ -404,6 +405,8 @@ function ProductApp({
     showMissingToolCandidates,
     setShowMissingToolCandidates,
     subscriptionWizardProvider,
+    subscriptionUseSystemProxy,
+    changeSubscriptionProxy,
     subscriptionWizardOpen,
     subscriptionOAuthSession,
     subscriptionCallbackInput,
@@ -488,6 +491,7 @@ function ProductApp({
     copiedField,
     hasChanges,
     configActionBusy,
+    routingPreferenceSaving,
     activeDiagnostics,
     hasDiagnostics,
     localEntryIssue,
@@ -1363,7 +1367,8 @@ function ProductApp({
                           <input
                             type="checkbox"
                             checked={Boolean(config.prefer_local_supply)}
-                            onChange={(event) => setConfig({ ...config, prefer_local_supply: event.target.checked })}
+                            onChange={(event) => void saveRoutingPreference("prefer_local_supply", event.target.checked)}
+                            disabled={configActionBusy || routingPreferenceSaving.prefer_local_supply}
                             aria-label={t("access.preferLocal")}
                           />
                           <span>
@@ -1377,7 +1382,8 @@ function ProductApp({
                           <input
                             type="checkbox"
                             checked={config.allow_model_equivalence}
-                            onChange={(event) => setConfig({ ...config, allow_model_equivalence: event.target.checked })}
+                            onChange={(event) => void saveRoutingPreference("allow_model_equivalence", event.target.checked)}
+                            disabled={configActionBusy || routingPreferenceSaving.allow_model_equivalence}
                             aria-label={t("access.compatibleFallback")}
                           />
                           <span>
@@ -1985,6 +1991,7 @@ function ProductApp({
                         <span className="field-hint">{t("supplier.accountTypeHint")}</span>
                       </label>
                       {["cursor", "opencode"].includes(subscriptionWizardProvider) ? <DeviceCodeAuthorization
+                        useSystemProxy={subscriptionUseSystemProxy}
                         provider={subscriptionWizardProvider === "cursor" ? "cursor" : "opencode"}
                         disabled={subscriptionWizardBusy}
                         onStarting={() => setSubscriptionTokenJson("")}
@@ -2000,6 +2007,18 @@ function ProductApp({
                           <KeyRound size={16} />{subscriptionOAuthSession ? t("supplier.regenerateLink") : t("supplier.generateLink")}
                         </button>
                       </div>}
+
+                      <label className="grid-wide">
+                        <span className="model-equivalence-check">
+                          <input type="checkbox"
+                            checked={subscriptionUseSystemProxy}
+                            disabled={subscriptionWizardBusy}
+                            aria-describedby="subscription-proxy-hint"
+                            onChange={(event) => changeSubscriptionProxy(event.target.checked)} />
+                          <span>{t("supplier.advanced.useSystemProxy")}</span>
+                        </span>
+                        <span id="subscription-proxy-hint" className="field-hint">{t("subscriptionImport.proxyHint")}</span>
+                      </label>
 
                       {["cursor", "opencode"].includes(subscriptionWizardProvider) && subscriptionTokenJson && <div className="wizard-actions grid-wide">
                         <button className="primary" onClick={() => void importSubscriptionJson()} disabled={subscriptionWizardBusy}>
@@ -2326,6 +2345,7 @@ function ProductApp({
                             </label>
                             {["muse_code", "copilot_subscription"].includes(selectedChannel.source_driver) && <DeviceCodeAuthorization
                               key={selectedChannel.id}
+                              useSystemProxy={selectedChannel.use_system_proxy ?? false}
                               provider={selectedChannel.source_driver === "copilot_subscription" ? "copilot" : "muse_code"}
                               disabled={selectedChannelBusy || configActionBusy}
                               onAuthorized={(key) => updateSupplier({ upstream_api_key: key })}
@@ -2681,17 +2701,18 @@ function ProductApp({
                               <span className="field-hint">{t(selectedChannel.source_driver === "openai_subscription" ? "supplier.advanced.codexProfileHint" : "supplier.advanced.userAgentProfileHint")}</span>
                             </label>
                           )}
-                          <div>
-                            <label className={`supply-toggle ${selectedChannel.use_system_proxy ? "checked" : ""}`}>
-                              <input type="checkbox" role="switch"
+                          <label>
+                            <span>{t("supplier.advanced.networkConnection")}</span>
+                            <span className="model-equivalence-check supplier-proxy-control">
+                              <input type="checkbox"
                                 checked={selectedChannel.use_system_proxy ?? false}
+                                aria-label={t("supplier.advanced.useSystemProxy")}
                                 aria-describedby="channel-proxy-hint"
                                 onChange={(event) => updateSupplier({ use_system_proxy: event.target.checked })} />
-                              <span className="supply-toggle-track" aria-hidden="true"><span /></span>
                               <span>{t("supplier.advanced.useSystemProxy")}</span>
-                            </label>
-                            <p id="channel-proxy-hint" className="field-hint">{t("supplier.advanced.useSystemProxyHint")}</p>
-                          </div>
+                            </span>
+                            <span id="channel-proxy-hint" className="field-hint">{t("supplier.advanced.useSystemProxyHint")}</span>
+                          </label>
                           {selectedChannel.kind === "subscription_adapter" && (
                             <>
                               {selectedChannel.source_driver === "claude_subscription" && (

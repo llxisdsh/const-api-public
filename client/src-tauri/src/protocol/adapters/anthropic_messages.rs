@@ -1265,11 +1265,6 @@ fn decode_thinking(body: &Value) -> ReasoningConfig {
     let thinking_type = thinking
         .and_then(|value| value.get("type"))
         .and_then(Value::as_str);
-    let mode = match thinking_type {
-        Some("adaptive") => ReasoningMode::Adaptive,
-        Some("enabled") => ReasoningMode::Enabled,
-        _ => ReasoningMode::Disabled,
-    };
     let effort = body
         .get("messages")
         .and_then(Value::as_array)
@@ -1280,14 +1275,33 @@ fn decode_thinking(body: &Value) -> ReasoningConfig {
         .find_map(|message| message.pointer("/output_config/effort"))
         .or_else(|| body.pointer("/output_config/effort"))
         .and_then(Value::as_str)
-        .and_then(ReasoningEffort::parse)
-        .or_else(|| (thinking_type == Some("disabled")).then_some(ReasoningEffort::None));
+        .and_then(ReasoningEffort::parse);
+    // Anthropic effort also controls visible output while thinking is off.
+    // Foreign protocols have only one reasoning switch, so preserve the
+    // explicit off command instead of accidentally enabling their reasoning.
+    let explicitly_disabled = thinking_type == Some("disabled");
+    let effort = if explicitly_disabled {
+        Some(ReasoningEffort::None)
+    } else {
+        effort
+    };
+    let mode = match thinking_type {
+        Some("disabled") => ReasoningMode::Disabled,
+        Some("adaptive") => ReasoningMode::Adaptive,
+        Some("enabled") => ReasoningMode::Enabled,
+        _ if effort.is_some() => ReasoningMode::Automatic,
+        _ => ReasoningMode::Disabled,
+    };
     ReasoningConfig {
         mode,
         effort,
-        token_budget: thinking
-            .and_then(|value| value.get("budget_tokens"))
-            .and_then(Value::as_u64),
+        token_budget: if explicitly_disabled {
+            None
+        } else {
+            thinking
+                .and_then(|value| value.get("budget_tokens"))
+                .and_then(Value::as_u64)
+        },
         summary: ReasoningSummaryMode::None,
         provider_extensions: Vec::new(),
     }

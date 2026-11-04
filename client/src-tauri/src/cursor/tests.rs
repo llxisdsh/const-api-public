@@ -59,7 +59,7 @@ fn credentials_keep_refresh_rotation_and_do_not_invent_expiry() {
     assert!(normalize_token(json!({}), None).is_err());
     let imported = crate::detection::normalize_subscription_token("cursor", value).unwrap();
     assert_eq!(imported.0, "cursor");
-    let session = auth::create_cursor_auth_session().unwrap();
+    let session = auth::create_cursor_auth_session(None).unwrap();
     assert!(!session.to_string().contains("verifier"));
     let url = reqwest::Url::parse(session["verification_uri"].as_str().unwrap()).unwrap();
     assert_eq!(url.host_str(), Some("cursor.com"));
@@ -682,7 +682,7 @@ async fn cursor_live_account_acceptance() -> Result<()> {
     );
     let credential = normalize_token(serde_json::from_slice(&std::fs::read(path)?)?, None)?;
     let token = credential["access_token"].as_str().unwrap();
-    let client = http_client()?;
+    let client = channel_http_client(true)?;
     let models = catalog(&client, token).await?;
     if phase == "catalog" {
         println!(

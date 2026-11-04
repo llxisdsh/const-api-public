@@ -14,9 +14,9 @@ pub(crate) const DEFAULT_LOCAL_PROXY_LISTEN: &str = "127.0.0.1:38787";
 pub(crate) const DEFAULT_DEVELOPMENT_PROXY_LISTEN: &str = "127.0.0.1:38788";
 #[cfg(debug_assertions)]
 const CLIENT_PROFILE_ENV: &str = "CONST_API_CLIENT_PROFILE";
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, not(test)))]
 const CLIENT_DATA_DIR_ENV: &str = "CONST_API_CLIENT_DATA_DIR";
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, not(test)))]
 const CLIENT_CONFIG_PATH_ENV: &str = "CONST_API_CLIENT_CONFIG_PATH";
 const LEGACY_PLATFORM_DEVICE_KEY_PREFIX: &str = "sk-ca_";
 const LEGACY_PRICE_RATIO_SCALE: f64 = 1_000_000.0;

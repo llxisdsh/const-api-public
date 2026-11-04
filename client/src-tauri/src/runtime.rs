@@ -555,12 +555,7 @@ impl RuntimeSupervisor {
 
 async fn run_release_source_refresh_loop(state: AppState) {
     loop {
-        match crate::release_sources::refresh_release_sources(
-            &crate::short_http_client(),
-            &state.config_path,
-        )
-        .await
-        {
+        match crate::release_sources::refresh_release_sources(&state.config_path).await {
             Ok(refresh) => {
                 log::info!(
                     "[const-api][runtime] release sources verified source={} sequence={} changed={}",

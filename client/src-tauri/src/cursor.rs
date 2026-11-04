@@ -20,11 +20,6 @@ const API: &str = "https://api2.cursor.sh";
 // Official Cursor CLI installer build, checked 2026-10-19.
 pub(crate) const CLIENT_VERSION: &str = "cli-2026.10.16-e3cb207";
 
-pub(crate) fn http_client() -> Result<Client> {
-    // OAuth login has no channel yet; retain its existing proxy policy.
-    channel_http_client(true)
-}
-
 pub(crate) fn channel_http_client(use_system_proxy: bool) -> Result<Client> {
     static CLIENT: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
     static DIRECT: OnceLock<crate::http_client::HttpClient> = OnceLock::new();

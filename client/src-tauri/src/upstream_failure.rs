@@ -5,6 +5,77 @@ use serde_json::{Map, Value};
 
 pub(crate) const MAX_OBSERVATION_BYTES: usize = 256 * 1024;
 
+/// Parameter-only diagnostics for rejected requests. Do not log the body or
+/// arbitrary provider strings: error messages can echo private prompt content.
+pub(crate) fn log_reasoning_rejection(channel_id: &str, protocol: &str, status: u16, body: &[u8]) {
+    if status != 400 {
+        return;
+    }
+    if let Some(settings) = reasoning_request_settings(body) {
+        log::info!(
+            "[const-api][upstream] parameter_rejection channel_id={} protocol={} status={} reasoning_settings={}",
+            channel_id,
+            protocol,
+            status,
+            settings
+        );
+    }
+}
+
+fn reasoning_request_settings(body: &[u8]) -> Option<Value> {
+    let envelope: Value = serde_json::from_slice(body).ok()?;
+    // Antigravity wraps the native Gemini request; API requests do not.
+    let body = envelope.get("request").unwrap_or(&envelope);
+    let effort = body
+        .get("reasoning_effort")
+        .or_else(|| body.pointer("/reasoning/effort"))
+        .or_else(|| body.pointer("/output_config/effort"))
+        .or_else(|| body.pointer("/generationConfig/thinkingConfig/thinkingLevel"));
+    let budget = body
+        .pointer("/reasoning/max_tokens")
+        .or_else(|| body.pointer("/reasoning/budget_tokens"))
+        .or_else(|| body.pointer("/thinking/budget_tokens"))
+        .or_else(|| body.pointer("/generationConfig/thinkingConfig/thinkingBudget"));
+    let selected = |value: Option<&Value>, allowed: &[&str]| -> Value {
+        match value {
+            None => Value::String("unspecified".into()),
+            Some(Value::String(text)) if allowed.contains(&text.as_str()) => {
+                Value::String(text.clone())
+            }
+            Some(Value::String(_)) => Value::String("other_string".into()),
+            Some(_) => Value::String("invalid_type".into()),
+        }
+    };
+    let budget = match budget {
+        Some(value) if value.is_i64() || value.is_u64() => value.clone(),
+        Some(_) => Value::String("invalid_type".into()),
+        None => Value::Null,
+    };
+    let tools = ["tools", "functions"].iter().any(|field| {
+        body.get(*field)
+            .and_then(Value::as_array)
+            .is_some_and(|tools| !tools.is_empty())
+    }) || body
+        .get("input")
+        .and_then(Value::as_array)
+        .is_some_and(|input| {
+            input.iter().any(|item| {
+                item.get("type").and_then(Value::as_str) == Some("additional_tools")
+                    && item
+                        .get("tools")
+                        .and_then(Value::as_array)
+                        .is_some_and(|tools| !tools.is_empty())
+            })
+        });
+    Some(serde_json::json!({
+        "effort": selected(effort, &["none","minimal","low","medium","high","xhigh","max","ultra","auto","MINIMAL","LOW","MEDIUM","HIGH"]),
+        "thinking_type": selected(body.pointer("/thinking/type"), &["disabled","enabled","adaptive","between_tools"]),
+        "enabled": body.pointer("/reasoning/enabled").and_then(Value::as_bool),
+        "budget": budget,
+        "tools": tools,
+    }))
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub(crate) struct Failure {
@@ -632,6 +703,37 @@ fn retry_after_value(value: &str, now: i64) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reasoning_diagnostics_project_only_fixed_parameters() {
+        for body in [
+            serde_json::json!({"reasoning_effort":"max","messages":[{"content":"private prompt"}],"tools":[{"name":"private tool"}]}),
+            serde_json::json!({"reasoning":{"effort":"max","max_tokens":4096},"input":"private prompt","tools":[{}]}),
+            serde_json::json!({"reasoning":{"effort":"max"},"input":[{"type":"additional_tools","tools":[{"type":"namespace","name":"private tool","tools":[]}]}]}),
+            serde_json::json!({"thinking":{"type":"adaptive"},"output_config":{"effort":"max"},"system":"private prompt","tools":[{}]}),
+        ] {
+            let settings = reasoning_request_settings(&serde_json::to_vec(&body).unwrap()).unwrap();
+            assert_eq!(settings["effort"], "max");
+            assert_eq!(settings["tools"], true);
+            assert!(!settings.to_string().contains("private"));
+        }
+        let settings = reasoning_request_settings(br#"{"request":{"generationConfig":{"thinkingConfig":{"thinkingBudget":-1,"thinkingLevel":"HIGH"}}},"authorization":"private"}"#).unwrap();
+        assert_eq!(settings["effort"], "HIGH");
+        assert_eq!(settings["budget"], -1);
+        let settings = reasoning_request_settings(br#"{"reasoning_effort":"private prompt","reasoning":{"enabled":false,"max_tokens":"secret"},"thinking":{"type":"secret"}}"#).unwrap();
+        assert_eq!(settings["effort"], "other_string");
+        assert_eq!(settings["thinking_type"], "other_string");
+        assert_eq!(settings["budget"], "invalid_type");
+        assert_eq!(settings["enabled"], false);
+        assert!(!settings.to_string().contains("private"));
+        assert!(!settings.to_string().contains("secret"));
+        assert!(reasoning_request_settings(b"not json").is_none());
+        assert_eq!(
+            reasoning_request_settings(b"{}").unwrap()["effort"],
+            "unspecified"
+        );
+    }
+
     fn failure(status: u16, raw: &str) -> Failure {
         observe(status, raw, &[], Some("model-a")).unwrap()
     }

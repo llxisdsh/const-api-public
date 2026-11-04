@@ -65,11 +65,14 @@ impl PlatformHttpTransport {
         // are still bounded by connect/read-inactivity timeouts, downstream
         // cancellation, and the supplier protocol's inactivity watchdog.
         let tcp_stream_client = crate::http_client::HttpClient::new(|| {
-            Client::builder()
-                .connect_timeout(Duration::from_secs(10))
-                .read_timeout(MODEL_REQUEST_TIMEOUT)
-                .pool_idle_timeout(Duration::from_secs(90))
-                .retry(reqwest::retry::never())
+            crate::http_client::proxy_policy(
+                Client::builder()
+                    .connect_timeout(Duration::from_secs(10))
+                    .read_timeout(MODEL_REQUEST_TIMEOUT)
+                    .pool_idle_timeout(Duration::from_secs(90))
+                    .retry(reqwest::retry::never()),
+                crate::http_client::PLATFORM_USE_SYSTEM_PROXY,
+            )
         })
         .expect("platform streaming HTTP client");
         Self {
