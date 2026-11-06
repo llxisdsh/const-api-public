@@ -681,6 +681,7 @@ pub(crate) async fn forward_antigravity_subscription_stream_request_with_capacit
         send_supplier_message(
             outbound,
             SupplierMessage {
+                output_credit: None,
                 id: msg_id.to_string(),
                 kind: "error".to_string(),
                 payload,

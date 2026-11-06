@@ -735,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "const-api-local"
-version = "0.1.66"
+version = "0.1.67"
 dependencies = [
  "aes 0.9.3",
  "anyhow",
@@ -809,6 +809,8 @@ dependencies = [
  "warp",
  "webpki-roots",
  "webrtc",
+ "webview2-com",
+ "windows",
  "windows-sys 0.61.2",
  "x509-parser 0.18.1",
  "zstd",

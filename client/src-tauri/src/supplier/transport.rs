@@ -81,6 +81,7 @@ impl SupplierRuntime {
             route_statuses: transport.3,
             channel_transports: transport.4,
             availability_groups: None,
+            channel_metrics: None,
         }
     }
 }
@@ -436,19 +437,22 @@ pub(crate) fn supplier_registration_is_current(last_register_ack_unix: i64, now_
 
 fn supplier_heartbeat_message() -> SupplierMessage {
     SupplierMessage {
+        output_credit: None,
         id: format!("h{:x}", now_unix()),
         kind: "ping".to_string(),
         payload: serde_json::Map::new(),
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct SupplierMessage {
     pub(crate) id: String,
     #[serde(rename = "type")]
     pub(crate) kind: String,
     #[serde(default)]
     pub(crate) payload: serde_json::Map<String, serde_json::Value>,
+    #[serde(skip)]
+    pub(crate) output_credit: Option<Arc<SupplierOutputCredit>>,
 }
 
 impl serde::Serialize for SupplierMessage {
@@ -595,6 +599,7 @@ pub(crate) struct SupplierReplayState {
     next_unsent: usize,
     blocked: bool,
     last_replay_progress: Option<Instant>,
+    cancelled: HashMap<String, Instant>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -632,6 +637,10 @@ fn supplier_replay_diagnostic_id(value: &str) -> &str {
 impl SupplierReplayState {
     pub(crate) fn enqueue(&mut self, mut message: SupplierMessage) {
         let request_id = message.id.clone();
+        if self.is_cancelled(&request_id) {
+            crate::update_activity::supplier_output_send_failed_or_delivered_without_replay(&request_id);
+            return;
+        }
         let execution_id = self
             .execution_ids
             .entry(message.id.clone())
@@ -833,6 +842,20 @@ impl SupplierReplayState {
         {
             return false;
         }
+        self.cancel_request(request_id);
+        true
+    }
+
+    fn is_cancelled(&self, request_id: &str) -> bool {
+        self.cancelled.get(request_id).is_some_and(|expires| *expires > Instant::now())
+    }
+
+    fn cancel_request(&mut self, request_id: &str) {
+        let now = Instant::now();
+        self.cancelled.retain(|_, expires| *expires > now);
+        // Producers can already have outputs in the mpsc queue when cancellation
+        // arrives. Do not recreate replay state (or retain credit) for those frames.
+        self.cancelled.insert(request_id.to_string(), now + SUPPLIER_TUNNEL_RESUME_WINDOW);
         let mut removed_before_cursor = 0usize;
         let mut retained = VecDeque::with_capacity(self.unacknowledged.len());
         for (index, item) in self.unacknowledged.drain(..).enumerate() {
@@ -853,7 +876,6 @@ impl SupplierReplayState {
         self.execution_ids.remove(request_id);
         self.acknowledged_sequence.remove(request_id);
         self.last_replay_progress = (!self.unacknowledged.is_empty()).then(Instant::now);
-        true
     }
 
     pub(crate) fn maintain_unacknowledged(&mut self, now: Instant) -> SupplierReplayMaintenance {
@@ -1309,9 +1331,10 @@ pub(crate) fn decode_supplier_transport_frame(frame: &[u8]) -> Result<SupplierMe
 
 pub(crate) async fn send_supplier_message(
     outbound: &SupplierOutbound,
-    msg: SupplierMessage,
+    mut msg: SupplierMessage,
 ) -> Result<()> {
     let pending_supplier_output = crate::update_activity::track_supplier_output_before_send();
+    reserve_supplier_output(outbound, &mut msg).await?;
     let request_id = msg.id.clone();
     let result = outbound
         .send(msg)
@@ -1340,6 +1363,7 @@ fn supplier_access_token(config: &SupplierAgentConfig) -> String {
 
 fn supplier_auth_message(config: &SupplierAgentConfig, kind: &str, token: &str) -> SupplierMessage {
     SupplierMessage {
+        output_credit: None,
         id: format!("auth-{}", now_unix()),
         kind: kind.to_string(),
         payload: serde_json::json!({
@@ -1460,7 +1484,7 @@ pub(crate) enum SupplierInboundOutcome {
     },
     RequestCancel {
         request_id: String,
-        execution_id: String,
+        execution_id: Option<String>,
     },
     ServerRestarting {
         retry_after_ms: u64,
@@ -1984,6 +2008,7 @@ async fn handle_supplier_inbound_text_with_tasks(
         }
         if message.kind == "ping" {
             let pong = SupplierMessage {
+                output_credit: None,
                 id: message.id,
                 kind: "pong".to_string(),
                 payload: serde_json::Map::new(),
@@ -2001,7 +2026,7 @@ async fn handle_supplier_inbound_text_with_tasks(
             {
                 return SupplierInboundOutcome::RequestCancel {
                     request_id: message.id,
-                    execution_id: execution_id.to_string(),
+                    execution_id: Some(execution_id.to_string()),
                 };
             }
             // Legacy and ordinary requester cancellation is request-scoped.
@@ -2009,15 +2034,16 @@ async fn handle_supplier_inbound_text_with_tasks(
             if let Some(tasks) = request_tasks {
                 tasks.cancel(&message.id);
             }
-            return SupplierInboundOutcome::None;
+            return SupplierInboundOutcome::RequestCancel { request_id: message.id, execution_id: None };
         }
         if message.kind == "duplex_client_frame" || message.kind == "duplex_close" {
             let delivered = match request_tasks {
-                Some(tasks) => tasks.send_duplex(message.clone()).await,
+                Some(tasks) => tasks.send_duplex(message.clone()),
                 None => false,
             };
             if !delivered {
                 let response = SupplierMessage {
+                    output_credit: None,
                     id: message.id,
                     kind: "duplex_error".to_string(),
                     payload: serde_json::json!({
@@ -2050,6 +2076,7 @@ async fn handle_supplier_inbound_text_with_tasks(
                 .unwrap_or_default();
             let Some(supplier) = config.supplier_for_target(target_channel_id, target_supplier_unit_id) else {
                 let response = SupplierMessage {
+                    output_credit: None,
                     id: message.id,
                     kind: if message.kind == "duplex_open" { "duplex_error" } else { "error" }.into(),
                     payload: serde_json::json!({
@@ -2351,7 +2378,8 @@ mod recovery_tests {
     use super::*;
 
     fn replay_test_message(id: &str, kind: &str) -> SupplierMessage {
-        SupplierMessage { id: id.into(), kind: kind.into(), payload: Default::default() }
+        SupplierMessage {
+            output_credit: None, id: id.into(), kind: kind.into(), payload: Default::default() }
     }
 
     #[test]
@@ -2570,6 +2598,7 @@ mod recovery_tests {
                 format!("large-{index}-{}", "fragmented-payload-".repeat(256))
             };
             let message = SupplierMessage {
+                output_credit: None,
                 id: format!("request-{index}"),
                 kind: "http_request".to_string(),
                 payload: serde_json::json!({"body": body})

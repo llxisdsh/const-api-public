@@ -61,7 +61,7 @@ impl AccountTransport {
         // HTTP/2; the shared WS config deliberately offers no ALPN.
         http_tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
         let cookies = self.cookies.clone();
-        let client = crate::http_client::HttpClient::new(move || {
+        let client = crate::http_client::HttpClient::new(options.use_system_proxy, move || {
             let builder = Client::builder()
                 .tls_backend_preconfigured(http_tls.clone())
                 .cookie_provider(cookies.clone())

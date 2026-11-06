@@ -5,7 +5,8 @@ import { SupplierChannelChecks } from "./SupplierChannelChecks";
 
 const props = () => ({
   checks: [], busy: false, canSupply: true, saving: false, testing: false,
-  model: "custom-model", prompt: "Reply OK", onPromptChange: vi.fn(), onFullCheck: vi.fn(), onTest: vi.fn(),
+  model: "custom-model", models: ["custom-model", "another-model"], onModelChange: vi.fn(),
+  prompt: "Reply OK", onPromptChange: vi.fn(), onFullCheck: vi.fn(), onTest: vi.fn(),
 });
 
 describe("SupplierChannelChecks", () => {
@@ -17,8 +18,13 @@ describe("SupplierChannelChecks", () => {
     const test = screen.getByRole("button", { name: "测试" });
     expect(results.compareDocumentPosition(full) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(results.compareDocumentPosition(test) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByText("custom-model")).toHaveAttribute("title", "当前模型：custom-model");
-    expect(screen.getByText("custom-model").parentElement).toContainElement(test);
+    const model = screen.getByRole("combobox", { name: /测试模型/ });
+    expect(model).toHaveValue("custom-model");
+    expect(model.closest(".supplier-test-panel")).toContainElement(test);
+    fireEvent.change(model, { target: { value: "another-model" } });
+    expect(input.onModelChange).toHaveBeenCalledWith("another-model");
+    expect(input.onFullCheck).not.toHaveBeenCalled();
+    expect(input.onTest).not.toHaveBeenCalled();
     expect(container.querySelector(".supplier-test-panel header")).toBeNull();
     expect(screen.getByText("尚未完整检查")).toBeInTheDocument();
     expect(screen.queryByText(/上游额度/)).not.toBeInTheDocument();
@@ -137,6 +143,8 @@ describe("SupplierChannelChecks", () => {
     try {
       render(<SupplierChannelChecks {...props()} />);
       expect(screen.getByRole("button", { name: "Test" })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Checks and testing" })).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: /Test model/ })).toHaveValue("custom-model");
       expect(screen.getByText("Test one model per group and check protocol capabilities")).toBeInTheDocument();
       expect(screen.getByText("No full check yet")).toBeInTheDocument();
     } finally { await changeAppLanguage("zh-CN"); }

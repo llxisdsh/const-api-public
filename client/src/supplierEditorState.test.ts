@@ -5,7 +5,6 @@ import {
   channelDetectionInputChanged,
   channelEditorSettingsChanged,
   channelRuntimeNeedsActivation,
-  diagnosticToastEventKey,
   finishSupplierDeletion,
   mergeEndpointDiscoveryConfig,
   reconcileDetectedDefaultModel,
@@ -158,23 +157,6 @@ describe("supplier editor state", () => {
     expect(channelDetectionInputChanged(saved, changed)).toBe(true);
     expect(channelRuntimeNeedsActivation(saved, changed)).toBe(true);
     expect(channelDetectionInputChanged(saved, { ...saved, use_system_proxy: undefined })).toBe(false);
-  });
-
-  test("renaming a channel does not replay an unchanged diagnostic toast", () => {
-    const original = diagnosticToastEventKey({
-      id: "supplier-model-catalog-channel-1",
-      title: "Old name 部分模型未入池",
-      message: "服务器已接纳 9 个模型，另有 11 个模型暂不支持。",
-      createdAt: 0,
-    });
-    const renamed = diagnosticToastEventKey({
-      id: "supplier-model-catalog-channel-1",
-      title: "New name 部分模型未入池",
-      message: "服务器已接纳 9 个模型，另有 11 个模型暂不支持。",
-      createdAt: 0,
-    });
-
-    expect(renamed).toBe(original);
   });
 
   test("endpoint refresh preserves an unsaved channel draft", () => {

@@ -473,7 +473,7 @@ async fn forward_openai_subscription_local_stream_response_with_cache_identity(
         inbound_protocol,
         model
     );
-    let continuation = CodexHttpContinuationCollector::new(&upstream_body);
+    let continuation = CodexHttpContinuationCollector::new(config, &upstream_body);
     let state = LocalOpenAiSubscriptionStreamState {
         stream: Box::pin(resp.bytes_stream()),
         converter,
@@ -898,6 +898,7 @@ async fn forward_non_openai_subscription_local_stream_response_with_cache_identi
                     Ok(Some(payload)) => {
                         let _ = outbound
                             .send(SupplierMessage {
+                                output_credit: None,
                                 id: "local-subscription-stream".to_string(),
                                 kind: "local_payload".to_string(),
                                 payload,
@@ -908,6 +909,7 @@ async fn forward_non_openai_subscription_local_stream_response_with_cache_identi
                     Err(error) => {
                         let _ = outbound
                             .send(SupplierMessage {
+                                output_credit: None,
                                 id: "local-subscription-stream".to_string(),
                                 kind: "local_error".to_string(),
                                 payload: serde_json::json!({"message": error.to_string()})
@@ -923,6 +925,7 @@ async fn forward_non_openai_subscription_local_stream_response_with_cache_identi
         if let Err(recovered) = guarded {
             let _ = panic_outbound
                 .send(SupplierMessage {
+                    output_credit: None,
                     id: "local-subscription-stream".to_string(),
                     kind: "local_error".to_string(),
                     payload: serde_json::json!({

@@ -8,6 +8,11 @@ import {
   supplierNetworkState,
   supplierProtocolLatencyLabel,
   supplierProtocolLatencyParts,
+  supplierChannelMetrics,
+  supplierActiveRequestsLabel,
+  supplierLatencyLabel,
+  supplierLatencyTitle,
+  preserveSupplierChannelMetrics,
 } from "./appHelpers";
 import type { SupplierStatus } from "./appTypes";
 
@@ -102,6 +107,50 @@ describe("supplierProtocolLatencyLabel", () => {
   });
 });
 
+describe("supplier channel metrics", () => {
+  it("retains metrics across partial action responses but accepts fresh empty projections", () => {
+    const previous = { ...supplierOffline, channel_metrics: { api: { current_concurrency: 0, latency_ms: 42 } } };
+    const next = preserveSupplierChannelMetrics(previous, { ...supplierOffline, running: true });
+    expect(next.running).toBe(true);
+    expect(next.channel_metrics).toBe(previous.channel_metrics);
+    expect(preserveSupplierChannelMetrics(previous, { ...supplierOffline, channel_metrics: {} }).channel_metrics).toEqual({});
+  });
+
+  it("shows runtime activity for API, subscription and stopped channels without a health snapshot", () => {
+    const status: SupplierStatus = {
+      ...supplierOffline,
+      channel_metrics: {
+        api: { current_concurrency: 2, latency_ms: 47, latency_checked_at_unix: 123 },
+        subscription: { current_concurrency: 1, latency_ms: 120 },
+        stopped: { current_concurrency: 0, latency_ms: 0 },
+      },
+    };
+    expect(supplierActiveRequestsLabel(supplierChannelMetrics(status, "api"))).toBe("2");
+    expect(supplierActiveRequestsLabel(supplierChannelMetrics(status, "subscription"))).toBe("1");
+    expect(supplierActiveRequestsLabel(supplierChannelMetrics(status, "stopped"))).toBe("0");
+    expect(supplierActiveRequestsLabel(supplierChannelMetrics(status, "unknown"))).toBe("-");
+  });
+
+  it("distinguishes a measured sub-millisecond response from no measurement", () => {
+    expect(supplierLatencyLabel({ latency_ms: 0, latency_checked_at_unix: 123 })).toBe("0ms");
+    expect(supplierLatencyLabel({ latency_ms: 0 })).toBe("-");
+    expect(supplierLatencyTitle({ latency_ms: 20, latency_checked_at_unix: 123 })).toContain("测试时间：");
+    expect(supplierLatencyTitle({ latency_ms: 20 })).toContain("包含生成时间");
+    expect(supplierLatencyTitle()).toContain("尚无成功模型测试");
+  });
+
+  it("updates a manual test even before a channel has been activated", () => {
+    const next = applySupplierUpstreamObservation(supplierOffline, "new-api", {
+      latency_ms: 71, upstream_http_version: "http2", checked_at_unix: 123,
+    });
+    expect(next.channels).toBeUndefined();
+    expect(supplierChannelMetrics(next, "new-api")).toMatchObject({
+      latency_ms: 71, latency_checked_at_unix: 123, upstream_http_version: "http2",
+    });
+    expect(supplierActiveRequestsLabel(supplierChannelMetrics(next, "new-api"))).toBe("-");
+  });
+});
+
 describe("applySupplierUpstreamObservation", () => {
   const status: SupplierStatus = {
     ...supplierOffline,
@@ -142,6 +191,15 @@ describe("applySupplierUpstreamObservation", () => {
       upstream_http_version: "http3",
       latency_ms: 63,
     });
+  });
+
+  it("uses fresh metrics instead of stale health, with a legacy health fallback", () => {
+    expect(supplierLatencyLabel(supplierChannelMetrics(status, "channel-a"))).toBe("40ms");
+    const fresh = { ...status, channel_metrics: {
+      "channel-a": { current_concurrency: 0, latency_ms: 0, latency_checked_at_unix: 0 },
+    } };
+    expect(supplierLatencyLabel(supplierChannelMetrics(fresh, "channel-a"))).toBe("-");
+    expect(supplierActiveRequestsLabel(supplierChannelMetrics(fresh, "channel-a"))).toBe("0");
   });
 });
 

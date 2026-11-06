@@ -652,14 +652,33 @@ fn adjust_codex_subscription_request_for_operation(
         // Latest Codex also emits service_tier, stream_options, prompt_cache_key, text, and
         // client_metadata for both API-key and ChatGPT-backed providers; those fields remain
         // native and must not be stripped at this boundary.
-        for field in ["prompt_cache_options", "prompt_cache_retention"] {
+        // Codex now defines prompt_cache_options as {ttl: "30m" | "12h"}.
+        // Retain a caller's supported TTL without opting other requests in.
+        // Public API cache modes/retention are a separate dialect. Native Codex
+        // requests bypass this adapted-HTTP normalization above.
+        let cache_ttl_supported = object.get("prompt_cache_options")
+            .and_then(|options| options.get("ttl"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|ttl| matches!(ttl, "30m" | "12h"));
+        if cache_ttl_supported {
+            let options = object.get_mut("prompt_cache_options")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("a supported cache TTL belongs to an options object");
+            // Only remove the known public-API mode; preserve unknown extensions.
+            if options.remove("mode").is_some() {
+                actions.push(SubscriptionDialectAction {
+                    code: "codex_prompt_cache_control_omitted",
+                    path: "$.prompt_cache_options.mode".to_string(),
+                });
+            }
+        } else {
             remove_codex_subscription_field(
-                object,
-                field,
-                "codex_prompt_cache_control_omitted",
-                &mut actions,
+                object, "prompt_cache_options", "codex_prompt_cache_control_omitted", &mut actions,
             );
         }
+        remove_codex_subscription_field(
+            object, "prompt_cache_retention", "codex_prompt_cache_control_omitted", &mut actions,
+        );
         for field in [
             "metadata",
             "truncation",
@@ -2176,6 +2195,7 @@ mod native_codex_endpoint_tests {
         let body = r#"{ "model":"gpt-6-astra", "store":false,
             "input":[{"type":"additional_tools","id":"at_native","role":"developer","tools":[]}],
             "reasoning":{"effort":"disabled","context":"all_turns"},
+            "prompt_cache_options":{"ttl":"12h","future_option":true},
             "access_programs":{"cyber":"standard"}, "future_extension":{"value":1} }"#;
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("originator", "codex_cli_rs".parse().unwrap());
@@ -2199,6 +2219,26 @@ mod native_codex_endpoint_tests {
         actual.as_object_mut().unwrap().remove("prompt_cache_key");
         assert_eq!(actual, serde_json::from_str::<serde_json::Value>(body).unwrap());
         assert!(prepared.faults.is_empty());
+    }
+
+    #[test]
+    fn codex_subscription_cache_ttl_reaches_both_http_entry_paths() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("originator", "Codex Desktop".parse().unwrap());
+        headers.insert("user-agent", "Codex Desktop/0.167.0-alpha.3.2".parse().unwrap());
+        for native_headers in [None, Some(&headers)] {
+            for compact in [false, true] {
+                let prepared = prepare_codex_subscription_endpoint_request(
+                    &crate::default_supplier_config(),
+                    r#"{"model":"gpt-6-astra","input":[],"prompt_cache_key":"ttl-session","prompt_cache_options":{"ttl":"12h"}}"#,
+                    compact, "gpt-6-astra", None, native_headers,
+                ).unwrap();
+                let upstream: serde_json::Value = serde_json::from_str(&prepared.body).unwrap();
+                assert_eq!(upstream["prompt_cache_options"], serde_json::json!({"ttl":"12h"}));
+                assert_eq!(upstream["prompt_cache_key"], "ttl-session");
+                assert!(prepared.faults.is_empty());
+            }
+        }
     }
 
     #[test]

@@ -782,6 +782,140 @@
     }
 
     #[tokio::test]
+    async fn responses_websocket_platform_errors_reach_caller_and_release_turn() {
+        use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message as WsMessage};
+
+        async fn read_message(socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> SupplierMessage {
+            loop {
+                let frame = socket.next().await.expect("platform input").expect("platform frame");
+                if let WsMessage::Text(text) = frame {
+                    let message: SupplierMessage = serde_json::from_str(&text).unwrap();
+                    if message.kind != "platform_duplex_ack" { return message; }
+                }
+            }
+        }
+
+        for (scenario, expected_code, reusable) in [
+            ("legacy", "context_length_exceeded", true),
+            ("tagged", "context_length_exceeded", true),
+            ("wrapped_budget", "budget_reached", true),
+            ("wrapped_capacity", "policy_capacity_unavailable", true),
+            ("control", "platform_duplex_not_found", false),
+            ("wrong_turn", "upstream_read_error", false),
+            ("untagged_output", "upstream_read_error", false),
+            ("sequence_gap", "upstream_read_error", false),
+            ("partial_error_metadata", "upstream_read_error", false),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (finish_platform, finished) = tokio::sync::oneshot::channel();
+            let expected_error = if scenario.starts_with("wrapped_") {
+                serde_json::json!({"type":"error","body":{"error":{
+                    "code":expected_code,"message":"simulated upstream rejection"
+                }}}).to_string()
+            } else {
+                r#"{"type":"error","status":400,"error":{"code":"context_length_exceeded","message":"compact the conversation"}}"#.to_string()
+            };
+            let error_to_send = expected_error.clone();
+            let platform = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let auth = read_message(&mut socket).await;
+                socket.send(WsMessage::Text(serde_json::json!({
+                    "id":auth.id,"type":"authenticate_ack","payload":{
+                        "ok":true,"transport_features":["platform_duplex_v1","platform_duplex_resume_v1"]
+                    }
+                }).to_string().into())).await.unwrap();
+                let open = read_message(&mut socket).await;
+                socket.send(WsMessage::Text(serde_json::json!({
+                    "id":open.id,"type":"platform_duplex_opened","payload":{"ok":true}
+                }).to_string().into())).await.unwrap();
+                let first = read_message(&mut socket).await;
+                assert_eq!(first.kind, "platform_duplex_client_frame");
+                let mut payload = serde_json::json!({
+                    "frame_type":"text","_const_platform_seq":1,
+                    "data":error_to_send
+                });
+                if scenario != "legacy" && scenario != "untagged_output" {
+                    payload["_const_duplex_turn_id"] = first.payload["_const_duplex_turn_id"].clone();
+                    payload["_const_duplex_turn_seq"] = 1.into();
+                    payload["turn_terminal"] = true.into();
+                }
+                match scenario {
+                    "control" => payload = serde_json::json!({
+                        "status":503,"error_kind":"platform_duplex_not_found","message":"the platform session expired"
+                    }),
+                    "wrong_turn" => {
+                        payload["_const_duplex_turn_id"] = "another-turn".into();
+                        payload["data"] = r#"{"type":"response.created"}"#.into();
+                    }
+                    "sequence_gap" => payload["_const_platform_seq"] = 2.into(),
+                    "untagged_output" => payload["data"] = r#"{"type":"response.created"}"#.into(),
+                    "partial_error_metadata" => { payload.as_object_mut().unwrap().remove("_const_duplex_turn_seq"); }
+                    _ => {}
+                }
+                socket.send(WsMessage::Text(serde_json::json!({
+                    "id":open.id,"type":if scenario == "control" {"platform_duplex_error"} else {"platform_duplex_server_frame"},
+                    "payload":payload
+                }).to_string().into())).await.unwrap();
+                if reusable {
+                    let second = read_message(&mut socket).await;
+                    assert_eq!(second.kind, "platform_duplex_client_frame", "error must release the active turn");
+                    assert_eq!(second.id, open.id, "admission rejection must keep the logical session usable");
+                    socket.send(WsMessage::Text(serde_json::json!({
+                        "id":open.id,"type":"platform_duplex_server_frame","payload":{
+                            "frame_type":"text","_const_platform_seq":2,
+                            "_const_duplex_turn_id":second.payload["_const_duplex_turn_id"],"_const_duplex_turn_seq":1,
+                            "turn_terminal":true,"status":200,
+                            "data":r#"{"type":"response.completed","response":{"id":"resp-after-error"}}"#
+                        }
+                    }).to_string().into())).await.unwrap();
+                }
+                // A terminal control error already removes the logical session;
+                // it need not send a redundant close over the shared transport.
+                // Keep that transport alive until the caller assertions finish.
+                let _ = finished.await;
+            });
+            let mut config = default_config();
+            config.api_key = "sk-local-test".into();
+            config.account_device_api_key = "sk-device-test".into();
+            config.channels.clear();
+            config.endpoints = vec![Endpoint {
+                server_id: String::new(), name: "error-probe".into(), enabled: true,
+                base_url: format!("http://{address}"), supplier_ws_url: format!("ws://{address}/supplier/ws"), supplier_quic_url: String::new(),
+            }];
+            let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+            *shared.platform_access_token.lock().unwrap() = "test-access".into();
+            let (proxy_address, server) = crate::bind_ephemeral!(crate::proxy_routes(shared), ([127,0,0,1],0));
+            let proxy = tokio::spawn(server);
+            let mut request = format!("ws://{proxy_address}/v1/responses").into_client_request().unwrap();
+            request.headers_mut().insert("authorization", "Bearer sk-local-test".parse().unwrap());
+            let (mut client, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+            let create = WsMessage::Text(r#"{"type":"response.create","model":"platform-model","input":"compact"}"#.into());
+            client.send(create.clone()).await.unwrap();
+            let response = tokio::time::timeout(Duration::from_secs(3), client.next()).await
+                .expect("error must arrive without recovery retries").unwrap().unwrap();
+            assert!(response.is_text(), "{scenario}: caller received a close instead of an error");
+            let event: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+            assert_eq!(event["type"], "error", "{scenario}");
+            let error = event.get("error").or_else(|| event.pointer("/body/error")).unwrap();
+            assert_eq!(error["code"], expected_code, "{scenario}");
+            if scenario == "control" { assert_eq!(event["status"], 503); }
+            if reusable {
+                assert_eq!(response.to_text().unwrap(), expected_error, "{scenario}: keep the original error");
+                client.send(create).await.unwrap();
+                let response = tokio::time::timeout(Duration::from_secs(3), client.next()).await.unwrap().unwrap().unwrap();
+                let event: serde_json::Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+                assert_eq!(event["type"], "response.completed", "{scenario}");
+            }
+            let _ = client.close(None).await;
+            let _ = finish_platform.send(());
+            tokio::time::timeout(Duration::from_secs(3), platform).await.unwrap().unwrap();
+            proxy.abort();
+        }
+    }
+
+    #[tokio::test]
     async fn responses_websocket_platform_duplex_keeps_custom_tool_output_on_one_session() {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -1690,7 +1824,7 @@
             "gemini-live-channel"
         );
 
-        let mut updated = shared.config_snapshot();
+        let mut updated = (*shared.config_snapshot()).clone();
         let mut wrong = gemini_api_channel(
             "wrong-live-channel",
             "gemini-live-test",

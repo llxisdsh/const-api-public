@@ -36,7 +36,8 @@ async fn voice_test_physical_platform(
     } else {
         "realtime_calls_create"
     };
-    let supplier_open = SupplierMessage { id:open.id.clone(), kind:"duplex_open".into(),
+    let supplier_open = SupplierMessage {
+        output_credit: None, id:open.id.clone(), kind:"duplex_open".into(),
         payload: serde_json::json!({"session_kind":"native_realtime_call","wire":{
             "version":2,"surface":"openai","operation":operation,"method":"POST",
             "escaped_relative_path":path,"headers":[],"body":{"encoding":"utf8","data":call_body},
@@ -57,6 +58,7 @@ async fn voice_test_physical_platform(
     });
     commands
         .send(SupplierMessage {
+            output_credit: None,
             id: open.id.clone(),
             kind: "duplex_client_frame".into(),
             payload: serde_json::json!({"control":"media_lease"})

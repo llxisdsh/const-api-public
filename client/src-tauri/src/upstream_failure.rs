@@ -5,6 +5,23 @@ use serde_json::{Map, Value};
 
 pub(crate) const MAX_OBSERVATION_BYTES: usize = 256 * 1024;
 
+/// Terminal Responses request failures, including SSE/WS events without an HTTP
+/// error status. A session budget is not an account quota; changing suppliers or
+/// honoring a Retry-After hint cannot repair this request. See Codex's
+/// codex-api/src/error.rs::parse_terminal_provider_error.
+pub(crate) fn is_responses_input_or_budget_error(code: &str) -> bool {
+    matches!(
+        code,
+        "budget_reached"
+            | "audio_too_large"
+            | "audio_too_short"
+            | "invalid_audio"
+            | "invalid_audio_data"
+            | "invalid_audio_format"
+            | "missing_audio_sample_rate"
+    )
+}
+
 /// Parameter-only diagnostics for rejected requests. Do not log the body or
 /// arbitrary provider strings: error messages can echo private prompt content.
 pub(crate) fn log_reasoning_rejection(channel_id: &str, protocol: &str, status: u16, body: &[u8]) {
@@ -230,6 +247,14 @@ pub(crate) fn error_object(value: &Value) -> Option<(&Value, &Value)> {
     if let Some(error) = value.get("error").filter(|v| v.is_object()) {
         return Some((value, error));
     }
+    // Responses WS also wraps provider failures in an error event's body.
+    // Do not interpret an arbitrary generated body.error as a provider failure.
+    if text(value.get("type")) == "error"
+        && let Some(body) = value.get("body")
+        && let Some(error) = body.get("error").filter(|v| v.is_object())
+    {
+        return Some((body, error));
+    }
     if let Some(response) = value.get("response") {
         if let Some(error) = response.get("error").filter(|v| v.is_object()) {
             return Some((response, error));
@@ -307,16 +332,25 @@ pub(crate) fn observe_value(status: u16, value: &Value, model: Option<&str>) -> 
         return None;
     }
     let (envelope, error) = pair.unwrap_or((value, value));
-    // SSE/WS can carry a numeric upstream status inside an error while the
-    // enclosing transport is successful. Keep the wire status, classify the error.
+    // SSE/WS can carry a numeric status on the event, its body, or the error
+    // while the transport is successful. Keep the wire status; classify using
+    // the first valid declared status, without a string code masking it.
     let classification_status = if status < 400 {
-        error
-            .get("code")
-            .or_else(|| error.get("status"))
-            .and_then(Value::as_u64)
-            .filter(|code| (400..600).contains(code))
-            .map(|code| code as u16)
-            .unwrap_or(status)
+        [
+            value.get("status"),
+            value.get("status_code"),
+            envelope.get("status"),
+            envelope.get("status_code"),
+            error.get("status"),
+            error.get("status_code"),
+            error.get("code"),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_u64)
+        .find(|code| (400..600).contains(code))
+        .map(|code| code as u16)
+        .unwrap_or(status)
     } else {
         status
     };
@@ -392,10 +426,14 @@ pub(crate) fn observe_value(status: u16, value: &Value, model: Option<&str>) -> 
     }
     // Responses SSE/WS failures carry HTTP retry advice inside the error event.
     // Inspect only the recognized error envelope, never generated model content.
-    if let Some(delay) = [error.get("headers"), envelope.get("headers")]
-        .into_iter()
-        .flatten()
-        .find_map(|headers| json_retry_after(headers, crate::now_unix()))
+    if let Some(delay) = [
+        error.get("headers"),
+        envelope.get("headers"),
+        value.get("headers"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|headers| json_retry_after(headers, crate::now_unix()))
     {
         failure.retry_after_seconds = Some(delay);
         failure.retry_source = "structured_body".into();
@@ -419,6 +457,18 @@ pub(crate) fn observe_value(status: u16, value: &Value, model: Option<&str>) -> 
     };
     let (cause, scope, rule) = match kind {
         "__invalid_credential__" => ("auth_error", "channel", "auth.credential.v1"),
+        code if is_responses_input_or_budget_error(code) => (
+            "request_invalid",
+            "request",
+            "request.responses_terminal.v1",
+        ),
+        // Capacity on a policy-restricted route is still retryable availability,
+        // not a policy refusal or exhausted account. Keep the wire code and hint.
+        "policy_capacity_unavailable" => (
+            "provider_overload",
+            "request",
+            "availability.policy_capacity.v1",
+        ),
         "cyber_policy" => ("cyber_policy", "request", "policy.cyber.v1"),
         "content_policy_violation" | "image_content_policy_violation" | "refusal" => {
             ("content_policy", "request", "policy.content.v1")
@@ -780,6 +830,128 @@ mod tests {
         assert_eq!(error.cause, "provider_overload");
         assert_eq!(error.scope, "request");
         assert!(error.safe_to_retry());
+    }
+
+    #[test]
+    fn responses_terminal_request_errors_do_not_retry_or_penalize_the_channel() {
+        for code in [
+            "budget_reached",
+            "audio_too_large",
+            "audio_too_short",
+            "invalid_audio",
+            "invalid_audio_data",
+            "invalid_audio_format",
+            "missing_audio_sample_rate",
+        ] {
+            let error = serde_json::json!({
+                "type": "server_error", "code": code, "headers": {"Retry-After": "300"}
+            });
+            for (status, body) in [
+                (400, serde_json::json!({"error": error})),
+                (200, serde_json::json!({"type": "error", "error": error})),
+                (
+                    200,
+                    serde_json::json!({"type": "error", "body": {"error": error}}),
+                ),
+                (
+                    200,
+                    serde_json::json!({"type": "response.failed", "response": {"error": error}}),
+                ),
+            ] {
+                let observed = observe_value(status, &body, Some("model-a")).unwrap();
+                assert_eq!(observed.cause, "request_invalid", "{code}: {status}");
+                assert_eq!(observed.scope, "request");
+                assert_eq!(observed.effective_status(), 400);
+                assert!(!observed.safe_to_retry());
+                assert!(!observed.group_failure());
+                assert_eq!(observed.code, Some(serde_json::json!(code)));
+                let mut payload = Map::new();
+                observed.attach(&mut payload);
+                assert_eq!(payload["safe_to_retry_other_channel"], false);
+                assert_eq!(payload["error_kind"], "request_error");
+                assert!(payload.get("model_failure_soft").is_none());
+            }
+        }
+        let ordinary = serde_json::json!({
+            "type": "response.output_text.delta",
+            "body": {"error": {"code": "budget_reached"}}
+        });
+        assert!(observe_value(200, &ordinary, None).is_none());
+    }
+
+    #[test]
+    fn policy_capacity_preserves_retry_advice_without_becoming_a_policy_refusal() {
+        let error = serde_json::json!({
+            "type": "policy_error", "code": "policy_capacity_unavailable",
+            "headers": {"Retry-After": "17"}
+        });
+        for (status, body) in [
+            (503, serde_json::json!({"error": error})),
+            (
+                200,
+                serde_json::json!({"type": "error", "body": {"error": error}}),
+            ),
+            (
+                200,
+                serde_json::json!({"type": "response.failed", "response": {"error": error}}),
+            ),
+        ] {
+            let observed = observe_value(status, &body, Some("model-a")).unwrap();
+            assert_eq!(observed.cause, "provider_overload");
+            assert_eq!(observed.scope, "request");
+            assert_eq!(observed.rule_id, "availability.policy_capacity.v1");
+            assert_eq!(observed.retry_after_seconds, Some(17));
+            assert!(observed.safe_to_retry());
+        }
+    }
+
+    #[test]
+    fn wrapped_error_observation_keeps_declared_status_and_outer_retry_headers() {
+        for (status, error, cause, scope, retryable) in [
+            (
+                400,
+                serde_json::json!({"code":"future_invalid_parameter","message":"Invalid parameter"}),
+                "request_invalid",
+                "request",
+                false,
+            ),
+            (
+                401,
+                serde_json::json!({"type":"server_error","message":"Invalid credential"}),
+                "auth_error",
+                "channel",
+                true,
+            ),
+        ] {
+            for event in [
+                serde_json::json!({"type":"error","status":status,"error":error}),
+                serde_json::json!({"type":"error","status_code":status,"body":{"error":error}}),
+                serde_json::json!({"type":"error","body":{"status":status,"error":error}}),
+                serde_json::json!({"type":"error","body":{"status_code":status,"error":error}}),
+            ] {
+                let mut event = event;
+                event["headers"] = serde_json::json!({"Retry-After":"17"});
+                let observed = observe_value(200, &event, Some("model-a")).unwrap();
+                assert_eq!(observed.status, 200, "keep the successful transport status");
+                assert_eq!(observed.effective_status(), status);
+                assert_eq!(observed.cause, cause);
+                assert_eq!(observed.scope, scope);
+                assert_eq!(observed.safe_to_retry(), retryable);
+                assert_eq!(observed.retry_after_seconds, Some(17));
+                assert_eq!(observed.retry_source, "structured_body");
+            }
+        }
+        let embedded = serde_json::json!({"type":"error","status":null,
+            "error":{"code":"future_invalid_parameter","status":400}});
+        assert_eq!(
+            observe_value(200, &embedded, None).unwrap().cause,
+            "request_invalid"
+        );
+        assert_eq!(
+            observe_value(503, &embedded, None).unwrap().cause,
+            "provider_overload",
+            "a real HTTP error status remains authoritative"
+        );
     }
 
     #[test]

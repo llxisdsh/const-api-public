@@ -10,16 +10,20 @@ pub(crate) use installation::installation_id;
 /// It changes together with the adapter; discovering a newer package version
 /// at runtime is not evidence that this binary implements its wire contract.
 /// The models endpoint also gates its catalog on this version's `client_version`.
-pub(crate) const BUNDLED_CODEX_CLIENT_VERSION: &str = "0.163.0";
+pub(crate) const BUNDLED_CODEX_CLIENT_VERSION: &str = "0.167.0";
 /// The subscription adapter presents one official interactive Codex client.
 /// The User-Agent prefix, `originator`, and `version` header must always name
 /// the same client family. This is a compatibility invariant, not evidence
 /// about upstream capacity or risk-control decisions.
 pub(crate) const CODEX_ORIGINATOR: &str = "Codex Desktop";
-// Verified against the Windows Desktop package on 2026-10-30: owl-app.ini
-// declares this app version; packaged codex.exe matches the running Core by SHA256.
-const DESKTOP_CORE_VERSION: &str = "0.166.0-alpha.5.1";
-const DESKTOP_APP_VERSION: &str = "26.1027.30824";
+// Published Windows Store package OpenAI.Codex 26.1103.3517.0, verified 2026-11-06
+// (Store signature, not a development package). owl-app.ini supplies AppVersion;
+// the packaged codex.exe embeds this Core version. Its `alpha` suffix does NOT
+// mean an unpublished Desktop build. Keep this pair independent of CLI releases
+// and never advance it from upstream main/prerelease tags alone.
+// Evidence and Core SHA256: docs/subscription-adapters.md.
+const DESKTOP_CORE_VERSION: &str = "0.167.0-alpha.3.2";
+const DESKTOP_APP_VERSION: &str = "26.1103.31037";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) enum CodexProfile {
@@ -514,6 +518,27 @@ pub(crate) fn active_codex_identity() -> CodexClientIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_subscription_profile_uses_the_published_desktop_pair() {
+        let channel = crate::config::channel_from_supplier(
+            "default-profile".into(),
+            &crate::default_supplier_config(),
+        );
+        let identity = codex_identity_for_channel(&channel);
+        assert_eq!(CodexProfile::default(), CodexProfile::Desktop);
+        assert_eq!(identity.originator, "Codex Desktop");
+        assert_eq!(identity.version, DESKTOP_CORE_VERSION);
+        assert!(
+            identity
+                .user_agent
+                .ends_with(&format!(" (Codex Desktop; {DESKTOP_APP_VERSION})"))
+        );
+        let cli = CodexProfile::Cli.identity();
+        assert_eq!(cli.version, BUNDLED_CODEX_CLIENT_VERSION);
+        assert_eq!(cli.originator, "codex_cli_rs");
+        assert!(!cli.user_agent.contains("Codex Desktop"));
+    }
 
     #[test]
     fn codex_identity_user_agent_matches_official_shape() {

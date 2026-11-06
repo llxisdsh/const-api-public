@@ -1132,6 +1132,17 @@ pub(crate) struct SupplierStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) availability_groups:
         Option<std::collections::BTreeMap<String, Vec<crate::supplier::availability::GroupResult>>>,
+    // Display metrics are independent of admission/health, including stopped channels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) channel_metrics: Option<std::collections::BTreeMap<String, SupplierChannelMetrics>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub(crate) struct SupplierChannelMetrics {
+    pub(crate) current_concurrency: u32,
+    pub(crate) latency_ms: u128,
+    pub(crate) latency_checked_at_unix: i64,
+    pub(crate) upstream_http_version: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
@@ -1366,6 +1377,7 @@ pub(crate) struct ProtocolDebugMetrics {
 pub(crate) struct ChannelUpstreamTestResult {
     pub(crate) http_status: u16,
     pub(crate) latency_ms: u128,
+    pub(crate) checked_at_unix: i64,
     pub(crate) upstream_http_version: String,
     pub(crate) model: String,
     pub(crate) content: String,
@@ -1675,7 +1687,7 @@ pub(crate) struct SubscriptionQuotaSnapshot {
 pub(crate) struct AppState {
     pub(crate) config_path: PathBuf,
     pub(crate) proxy: Arc<Mutex<ProxyRuntime>>,
-    pub(crate) proxy_config: Arc<StdMutex<ClientConfig>>,
+    pub(crate) proxy_config: Arc<crate::config::LiveClientConfig>,
     pub(crate) local_channel_readiness: Arc<StdMutex<HashMap<String, bool>>>,
     pub(crate) local_model_quota_routes:
         Arc<StdMutex<HashMap<String, crate::supplier::LocalModelQuotaRouteState>>>,

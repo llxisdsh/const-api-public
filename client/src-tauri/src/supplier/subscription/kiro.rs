@@ -284,6 +284,7 @@ pub(crate) async fn forward_kiro_subscription_request(
                 send_supplier_message(
                     outbound,
                     SupplierMessage {
+                        output_credit: None,
                         id: id.to_string(),
                         kind: "error".into(),
                         payload,

@@ -271,6 +271,7 @@ async fn send_supplier_execution_failure(
     send_supplier_message(
         outbound,
         SupplierMessage {
+            output_credit: None,
             id: request_id.to_string(),
             kind: "error".to_string(),
             payload: supplier_execution_error_payload(error),
@@ -344,7 +345,7 @@ pub(crate) async fn forward_supplier_request(
         }
     }
     if let crate::channel_executor::ChannelExecutionBackend::RetainedSubscription { provider } =
-        crate::channel_executor::channel_execution_backend(&channel, resolved.route.operation)?
+        crate::channel_executor::channel_execution_backend(&channel, &resolved.route)?
     {
         let retained_target = match provider {
             "openai" | "codex" => "openai_responses",
@@ -589,6 +590,7 @@ pub(crate) async fn forward_supplier_request(
                         send_supplier_message(
                             outbound,
                             SupplierMessage {
+                                output_credit: None,
                                 id: msg.id.clone(),
                                 kind: "stream_start".to_string(),
                                 payload: channel_stream_start_payload(
@@ -611,6 +613,7 @@ pub(crate) async fn forward_supplier_request(
                 send_supplier_message(
                     outbound,
                     SupplierMessage {
+                        output_credit: None,
                         id: msg.id.clone(),
                         kind: "stream_start".to_string(),
                         payload: channel_stream_start_payload(
@@ -624,6 +627,7 @@ pub(crate) async fn forward_supplier_request(
                 started = true;
             }
             let message = SupplierMessage {
+                output_credit: None,
                 id: msg.id.clone(),
                 kind: "stream_chunk".to_string(),
                 payload: crate::surface_wire::stream_chunk_payload(chunk.as_slice())?,
@@ -633,6 +637,7 @@ pub(crate) async fn forward_supplier_request(
         send_supplier_message(
             outbound,
             SupplierMessage {
+                output_credit: None,
                 id: msg.id.clone(),
                 kind: "stream_end".to_string(),
                 payload: {
@@ -710,18 +715,21 @@ pub(crate) async fn forward_supplier_request(
             reqwest::header::HeaderValue::from_static("text/event-stream"),
         );
         let start = SupplierMessage {
+            output_credit: None,
             id: msg.id.clone(),
             kind: "stream_start".to_string(),
             payload: channel_stream_start_payload(status, &headers, &improvement_faults)?,
         };
         send_supplier_message(outbound, start).await?;
         let chunk = SupplierMessage {
+            output_credit: None,
             id: msg.id.clone(),
             kind: "stream_chunk".to_string(),
             payload: crate::surface_wire::stream_chunk_payload(converted.body.as_bytes())?,
         };
         send_supplier_message(outbound, chunk).await?;
         let end = SupplierMessage {
+            output_credit: None,
             id: msg.id.clone(),
             kind: "stream_end".to_string(),
             payload: {
@@ -767,6 +775,7 @@ pub(crate) async fn forward_supplier_request(
                     let text = utf8.push(&converted)?;
                     if !text.is_empty() {
                         let message = SupplierMessage {
+                            output_credit: None,
                             id: msg.id.clone(),
                             kind: "stream_chunk".to_string(),
                             payload: crate::surface_wire::stream_chunk_payload(text.as_bytes())?,
@@ -807,6 +816,7 @@ pub(crate) async fn forward_supplier_request(
                 send_supplier_message(
                     outbound,
                     SupplierMessage {
+                        output_credit: None,
                         id: msg.id.clone(),
                         kind: "stream_start".to_string(),
                         payload: channel_stream_start_payload(
@@ -821,6 +831,7 @@ pub(crate) async fn forward_supplier_request(
             }
             let request_id = msg.id.clone();
             let stream_msg = SupplierMessage {
+                output_credit: None,
                 id: msg.id.clone(),
                 kind: "stream_chunk".to_string(),
                 payload: crate::surface_wire::stream_chunk_payload(text.as_bytes())?,
@@ -846,6 +857,7 @@ pub(crate) async fn forward_supplier_request(
                 send_supplier_message(
                     outbound,
                     SupplierMessage {
+                        output_credit: None,
                         id: msg.id.clone(),
                         kind: "stream_start".to_string(),
                         payload: channel_stream_start_payload(
@@ -859,6 +871,7 @@ pub(crate) async fn forward_supplier_request(
                 started = true;
             }
             let msg = SupplierMessage {
+                output_credit: None,
                 id: msg.id.clone(),
                 kind: "stream_chunk".to_string(),
                 payload: crate::surface_wire::stream_chunk_payload(tail.as_bytes())?,
@@ -880,6 +893,7 @@ pub(crate) async fn forward_supplier_request(
             send_supplier_message(
                 outbound,
                 SupplierMessage {
+                    output_credit: None,
                     id: msg.id.clone(),
                     kind: "stream_start".to_string(),
                     payload: channel_stream_start_payload(
@@ -892,6 +906,7 @@ pub(crate) async fn forward_supplier_request(
             .await?;
         }
         let end = SupplierMessage {
+            output_credit: None,
             id: msg.id.clone(),
             kind: "stream_end".to_string(),
             payload: {
@@ -1116,6 +1131,7 @@ mod opaque_subscription_tests {
         };
         let payload = crate::surface_wire::wire_payload(wire).expect("opaque envelope");
         let message = SupplierMessage {
+            output_credit: None,
             id: "opaque-subscription".to_string(),
             kind: "request".to_string(),
             payload,
@@ -1149,8 +1165,128 @@ mod opaque_subscription_tests {
         config
     }
 
+    #[tokio::test]
+    async fn subscription_token_counts_use_the_same_local_estimate_on_local_and_platform_paths() {
+        use crate::channel_executor::ChannelExecutionBackend;
+        use crate::source_driver::SourceDriverId::*;
+        let client = Client::new();
+        for driver in [
+            OpenAiSubscription,
+            ClaudeSubscription,
+            GeminiSubscription,
+            GrokSubscription,
+            KiroSubscription,
+            CursorSubscription,
+        ] {
+            let mut config = typed_subscription_config(driver);
+            config.channel_id = format!("count-{driver:?}");
+            config.use_system_proxy = false;
+            // A retained adapter cannot authenticate or generate with this
+            // fixture. Estimated counts must succeed without loading it.
+            config.subscription.credential_ref = "missing-count-fixture".into();
+            let channel = channel_from_supplier(config.channel_id.clone(), &config);
+            for (path, body, field) in [
+                (
+                    "/anthropic/v1/messages/count_tokens",
+                    r#"{"model":"count-model","messages":[{"role":"user","content":"count me"}]}"#,
+                    "input_tokens",
+                ),
+                (
+                    "/gemini/v1beta/models/count-model:countTokens",
+                    r#"{"contents":[{"role":"user","parts":[{"text":"count me"}]}]}"#,
+                    "totalTokens",
+                ),
+                (
+                    "/v1/responses/input_tokens",
+                    r#"{"model":"count-model","input":"count me"}"#,
+                    "input_tokens",
+                ),
+            ] {
+                let route = crate::surface::resolve_api_route("POST", path, false).unwrap();
+                let backend =
+                    crate::channel_executor::channel_execution_backend(&channel, &route).unwrap();
+                let native = (driver == ClaudeSubscription
+                    && route.surface == ApiSurface::Anthropic)
+                    || (driver == GeminiSubscription && route.surface == ApiSurface::Gemini);
+                if native {
+                    assert!(
+                        matches!(
+                            backend,
+                            ChannelExecutionBackend::RetainedSubscription { .. }
+                        ),
+                        "{driver:?} {path}: keep native counting"
+                    );
+                    continue;
+                }
+                assert_eq!(
+                    backend,
+                    ChannelExecutionBackend::HttpSurface,
+                    "{driver:?} {path}"
+                );
+                let response = crate::proxy::forward_local_channel_once(
+                    warp::http::Method::POST,
+                    path,
+                    "beta=true",
+                    Default::default(),
+                    bytes::Bytes::copy_from_slice(body.as_bytes()),
+                    &client,
+                    &crate::default_config(),
+                    &channel,
+                )
+                .await
+                .unwrap_or_else(|error| panic!("local {driver:?} {path}: {error}"));
+                assert_eq!(response.status(), 200);
+                assert_eq!(
+                    response.headers()["x-const-api-token-count-estimated"],
+                    "true"
+                );
+                let local_body = crate::test_body_bytes(response.into_body()).await.unwrap();
+                let local: serde_json::Value = serde_json::from_slice(&local_body).unwrap();
+                assert!(local[field].as_u64().is_some_and(|value| value > 0));
+
+                let message = supplier_message(
+                    "count-fixture",
+                    SurfaceEnvelope {
+                        surface: Some(route.surface),
+                        operation: Some(route.operation),
+                        method: "POST".into(),
+                        path: route.relative_path.clone(),
+                        raw_query: "beta=true".into(),
+                        has_query: true,
+                        body: WireBody::from_bytes(body.as_bytes()),
+                        selected_target_protocol: Some(
+                            config.default_target.protocol.as_str().into(),
+                        ),
+                        ..SurfaceEnvelope::default()
+                    },
+                );
+                let (outbound, mut received) = mpsc::channel(1);
+                let payload =
+                    forward_supplier_request(&client, &config, &message, false, &outbound)
+                        .await
+                        .unwrap_or_else(|error| panic!("platform {driver:?} {path}: {error}"))
+                        .unwrap();
+                let wire = SurfaceEnvelope::from_payload(&payload).unwrap();
+                assert_eq!(wire.status, Some(200));
+                assert_eq!(
+                    wire.header_map().unwrap()["x-const-api-token-count-estimated"],
+                    "true"
+                );
+                let platform: serde_json::Value =
+                    serde_json::from_slice(&wire.body.decode().unwrap()).unwrap();
+                assert_eq!(platform, local, "{driver:?} {path}");
+                assert!(
+                    received.try_recv().is_err(),
+                    "counting must not start a model stream"
+                );
+                assert_eq!(crate::channel_concurrency::current(&channel.id), 0);
+            }
+        }
+    }
+
     fn supplier_message(id: &str, wire: SurfaceEnvelope) -> SupplierMessage {
         SupplierMessage {
+            output_credit: None,
             id: id.to_string(),
             kind: "request".to_string(),
             payload: crate::surface_wire::wire_payload(wire).expect("surface envelope"),
@@ -1402,6 +1538,7 @@ mod opaque_subscription_tests {
         };
         let payload = crate::surface_wire::wire_payload(wire).expect("opaque envelope");
         let message = SupplierMessage {
+            output_credit: None,
             id: "opaque-missing-content-type".to_string(),
             kind: "request".to_string(),
             payload,

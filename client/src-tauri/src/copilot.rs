@@ -46,6 +46,7 @@ fn client(use_system_proxy: bool) -> Result<Client> {
     static DIRECT: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
     Ok(crate::http_client::cached_client(
         if use_system_proxy { &CLIENT } else { &DIRECT },
+        use_system_proxy,
         move || {
             crate::http_client::proxy_policy(
                 Client::builder()

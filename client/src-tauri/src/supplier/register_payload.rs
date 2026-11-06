@@ -25,6 +25,7 @@ pub(crate) fn supplier_register_message(config: &SupplierAgentConfig) -> Supplie
     .cloned()
     .unwrap_or_default();
     SupplierMessage {
+        output_credit: None,
         id: "register".to_string(),
         kind: "register".to_string(),
         payload,
@@ -160,7 +161,7 @@ pub(crate) fn supplier_register_payload(
             "cooldown_until_unix": safety.as_ref().map(|state| state.cooldown_until_unix).unwrap_or_default(),
             "success_ewma": safety.as_ref().map(|state| state.success_ewma).unwrap_or(1.0),
             "latency_ewma_ms": safety.as_ref().map(|state| state.latency_ewma_ms).unwrap_or_default(),
-            "current_concurrency": safety.as_ref().map(|state| state.current_concurrency).unwrap_or_default(),
+            "current_concurrency": crate::channel_concurrency::current(&channel_id),
             "max_concurrency": safety.as_ref().map(|state| state.max_concurrency).unwrap_or(config.max_concurrency()),
             "last_probe_ms": 0
         })
@@ -287,12 +288,12 @@ fn supplier_supported_operations(config: &SupplierConfig) -> Vec<String> {
         && bound_surfaces.contains(&crate::surface::ApiSurface::Gemini) {
         operations.push("gemini.live_websocket".to_string());
     }
-    // Every HTTP Surface model channel can answer cross-protocol token-count
-    // preflights with the reviewed local estimator. This explicit declaration
-    // is also the rolling-upgrade gate: old clients are never sent an operation
-    // they may accidentally turn into a paid generation request.
-    let model_channel = execution_kind == crate::source_driver::ExecutionKind::HttpSurface
-        && !bound_surfaces.is_empty();
+    // Every model channel can answer token-count preflights: native counters
+    // keep their adapters; missing counters use the reviewed local estimator.
+    // Keep capability advertisement aligned with execution for routing and
+    // rolling-upgrade operation gates.
+    let model_channel = execution_kind != crate::source_driver::ExecutionKind::HttpSurface
+        || !bound_surfaces.is_empty();
     if model_channel {
         operations.extend([
             "anthropic.count_tokens".to_string(),

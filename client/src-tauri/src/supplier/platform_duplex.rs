@@ -204,6 +204,7 @@ impl PlatformWireConnection {
 
 fn platform_auth_message(token: &str, kind: &str) -> SupplierMessage {
     SupplierMessage {
+        output_credit: None,
         id: format!("platform-auth-{:032x}", rand::random::<u128>()),
         kind: kind.to_string(),
         payload: serde_json::json!({
@@ -270,6 +271,7 @@ fn platform_duplex_open_message(
     headers: &reqwest::header::HeaderMap,
 ) -> SupplierMessage {
     SupplierMessage {
+        output_credit: None,
         id: session_id.to_string(),
         kind: "platform_duplex_open".to_string(),
         payload: serde_json::json!({
@@ -307,6 +309,7 @@ fn platform_duplex_resume_message(
         );
     }
     SupplierMessage {
+        output_credit: None,
         id: session_id.to_string(),
         kind: "platform_duplex_resume".to_string(),
         payload,
@@ -315,6 +318,7 @@ fn platform_duplex_resume_message(
 
 fn platform_duplex_ack_message(session_id: &str, sequence: u64) -> SupplierMessage {
     SupplierMessage {
+        output_credit: None,
         id: session_id.to_string(),
         kind: "platform_duplex_ack".to_string(),
         payload: serde_json::json!({"sequence": sequence})
@@ -386,6 +390,9 @@ pub(crate) fn platform_server_frame(
 fn platform_error_frame(payload: &serde_json::Map<String, serde_json::Value>) -> PlatformDuplexFrame {
     let mut event = serde_json::Map::new();
     event.insert("type".to_string(), serde_json::Value::String("error".to_string()));
+    if let Some(status) = payload.get("status") {
+        event.insert("status".to_string(), status.clone());
+    }
     if let Some(value) = payload.get("safe_to_retry_http_bridge") {
         event.insert("safe_to_retry_http_bridge".to_string(), value.clone());
     }
@@ -394,12 +401,30 @@ fn platform_error_frame(payload: &serde_json::Map<String, serde_json::Value>) ->
         payload.get("error").cloned().unwrap_or_else(|| {
             serde_json::json!({
                 "type": "const_api_error",
-                "code": "platform_duplex_error",
+                "code": payload.get("error_code").or_else(|| payload.get("code"))
+                    .or_else(|| payload.get("error_kind"))
+                    .and_then(serde_json::Value::as_str).unwrap_or("platform_duplex_error"),
                 "message": payload_string(payload, "message"),
             })
         }),
     );
     PlatformDuplexFrame::Text(serde_json::Value::Object(event).to_string())
+}
+
+fn platform_legacy_turn_error(message: &SupplierMessage) -> bool {
+    // Released servers sent admission errors outside the resumable turn. Only
+    // accept that specific envelope; ordinary output must retain strict IDs and
+    // sequences, including when just one of the metadata fields is missing.
+    if message.kind != "platform_duplex_server_frame"
+        || message.payload.contains_key(PLATFORM_DUPLEX_TURN_ID_FIELD)
+        || message.payload.contains_key(PLATFORM_DUPLEX_TURN_SEQUENCE_FIELD)
+        || payload_string(&message.payload, "frame_type") != "text"
+    {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(&payload_string(&message.payload, "data"))
+        .is_ok_and(|event| event.get("type").and_then(serde_json::Value::as_str) == Some("error")
+            && event.get("error").is_some_and(serde_json::Value::is_object))
 }
 
 async fn platform_ws_send(
@@ -853,6 +878,7 @@ async fn run_platform_physical_connection(
                     PlatformPhysicalCommand::Close { session_id } => {
                         sessions.remove(&session_id);
                         let _ = wire.send(SupplierMessage {
+                            output_credit: None,
                             id: session_id,
                             kind: "platform_duplex_close".to_string(),
                             payload: serde_json::Map::new(),
@@ -875,6 +901,7 @@ async fn run_platform_physical_connection(
                     }
                     if !sent {
                         let _ = wire.send(SupplierMessage {
+                            output_credit: None,
                             id: session_id,
                             kind: "platform_duplex_close".to_string(),
                             payload: serde_json::Map::new(),
@@ -908,6 +935,7 @@ async fn run_platform_physical_connection(
                     }
                     "ping" => {
                         if let Err(error) = wire.send(SupplierMessage {
+                            output_credit: None,
                             id: message.id,
                             kind: "pong".to_string(),
                             payload: serde_json::Map::new(),
@@ -1345,6 +1373,7 @@ pub(crate) async fn open_platform_responses_duplex(
                         "platform_duplex_client_frame"
                     };
                     let result = physical.send(SupplierMessage {
+                        output_credit: None,
                         id: session_id.clone(),
                         kind: kind.to_string(),
                         payload,
@@ -1420,7 +1449,11 @@ pub(crate) async fn open_platform_responses_duplex(
                         .get(PLATFORM_DUPLEX_SEQUENCE_FIELD)
                         .and_then(serde_json::Value::as_u64)
                         .unwrap_or_default();
-                    if physical.resume_supported {
+                    // Manager-level failures can precede a replay entry. They
+                    // terminate the session, so forward them without resuming.
+                    let unsequenced_error = message.kind == "platform_duplex_error"
+                        && !message.payload.contains_key(PLATFORM_DUPLEX_SEQUENCE_FIELD);
+                    if physical.resume_supported && !unsequenced_error {
                         if platform_sequence == 0 {
                             let _ = frames.send(Err(
                                 "platform duplex response is missing its recovery sequence".to_string()
@@ -1476,7 +1509,8 @@ pub(crate) async fn open_platform_responses_duplex(
                             }
                         }
                     }
-                    if message.kind == "platform_duplex_server_frame" {
+                    let legacy_turn_error = platform_legacy_turn_error(&message);
+                    if message.kind == "platform_duplex_server_frame" && !legacy_turn_error {
                         if let Some(turn_id) = active_turn_id.as_deref() {
                             let response_turn_id = payload_string(&message.payload, PLATFORM_DUPLEX_TURN_ID_FIELD);
                             let turn_sequence = message
@@ -1508,12 +1542,12 @@ pub(crate) async fn open_platform_responses_duplex(
                             last_turn_sequence = turn_sequence;
                         }
                     }
-                    let terminal_turn = message.kind == "platform_duplex_server_frame"
+                    let terminal_turn = legacy_turn_error || (message.kind == "platform_duplex_server_frame"
                         && message
                             .payload
                             .get("turn_terminal")
                             .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(false);
+                            .unwrap_or(false));
                     let frame = match message.kind.as_str() {
                         "platform_duplex_server_frame" => platform_server_frame(&message.payload)
                             .map_err(|error| format!("{error:#}")),
@@ -1618,6 +1652,7 @@ pub(crate) async fn open_platform_native_session(
                 let close = matches!(command.frame, PlatformDuplexFrame::Close { .. });
                 let result = physical
                     .send(SupplierMessage {
+                        output_credit: None,
                         id: session_id.clone(),
                         kind: if close {
                             "platform_duplex_close"
@@ -1703,6 +1738,7 @@ mod platform_duplex_tests {
                 if message.kind == "platform_duplex_open" {
                     replies
                         .send(Ok(SupplierMessage {
+                            output_credit: None,
                             id: message.id.clone(),
                             kind: "platform_duplex_opened".into(),
                             payload: serde_json::Map::new(),
@@ -1735,6 +1771,7 @@ mod platform_duplex_tests {
 
     fn buffered_mock_frame(id: &str, text: String) -> SupplierMessage {
         SupplierMessage {
+            output_credit: None,
             id: id.into(),
             kind: "platform_duplex_server_frame".into(),
             payload: platform_frame_payload(PlatformDuplexFrame::Text(text)),
@@ -1825,6 +1862,7 @@ mod platform_duplex_tests {
             }
             physical
                 .send(SupplierMessage {
+                    output_credit: None,
                     id: "slow".into(),
                     kind: "platform_duplex_client_frame".into(),
                     payload: Default::default(),
@@ -1854,6 +1892,7 @@ mod platform_duplex_tests {
                 .unwrap();
             physical
                 .send(SupplierMessage {
+                    output_credit: None,
                     id: "slow".into(),
                     kind: "platform_duplex_close".into(),
                     payload: Default::default(),
@@ -1993,6 +2032,7 @@ mod platform_duplex_tests {
             "duplex_close",
         ] {
             let mut message = SupplierMessage {
+                output_credit: None,
                 id: "voice".into(),
                 kind: kind.into(),
                 payload: serde_json::Map::new(),
@@ -2463,6 +2503,7 @@ mod platform_duplex_tests {
                 match command {
                     PlatformPhysicalCommand::Open { message, events, completed } => {
                         events.finish(Ok(SupplierMessage {
+                            output_credit: None,
                             id: message.id, kind: "platform_duplex_opened".into(), payload: Default::default(),
                         }));
                         output = Some(events);
@@ -2476,6 +2517,7 @@ mod platform_duplex_tests {
                         }
                         assert_eq!(message.kind, "platform_duplex_client_frame");
                         output.as_ref().unwrap().finish(Ok(SupplierMessage {
+                            output_credit: None,
                             id: message.id, kind: "platform_duplex_error".into(),
                             payload: serde_json::json!({"_const_platform_seq": 1, "error_kind": "test_terminal", "message": "completed with an error"}).as_object().unwrap().clone(),
                         }));

@@ -1114,7 +1114,7 @@
             true,
         )])));
         let platform_api_key = Arc::new(StdMutex::new(String::new()));
-        let live_config = Arc::new(StdMutex::new(config.clone()));
+        let live_config = Arc::new(crate::config::LiveClientConfig::new(config.clone()));
         let shared = Arc::new(ProxyShared::with_platform_api_key(
             config,
             Client::new(),
@@ -1285,7 +1285,7 @@
                 config.clone(),
                 Client::new(),
                 Arc::new(StdMutex::new("test-device-key".to_string())),
-                Arc::new(StdMutex::new(config)),
+                Arc::new(crate::config::LiveClientConfig::new(config)),
                 readiness.clone(),
             ));
             assert_eq!(
@@ -4683,6 +4683,266 @@
 
         platform_task.abort();
         local_task.abort();
+    }
+
+    #[tokio::test]
+    async fn subscription_token_count_fallback_stops_before_compatible_platform_forwarding() {
+        let platform_modes = Arc::new(StdMutex::new(Vec::new()));
+        let captured_modes = platform_modes.clone();
+        let native_count_available = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let count_available = native_count_available.clone();
+        let platform = warp::method()
+            .and(warp::path::full())
+            .and(warp::header::optional::<String>(
+                PLATFORM_MODEL_ROUTE_MODE_HEADER,
+            ))
+            .map(
+                move |method: warp::http::Method, path: warp::path::FullPath, mode: Option<String>| {
+                    if method != warp::http::Method::POST
+                        || path.as_str() != "/anthropic/v1/messages/count_tokens"
+                    {
+                        return warp::reply::with_status("ok", StatusCode::OK).into_response();
+                    }
+                    let mode = mode.unwrap_or_default();
+                    captured_modes.lock().unwrap().push(mode.clone());
+                    if count_available.load(std::sync::atomic::Ordering::SeqCst) {
+                        return warp::reply::json(&serde_json::json!({"input_tokens":73}))
+                            .into_response();
+                    }
+                    let response = warp::reply::with_status(
+                        warp::reply::json(&serde_json::json!({"error":{"message":"no exact route"}})),
+                        StatusCode::SERVICE_UNAVAILABLE,
+                    );
+                    let response = warp::reply::with_header(
+                        response,
+                        PLATFORM_MODEL_ROUTE_MODE_APPLIED_HEADER,
+                        mode,
+                    );
+                    let response =
+                        warp::reply::with_header(response, PLATFORM_UPSTREAM_ATTEMPTS_USED_HEADER, "0");
+                    warp::reply::with_header(response, PLATFORM_MODEL_FALLBACK_SAFE_HEADER, "1")
+                        .into_response()
+                },
+            );
+        let (address, server) = crate::bind_ephemeral!(platform, ([127, 0, 0, 1], 0));
+        let task = tokio::spawn(server);
+
+        for logged_in in [false, true] {
+            let mut config = default_config();
+            config.account_device_api_key = if logged_in { "count-fixture-key" } else { "" }.into();
+            config.prefer_local_supply = true;
+            config.endpoints = vec![Endpoint {
+                server_id: String::new(),
+                name: "count-platform".into(),
+                base_url: format!("http://{address}"),
+                supplier_ws_url: String::new(),
+                supplier_quic_url: String::new(),
+                enabled: true,
+            }];
+            config.channels = vec![openai_subscription_channel(&["count-local-model"])];
+            config.channels[0].id = format!("count-route-{logged_in}");
+            config.channels[0].subscription.credential_ref = "missing-count-fixture".into();
+            configure_model_compatibility_pair(
+                &mut config,
+                "count-requested-model",
+                "count-local-model",
+            );
+            config.platform_id = config.account_platform_id.clone();
+            let shared = Arc::new(ProxyShared::from_config(
+                normalize_config(config),
+                Client::new(),
+            ));
+            let response = forward_with_failover(
+                    warp::http::Method::POST, "/anthropic/v1/messages/count_tokens", "beta=true",
+                    HeaderMap::new(),
+                    bytes::Bytes::from_static(br#"{"model":"count-requested-model","messages":[{"role":"user","content":"count me"}]}"#),
+                    &shared,
+                ).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers()["x-const-api-token-count-estimated"],
+                "true"
+            );
+            let body = crate::test_body_bytes(response.into_body()).await.unwrap();
+            assert!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()["input_tokens"]
+                    .as_u64()
+                    .unwrap()
+                    > 0
+            );
+            let modes = platform_modes.lock().unwrap();
+            if logged_in {
+                assert_eq!(
+                    *modes,
+                    vec!["exact-only"],
+                    "preserve exact-model priority; no compatible platform round trip"
+                );
+                drop(modes);
+                let path = "/anthropic/v1/messages/count_tokens";
+                let mut headers = HeaderMap::new();
+                headers.insert("session_id", "count-stable-session".parse().unwrap());
+                let body = bytes::Bytes::from_static(br#"{"model":"count-requested-model","messages":[{"role":"user","content":"count me"}]}"#);
+                let key = local_model_route_affinity_key(path, &headers, &body).unwrap();
+                let config = shared.config_snapshot();
+                let context = local_model_route_preference_context(&config, true, true);
+                let route = local_model_route_key(&config.channels[0], "count-local-model");
+                shared.promote_local_model_route(
+                    &key,
+                    &route,
+                    context,
+                    now_unix(),
+                    std::time::Instant::now(),
+                );
+                native_count_available.store(true, std::sync::atomic::Ordering::SeqCst);
+                let response =
+                    forward_with_failover(warp::http::Method::POST, path, "", headers, body, &shared)
+                        .await
+                        .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                assert!(
+                    response
+                        .headers()
+                        .get("x-const-api-token-count-estimated")
+                        .is_none()
+                );
+                assert_eq!(
+                    shared.preferred_local_model_route(&key, context, now_unix()),
+                    Some(route),
+                    "a successful platform count must not displace the last successful generation route",
+                );
+            } else {
+                assert!(modes.is_empty(), "offline counting must stay local");
+            }
+        }
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn model_inventory_filters_platform_stages_in_both_supply_orders_but_preserves_continuations()
+    {
+        let posts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let captured = posts.clone();
+        let platform = warp::method().map(move |method: warp::http::Method| {
+                if method == warp::http::Method::GET {
+                    warp::reply::json(&serde_json::json!({"object":"account_model_compatibility",
+                        "aliases":{"count-requested-model":"count-local-model"},
+                        "routing_model_inventory":{"schema_version":1,"models":["unrelated"],"identity_aliases":{}}
+                    })).into_response()
+                } else {
+                    captured.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    warp::reply::json(&serde_json::json!({"input_tokens":5})).into_response()
+                }
+            });
+        let (address, server) = crate::bind_ephemeral!(platform, ([127, 0, 0, 1], 0));
+        let task = tokio::spawn(server);
+        for prefer_local in [true, false] {
+            let mut config = default_config();
+            config.account_platform_id = "inventory-test".into();
+            config.platform_id = "inventory-test".into();
+            config.account_user_id = "inventory-user".into();
+            config.account_device_api_key = "fixture-key".into();
+            config.prefer_local_supply = prefer_local;
+            config.endpoints = vec![Endpoint {
+                server_id: String::new(),
+                name: "inventory".into(),
+                base_url: format!("http://{address}"),
+                supplier_ws_url: String::new(),
+                supplier_quic_url: String::new(),
+                enabled: true,
+            }];
+            config.channels = vec![openai_subscription_channel(&["count-local-model"])];
+            config.channels[0].subscription.credential_ref = "missing-count-fixture".into();
+            configure_model_compatibility_pair(
+                &mut config,
+                "count-requested-model",
+                "count-local-model",
+            );
+            config.platform_id = config.account_platform_id.clone();
+            let cache = Arc::new(StdMutex::new(
+                crate::model_compatibility::ModelCompatibilityHttpCache::default(),
+            ));
+            crate::model_compatibility::load_model_inventory_fixture(&config, &cache)
+                .await
+                .unwrap();
+            let mut shared = ProxyShared::from_config(normalize_config(config.clone()), Client::new());
+            shared.model_compatibility_http_cache = Some(cache.clone());
+            let shared = Arc::new(shared);
+            let before = posts.load(std::sync::atomic::Ordering::SeqCst);
+            for (path, body) in [
+                (
+                    "/anthropic/v1/messages/count_tokens",
+                    r#"{"model":"count-requested-model","messages":[{"role":"user","content":"count me"}]}"#,
+                ),
+                (
+                    "/v1/responses/input_tokens",
+                    r#"{"model":"count-requested-model","input":"count me"}"#,
+                ),
+                (
+                    "/gemini/v1beta/models/count-requested-model:countTokens",
+                    r#"{"contents":[{"parts":[{"text":"count me"}]}]}"#,
+                ),
+            ] {
+                let response = forward_with_failover(
+                    warp::http::Method::POST,
+                    path,
+                    "",
+                    HeaderMap::new(),
+                    bytes::Bytes::from(body),
+                    &shared,
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::OK,
+                    "{path} prefer_local={prefer_local}"
+                );
+                assert_eq!(
+                    response.headers()["x-const-api-token-count-estimated"],
+                    "true"
+                );
+            }
+            assert_eq!(
+                posts.load(std::sync::atomic::Ordering::SeqCst),
+                before,
+                "no platform POST needed in either fidelity stage"
+            );
+            config.channels.clear();
+            config.allow_model_equivalence = false;
+            let mut shared = ProxyShared::from_config(config, Client::new());
+            shared.model_compatibility_http_cache = Some(cache);
+            let shared = Arc::new(shared);
+            for (path, body) in [
+                ("/v1/responses", r#"{"model":"missing","previous_response_id":"resp_owned","input":"continue"}"#),
+                ("/v1/responses/input_tokens", r#"{"model":"missing","previous_response_id":"resp_owned","input":"count"}"#),
+                ("/v1/responses/input_tokens", r#"{"model":"missing","conversation":"conv_owned","input":"count"}"#),
+                ("/v1/responses/input_tokens", r#"{"model":"missing","input":[{"role":"user","content":[{"type":"input_file","file_id":"file_owned"}]}]}"#),
+                ("/v1/chat/completions", r#"{"model":"missing","messages":[{"role":"user","content":[{"type":"file","file":{"file_id":"file_owned"}}]}]}"#),
+                ("/anthropic/v1/messages/count_tokens", r#"{"model":"missing","messages":[{"role":"user","content":[{"type":"document","source":{"type":"file","file_id":"file_owned"}}]}]}"#),
+                ("/gemini/v1beta/models/missing:countTokens", r#"{"contents":[{"parts":[{"fileData":{"fileUri":"https://generativelanguage.googleapis.com/v1beta/files/owned"}}]}]}"#),
+                ("/gemini/v1beta/models/missing:countTokens", r#"{"cachedContent":"cachedContents/owned","contents":[]}"#),
+                ("/gemini/v1beta/models/missing:countTokens", r#"{"generateContentRequest":{"model":"models/missing","cachedContent":"cachedContents/owned","contents":[]}}"#),
+            ] {
+                let before = posts.load(std::sync::atomic::Ordering::SeqCst);
+                let response = forward_with_failover(
+                    warp::http::Method::POST,
+                    path,
+                    "",
+                    HeaderMap::new(),
+                    bytes::Bytes::from(body),
+                    &shared,
+                )
+                .await
+                .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{path} prefer_local={prefer_local}");
+                assert_eq!(
+                    posts.load(std::sync::atomic::Ordering::SeqCst),
+                    before + 1,
+                    "{path}: resources and continuations must still reach the platform",
+                );
+            }
+        }
+        task.abort();
     }
 
     #[test]

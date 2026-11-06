@@ -170,15 +170,6 @@ export function channelEditorSettingsChanged(
   return JSON.stringify(editorSettings(saved)) !== JSON.stringify(editorSettings(current));
 }
 
-export function diagnosticToastEventKey(issue: {
-  id: string;
-  title?: string;
-  message: string;
-  createdAt: number;
-}) {
-  return `${issue.id}:${issue.createdAt}:${issue.message}`;
-}
-
 export function mergeEndpointDiscoveryConfig<
   TEndpoint,
   TChannel extends EndpointConnection,

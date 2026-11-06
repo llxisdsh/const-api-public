@@ -243,9 +243,11 @@ pub(crate) enum ChannelExecutionBackend {
 
 pub(crate) fn channel_execution_backend(
     channel: &ChannelConfig,
-    operation: ApiOperation,
+    route: &ApiRoute,
 ) -> Result<ChannelExecutionBackend> {
-    if operation == ApiOperation::Opaque {
+    if route.operation == ApiOperation::Opaque
+        || subscription_uses_local_token_count(channel, route)?
+    {
         return Ok(ChannelExecutionBackend::HttpSurface);
     }
     let execution_kind = execution_kind_for_source(channel.source_driver())?;
@@ -254,6 +256,27 @@ pub(crate) fn channel_execution_backend(
             Some(provider) => ChannelExecutionBackend::RetainedSubscription { provider },
             None => ChannelExecutionBackend::HttpSurface,
         },
+    )
+}
+
+fn subscription_uses_local_token_count(channel: &ChannelConfig, route: &ApiRoute) -> Result<bool> {
+    if !matches!(
+        route.operation,
+        ApiOperation::CountTokens | ApiOperation::ResponsesInputTokens
+    ) {
+        return Ok(false);
+    }
+    // Native subscription counters keep their own authentication and wire
+    // contracts. Other counters use the same no-I/O estimate as API channels,
+    // before retained subscription admission can reject the auxiliary request.
+    Ok(
+        crate::source_driver::source_driver(channel.source_driver())?
+            .subscription_contract()
+            .is_some_and(|contract| {
+                !contract.special_operations.iter().any(|special| {
+                    special.surface == route.surface && special.operation == route.operation
+                })
+            }),
     )
 }
 
@@ -415,7 +438,8 @@ pub(crate) async fn execute_channel_request(
     if matches!(
         route.operation,
         ApiOperation::CountTokens | ApiOperation::ResponsesInputTokens
-    ) && (inbound_protocol
+    ) && (subscription_uses_local_token_count(channel, &route)?
+        || inbound_protocol
         .as_deref()
         .is_some_and(|inbound| inbound != target_protocol)
         // Gateway token-count support is a local estimate unless an actual
@@ -1996,11 +2020,19 @@ mod tests {
             channel.subscription.platform = "conflicting-legacy-provider".to_string();
 
             assert_eq!(
-                channel_execution_backend(&channel, ApiOperation::ChatCompletions).unwrap(),
+                channel_execution_backend(
+                    &channel,
+                    &resolve_api_route("POST", "/v1/chat/completions", false).unwrap(),
+                )
+                .unwrap(),
                 expected
             );
             assert_eq!(
-                channel_execution_backend(&channel, ApiOperation::Opaque).unwrap(),
+                channel_execution_backend(
+                    &channel,
+                    &resolve_api_route("POST", "/v1/future-operation", false).unwrap(),
+                )
+                .unwrap(),
                 ChannelExecutionBackend::HttpSurface
             );
         }

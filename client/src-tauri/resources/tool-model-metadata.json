@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_revision": "fd4cef22eafaf5e1c18f3a5af6df252a16fa5cce",
+  "source_revision": "fc1e47e580d9e3d2e8b46ad05a293a58ed0b8f1f",
   "compatibility_version_id": "compat-v31-2026-11-04",
   "compatibility_groups": [
     {
@@ -1026,6 +1026,11 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-6-cyber",
+      "display_name": "gpt-6-cyber",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-6-luna",
       "display_name": "gpt-6-luna",
       "vendor": "openai"
@@ -1078,6 +1083,16 @@
     {
       "id": "gpt-image-2.5-sunburst",
       "display_name": "gpt-image-2.5-sunburst",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-image-2.6-flare",
+      "display_name": "gpt-image-2.6-flare",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-image-2.6-sunburst",
+      "display_name": "gpt-image-2.6-sunburst",
       "vendor": "openai"
     },
     {
@@ -4984,13 +4999,14 @@
       ],
       "reasoning": true,
       "reasoning_efforts": [
+        "none",
         "low",
         "medium",
         "high",
         "xhigh"
       ],
       "tool_call": true,
-      "source_key": "codex-client/gpt-5.5"
+      "source_key": "gpt-5.5"
     },
     "gpt-5.5-cyber": {
       "display_name": "gpt-5.5-cyber",
@@ -5214,6 +5230,24 @@
       "tool_call": true,
       "source_key": "openrouter/openai/gpt-6-astra-pro"
     },
+    "gpt-6-cyber": {
+      "display_name": "gpt-6-cyber",
+      "context_tokens": 272000,
+      "max_context_tokens": 1050000,
+      "input_tokens": 922000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "gpt-6-cyber"
+    },
     "gpt-6-luna": {
       "display_name": "GPT-6-Luna",
       "context_tokens": 272000,
@@ -5340,7 +5374,7 @@
       "source_key": "openrouter/openai/gpt-6.1-sol-pro"
     },
     "gpt-6.1-terra": {
-      "display_name": "gpt-6.1-terra",
+      "display_name": "GPT-6.1 Terra",
       "context_tokens": 922000,
       "max_context_tokens": 1050000,
       "input_tokens": 922000,
@@ -5355,15 +5389,15 @@
       ],
       "reasoning": true,
       "reasoning_efforts": [
-        "none",
         "low",
         "medium",
         "high",
         "xhigh",
-        "max"
+        "max",
+        "ultra"
       ],
       "tool_call": true,
-      "source_key": "gpt-6.1-terra"
+      "source_key": "codex-client/gpt-6.1-terra"
     },
     "gpt-chat-latest": {
       "display_name": "gpt-chat-latest",
@@ -5421,6 +5455,28 @@
         "image"
       ],
       "source_key": "gpt-image-2.5-sunburst"
+    },
+    "gpt-image-2.6-flare": {
+      "display_name": "gpt-image-2.6-flare",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "gpt-image-2.6-flare"
+    },
+    "gpt-image-2.6-sunburst": {
+      "display_name": "gpt-image-2.6-sunburst",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "gpt-image-2.6-sunburst"
     },
     "gpt-live-1": {
       "display_name": "GPT-Live 1",
@@ -5797,7 +5853,7 @@
       "source_key": "provider-registry/xai/grok-build-0.1"
     },
     "grok-imagine-video-1.5-lite": {
-      "display_name": "grok-imagine-video-1.5-lite",
+      "display_name": "Grok Imagine Video 1.5 Lite",
       "input_modalities": [
         "image",
         "text"
@@ -5805,7 +5861,7 @@
       "output_modalities": [
         "video"
       ],
-      "source_key": "xai/grok-imagine-video-1.5-lite"
+      "source_key": "provider-registry/xai/grok-imagine-video-1.5-lite"
     },
     "grok-voice-transcribe-1.0": {
       "display_name": "grok-voice-transcribe-1.0",
@@ -6175,8 +6231,9 @@
       "source_key": "provider-registry/kimi/kimi-k3"
     },
     "kimi-k3.1-pro": {
-      "display_name": "kimi-k3.1-pro",
+      "display_name": "Kimi K3.1 Pro",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
       "input_tokens": 1048576,
       "output_tokens": 1048576,
       "input_modalities": [
@@ -6193,7 +6250,7 @@
         "max"
       ],
       "tool_call": true,
-      "source_key": "moonshot/kimi-k3.1-pro"
+      "source_key": "provider-registry/kimi/kimi-k3.1-pro"
     },
     "l3-lunaris-8b": {
       "display_name": "l3-lunaris-8b",

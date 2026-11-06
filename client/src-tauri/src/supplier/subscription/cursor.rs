@@ -267,6 +267,7 @@ pub(crate) async fn forward_cursor_subscription_request(
             send_supplier_message(
                 sender,
                 SupplierMessage {
+                    output_credit: None,
                     id: id.into(),
                     kind: "error".into(),
                     payload,

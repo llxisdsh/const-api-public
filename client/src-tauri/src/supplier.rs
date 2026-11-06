@@ -28,6 +28,7 @@ include!("supplier/lifecycle.rs");
 include!("supplier/auto_recovery.rs");
 include!("supplier/payload_encryption.rs");
 include!("supplier/message_chunks.rs");
+include!("supplier/output_budget.rs");
 #[cfg(test)]
 include!("supplier/transport_regression_tests.rs");
 include!("supplier/transport.rs");

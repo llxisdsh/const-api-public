@@ -70,6 +70,21 @@ describe("application runtime preferences", () => {
     expect(listen).toHaveBeenCalledWith("const-api://update-state", expect.any(Function));
   });
 
+  it("keeps update errors in the existing update information without an application alarm", async () => {
+    edition.updates = true;
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "native_update_status") return {
+        status: "error", automatic: false, sources: [], checked_at_unix_ms: 0, error: "fixture update unavailable",
+      };
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.updateState.status).toBe("error"));
+    expect(result.current.appMeta.updateLastError).toContain("fixture update unavailable");
+    expect(result.current.applicationDiagnostics).toEqual([]);
+  });
+
   it("saves sleep prevention locally without changing drafts or restarting services", async () => {
     const base = vi.mocked(invoke).getMockImplementation()!;
     vi.mocked(invoke).mockImplementation(async (command, args) => {

@@ -140,7 +140,7 @@ pub(crate) fn create_runtime_state(config_path: PathBuf, initial_config: ClientC
             shutdown: None,
             server_task: None,
         })),
-        proxy_config: Arc::new(StdMutex::new(initial_config)),
+        proxy_config: Arc::new(crate::config::LiveClientConfig::new(initial_config)),
         local_channel_readiness: Arc::new(StdMutex::new(HashMap::new())),
         local_model_quota_routes: Arc::new(StdMutex::new(HashMap::new())),
         supplier: Arc::new(Mutex::new(SupplierRuntime {
@@ -624,6 +624,15 @@ async fn run_model_compatibility_sync_loop(state: AppState) {
                 }
             }
             last_platform_key = platform_key;
+        } else if crate::model_compatibility::routing_inventory_refresh_due(
+            &state.model_compatibility_http_cache,
+        ) {
+            if let Err(error) =
+                crate::model_compatibility::refresh_routing_inventory_for_runtime(&state).await
+            {
+                // An expired/failed snapshot cannot suppress real requests.
+                log::debug!("[const-api][runtime] model inventory refresh deferred: {error:#}");
+            }
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }

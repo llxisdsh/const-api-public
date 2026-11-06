@@ -1031,8 +1031,8 @@
       "ownership": "routed_known",
       "statefulness": "stateless",
       "billing_class": "none",
-      "execution_policy": "native_backend_only",
-      "required_context_declarations": ["api_credential"],
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
       "required_conversion_evidence": ["request", "response", "error", "cancel"]
     },
     {

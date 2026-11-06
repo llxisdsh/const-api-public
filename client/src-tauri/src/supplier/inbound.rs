@@ -20,6 +20,7 @@ pub(crate) async fn handle_supplier_request(
         forward_supplier_request(client, config, &msg, stream_requested, outbound).await?;
     if let Some(payload) = response {
         let msg = SupplierMessage {
+            output_credit: None,
             id,
             kind: "http_response".to_string(),
             payload,
@@ -42,6 +43,7 @@ struct SupplierDuplexCommands {
     channel_id: String,
     sender: mpsc::Sender<SupplierMessage>,
     accepting: tokio::sync::watch::Sender<bool>,
+    input_overflow: tokio::sync::watch::Sender<bool>,
 }
 
 impl SupplierRequestTasks {
@@ -80,10 +82,10 @@ impl SupplierRequestTasks {
             let panic_outbound = outbound.clone();
             let guarded = crate::catch_runtime_panic(
                 format!("supplier request {panic_request_id}"),
-                crate::update_activity::scope_supplier_request_outputs(
+                scope_supplier_output_budget(crate::update_activity::scope_supplier_request_outputs(
                     activity_request_id,
                     execute_supplier_request_and_report(&client, &supplier, message, &outbound),
-                ),
+                )),
             )
             .await;
             if let Err(recovered) = guarded {
@@ -93,6 +95,7 @@ impl SupplierRequestTasks {
                     recovered.message,
                 );
                 let response = SupplierMessage {
+                    output_credit: None,
                     id: panic_request_id,
                     kind: "error".to_string(),
                     payload: supplier_execution_error_payload(&error),
@@ -131,6 +134,7 @@ impl SupplierRequestTasks {
         let task_id = request_id.clone();
         let (commands_tx, commands_rx) = mpsc::channel(64);
         let (accepting, admission) = tokio::sync::watch::channel(true);
+        let (input_overflow, mut overflow) = tokio::sync::watch::channel(false);
         let channel_id = supplier.channel_id.clone();
         let (start_tx, start_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
@@ -144,11 +148,13 @@ impl SupplierRequestTasks {
                 tasks: tasks.clone(),
             };
             let panic_outbound = outbound.clone();
-            let guarded = crate::catch_runtime_panic(
+            let execution = crate::catch_runtime_panic(
                 format!("supplier duplex session {panic_request_id}"),
-                crate::update_activity::scope_supplier_request_outputs(
+                scope_supplier_output_budget(crate::update_activity::scope_supplier_request_outputs(
                     panic_request_id.clone(),
-                    crate::proxy::run_supplier_responses_duplex(
+                    // Box before applying task-local/panic/select wrappers: the
+                    // protocol future is large even before its first poll.
+                    Box::pin(crate::proxy::run_supplier_responses_duplex(
                         &client,
                         &supplier,
                         message,
@@ -156,10 +162,20 @@ impl SupplierRequestTasks {
                         &outbound,
                         tasks.responses_ws_pool.clone(),
                         admission,
-                    ),
-                ),
-            )
-            .await;
+                    )),
+                )),
+            );
+            // A slow output consumer must not stop the transport reader from
+            // processing ACK/cancel. The existing bounded input mailbox rejects
+            // overflow; this task reports the failure without blocking that reader.
+            let guarded = tokio::select! {
+                biased;
+                _ = overflow.changed() => Ok(Err(platform_execution_failure(
+                    "supplier_duplex_input", "duplex_input_backpressure",
+                    "The duplex input queue is full; reconnect after the receiver catches up.",
+                ))),
+                result = execution => result,
+            };
             let error = match guarded {
                 Ok(Ok(())) => return,
                 Ok(Err(error)) => error,
@@ -176,6 +192,9 @@ impl SupplierRequestTasks {
                 supplier.source_driver,
             );
             let mut payload = supplier_execution_error_payload(&error);
+            if *overflow.borrow() {
+                payload.insert("failure_scope".into(), "request".into());
+            }
             if !payload.contains_key("failure_scope") {
                 let evidence = execution_evidence_for_error(&error);
                 let scope = if matches!(
@@ -196,6 +215,7 @@ impl SupplierRequestTasks {
                 );
             }
             let response = SupplierMessage {
+                output_credit: None,
                 id: panic_request_id,
                 kind: "duplex_error".to_string(),
                 payload,
@@ -223,6 +243,7 @@ impl SupplierRequestTasks {
                         channel_id,
                         sender: commands_tx,
                         accepting,
+                        input_overflow,
                     },
                 );
             }
@@ -237,15 +258,26 @@ impl SupplierRequestTasks {
         let _ = start_tx.send(());
     }
 
-    pub(crate) async fn send_duplex(&self, message: SupplierMessage) -> bool {
-        let sender = self
+    pub(crate) fn send_duplex(&self, message: SupplierMessage) -> bool {
+        let entry = self
             .duplex_commands
             .lock()
             .ok()
-            .and_then(|commands| commands.get(&message.id).map(|entry| entry.sender.clone()));
-        match sender {
-            Some(sender) => sender.send(message).await.is_ok(),
-            None => false,
+            .and_then(|commands| commands.get(&message.id).map(|entry| {
+                (entry.sender.clone(), entry.input_overflow.clone())
+            }));
+        let Some((sender, overflow)) = entry else { return false };
+        if *overflow.borrow() {
+            // A terminal error is already being queued by the owning task.
+            return true;
+        }
+        match sender.try_send(message) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Closed(_)) => false,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                overflow.send_replace(true);
+                true
+            }
         }
     }
 
@@ -397,6 +429,7 @@ async fn execute_supplier_request_and_report(
             );
         }
         let response = SupplierMessage {
+            output_credit: None,
             id: error_id,
             kind: "error".to_string(),
             payload,
@@ -771,6 +804,7 @@ mod request_task_tests {
             ..SurfaceEnvelope::default()
         };
         SupplierMessage {
+            output_credit: None,
             id: id.to_string(),
             kind: "http_request".to_string(),
             payload: crate::surface_wire::wire_payload(wire).expect("wire payload"),
@@ -779,6 +813,7 @@ mod request_task_tests {
 
     fn cancel_message(id: &str) -> String {
         serde_json::to_string(&SupplierMessage {
+            output_credit: None,
             id: id.to_string(),
             kind: "request_cancel".to_string(),
             payload: serde_json::Map::new(),
@@ -906,6 +941,7 @@ mod request_task_tests {
             ..SurfaceEnvelope::default()
         };
         SupplierMessage {
+            output_credit: None,
             id: id.to_string(),
             kind: "http_request".to_string(),
             payload: crate::surface_wire::wire_payload(wire).expect("wire request"),

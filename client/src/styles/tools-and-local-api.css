@@ -137,10 +137,6 @@
   line-height: 1.4;
 }
 
-.access-principle {
-  max-width: 980px;
-}
-
 .inline-text-link {
   display: inline-flex;
   align-items: center;
@@ -199,7 +195,6 @@
   align-items: baseline;
   flex-wrap: wrap;
   gap: 10px;
-  max-width: 1120px;
   margin: 0 0 14px;
 }
 
@@ -227,7 +222,6 @@
 
 .access-tools-hint {
   display: block;
-  max-width: 1120px;
   margin: -10px 0 18px;
   color: var(--muted);
   font-size: 12px;

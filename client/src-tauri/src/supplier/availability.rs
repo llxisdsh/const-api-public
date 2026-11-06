@@ -176,8 +176,18 @@ impl Snapshot {
 struct Store {
     version: u8,
     channels: BTreeMap<String, Snapshot>,
+    // Successful probe timing is display data, never admission evidence.
+    probe_observations: BTreeMap<String, ProbeObservation>,
     #[serde(skip)]
     checking: HashSet<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ProbeObservation {
+    fingerprint: String,
+    latency_ms: u128,
+    checked_at_unix: i64,
+    upstream_http_version: String,
 }
 
 fn decode(bytes: &[u8]) -> Option<Store> {
@@ -185,9 +195,17 @@ fn decode(bytes: &[u8]) -> Option<Store> {
         return None;
     }
     let mut store: Store = serde_json::from_slice(bytes).ok()?;
-    if store.version != 1 || store.channels.len() > 256 {
+    if store.version != 1 || store.channels.len() > 256 || store.probe_observations.len() > 256 {
         return None;
     }
+    store.probe_observations.retain(|_, observation| {
+        observation.checked_at_unix > 0
+            && observation.fingerprint.len() == 64
+            && matches!(
+                observation.upstream_http_version.as_str(),
+                "" | "http" | "http1" | "http2" | "http3"
+            )
+    });
     for snapshot in store.channels.values_mut() {
         // Future groups/states are observations, not new hard gates.
         snapshot.groups.retain(|key, value| {
@@ -259,6 +277,68 @@ fn persist() {
             log::warn!("channel_availability_snapshot_save_failed: {error}");
         }
     }
+}
+
+pub(crate) fn record_probe_observation(
+    channel: &ChannelConfig,
+    result: &ChannelUpstreamTestResult,
+) {
+    let mut state = store()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let fingerprint = fingerprint(channel);
+    if state
+        .probe_observations
+        .get(&channel.id)
+        .is_some_and(|previous| {
+            previous.fingerprint == fingerprint && previous.checked_at_unix > result.checked_at_unix
+        })
+    {
+        return;
+    }
+    if state.probe_observations.len() >= 256 && !state.probe_observations.contains_key(&channel.id)
+    {
+        // Timing is a bounded cache; replacing its oldest entry must not change admission.
+        if let Some(oldest) = state
+            .probe_observations
+            .iter()
+            .min_by_key(|(_, observation)| observation.checked_at_unix)
+            .map(|(id, _)| id.clone())
+        {
+            state.probe_observations.remove(&oldest);
+        }
+    }
+    state.probe_observations.insert(
+        channel.id.clone(),
+        ProbeObservation {
+            fingerprint,
+            latency_ms: result.latency_ms,
+            checked_at_unix: result.checked_at_unix,
+            upstream_http_version: result.upstream_http_version.clone(),
+        },
+    );
+    drop(state);
+    persist();
+}
+
+pub(crate) fn channel_metrics(channel: &ChannelConfig) -> crate::model::SupplierChannelMetrics {
+    let mut metrics = crate::model::SupplierChannelMetrics {
+        current_concurrency: crate::channel_concurrency::current(&channel.id),
+        ..Default::default()
+    };
+    let state = store()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(observation) = state
+        .probe_observations
+        .get(&channel.id)
+        .filter(|observation| observation.fingerprint == fingerprint(channel))
+    {
+        metrics.latency_ms = observation.latency_ms;
+        metrics.latency_checked_at_unix = observation.checked_at_unix;
+        metrics.upstream_http_version = observation.upstream_http_version.clone();
+    }
+    metrics
 }
 
 // This is deliberately independent of access tokens, display names, prices and model sorting.
@@ -919,6 +999,205 @@ async fn check_group(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn probe_result(latency_ms: u128, checked_at_unix: i64) -> ChannelUpstreamTestResult {
+        ChannelUpstreamTestResult {
+            http_status: 200,
+            latency_ms,
+            checked_at_unix,
+            upstream_http_version: "http2".into(),
+            model: "fixture-model".into(),
+            content: "private-probe-output".into(),
+            raw: "private-probe-body".into(),
+            input_tokens: 1,
+            output_tokens: 1,
+        }
+    }
+
+    #[test]
+    fn probe_metrics_survive_snapshot_reads_without_changing_admission() {
+        let mut channel = crate::default_config().channels.remove(0);
+        channel.id = "metrics-probe-roundtrip".into();
+        let admission = has_check_snapshot(&channel);
+        record_probe_observation(&channel, &probe_result(42, 123));
+        assert_eq!(has_check_snapshot(&channel), admission);
+        let request = crate::channel_concurrency::Guard::acquire(&channel.id, 1).unwrap();
+        let measured = channel_metrics(&channel);
+        assert_eq!(measured.latency_ms, 42);
+        assert_eq!(measured.latency_checked_at_unix, 123);
+        assert_eq!(measured.current_concurrency, 1);
+        drop(request);
+        assert_eq!(channel_metrics(&channel).current_concurrency, 0);
+        assert_eq!(channel_metrics(&channel).latency_ms, 42);
+
+        let observation = store()
+            .lock()
+            .unwrap()
+            .probe_observations
+            .get(&channel.id)
+            .unwrap()
+            .clone();
+        let isolated = Store {
+            version: 1,
+            probe_observations: BTreeMap::from([(channel.id.clone(), observation)]),
+            ..Default::default()
+        };
+        let bytes = serde_json::to_vec(&isolated).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-probe"));
+        let restored = decode(&bytes).unwrap();
+        assert!(restored.channels.is_empty());
+        assert_eq!(restored.probe_observations[&channel.id].latency_ms, 42);
+        assert_eq!(
+            restored.probe_observations[&channel.id].checked_at_unix,
+            123
+        );
+        assert!(
+            decode(br#"{"version":1,"channels":{}}"#)
+                .unwrap()
+                .probe_observations
+                .is_empty()
+        );
+        store()
+            .lock()
+            .unwrap()
+            .probe_observations
+            .remove(&channel.id);
+    }
+
+    #[test]
+    fn probe_metrics_keep_the_latest_success_and_invalidate_changed_identity() {
+        let mut channel = crate::default_config().channels.remove(0);
+        channel.id = "metrics-probe-identity".into();
+        record_probe_observation(&channel, &probe_result(80, 200));
+        record_probe_observation(&channel, &probe_result(99, 100));
+        assert_eq!(channel_metrics(&channel).latency_ms, 80);
+        record_probe_observation(&channel, &probe_result(0, 300));
+        assert_eq!(channel_metrics(&channel).latency_ms, 0);
+        assert_eq!(channel_metrics(&channel).latency_checked_at_unix, 300);
+        channel.name = "renamed".into();
+        assert_eq!(channel_metrics(&channel).latency_checked_at_unix, 300);
+        for change in ["credential", "proxy", "endpoint", "channel"] {
+            let mut changed = channel.clone();
+            match change {
+                "credential" => changed.v2.credential_ref = "different-credential".into(),
+                "proxy" => changed.v2.use_system_proxy = !changed.v2.use_system_proxy,
+                "endpoint" => changed.surface_bindings[0].base_url = "http://127.0.0.1:1".into(),
+                _ => changed.id = "unmeasured-channel".into(),
+            }
+            assert_eq!(
+                channel_metrics(&changed).latency_checked_at_unix,
+                0,
+                "{change}"
+            );
+        }
+        store()
+            .lock()
+            .unwrap()
+            .probe_observations
+            .remove(&channel.id);
+    }
+
+    #[tokio::test]
+    async fn probe_metrics_use_completed_http_tests_and_survive_cached_refresh_and_failure() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        use warp::Filter;
+        let fail = Arc::new(AtomicBool::new(false));
+        let next_fail = fail.clone();
+        let route = warp::any().map(move || {
+            let (status, body) = if next_fail.load(Ordering::SeqCst) {
+                (warp::http::StatusCode::BAD_REQUEST, serde_json::json!({"error":{"message":"fixture rejected"}}))
+            } else {
+                (warp::http::StatusCode::OK, serde_json::json!({"choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}))
+            };
+            warp::reply::with_status(warp::reply::json(&body), status)
+        });
+        let (addr, server) = crate::bind_ephemeral!(route, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        let mut channel = crate::coding_gateway::tests::channel(
+            crate::source_driver::SourceDriverId::OpenAiApi,
+            &format!("http://{addr}/v1"),
+        );
+        channel.id = "metrics-probe-http-roundtrip".into();
+        channel.models = vec!["gpt-4o-mini".into()];
+        channel.public_model = "gpt-4o-mini".into();
+        channel.upstream_model = "gpt-4o-mini".into();
+        let result = super::super::test_channel_upstream_model_inner(
+            channel.clone(),
+            "gpt-4o-mini".into(),
+            "OK".into(),
+        )
+        .await
+        .unwrap();
+        assert!(result.checked_at_unix > 0);
+        let measured = channel_metrics(&channel);
+        assert_eq!(measured.latency_ms, result.latency_ms);
+        assert_eq!(measured.latency_checked_at_unix, result.checked_at_unix);
+        let ((_, health), attempts) = {
+            let (refreshed, attempts) = crate::upstream_transport::with_probe_budget(
+                0,
+                super::super::validate_supplier_channel(
+                    channel.clone(),
+                    super::super::SupplierCheckMode::Cached,
+                ),
+            )
+            .await;
+            (refreshed.unwrap(), attempts)
+        };
+        assert_eq!(attempts, 0);
+        assert_eq!(health.latency_ms, result.latency_ms);
+        fail.store(true, Ordering::SeqCst);
+        assert!(
+            super::super::test_channel_upstream_model_inner(
+                channel.clone(),
+                "gpt-4o-mini".into(),
+                "OK".into()
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            channel_metrics(&channel).latency_checked_at_unix,
+            result.checked_at_unix
+        );
+        assert_eq!(channel_metrics(&channel).latency_ms, result.latency_ms);
+        store()
+            .lock()
+            .unwrap()
+            .probe_observations
+            .remove(&channel.id);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn probe_metrics_refresh_activity_even_when_health_is_missing_or_channel_stopped() {
+        let mut config = crate::default_config();
+        let channel = &mut config.channels[0];
+        channel.id = "metrics-stopped-api".into();
+        channel.enabled = false;
+        record_probe_observation(channel, &probe_result(30, 123));
+        let channel_id = channel.id.clone();
+        let request = crate::channel_concurrency::Guard::acquire(&channel_id, 1).unwrap();
+        let state = crate::runtime::create_runtime_state(std::path::PathBuf::new(), config);
+        let status = super::super::supplier_status_inner(&state).await.unwrap();
+        assert!(status.channels.is_empty());
+        let metrics = &status.channel_metrics.unwrap()[&channel_id];
+        assert_eq!(metrics.current_concurrency, 1);
+        assert_eq!(metrics.latency_ms, 30);
+        drop(request);
+        let status = super::super::supplier_status_inner(&state).await.unwrap();
+        assert_eq!(
+            status.channel_metrics.unwrap()[&channel_id].current_concurrency,
+            0
+        );
+        store()
+            .lock()
+            .unwrap()
+            .probe_observations
+            .remove(&channel_id);
+    }
 
     #[test]
     fn default_user_agent_preserves_the_legacy_check_fingerprint() {

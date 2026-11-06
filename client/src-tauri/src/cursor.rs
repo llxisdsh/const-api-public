@@ -17,14 +17,15 @@ mod wire;
 
 const API: &str = "https://api2.cursor.sh";
 // Cursor Agent build, not the IDE's semver. Checked against the CLI installer.
-// Official Cursor CLI installer build, checked 2026-10-19.
-pub(crate) const CLIENT_VERSION: &str = "cli-2026.10.16-e3cb207";
+// Official Cursor CLI installer build, checked 2026-11-06.
+pub(crate) const CLIENT_VERSION: &str = "cli-2026.11.05-86047df";
 
 pub(crate) fn channel_http_client(use_system_proxy: bool) -> Result<Client> {
     static CLIENT: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
     static DIRECT: OnceLock<crate::http_client::HttpClient> = OnceLock::new();
     Ok(crate::http_client::cached_client(
         if use_system_proxy { &CLIENT } else { &DIRECT },
+        use_system_proxy,
         move || {
             crate::http_client::proxy_policy(
                 Client::builder()

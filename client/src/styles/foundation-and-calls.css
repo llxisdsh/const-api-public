@@ -515,8 +515,7 @@ section button:disabled:hover,
   flex-wrap: wrap;
   align-items: center;
   gap: 2px;
-  max-width: 1120px;
-  width: fit-content;
+  width: 100%;
   padding: 0;
   border: 0;
   background: transparent;

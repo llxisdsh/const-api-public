@@ -333,7 +333,6 @@
 .about-panel {
   display: grid;
   gap: 18px;
-  max-width: 900px;
   padding: 4px 0 0;
   border: 0;
   border-radius: 0;

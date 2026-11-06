@@ -116,6 +116,7 @@ mod transport_regression_tests {
                         continue;
                     };
                     let mut reply = SupplierMessage {
+                        output_credit: None,
                         id: msg.id.clone(),
                         kind: String::new(),
                         payload: Default::default(),
@@ -528,6 +529,7 @@ mod transport_regression_tests {
             let tasks = SupplierRequestTasks::default();
             let _guard = SupplierRequestTaskGuard::new(tasks.clone());
             tasks.spawn_duplex(Client::new(), supplier.clone(), SupplierMessage {
+                output_credit: None,
                 id: id.clone(), kind: "duplex_open".into(), payload,
             }, output);
             let opened = tokio::time::timeout(Duration::from_secs(5), messages.recv()).await.unwrap().unwrap();
@@ -535,13 +537,14 @@ mod transport_regression_tests {
             assert_eq!(tasks.len(), 1, "the open session is tracked separately from active requests");
             assert_eq!(crate::channel_concurrency::current(&supplier.channel_id), 0, "an open idle WS is not an active request");
             let frame = || SupplierMessage {
+                output_credit: None,
                 id: id.clone(), kind: "duplex_client_frame".into(),
                 payload: serde_json::json!({"frame_type":"text","data":
                     r#"{"type":"response.create","model":"lifecycle-model","input":[]}"#
                 }).as_object().unwrap().clone(),
             };
             if active {
-                assert!(tasks.send_duplex(frame()).await);
+                assert!(tasks.send_duplex(frame()));
                 tokio::time::timeout(Duration::from_secs(5), started_rx).await.unwrap().unwrap();
                 assert_eq!(crate::channel_concurrency::current(&supplier.channel_id), 1);
             }
@@ -555,7 +558,7 @@ mod transport_regression_tests {
             if active {
                 assert_eq!(crate::channel_concurrency::current(&supplier.channel_id), 1, "withdrawal must not cancel an active turn");
             } else {
-                let _ = tasks.send_duplex(frame()).await;
+                let _ = tasks.send_duplex(frame());
             }
             let _ = finish.send(());
             let mut completed = false;
@@ -567,7 +570,7 @@ mod transport_regression_tests {
                     if message.payload["turn_terminal"] == true {
                         assert_eq!(message.payload["status"], 200);
                         completed = true;
-                        let _ = tasks.send_duplex(frame()).await;
+                        let _ = tasks.send_duplex(frame());
                     }
                 }
             }).await.unwrap();
@@ -803,6 +806,7 @@ mod transport_regression_tests {
             (before_ack, pong, frames)
         });
         let message = |turn_seq| SupplierMessage {
+            output_credit: None,
             id: format!("live-reconnected-session-{quic}-{resumable}-{kind}"), kind: kind.into(),
             payload: serde_json::json!({"data": "unchanged", "frame_type": "text",
                 "_const_duplex_turn_id": "live-reconnected-turn", "_const_duplex_turn_seq": turn_seq})
@@ -904,6 +908,7 @@ mod transport_regression_tests {
             ready.await.unwrap();
             for index in 0..128 {
                 let message = SupplierMessage {
+                    output_credit: None,
                     id: format!("backpressure-{index}"),
                     kind: "http_response".into(),
                     payload: serde_json::json!({"body":"x".repeat(256*1024)})

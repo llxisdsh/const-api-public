@@ -536,7 +536,6 @@ pub(crate) const fn api_operation_requires_native_api_credential(operation: ApiO
         operation,
         ApiOperation::RealtimeWebSocket
             | ApiOperation::RealtimeTranslationWebSocket
-            | ApiOperation::ResponsesInputTokens
             | ApiOperation::ConversationsCreate
             | ApiOperation::ConversationsGet
             | ApiOperation::ConversationsUpdate
@@ -2413,7 +2412,7 @@ mod tests {
     fn current_cache_and_token_count_resources_are_typed_without_false_backend_claims() {
         let input_tokens = resolve_api_route("POST", "/v1/responses/input_tokens", false).unwrap();
         assert_eq!(input_tokens.operation, ApiOperation::ResponsesInputTokens);
-        assert!(api_operation_requires_native_api_credential(
+        assert!(!api_operation_requires_native_api_credential(
             input_tokens.operation
         ));
         assert!(

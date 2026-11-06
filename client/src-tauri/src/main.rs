@@ -114,6 +114,7 @@ mod network_recovery;
 mod openai_transport;
 mod opencode;
 mod opencode_client;
+mod window_memory;
 
 mod openrouter;
 mod output_buffer;
@@ -266,11 +267,11 @@ const GROK_MODELS_URL: &str = "https://cli-chat-proxy.grok.com/v1/models";
 const GROK_RESPONSES_URL: &str = "https://cli-chat-proxy.grok.com/v1/responses";
 const GROK_BILLING_WEEKLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const GROK_BILLING_MONTHLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing";
-// Official https://x.ai/cli/stable, checked 2026-10-19.
-const GROK_CLI_VERSION: &str = "1.0.62";
-const GROK_CLI_USER_AGENT: &str = "xai-grok-workspace/1.0.62";
+// Official https://x.ai/cli/stable, checked 2026-11-06.
+const GROK_CLI_VERSION: &str = "1.0.77";
+const GROK_CLI_USER_AGENT: &str = "xai-grok-workspace/1.0.77";
 const GROK_CLI_CLIENT_IDENTIFIER: &str = "grok-shell";
-const GROK_BILLING_USER_AGENT: &str = "grok-pager/1.0.62 grok-shell/1.0.62 (macos; aarch64)";
+const GROK_BILLING_USER_AGENT: &str = "grok-pager/1.0.77 grok-shell/1.0.77 (macos; aarch64)";
 const ANTIGRAVITY_OAUTH_CLIENT_ID: &str = match option_env!("CONST_LOCAL_ANTIGRAVITY_CLIENT_ID") { Some(value) => value, None => "" };
 const ANTIGRAVITY_OAUTH_CLIENT_SECRET: &str = match option_env!("CONST_LOCAL_ANTIGRAVITY_CLIENT_SECRET") { Some(value) => value, None => "" };
 const ANTIGRAVITY_OAUTH_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -281,8 +282,8 @@ const ANTIGRAVITY_DAILY_API_BASE_URL: &str = "https://daily-cloudcode-pa.googlea
 const ANTIGRAVITY_REDIRECT_URI: &str = "http://localhost:51121/oauth-callback";
 const ANTIGRAVITY_SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs";
 // Current Antigravity Hub version used when an updater override is absent;
-// checked against the official updater manifest on 2026-10-19.
-const ANTIGRAVITY_DEFAULT_USER_AGENT_VERSION: &str = "2.24.0";
+// checked against the official updater manifest on 2026-11-06.
+const ANTIGRAVITY_DEFAULT_USER_AGENT_VERSION: &str = "2.29.0";
 const ANTIGRAVITY_GOOG_API_CLIENT: &str = "gl-node/22.21.1";
 const SKIP_LOCAL_SHORT_CIRCUIT_HEADER: &str = "x-const-api-skip-local";
 const USE_LOCAL_SHORT_CIRCUIT_HEADER: &str = "x-const-api-use-local";
@@ -377,21 +378,25 @@ fn startup_elapsed_ms() -> u128 {
 }
 
 pub(crate) fn short_http_client() -> Client {
-    http_client::cached_client(&SHORT_HTTP_CLIENT, || {
-        http_client::proxy_policy(
-            Client::builder()
-                .timeout(Duration::from_secs(30))
-                .retry(reqwest::retry::never()),
-            http_client::PLATFORM_USE_SYSTEM_PROXY,
-        )
-    })
+    http_client::cached_client(
+        &SHORT_HTTP_CLIENT,
+        http_client::PLATFORM_USE_SYSTEM_PROXY,
+        || {
+            http_client::proxy_policy(
+                Client::builder()
+                    .timeout(Duration::from_secs(30))
+                    .retry(reqwest::retry::never()),
+                http_client::PLATFORM_USE_SYSTEM_PROXY,
+            )
+        },
+    )
     .expect("short http client")
 }
 
 pub(crate) fn long_http_client_source() -> http_client::HttpClient {
     LONG_HTTP_CLIENT
         .get_or_init(|| {
-            http_client::HttpClient::new(|| {
+            http_client::HttpClient::new(http_client::PLATFORM_USE_SYSTEM_PROXY, || {
                 http_client::proxy_policy(
                     Client::builder()
                         .connect_timeout(Duration::from_secs(10))
@@ -934,6 +939,7 @@ async fn run_desktop_host(
             app.manage(setup_lifecycle.runtime.state().clone());
             app.manage(setup_lifecycle.clone());
             app.manage(setup_update_manager.clone());
+            window_memory::install(app.handle());
             let _ = setup_mode;
             #[cfg(target_os = "macos")]
             if setup_mode == LaunchMode::Tray {
@@ -1001,6 +1007,7 @@ async fn run_desktop_host(
         .on_window_event({
             let lifecycle = lifecycle.clone();
             move |window, event| {
+                window_memory::on_window_event(window, event);
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     if !lifecycle.quitting.load(Ordering::SeqCst) {
                         api.prevent_close();
@@ -1009,6 +1016,7 @@ async fn run_desktop_host(
                             return;
                         }
                         let _ = window.hide();
+                        window_memory::update(window.app_handle());
                         #[cfg(target_os = "macos")]
                         if let Err(error) = enter_macos_tray_mode(window.app_handle()) {
                             log::error!(
@@ -1031,6 +1039,9 @@ async fn run_desktop_host(
                 && !page_shown_handler.swap(true, Ordering::SeqCst)
             {
                 show_main_window(webview.app_handle());
+            }
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                window_memory::update(webview.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1171,7 +1182,7 @@ async fn run_desktop_host(
             save_tool_program,
             scan_codex_session_history
         ])
-        .build(tauri::generate_context!())
+        .build(window_memory::configure(tauri::generate_context!()))
         .context("build Tauri desktop host")?;
     let event_lifecycle = lifecycle.clone();
     let exit_code = app.run_return(move |app, event| match event {
@@ -1382,6 +1393,7 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
+        window_memory::update(app);
         let _ = window.set_focus();
     }
 }
@@ -1593,7 +1605,7 @@ async fn save_routing_preference(
 
 fn save_routing_preference_authoritatively(
     config_path: &std::path::PathBuf,
-    live_config: &Arc<StdMutex<ClientConfig>>,
+    live_config: &Arc<crate::config::LiveClientConfig>,
     preference: RoutingPreference,
     enabled: bool,
 ) -> Result<bool> {
@@ -1633,7 +1645,7 @@ async fn set_development_endpoint(
 
 fn save_config_authoritatively(
     config_path: &std::path::PathBuf,
-    live_config: &Arc<StdMutex<ClientConfig>>,
+    live_config: &Arc<crate::config::LiveClientConfig>,
     config: AccessConfigUpdate,
 ) -> Result<ClientConfig> {
     let (authoritative, ()) = commit_config_update(config_path, live_config, move |current| {
@@ -1645,7 +1657,7 @@ fn save_config_authoritatively(
 
 fn save_supplier_config_authoritatively(
     config_path: &std::path::PathBuf,
-    live_config: &Arc<StdMutex<ClientConfig>>,
+    live_config: &Arc<crate::config::LiveClientConfig>,
     channels: Vec<ChannelConfig>,
     base_channels: Vec<ChannelConfig>,
 ) -> Result<ClientConfig> {
@@ -2074,7 +2086,7 @@ async fn start_proxy_inner(state: &AppState) -> Result<ProxyStatus, String> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     // Platform control traffic and model forwarding share one negotiated
     // transport and its connection pools.
-    let shared = Arc::new(ProxyShared::with_platform_api_key_and_transport(
+    let mut shared = ProxyShared::with_platform_api_key_and_transport(
         cfg.clone(),
         long_http_client_source(),
         state.platform_api_key.clone(),
@@ -2084,7 +2096,9 @@ async fn start_proxy_inner(state: &AppState) -> Result<ProxyStatus, String> {
         state.local_channel_readiness.clone(),
         state.local_model_quota_routes.clone(),
         state.platform_transport.clone(),
-    ));
+    );
+    shared.model_compatibility_http_cache = Some(state.model_compatibility_http_cache.clone());
+    let shared = Arc::new(shared);
     shared.probe_platform_endpoints();
     startup_log(format!(
         "[proxy] reqwest client/shared state built in {}ms",
@@ -2626,6 +2640,7 @@ async fn close_main_window(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     };
     window.hide().map_err(|err| err.to_string())?;
+    window_memory::update(&app);
     #[cfg(target_os = "macos")]
     enter_macos_tray_mode(&app)?;
     Ok(())

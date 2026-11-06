@@ -113,8 +113,9 @@ impl UpstreamAttemptBudget {
 
 pub(crate) struct ProxyShared {
     pub(crate) websocket_shutdown: tokio::sync::watch::Sender<bool>,
-    pub(crate) config: ClientConfig,
-    pub(crate) live_config: Arc<StdMutex<ClientConfig>>,
+    pub(crate) config: Arc<ClientConfig>,
+    pub(crate) live_config: Arc<crate::config::LiveClientConfig>,
+    lan_share_config: StdMutex<Option<LanShareConfigSnapshot>>,
     pub(crate) local_channel_readiness: Arc<StdMutex<HashMap<String, bool>>>,
     pub(crate) local_model_quota_routes:
         Arc<StdMutex<HashMap<String, crate::supplier::LocalModelQuotaRouteState>>>,
@@ -128,10 +129,17 @@ pub(crate) struct ProxyShared {
     model_catalog_upstream_timeout: Duration,
     model_catalog_snapshots:
         Arc<StdMutex<HashMap<ModelCatalogCacheKey, CachedModelCatalogResponse>>>,
+    pub(crate) model_compatibility_http_cache:
+        Option<Arc<StdMutex<crate::model_compatibility::ModelCompatibilityHttpCache>>>,
     local_model_route_preferences: Arc<StdMutex<HashMap<String, LocalModelRoutePreference>>>,
     local_resource_owners: Arc<LocalResourceOwnerRegistry>,
     gemini_upload_sessions: Arc<GeminiUploadSessionRegistry>,
     platform_voice_calls: Arc<Mutex<HashMap<String, Arc<PlatformVoiceCall>>>>,
+}
+
+struct LanShareConfigSnapshot {
+    source: std::sync::Weak<ClientConfig>,
+    restricted: Arc<ClientConfig>,
 }
 
 impl ProxyShared {
@@ -147,7 +155,7 @@ impl ProxyShared {
             config.clone(),
             client,
             platform_api_key,
-            Arc::new(StdMutex::new(config)),
+            Arc::new(crate::config::LiveClientConfig::new(config)),
             Arc::new(StdMutex::new(readiness)),
         )
     }
@@ -157,7 +165,7 @@ impl ProxyShared {
         config: ClientConfig,
         client: Client,
         platform_api_key: Arc<StdMutex<String>>,
-        live_config: Arc<StdMutex<ClientConfig>>,
+        live_config: Arc<crate::config::LiveClientConfig>,
         local_channel_readiness: Arc<StdMutex<HashMap<String, bool>>>,
     ) -> Self {
         Self::with_platform_api_key_and_transport_state(
@@ -182,7 +190,7 @@ impl ProxyShared {
         platform_api_key: Arc<StdMutex<String>>,
         platform_access_token: Arc<StdMutex<String>>,
         account_refresh_notify: Arc<tokio::sync::Notify>,
-        live_config: Arc<StdMutex<ClientConfig>>,
+        live_config: Arc<crate::config::LiveClientConfig>,
         local_channel_readiness: Arc<StdMutex<HashMap<String, bool>>>,
         local_model_quota_routes: Arc<
             StdMutex<HashMap<String, crate::supplier::LocalModelQuotaRouteState>>,
@@ -214,7 +222,7 @@ impl ProxyShared {
         platform_api_key: Arc<StdMutex<String>>,
         platform_access_token: Arc<StdMutex<String>>,
         account_refresh_notify: Arc<tokio::sync::Notify>,
-        live_config: Arc<StdMutex<ClientConfig>>,
+        live_config: Arc<crate::config::LiveClientConfig>,
         local_channel_readiness: Arc<StdMutex<HashMap<String, bool>>>,
         local_model_quota_routes: Arc<
             StdMutex<HashMap<String, crate::supplier::LocalModelQuotaRouteState>>,
@@ -229,8 +237,9 @@ impl ProxyShared {
         );
         Self {
             websocket_shutdown: tokio::sync::watch::Sender::new(false),
-            config,
+            config: Arc::new(config),
             live_config,
+            lan_share_config: StdMutex::new(None),
             local_channel_readiness,
             local_model_quota_routes,
             client: client.into(),
@@ -242,6 +251,7 @@ impl ProxyShared {
             platform_api_key,
             model_catalog_upstream_timeout: MODEL_CATALOG_UPSTREAM_TIMEOUT,
             model_catalog_snapshots: Arc::new(StdMutex::new(HashMap::new())),
+            model_compatibility_http_cache: None,
             local_model_route_preferences: Arc::new(StdMutex::new(HashMap::new())),
             local_resource_owners,
             gemini_upload_sessions: GeminiUploadSessionRegistry::new(),
@@ -253,19 +263,31 @@ impl ProxyShared {
         if let Some(endpoint) = self
             .config_snapshot()
             .endpoints
-            .into_iter()
+            .iter()
             .filter(|endpoint| endpoint.enabled && !endpoint.base_url.trim().is_empty())
             .next()
         {
-            self.platform_transport.start_probe(endpoint);
+            self.platform_transport.start_probe(endpoint.clone());
         }
     }
 
-    fn config_snapshot(&self) -> ClientConfig {
+    fn config_snapshot(&self) -> Arc<ClientConfig> {
         self.live_config
-            .lock()
-            .map(|config| config.clone())
+            .snapshot()
             .unwrap_or_else(|_| self.config.clone())
+    }
+
+    fn lan_share_config_snapshot(&self, config: &Arc<ClientConfig>) -> Arc<ClientConfig> {
+        // LAN permissions remain a separate projection, reused only for the exact
+        // immutable source version. Never reuse it after a model/permission edit.
+        let source = Arc::downgrade(config);
+        let mut cached = self.lan_share_config.lock().expect("LAN config snapshot poisoned");
+        if let Some(snapshot) = cached.as_ref().filter(|entry| entry.source.ptr_eq(&source)) {
+            return snapshot.restricted.clone();
+        }
+        let restricted = Arc::new(crate::lan_share::lan_share_restricted_config(config));
+        *cached = Some(LanShareConfigSnapshot { source, restricted: restricted.clone() });
+        restricted
     }
 
     async fn wait_for_websocket_shutdown(&self) {
@@ -841,7 +863,7 @@ pub(crate) async fn proxy_request(
             ));
         }
         let body_text = String::from_utf8_lossy(&body);
-        request_config = crate::lan_share::lan_share_restricted_config(&config);
+        request_config = shared.lan_share_config_snapshot(&config);
         if requested_model_from_body_or_path(&body_text, path_str).is_some_and(|requested| {
             !crate::lan_share::lan_share_model_is_allowed(&request_config, &requested)
         }) {
@@ -1637,6 +1659,7 @@ fn model_request_uses_fidelity_stages(
             | crate::surface::ApiOperation::Responses
             | crate::surface::ApiOperation::Messages
             | crate::surface::ApiOperation::CountTokens
+            | crate::surface::ApiOperation::ResponsesInputTokens
             | crate::surface::ApiOperation::GenerateContent
             | crate::surface::ApiOperation::StreamGenerateContent
             | crate::surface::ApiOperation::InteractionsCreate
@@ -1867,6 +1890,8 @@ async fn forward_model_request_by_fidelity(
     );
     let preferred_local_route =
         shared.preferred_local_model_route(&affinity_key, preference_context, now_unix());
+    let proves_model_health = crate::surface::resolve_api_route(method.as_str(), path, false)
+        .is_some_and(|route| local_operation_proves_model_health(route.operation));
 
     for match_mode in [ModelMatchMode::ExactOnly, ModelMatchMode::CompatibleOnly] {
         if match_mode == ModelMatchMode::CompatibleOnly && !config.allow_model_equivalence {
@@ -1959,6 +1984,8 @@ async fn forward_model_request_by_fidelity(
                 }
             };
             if matches!(scope, ModelSupplyScope::Platform)
+                // Auxiliary counts do not establish a new generation route.
+                && proves_model_health
                 && matches!(
                     &attempt,
                     ModelRouteAttempt::CompleteResponse(response) if response.status().is_success()
@@ -2136,6 +2163,10 @@ async fn attempt_platform_model_route(
     let start = *shared.active_index.lock().await % endpoint_count;
     let mut last_error = None;
     let mut last_response = None;
+    let filter_model = shared.model_compatibility_http_cache.as_ref().and_then(|_| {
+        requested_model_from_body_or_path(&String::from_utf8_lossy(&body), path)
+    });
+    let mut can_filter_resources = None;
     for (offset, endpoint) in config
         .endpoints
         .iter()
@@ -2149,6 +2180,46 @@ async fn attempt_platform_model_route(
             break;
         }
         let index = (start + offset) % endpoint_count;
+        if let (Some(cache), Some(model)) = (&shared.model_compatibility_http_cache, &filter_model)
+        {
+            if crate::model_compatibility::cached_platform_model_absent(
+                cache,
+                config,
+                endpoint,
+                platform_api_key,
+                model,
+                model_route_mode,
+            ) && *can_filter_resources.get_or_insert_with(|| {
+                // Only inspect the full body when exclusion is possible.
+                // Resource owners/continuations must still reach their router.
+                crate::surface::resolve_api_route(method.as_str(), path, false)
+                    .is_some_and(|mut route| {
+                        use crate::surface::{ApiOperation, ApiSurface};
+                        let nested_request = (route.surface == ApiSurface::Gemini
+                            && route.operation == ApiOperation::CountTokens)
+                            .then(|| crate::supplier::top_level_json_raw_token(
+                                &body, "generateContentRequest",
+                            ))
+                            .flatten();
+                        // Count payloads reuse generation inputs; Chat also
+                        // accepts file IDs. Inspect those resource schemas only
+                        // for exclusion, without changing routing or wire data.
+                        route.operation = match (route.surface, route.operation) {
+                            (_, ApiOperation::ResponsesInputTokens | ApiOperation::ChatCompletions) =>
+                                ApiOperation::Responses,
+                            (ApiSurface::Anthropic, ApiOperation::CountTokens) => ApiOperation::Messages,
+                            (ApiSurface::Gemini, ApiOperation::CountTokens) => ApiOperation::GenerateContent,
+                            _ => route.operation,
+                        };
+                        local_resource_references(&route, path, &body).is_empty()
+                            && nested_request.is_none_or(|nested| {
+                                local_resource_references(&route, path, nested.as_bytes()).is_empty()
+                            })
+                    })
+            }) {
+                continue;
+            }
+        }
         match forward_once_preferred(
             method.clone(),
             path,
@@ -4531,6 +4602,7 @@ fn local_operation_uses_model_health(operation: crate::surface::ApiOperation) ->
             | ApiOperation::Embeddings
             | ApiOperation::Messages
             | ApiOperation::CountTokens
+            | ApiOperation::ResponsesInputTokens
             | ApiOperation::GenerateContent
             | ApiOperation::StreamGenerateContent
             | ApiOperation::EmbedContent
@@ -4758,7 +4830,7 @@ async fn forward_local_channel_once_with_query_presence(
         .await;
     }
     if let crate::channel_executor::ChannelExecutionBackend::RetainedSubscription { provider } =
-        crate::channel_executor::channel_execution_backend(channel, route.operation)?
+        crate::channel_executor::channel_execution_backend(channel, &route)?
     {
         let supplier = supplier_from_channel(channel);
         let original_body_text = String::from_utf8_lossy(&body).to_string();

@@ -236,6 +236,14 @@ export type SupplierStatus = {
   route_statuses?: SupplierNodeRouteStatus[];
   channel_transports?: SupplierChannelTransportStatus[];
   availability_groups?: Record<string, AvailabilityGroupResult[]>;
+  channel_metrics?: Record<string, SupplierChannelMetrics>;
+};
+
+export type SupplierChannelMetrics = {
+  current_concurrency?: number;
+  latency_ms: number;
+  latency_checked_at_unix?: number;
+  upstream_http_version?: string;
 };
 
 export type SupplierChannelTransportStatus = {
@@ -627,6 +635,7 @@ export type ProtocolDebugMetrics = {
 };
 
 export type ChannelUpstreamTestResult = LocalProxyTestResult & {
+  checked_at_unix?: number;
   upstream_http_version?: string;
   input_tokens: number;
   output_tokens: number;
@@ -716,7 +725,6 @@ export type UpdateState = {
   error?: string;
   waitingReason?: string;
   checkedAt?: string;
-  showDiagnostic?: boolean;
 };
 
 export type UpdateInstallReadiness = {

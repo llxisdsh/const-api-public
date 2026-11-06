@@ -30,7 +30,6 @@
 }
 
 .account-center-page-header p {
-  max-width: 760px;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.55;

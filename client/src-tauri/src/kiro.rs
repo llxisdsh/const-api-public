@@ -23,6 +23,7 @@ pub(crate) fn channel_http_client(use_system_proxy: bool) -> Result<Client> {
     static DIRECT: std::sync::OnceLock<crate::http_client::HttpClient> = std::sync::OnceLock::new();
     Ok(crate::http_client::cached_client(
         if use_system_proxy { &CLIENT } else { &DIRECT },
+        use_system_proxy,
         move || {
             crate::http_client::proxy_policy(
                 Client::builder()

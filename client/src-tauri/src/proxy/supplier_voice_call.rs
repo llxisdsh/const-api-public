@@ -288,6 +288,7 @@ async fn run_supplier_voice_call(
             send_native_supplier_message(
                 outbound,
                 SupplierMessage {
+                    output_credit: None,
                     id: open.id,
                     kind: "duplex_error".into(),
                     payload,
@@ -318,7 +319,8 @@ async fn run_supplier_voice_call(
                 .map(|error| error.code.as_str())
                 .unwrap_or("connection_failed");
             log::warn!("[const-api][realtime] supplier call failed channel_id={} status={} stage={} provider_code={}", channel.id, status, stage, code);
-            send_native_supplier_message(outbound, SupplierMessage { id:open.id, kind:"duplex_error".into(),
+            send_native_supplier_message(outbound, SupplierMessage {
+                output_credit: None, id:open.id, kind:"duplex_error".into(),
                 payload: serde_json::json!({"status":status, "failure_scope":"operation", "upstream_attempted":true,
                     "message": format!("voice {stage} failed (HTTP {status}, provider_code={code})"), "error_kind":"realtime_call_failed"}).as_object().cloned().unwrap_or_default(),
             }).await?;
@@ -328,6 +330,7 @@ async fn run_supplier_voice_call(
     send_native_supplier_message(
         outbound,
         SupplierMessage {
+            output_credit: None,
             id: open.id.clone(),
             kind: "duplex_opened".into(),
             payload: serde_json::Map::new(),
@@ -337,6 +340,7 @@ async fn run_supplier_voice_call(
     send_native_supplier_message(
         outbound,
         SupplierMessage {
+            output_credit: None,
             id: open.id.clone(),
             kind: "duplex_server_frame".into(),
             payload: crate::supplier::platform_frame_payload(Frame::Text(
@@ -381,6 +385,7 @@ async fn run_supplier_voice_call(
         if send_native_supplier_message(
             outbound,
             SupplierMessage {
+                output_credit: None,
                 id: open.id.clone(),
                 kind: "duplex_server_frame".into(),
                 payload: crate::supplier::platform_frame_payload(frame),
@@ -397,6 +402,7 @@ async fn run_supplier_voice_call(
     send_native_supplier_message(
         outbound,
         SupplierMessage {
+            output_credit: None,
             id: open.id,
             kind: "duplex_close".into(),
             payload: serde_json::Map::new(),

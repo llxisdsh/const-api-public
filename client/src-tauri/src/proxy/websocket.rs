@@ -473,7 +473,8 @@ fn responses_websocket_terminal_metadata_from_value(
         .and_then(|status| u16::try_from(status).ok())
         .unwrap_or_else(|| match error_code.as_deref() {
             Some("rate_limit_exceeded" | "slow_down") => 429,
-            Some("server_is_overloaded" | "websocket_connection_limit_reached") => 503,
+            Some("server_is_overloaded" | "policy_capacity_unavailable" | "websocket_connection_limit_reached") => 503,
+            Some(code) if crate::upstream_failure::is_responses_input_or_budget_error(code) => 400,
             Some("context_length_exceeded" | "invalid_request_error" | "previous_response_not_found") => 400,
             _ => default_status,
         });
@@ -799,6 +800,31 @@ async fn close_client_websocket_sender(
     let _ = tokio::time::timeout(WEBSOCKET_CLOSE_TIMEOUT, sender.close()).await;
 }
 
+async fn report_responses_relay_failure(
+    sender: &mut futures_util::stream::SplitSink<warp::ws::WebSocket, warp::ws::Message>,
+    code: &str,
+    message: &str,
+    error: Option<&anyhow::Error>,
+) {
+    let diagnostics = error
+        .and_then(|error| crate::supplier::execution_evidence_for_error(error).diagnostics);
+    // Only typed diagnostics and a fingerprint enter logs. The original error
+    // can contain a URL, credential, or provider response body.
+    log::warn!(
+        "[const-api][websocket] relay_failed code={} diagnostics={}",
+        code,
+        serde_json::to_string(&diagnostics).unwrap_or_default(),
+    );
+    let detail = error
+        .map(|error| format!("{message}: {}", crate::upstream_failure::safe_excerpt(&format!("{error:#}"))))
+        .unwrap_or_else(|| message.to_string());
+    let _ = tokio::time::timeout(
+        WEBSOCKET_CLOSE_TIMEOUT,
+        send_responses_websocket_status_error(sender, 502, code, &detail),
+    )
+    .await;
+}
+
 impl ResponsesRelayReceiver {
     async fn next(
         &mut self,
@@ -1047,6 +1073,11 @@ impl NativeSubscriptionWebsocketRequest {
         );
         payload.insert(
             "upstream_send_ms".to_string(),
+            serde_json::json!(self.upstream_send_ms),
+        );
+        payload.insert("upstream_transport".to_string(), serde_json::json!("websocket"));
+        payload.insert(
+            "upstream_ws_sent_ms".to_string(),
             serde_json::json!(self.upstream_send_ms),
         );
         payload.insert(
@@ -2154,6 +2185,7 @@ pub(crate) async fn run_supplier_responses_duplex(
             send_supplier_message(
                 outbound,
                 SupplierMessage {
+                    output_credit: None,
                     id: open.id.clone(),
                     kind: "duplex_error".to_string(),
                     payload,
@@ -2174,6 +2206,7 @@ pub(crate) async fn run_supplier_responses_duplex(
     send_supplier_message(
         outbound,
         SupplierMessage {
+            output_credit: None,
             id: open.id.clone(),
             kind: "duplex_opened".to_string(),
             payload: opened_payload,
@@ -2202,6 +2235,7 @@ pub(crate) async fn run_supplier_responses_duplex(
                 upstream_sender.close(&mut upstream_receiver, "channel_stopped").await;
                 upstream_sender.set_close_reason("channel_stopped");
                 send_supplier_message(outbound, SupplierMessage {
+                    output_credit: None,
                     id: open.id.clone(), kind: "duplex_close".into(),
                     payload: serde_json::json!({"code":1001,"reason":"channel stopped"})
                         .as_object().unwrap().clone(),
@@ -2327,11 +2361,13 @@ pub(crate) async fn run_supplier_responses_duplex(
                                     &mut active_turn_sequence,
                                 );
                                 send_supplier_message(outbound, SupplierMessage {
+                                    output_credit: None,
                                     id: open.id.clone(),
                                     kind: "duplex_server_frame".to_string(),
                                     payload,
                                 }).await?;
                                 send_supplier_message(outbound, SupplierMessage {
+                                    output_credit: None,
                                     id: open.id.clone(),
                                     kind: "duplex_close".to_string(),
                                     payload: serde_json::Map::new(),
@@ -2382,6 +2418,7 @@ pub(crate) async fn run_supplier_responses_duplex(
                                 &mut active_turn_sequence,
                             );
                             send_supplier_message(outbound, SupplierMessage {
+                                output_credit: None,
                                 id: open.id.clone(),
                                 kind: "duplex_server_frame".to_string(),
                                 payload,
@@ -2391,6 +2428,7 @@ pub(crate) async fn run_supplier_responses_duplex(
                             .close(&mut upstream_receiver, "downstream_close")
                             .await;
                         send_supplier_message(outbound, SupplierMessage {
+                            output_credit: None,
                             id: open.id.clone(),
                             kind: "duplex_close".to_string(),
                             payload: serde_json::Map::new(),
@@ -2421,11 +2459,13 @@ pub(crate) async fn run_supplier_responses_duplex(
                             &mut active_turn_sequence,
                         );
                         send_supplier_message(outbound, SupplierMessage {
+                            output_credit: None,
                             id: open.id.clone(),
                             kind: "duplex_server_frame".to_string(),
                             payload,
                         }).await?;
                         send_supplier_message(outbound, SupplierMessage {
+                            output_credit: None,
                             id: open.id.clone(),
                             kind: "duplex_close".to_string(),
                             payload: serde_json::Map::new(),
@@ -2458,11 +2498,13 @@ pub(crate) async fn run_supplier_responses_duplex(
                             &mut active_turn_sequence,
                         );
                         send_supplier_message(outbound, SupplierMessage {
+                            output_credit: None,
                             id: open.id.clone(),
                             kind: "duplex_server_frame".to_string(),
                             payload,
                         }).await?;
                         send_supplier_message(outbound, SupplierMessage {
+                            output_credit: None,
                             id: open.id.clone(),
                             kind: "duplex_close".to_string(),
                             payload: serde_json::Map::new(),
@@ -2565,6 +2607,7 @@ pub(crate) async fn run_supplier_responses_duplex(
                             &mut active_turn_sequence,
                         );
                         send_supplier_message(outbound, SupplierMessage {
+                            output_credit: None,
                             id: open.id.clone(),
                             kind: "duplex_server_frame".to_string(),
                             payload,
@@ -2587,6 +2630,7 @@ pub(crate) async fn run_supplier_responses_duplex(
                             if close_after_terminal {
                                 upstream_sender.close(&mut upstream_receiver, "continuation_replay_send_failed").await;
                                 send_supplier_message(outbound, SupplierMessage {
+                                    output_credit: None,
                                     id: open.id.clone(), kind: "duplex_close".to_string(),
                                     payload: serde_json::Map::new(),
                                 }).await?;
@@ -2611,6 +2655,7 @@ pub(crate) async fn run_supplier_responses_duplex(
                             &mut active_turn_sequence,
                         );
                         send_supplier_message(outbound, SupplierMessage {
+                            output_credit: None,
                             id: open.id.clone(),
                             kind: "duplex_server_frame".to_string(),
                             payload,
@@ -2644,6 +2689,7 @@ pub(crate) async fn run_supplier_responses_duplex(
                                 &mut active_turn_sequence,
                             );
                             send_supplier_message(outbound, SupplierMessage {
+                                output_credit: None,
                                 id: open.id.clone(),
                                 kind: "duplex_server_frame".to_string(),
                                 payload,
@@ -2651,6 +2697,7 @@ pub(crate) async fn run_supplier_responses_duplex(
                             drop(active_update_guard.take());
                         }
                         send_supplier_message(outbound, SupplierMessage {
+                            output_credit: None,
                             id: open.id.clone(),
                             kind: "duplex_close".to_string(),
                             payload: serde_json::json!({"code": code, "reason": reason})
@@ -3132,22 +3179,22 @@ async fn run_responses_websocket_proxy(
         };
     let (mut upstream_sender, mut upstream_receiver) = upstream_connection.split();
     if !first_frame_sent
-        && upstream_sender
+        && let Err(error) = upstream_sender
         .send(tokio_tungstenite::tungstenite::Message::Text(
             wire_first_text.into(),
         ))
         .await
-        .is_err()
     {
         if let (Some(request), Some(channel)) =
             (active_subscription_request.take(), channel.as_ref())
         {
             request.finalize(502, Some("channel"), Some(&shared), channel);
         }
-        let _ = send_responses_websocket_error(
+        report_responses_relay_failure(
             &mut client_sender,
             "upstream_connection_failed",
             "the first response.create frame could not be sent upstream",
+            Some(&error),
         )
         .await;
         if let Some(diagnostics) = upstream_diagnostics.as_mut() {
@@ -3224,14 +3271,15 @@ async fn run_responses_websocket_proxy(
                         && let Ok(text) = client_response_create_text(&client_message)
                         && is_responses_interrupt_frame(text)
                     {
-                        if upstream_sender
+                        if let Err(error) = upstream_sender
                             .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
                             .await
-                            .is_err()
                         {
                             if let Some(diagnostics) = upstream_diagnostics.as_mut() {
                                 diagnostics.set_close_reason("upstream_send_failed");
                             }
+                            report_responses_relay_failure(&mut client_sender, "upstream_send_failed",
+                                "the response control frame could not be sent upstream", Some(&error)).await;
                             break;
                         }
                         // Keep the active request and its usage until the
@@ -3407,12 +3455,11 @@ async fn run_responses_websocket_proxy(
                             &shared, &client_headers, text.as_bytes(), first_request_started_at,
                         )
                     });
-                    if upstream_sender
+                    if let Err(error) = upstream_sender
                         .send(tokio_tungstenite::tungstenite::Message::Text(
                             wire_text.into(),
                         ))
                         .await
-                        .is_err()
                     {
                         if let (Some(request), Some(channel)) =
                             (pending_subscription_request, channel.as_ref())
@@ -3422,6 +3469,8 @@ async fn run_responses_websocket_proxy(
                         if let Some(diagnostics) = upstream_diagnostics.as_mut() {
                             diagnostics.set_close_reason("upstream_send_failed");
                         }
+                        report_responses_relay_failure(&mut client_sender, "upstream_send_failed",
+                            "the response.create frame could not be sent upstream", Some(&error)).await;
                         break;
                     }
                     active_activity_guard = Some(next_activity_guard);
@@ -3433,28 +3482,34 @@ async fn run_responses_websocket_proxy(
                     active_turn_capacity = pending_turn_capacity;
                     turn_active = true;
                 } else if client_message.is_ping() {
-                    if upstream_sender
+                    if let Err(error) = upstream_sender
                         .send(tokio_tungstenite::tungstenite::Message::Ping(
                             client_message.as_bytes().to_vec().into(),
                         ))
                         .await
-                        .is_err()
                     {
                         if let Some(diagnostics) = upstream_diagnostics.as_mut() {
                             diagnostics.set_close_reason("upstream_send_failed");
                         }
+                        if turn_active {
+                            report_responses_relay_failure(&mut client_sender, "upstream_send_failed",
+                                "the response connection could not send a ping", Some(&error)).await;
+                        }
                         break;
                     }
                 } else if client_message.is_pong() {
-                    if upstream_sender
+                    if let Err(error) = upstream_sender
                         .send(tokio_tungstenite::tungstenite::Message::Pong(
                             client_message.as_bytes().to_vec().into(),
                         ))
                         .await
-                        .is_err()
                     {
                         if let Some(diagnostics) = upstream_diagnostics.as_mut() {
                             diagnostics.set_close_reason("upstream_send_failed");
+                        }
+                        if turn_active {
+                            report_responses_relay_failure(&mut client_sender, "upstream_send_failed",
+                                "the response connection could not send a pong", Some(&error)).await;
                         }
                         break;
                     }
@@ -3493,23 +3548,34 @@ async fn run_responses_websocket_proxy(
                     {
                         request.finalize(502, Some("channel"), Some(&shared), channel);
                     }
+                    if turn_active {
+                        report_responses_relay_failure(&mut client_sender, "upstream_eof",
+                            "the response ended before a terminal event was received", None).await;
+                    }
                     close_client_websocket_sender(&mut client_sender).await;
                     if let Some(diagnostics) = upstream_diagnostics.as_mut() {
                         diagnostics.set_close_reason("upstream_eof");
                     }
                     break;
                 };
-                let Ok(upstream_message) = upstream_message else {
-                    if let (Some(request), Some(channel)) =
-                        (active_subscription_request.take(), channel.as_ref())
-                    {
-                        request.finalize(502, Some("channel"), Some(&shared), channel);
+                let upstream_message = match upstream_message {
+                    Ok(message) => message,
+                    Err(error) => {
+                        if let (Some(request), Some(channel)) =
+                            (active_subscription_request.take(), channel.as_ref())
+                        {
+                            request.finalize(502, Some("channel"), Some(&shared), channel);
+                        }
+                        if turn_active {
+                            report_responses_relay_failure(&mut client_sender, "upstream_read_error",
+                                "the response stream could not be read", Some(&error)).await;
+                        }
+                        close_client_websocket_sender(&mut client_sender).await;
+                        if let Some(diagnostics) = upstream_diagnostics.as_mut() {
+                            diagnostics.set_close_reason("upstream_read_error");
+                        }
+                        break;
                     }
-                    close_client_websocket_sender(&mut client_sender).await;
-                    if let Some(diagnostics) = upstream_diagnostics.as_mut() {
-                        diagnostics.set_close_reason("upstream_read_error");
-                    }
-                    break;
                 };
                 let (client_message, terminal_status) = match upstream_message {
                     tokio_tungstenite::tungstenite::Message::Text(text) => {
@@ -3573,6 +3639,12 @@ async fn run_responses_websocket_proxy(
                             (active_subscription_request.take(), channel.as_ref())
                         {
                             request.finalize(502, Some("channel"), Some(&shared), channel);
+                        }
+                        if turn_active {
+                            let detail = frame.as_ref().map(|frame| anyhow!(
+                                "WebSocket close code {}: {}", u16::from(frame.code), frame.reason));
+                            report_responses_relay_failure(&mut client_sender, "upstream_closed",
+                                "the upstream closed before completing the response", detail.as_ref()).await;
                         }
                         let message = frame
                             .map(|frame| {
@@ -5618,7 +5690,7 @@ async fn send_responses_websocket_status_error(
                 "type": "error",
                 "status": status,
                 "error": {
-                    "type": "invalid_request_error",
+                    "type": if status >= 500 { "server_error" } else { "invalid_request_error" },
                     "code": code,
                     "message": message
                 }
@@ -6221,6 +6293,55 @@ mod responses_websocket_tests {
         )
         .expect("context terminal");
         assert_eq!(context.status, 400);
+    }
+
+    #[test]
+    fn websocket_responses_terminal_codes_preserve_status_and_retry_semantics() {
+        for (code, status, retry) in [
+            ("budget_reached", 400, false),
+            ("audio_too_large", 400, false),
+            ("audio_too_short", 400, false),
+            ("invalid_audio", 400, false),
+            ("invalid_audio_data", 400, false),
+            ("invalid_audio_format", 400, false),
+            ("missing_audio_sample_rate", 400, false),
+            ("policy_capacity_unavailable", 503, true),
+        ] {
+            for event in [
+                serde_json::json!({"type":"error", "error":{"code":code}}),
+                serde_json::json!({"type":"error", "body":{"error":{"code":code}}}),
+                serde_json::json!({"type":"response.failed", "response":{"error":{"code":code}}}),
+            ] {
+                let text = event.to_string();
+                let metadata = responses_websocket_terminal_metadata(&text).unwrap();
+                assert_eq!(metadata.status, status, "{code}");
+                let mut payload = serde_json::json!({"data":text}).as_object().unwrap().clone();
+                attach_responses_websocket_terminal_metadata(&mut payload, &metadata);
+                attach_responses_websocket_failure_observation(&mut payload, &text, Some("model-a"));
+                assert_eq!(payload["data"], text);
+                assert_eq!(payload["error_code"], code);
+                assert_eq!(payload["safe_to_retry_other_channel"], retry);
+                assert_eq!(payload["failure_scope"], "request");
+            }
+        }
+    }
+
+    #[test]
+    fn websocket_error_observation_respects_wrapped_request_status() {
+        let text = r#"{"type":"error","status_code":400,"body":{"error":{"code":"future_invalid_parameter","message":"Invalid parameter"}},"headers":{"Retry-After":"17"}}"#;
+        let metadata = responses_websocket_terminal_metadata(text).unwrap();
+        let mut payload = serde_json::json!({"status":metadata.status,"data":text})
+            .as_object().unwrap().clone();
+        attach_responses_websocket_terminal_metadata(&mut payload, &metadata);
+        attach_responses_websocket_failure_observation(&mut payload, text, Some("model-a"));
+        assert_eq!(payload["data"], text);
+        assert_eq!(payload["status"], 400);
+        assert_eq!(payload["error_code"], "future_invalid_parameter");
+        assert_eq!(payload["error_kind"], "request_error");
+        assert_eq!(payload["failure_scope"], "request");
+        assert_eq!(payload["safe_to_retry_other_channel"], false);
+        assert_eq!(payload["retry_after_seconds"], 17);
+        assert!(payload.get("model_failure_soft").is_none());
     }
 
     #[test]

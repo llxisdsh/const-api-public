@@ -193,6 +193,13 @@ fn insert_subscription_stream_debug_metrics(
     payload: &mut serde_json::Map<String, serde_json::Value>,
     stream_debug: &SubscriptionStreamDebug,
 ) {
+    // Preserve legacy timings for old consumers. Explicit stage names prevent
+    // comparing HTTP response-header wait with a WebSocket message send.
+    payload.insert("upstream_transport".to_string(), serde_json::json!("http"));
+    payload.insert(
+        "upstream_http_headers_ms".to_string(),
+        serde_json::json!(stream_debug.upstream_send_ms),
+    );
     payload.insert(
         "upstream_send_ms".to_string(),
         serde_json::json!(stream_debug.upstream_send_ms),
@@ -437,6 +444,14 @@ pub(crate) fn append_subscription_usage(
     record["first_sse_event_ms"] = serde_json::json!(first_sse_event_ms);
     record["first_meaningful_event_ms"] = serde_json::json!(first_meaningful_event_ms);
     record["routing_latency_ms"] = serde_json::json!(routing_latency_ms);
+    record["upstream_transport"] = serde_json::json!(response_payload
+        .get("upstream_transport")
+        .and_then(serde_json::Value::as_str)
+        .filter(|transport| matches!(*transport, "http" | "websocket")));
+    record["upstream_http_headers_ms"] = serde_json::json!(
+        subscription_payload_i64(response_payload, "upstream_http_headers_ms"));
+    record["upstream_ws_sent_ms"] = serde_json::json!(
+        subscription_payload_i64(response_payload, "upstream_ws_sent_ms"));
     record["error"] = serde_json::Value::String(error);
     append_subscription_usage_record(&record)?;
     Ok(())

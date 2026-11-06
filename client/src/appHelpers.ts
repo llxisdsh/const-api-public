@@ -28,6 +28,7 @@ import type {
   SubscriptionAdapterConfig,
   SubscriptionProvider,
   SupplierChannelHealth,
+  SupplierChannelMetrics,
   SupplierConfig,
   SupplierNodeRouteStatus,
   SupplierStatus,
@@ -406,33 +407,62 @@ export function transportLabel(transport: string) {
   return "-";
 }
 
+export function supplierChannelMetrics(status: SupplierStatus, channelId: string): SupplierChannelMetrics | undefined {
+  return status.channel_metrics?.[channelId]
+    ?? status.channels?.find((health) => health.channel_id === channelId);
+}
+
+export function preserveSupplierChannelMetrics(previous: SupplierStatus, next: SupplierStatus): SupplierStatus {
+  // Action responses may omit this projection; only a fresh status read owns its replacement.
+  return next.channel_metrics === undefined && previous.channel_metrics !== undefined
+    ? { ...next, channel_metrics: previous.channel_metrics }
+    : next;
+}
+
+export function supplierActiveRequestsLabel(metrics?: Pick<SupplierChannelMetrics, "current_concurrency">) {
+  return typeof metrics?.current_concurrency === "number" ? String(metrics.current_concurrency) : "-";
+}
+
+export function supplierLatencyLabel(metrics?: SupplierChannelMetrics) {
+  return metrics && (metrics.latency_ms > 0 || (metrics.latency_checked_at_unix ?? 0) > 0)
+    ? `${Math.round(metrics.latency_ms)}ms`
+    : "-";
+}
+
+export function supplierLatencyTitle(metrics?: SupplierChannelMetrics) {
+  if (!metrics || (metrics.latency_ms === 0 && !metrics.latency_checked_at_unix)) {
+    return tr("supplier.latencyUnmeasuredHint");
+  }
+  const time = metrics.latency_checked_at_unix;
+  return [tr("supplier.latencyHint"), time ? tr("supplier.latencyMeasuredAt", {
+    time: new Date(time * 1000).toLocaleString(currentAppLanguage(), { hour12: false }),
+  }) : ""].filter(Boolean).join(" ");
+}
+
 export function supplierProtocolLatencyLabel(
-  health?: Pick<SupplierChannelHealth, "upstream_http_version" | "latency_ms">,
+  health?: SupplierChannelMetrics,
 ) {
   const { primary: protocol, secondary: latency } = supplierProtocolLatencyParts(health);
   return [protocol, latency].filter((value) => value !== "-").join(" · ") || "-";
 }
 
 export function supplierProtocolLatencyParts(
-  health?: Pick<SupplierChannelHealth, "upstream_http_version" | "latency_ms">,
+  health?: SupplierChannelMetrics,
 ) {
   return {
     primary: transportLabel(health?.upstream_http_version?.trim() || ""),
-    secondary: typeof health?.latency_ms === "number" && health.latency_ms > 0
-      ? `${Math.round(health.latency_ms)}ms`
-      : "-",
+    secondary: supplierLatencyLabel(health),
   };
 }
 
 export function applySupplierUpstreamObservation(
   status: SupplierStatus,
   channelId: string,
-  observation: Pick<ChannelUpstreamTestResult, "upstream_http_version" | "latency_ms">,
+  observation: Pick<ChannelUpstreamTestResult, "upstream_http_version" | "latency_ms" | "checked_at_unix">,
 ) {
   const version = observation.upstream_http_version?.trim() || "";
-  if (!status.channels?.length) return status;
-  let changed = false;
-  const channels = status.channels.map((health) => {
+  const previous = supplierChannelMetrics(status, channelId);
+  const channels = status.channels?.map((health) => {
     if (health.channel_id !== channelId) return health;
     const nextVersion = version || health.upstream_http_version || "";
     if (
@@ -441,14 +471,25 @@ export function applySupplierUpstreamObservation(
     ) {
       return health;
     }
-    changed = true;
     return {
       ...health,
       latency_ms: observation.latency_ms,
       upstream_http_version: nextVersion,
     };
   });
-  return changed ? { ...status, channels } : status;
+  return {
+    ...status,
+    channels,
+    channel_metrics: {
+      ...status.channel_metrics,
+      [channelId]: {
+        current_concurrency: previous?.current_concurrency,
+        latency_ms: observation.latency_ms,
+        latency_checked_at_unix: observation.checked_at_unix ?? Math.floor(Date.now() / 1000),
+        upstream_http_version: version || previous?.upstream_http_version || "",
+      },
+    },
+  };
 }
 
 export function endpointDisplayName(endpoint?: Endpoint) {
@@ -494,71 +535,74 @@ export function isEstablishedSupplierTransport(transport?: string) {
 export function buildRuntimeDiagnostics(
   proxyStatus: ProxyStatus,
   supplierStatus: SupplierStatus,
-  meta: AppMetaState,
   config: ClientConfig,
   localEntryDiagnosticReady: boolean,
+  localEntryError = "",
 ): Omit<DiagnosticIssue, "createdAt">[] {
   const issues: Omit<DiagnosticIssue, "createdAt">[] = [];
 
-  if (localEntryDiagnosticReady && config.proxy_auto_start && !proxyStatus.running) {
+  if (localEntryDiagnosticReady && (config.proxy_auto_start || localEntryError) && !proxyStatus.running) {
     const localRoot = localLoopbackApiRoot(config.listen);
     issues.push({
       id: "local-entry",
       scope: "access",
       severity: "error",
-      title: tr("diagnostics.localEntryStopped"),
-      message: localRoot
+      title: tr(localEntryError ? "diagnostics.localEntryStartFailed" : "diagnostics.localEntryStopped"),
+      message: localEntryError || (localRoot
         ? tr("diagnostics.toolEntryStopped", { root: localRoot })
         : tr("diagnostics.listenAddressInvalid", {
           address: config.listen || tr("common.notConfigured"),
-        }),
-      action: "start_proxy",
+        })),
     });
   }
 
-  for (const routeStatus of supplierStatus.route_statuses ?? []) {
-    if (routeStatus.reason !== "model_not_supported" && routeStatus.reason !== "pricing_fallback") continue;
-    const channelId = routeStatus.channel_id?.trim() || routeStatus.supplier_unit_id?.trim() || routeStatus.node_id?.trim() || "unknown";
-    const channelName = config.channels.find((channel) => channel.id === routeStatus.channel_id)?.name || channelId;
-    const unsupportedCount = routeStatus.unsupported_models?.length ?? 0;
-    const noneAccepted = routeStatus.reason === "model_not_supported";
+  // A failed startup is current only while supply is still requested and has
+  // not started. Recovery is owned by Rust; never retain a second error latch
+  // in the renderer after the native status recovers.
+  if (!supplierStatus.running && !supplierStatus.starting && supplierStatus.last_error
+      && config.channels.some((channel) => channel.enabled && channel.share_enabled && channelIsPlatformShareable(channel))) {
     issues.push({
-      id: `supplier-model-catalog-${channelId}`,
+      id: "supplier-start",
       scope: "supplier",
-      severity: "warning",
-      title: noneAccepted
-        ? tr("diagnostics.channelNoModels", { channel: channelName })
-        : tr("diagnostics.channelBillingFallback", { channel: channelName }),
-      message: noneAccepted
-        ? tr("diagnostics.unsupportedModels", { count: unsupportedCount })
-        : supplierPricingFallbackSummary(routeStatus),
-      action: "open_supplier",
-    });
-  }
-
-  if (meta.endpointStatus === "error" && meta.endpointLastError) {
-    issues.push({
-      id: "endpoint-registry",
-      scope: "about",
       severity: "error",
-      title: tr("diagnostics.endpointSourceFailed"),
-      message: meta.endpointLastError,
-      action: "refresh_registry",
-    });
-  }
-
-  if (meta.updateLastError) {
-    issues.push({
-      id: "update-source",
-      scope: "about",
-      severity: "warning",
-      title: tr("diagnostics.updateSourceFailed"),
-      message: meta.updateLastError,
-      action: "check_update",
+      title: tr("diagnostics.supplierNotStarted"),
+      message: supplierStatus.last_error,
     });
   }
 
   return issues;
+}
+
+export function supplierChannelDiagnostic(
+  channel: ChannelConfig,
+  status: SupplierStatus,
+  pendingChannelIds: string[] = [],
+): Omit<DiagnosticIssue, "createdAt"> | undefined {
+  if (!channel.enabled || pendingChannelIds.includes(channel.id)) return undefined;
+  const health = status.channels?.find((item) => item.channel_id === channel.id);
+  // Safety states have their own quota/credential/status presentation. Their
+  // message may still be successful probe output, not the reason for the state.
+  if (health && ["error", "unavailable"].includes(health.status) && health.message) {
+    return {
+      id: `supplier-health-${channel.id}`,
+      scope: "supplier",
+      severity: "error",
+      title: tr("diagnostics.channelUnavailable"),
+      message: health.message,
+    };
+  }
+  const transport = supplierChannelTransportForChannel(status, channel.id);
+  if (channel.share_enabled && channelIsPlatformShareable(channel) && transport?.last_transport_error
+      && !(isEstablishedSupplierTransport(transport.active_transport) && transport.platform_registered)) {
+    return {
+      id: `supplier-transport-${channel.id}`,
+      scope: "supplier",
+      severity: "warning",
+      title: tr("diagnostics.platformConnectionIncomplete"),
+      message: transport.last_transport_error,
+    };
+  }
+  return undefined;
 }
 
 export function endpointNetworkState(

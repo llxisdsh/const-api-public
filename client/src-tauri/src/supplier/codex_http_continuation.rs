@@ -9,9 +9,54 @@ const CODEX_HTTP_CONTINUATION_MAX_RESPONSE_ID_BYTES: usize = 512;
 #[cfg(not(test))]
 const CODEX_HTTP_CONTINUATION_DB_FILE: &str = "codex-http-continuations.sqlite3";
 
+// Snapshots own their item order, but share immutable items within an account/channel.
+// Weak interning never keeps an evicted transcript alive. Disk/wire data stays a
+// complete JSON array; only a real replay materializes mutable Values again.
+type CodexContinuationHistory = Vec<Arc<serde_json::Value>>;
+
+fn shared_codex_history(config: &SupplierConfig, values: Vec<serde_json::Value>) -> CodexContinuationHistory {
+    struct DigestWriter(Sha256);
+    impl std::io::Write for DigestWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let scope = codex_http_continuation_key(config, "");
+    // Hash outside the cache lock, without allocating another serialized history.
+    let items = values.into_iter().map(|value| {
+        let mut writer = DigestWriter(Sha256::new());
+        serde_json::to_writer(&mut writer, &value).expect("JSON Value serialization is infallible");
+        ((scope.clone(), <[u8; 32]>::from(writer.0.finalize())), value)
+    }).collect::<Vec<_>>();
+    let mut cache = codex_http_continuation_cache().lock().unwrap_or_else(|p| p.into_inner());
+    cache.shared_items.retain(|_, item| item.strong_count() != 0);
+    items.into_iter().map(|(key, value)| {
+        if let Some(existing) = cache.shared_items.get(&key).and_then(std::sync::Weak::upgrade) {
+            // A digest is an index, never authority to replace unequal content.
+            if *existing == value { return existing; }
+        }
+        let item = Arc::new(value);
+        cache.shared_items.insert(key, Arc::downgrade(&item));
+        item
+    }).collect()
+}
+
+fn codex_history_has_prefix(current: &[serde_json::Value], history: &[Arc<serde_json::Value>]) -> bool {
+    current.len() >= history.len() && current.iter().zip(history).all(|(a, b)| a == b.as_ref())
+}
+
+fn serialize_codex_history<S: serde::Serializer>(history: &[Arc<serde_json::Value>], serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut sequence = serializer.serialize_seq(Some(history.len()))?;
+    for item in history { sequence.serialize_element(item.as_ref())?; }
+    sequence.end()
+}
+
 #[derive(Debug, Clone)]
 struct CodexHttpContinuationEntry {
-    history: Arc<Vec<serde_json::Value>>,
+    history: Arc<CodexContinuationHistory>,
     cache_identity: Option<String>,
     bytes: usize,
     touched_at: Instant,
@@ -19,7 +64,7 @@ struct CodexHttpContinuationEntry {
 
 #[derive(Debug, Clone, PartialEq)]
 struct CodexHttpContinuationState {
-    history: Arc<Vec<serde_json::Value>>,
+    history: Arc<CodexContinuationHistory>,
     cache_identity: Option<String>,
 }
 
@@ -34,7 +79,8 @@ impl CodexHttpContinuationState {
     fn serialized(&self) -> Result<Vec<u8>> {
         #[derive(serde::Serialize)]
         struct Borrowed<'a> {
-            history: &'a [serde_json::Value],
+            #[serde(serialize_with = "serialize_codex_history")]
+            history: &'a [Arc<serde_json::Value>],
             #[serde(skip_serializing_if = "str::is_empty")]
             cache_identity: &'a str,
         }
@@ -50,6 +96,7 @@ struct CodexHttpContinuationCache {
     entries: HashMap<String, CodexHttpContinuationEntry>,
     bytes: usize,
     websocket_pins: HashMap<u128, String>,
+    shared_items: HashMap<(String, [u8; 32]), std::sync::Weak<serde_json::Value>>,
 }
 
 /// Protect only the latest completed response of each live logical WS, not
@@ -256,13 +303,13 @@ fn load_codex_http_continuation_from_path(
         // Older clients persisted the history as a bare array. Keep those entries readable;
         // they simply cannot restore a cache identity until the next successful response.
         CodexHttpContinuationState {
-            history: Arc::new(serde_json::from_slice(&history_json)?),
+            history: Arc::new(serde_json::from_slice::<Vec<serde_json::Value>>(&history_json)?.into_iter().map(Arc::new).collect()),
             cache_identity: None,
         }
     } else {
         let stored: PersistedCodexHttpContinuation = serde_json::from_slice(&history_json)?;
         CodexHttpContinuationState {
-            history: Arc::new(stored.history),
+            history: Arc::new(stored.history.into_iter().map(Arc::new).collect()),
             cache_identity: normalized_subscription_cache_identity(Some(&stored.cache_identity))
                 .map(str::to_string),
         }
@@ -460,7 +507,7 @@ fn codex_http_continuation_state(
         }
     }
 
-    let state = match load_persisted_codex_http_continuation(&key) {
+    let mut state = match load_persisted_codex_http_continuation(&key) {
         Ok(state) => state?,
         Err(error) => {
             log::warn!(
@@ -469,6 +516,8 @@ fn codex_http_continuation_state(
             return None;
         }
     };
+    state.history = Arc::new(shared_codex_history(config, Arc::unwrap_or_clone(state.history)
+        .into_iter().map(Arc::unwrap_or_clone).collect()));
     insert_codex_http_continuation_memory(key, state.clone());
     log::info!(
         "[const-api][protocol] subscription continuation restored code=codex_response_context_restored"
@@ -498,12 +547,12 @@ pub(crate) fn codex_continuation_capacity(
     if current_input
         .and_then(serde_json::Value::as_array)
         .is_some_and(|current| {
-            current.len() >= history.len() && current[..history.len()] == history[..]
+            codex_history_has_prefix(current, &history)
         })
     {
         return Some((0, false));
     }
-    Some(crate::context_capacity::history_tokens(&history))
+    Some(crate::context_capacity::history_tokens(history.iter().map(AsRef::as_ref)))
 }
 
 fn insert_codex_http_continuation_memory(key: String, state: CodexHttpContinuationState) {
@@ -555,6 +604,17 @@ fn insert_codex_http_continuation_history_with_pin(
     config: &SupplierConfig,
     response_id: &str,
     history: Vec<serde_json::Value>,
+    cache_identity: Option<&str>,
+    websocket_pin: Option<u128>,
+) -> bool {
+    let history = shared_codex_history(config, history);
+    insert_shared_codex_continuation(config, response_id, history, cache_identity, websocket_pin)
+}
+
+fn insert_shared_codex_continuation(
+    config: &SupplierConfig,
+    response_id: &str,
+    history: CodexContinuationHistory,
     cache_identity: Option<&str>,
     websocket_pin: Option<u128>,
 ) -> bool {
@@ -613,12 +673,12 @@ fn apply_codex_continuation_state(
     };
     let history_len = history.len();
     let current_len = current.len();
-    let expanded = if current.len() >= history.len() && current[..history.len()] == history[..] {
+    let expanded = if codex_history_has_prefix(&current, &history) {
         current
     } else {
         // Cache lookups share immutable history. Clone only when replay really
         // needs a mutable transcript, and outside the global cache lock.
-        let mut expanded = Arc::unwrap_or_clone(history);
+        let mut expanded = Arc::unwrap_or_clone(history).into_iter().map(Arc::unwrap_or_clone).collect::<Vec<_>>();
         expanded.extend(current);
         expanded
     };
@@ -976,7 +1036,7 @@ pub(crate) struct CodexHttpContinuationProgress {
 /// treated as complete merely because its name appeared in the partial JSON payload.
 pub(crate) struct CodexHttpContinuationCollector {
     decoder: crate::protocol::stream::SseDecoder,
-    input: Option<Vec<serde_json::Value>>,
+    input: Option<CodexContinuationHistory>,
     cache_identity: Option<String>,
     created_response_id: String,
     indexed_items: std::collections::BTreeMap<u64, serde_json::Value>,
@@ -988,13 +1048,13 @@ pub(crate) struct CodexHttpContinuationCollector {
 }
 
 impl CodexHttpContinuationCollector {
-    pub(crate) fn new(request_body: &str) -> Self {
-        let request = serde_json::from_str::<serde_json::Value>(request_body).ok();
-        let input = request
-            .as_ref()
-            .and_then(|request| request.get("input"))
-            .and_then(serde_json::Value::as_array)
-            .cloned();
+    pub(crate) fn new(config: &SupplierConfig, request_body: &str) -> Self {
+        let mut request = serde_json::from_str::<serde_json::Value>(request_body).ok();
+        let input = request.as_mut().and_then(|request| request.get_mut("input"))
+            .map(serde_json::Value::take).and_then(|value| match value {
+                serde_json::Value::Array(values) => Some(shared_codex_history(config, values)),
+                _ => None,
+            });
         let cache_identity = request
             .as_ref()
             .and_then(|request| request.get("prompt_cache_key"))
@@ -1026,20 +1086,32 @@ impl CodexHttpContinuationCollector {
                 }
                 match (request.as_mut().and_then(serde_json::Value::as_object_mut), state) {
                     (Some(object), Some(state)) => {
-                        let _ = apply_codex_continuation_state(object, state);
-                        object
-                            .get("input")
-                            .and_then(serde_json::Value::as_array)
-                            .cloned()
+                        if object.get("prompt_cache_key").and_then(serde_json::Value::as_str)
+                            .is_none_or(|value| value.trim().is_empty()) {
+                            if let Some(identity) = state.cache_identity {
+                                object.insert("prompt_cache_key".into(), serde_json::Value::String(identity));
+                            }
+                        }
+                        let current = match object.remove("input") {
+                            Some(serde_json::Value::Array(values)) => values,
+                            _ => Vec::new(),
+                        };
+                        if codex_history_has_prefix(&current, &state.history) {
+                            Some(shared_codex_history(config, current))
+                        } else {
+                            let mut history = Arc::unwrap_or_clone(state.history);
+                            history.extend(shared_codex_history(config, current));
+                            Some(history)
+                        }
                     }
                     _ => None,
                 }
             }
-            None => request
-                .as_ref()
-                .and_then(|request| request.get("input"))
-                .and_then(serde_json::Value::as_array)
-                .cloned(),
+            None => request.as_mut().and_then(|request| request.get_mut("input"))
+                .map(serde_json::Value::take).and_then(|value| match value {
+                    serde_json::Value::Array(values) => Some(shared_codex_history(config, values)),
+                    _ => None,
+                }),
         };
         let cache_identity = request
             .as_ref()
@@ -1074,7 +1146,7 @@ impl CodexHttpContinuationCollector {
     }
 
     fn from_capture_context(
-        input: Option<Vec<serde_json::Value>>,
+        input: Option<CodexContinuationHistory>,
         cache_identity: Option<String>,
     ) -> Self {
         Self {
@@ -1246,8 +1318,8 @@ impl CodexHttpContinuationCollector {
         if response_id.is_empty() || output.is_empty() {
             return;
         }
-        history.extend(output);
-        self.cached = insert_codex_http_continuation_history_with_pin(
+        history.extend(shared_codex_history(config, output));
+        self.cached = insert_shared_codex_continuation(
             config,
             &response_id,
             history,
@@ -1268,7 +1340,7 @@ pub(crate) fn capture_codex_http_subscription_continuation(
     response_body: &str,
 ) -> bool {
     if looks_like_sse_body(response_body) {
-        let mut collector = CodexHttpContinuationCollector::new(request_body);
+        let mut collector = CodexHttpContinuationCollector::new(config, request_body);
         let _ = collector.push(config, response_body.as_bytes());
         return collector.finish(config).cached;
     }
@@ -1309,6 +1381,58 @@ mod codex_http_continuation_collector_tests {
     use super::*;
 
     #[test]
+    fn continuation_snapshots_share_large_coding_history_and_keep_account_boundaries() {
+        let mut config = default_supplier_config();
+        config.channel_id = "shared-coding-memory".into();
+        let base = (0..8).map(|index| serde_json::json!({
+            "type": "function_call_output", "call_id": format!("call-{index}"),
+            "output": format!("file-{index}:{}", "x".repeat(64 * 1024)),
+        })).collect::<Vec<_>>();
+        let mut snapshots = Vec::new();
+        for turn in 0..40 {
+            let mut input = base.clone();
+            input.push(serde_json::json!({"role": "user", "content": format!("review step {turn}")}));
+            let state = CodexHttpContinuationState {
+                history: Arc::new(shared_codex_history(&config, input.clone())),
+                cache_identity: Some("coding-session".into()),
+            };
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&state.serialized().unwrap()).unwrap()["history"], serde_json::json!(input));
+            snapshots.push(state);
+        }
+        let unique_items = snapshots.iter().flat_map(|s| s.history.iter().map(Arc::as_ptr)).collect::<HashSet<_>>();
+        assert_eq!(unique_items.len(), 8 + 40, "full-input HTTP captures must share unchanged items too");
+        let logical_payload: usize = snapshots.iter().map(|s| s.serialized().unwrap().len()).sum();
+        let mut seen = HashSet::new();
+        let shared_payload: usize = snapshots.iter().flat_map(|s| s.history.iter())
+            .filter(|item| seen.insert(Arc::as_ptr(item)))
+            .map(|item| serde_json::to_vec(item.as_ref()).unwrap().len()).sum();
+        assert!(shared_payload * 30 < logical_payload);
+        let weak = Arc::downgrade(&snapshots[0].history[0]);
+        let mut isolated = config.clone();
+        isolated.channel_id.push_str("-other");
+        let other = shared_codex_history(&isolated, base);
+        assert!(!Arc::ptr_eq(&other[0], &snapshots[0].history[0]));
+        drop(snapshots);
+        assert!(weak.upgrade().is_none(), "the interner must not retain discarded histories");
+    }
+
+    #[test]
+    fn continuation_incremental_capture_shares_parent_without_rewriting_wire_input() {
+        let mut config = default_supplier_config();
+        config.channel_id = "incremental-shared-parent".into();
+        let original = vec![serde_json::json!({"role":"user", "content":"review a file"})];
+        assert!(insert_codex_http_continuation_history(&config, "parent", original, Some("cache-key")));
+        let parent = codex_http_continuation_state(&config, "parent").unwrap();
+        let request = r#"{"previous_response_id":"parent","input":[{"role":"user","content":"continue"}]}"#;
+        let collector = CodexHttpContinuationCollector::new_for_websocket(&config, request);
+        let history = collector.input.unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(Arc::ptr_eq(&history[0], &parent.history[0]));
+        assert_eq!(collector.cache_identity.as_deref(), Some("cache-key"));
+        assert_eq!(parent.history.len(), 1);
+    }
+
+    #[test]
     fn continuation_response_id_bounds_and_normalization_are_shared() {
         assert_eq!(normalized_codex_response_id("  resp-1  ").as_deref(), Some("resp-1"));
         assert!(normalized_codex_response_id(&"r".repeat(513)).is_none());
@@ -1347,7 +1471,7 @@ mod codex_http_continuation_collector_tests {
             assert_eq!(apply_codex_continuation_state(&mut request, first.clone()), (1, 1));
             assert_eq!(request["prompt_cache_key"], identity.unwrap_or("stable-key"));
             assert_eq!(request["input"].as_array().unwrap().len(), 2);
-            assert_eq!(*second.history, history, "replay must not modify cached history");
+            assert_eq!(second.history.iter().map(|item| item.as_ref()).collect::<Vec<_>>(), history.iter().collect::<Vec<_>>(), "replay must not modify cached history");
         }
         let mut complete = serde_json::json!({"input": history, "previous_response_id":"resp-shared"})
             .as_object().unwrap().clone();
@@ -1364,7 +1488,7 @@ mod codex_http_continuation_collector_tests {
         let history = vec![serde_json::json!({"type":"reasoning", "encrypted_content":"opaque", "text":"中文"})];
         for identity in [None, Some("stable-key")] {
             let state = CodexHttpContinuationState {
-                history: Arc::new(history.clone()),
+                history: Arc::new(history.iter().cloned().map(Arc::new).collect()),
                 cache_identity: identity.map(str::to_string),
             };
             let old = serde_json::to_vec(&PersistedCodexHttpContinuation {
@@ -1377,7 +1501,7 @@ mod codex_http_continuation_collector_tests {
         let legacy = format!(" \n{}", serde_json::to_string(&history).unwrap());
         persist_codex_http_continuation_bytes_to_path(&path, "legacy", legacy.as_bytes(), 1000).unwrap();
         let restored = load_codex_http_continuation_from_path(&path, "legacy", 1001).unwrap().unwrap();
-        assert_eq!(*restored.history, history);
+        assert_eq!(restored.history.iter().map(|item| item.as_ref()).collect::<Vec<_>>(), history.iter().collect::<Vec<_>>());
         assert_eq!(restored.cache_identity, None);
         assert!(load_codex_http_continuation_from_path(&path, "legacy", 1002 + CODEX_HTTP_CONTINUATION_CACHE_TTL.as_secs() as i64).unwrap().is_none());
     }
@@ -1432,7 +1556,7 @@ mod codex_http_continuation_collector_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("long.sqlite3");
         let state = CodexHttpContinuationState {
-            history: Arc::new(vec![serde_json::json!({"type": "function_call_output", "call_id": "long", "output": "x".repeat(17 * 1024 * 1024)})]),
+            history: Arc::new(vec![Arc::new(serde_json::json!({"type": "function_call_output", "call_id": "long", "output": "x".repeat(17 * 1024 * 1024)}))]),
             cache_identity: Some("stable-long-context".into()),
         };
         let bytes = state.serialized().unwrap();
@@ -1441,7 +1565,7 @@ mod codex_http_continuation_collector_tests {
         assert_eq!(load_codex_http_continuation_from_path(&path, "long", 1001).unwrap(), Some(state.clone()));
         let mut config = default_supplier_config();
         config.channel_id = "long-continuation-regression".into();
-        assert!(insert_codex_http_continuation_history(&config, "long", Arc::unwrap_or_clone(state.history), state.cache_identity.as_deref()));
+        assert!(insert_codex_http_continuation_history(&config, "long", Arc::unwrap_or_clone(state.history).into_iter().map(Arc::unwrap_or_clone).collect(), state.cache_identity.as_deref()));
         assert_eq!(codex_http_continuation_state(&config, "long").unwrap().serialized().unwrap(), bytes);
     }
 
@@ -1543,7 +1667,7 @@ mod codex_http_continuation_collector_tests {
             "stream": true
         })
         .to_string();
-        let mut collector = CodexHttpContinuationCollector::new(&request);
+        let mut collector = CodexHttpContinuationCollector::new(&config, &request);
 
         let progress = collector.push(
             &config,

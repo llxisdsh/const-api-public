@@ -1,6 +1,6 @@
 [package]
 name = "const-api-local"
-version = "0.1.66"
+version = "0.1.67"
 description = "CONST API local-only source build"
 license = "MIT"
 edition = "2024"
@@ -90,6 +90,8 @@ strip = "symbols"
 debug = false
 
 [target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.39"
+windows = { version = "0.62", default-features = false }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",

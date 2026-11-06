@@ -814,7 +814,6 @@ async fn prepare_channels_with_mode(
             prepared.push(channel);
             continue;
         }
-        let started_at = std::time::Instant::now();
         match validate_supplier_channel(channel.clone(), mode).await {
             Ok((next_channel, channel_health)) => {
                 prepared.push(next_channel);
@@ -826,7 +825,7 @@ async fn prepare_channels_with_mode(
                 health.push(failed_supplier_channel_health(
                     &channel,
                     message,
-                    started_at.elapsed().as_millis(),
+                    0,
                     now_unix(),
                 ));
                 prepared.push(channel);
@@ -892,7 +891,6 @@ pub(crate) async fn validate_supplier_channel(
 ) -> Result<(ChannelConfig, SupplierChannelHealth)> {
     crate::channel_surface::validate_channel_v2(&channel)?;
     let mode = supplier_effective_check_mode(&channel, mode, now_unix());
-    let started_at = std::time::Instant::now();
     let detection = if mode == SupplierCheckMode::Cached {
         Ok(ChannelDetectionResult {
             availability: None,
@@ -914,7 +912,7 @@ pub(crate) async fn validate_supplier_channel(
     .with_context(|| format!("{} detection failed", channel.name))?;
     let mut next_channel = channel.clone();
     merge_channel_detection_result(&mut next_channel, &detection);
-    if let Some(health) = crate::openrouter::empty_catalog_health(&next_channel, started_at.elapsed().as_millis(), now_unix()) {
+    if let Some(health) = crate::openrouter::empty_catalog_health(&next_channel, 0, now_unix()) {
         return Ok((next_channel, health));
     }
     let model = pick_primary_model(&next_channel.models, &next_channel);
@@ -1009,21 +1007,16 @@ pub(crate) async fn validate_supplier_channel(
     } else {
         None
     };
-    // Only a completed upstream interaction is a latency measurement. Cached
-    // activation and catalog snapshots can finish in a few milliseconds
-    // without contacting the provider, so expose them as unknown instead of
-    // presenting local validation time as provider latency. A retained
-    // subscription may still have a real EWMA from earlier requests.
-    let latency_ms = test
-        .as_ref()
-        .map(|item| item.latency_ms)
-        .or_else(|| {
-            safety
-                .as_ref()
-                .filter(|state| state.latency_ewma_ms.is_finite() && state.latency_ewma_ms > 0.0)
-                .map(|state| state.latency_ewma_ms.round() as u128)
-        })
-        .unwrap_or_default();
+    // Display the last successful complete probe, including after restart.
+    // A metadata refresh or a routing first-event EWMA is not the same metric.
+    let mut metrics = availability::channel_metrics(&next_channel);
+    // Group probes already record in completion order. Their representative
+    // result must not overwrite a later probe, including within the same second.
+    if metrics.latency_checked_at_unix == 0 && let Some(test) = &test {
+        availability::record_probe_observation(&next_channel, test);
+        metrics = availability::channel_metrics(&next_channel);
+    }
+    let latency_ms = metrics.latency_ms;
     let rpm_remaining = safety
         .as_ref()
         .map(|state| subscription_safety_rpm_remaining(state, next_channel.subscription.rpm_limit))
@@ -1054,10 +1047,7 @@ pub(crate) async fn validate_supplier_channel(
                 .unwrap_or(model),
             model_count: effective_models.len(),
             latency_ms,
-            upstream_http_version: test
-                .as_ref()
-                .map(|item| item.upstream_http_version.clone())
-                .unwrap_or_default(),
+            upstream_http_version: metrics.upstream_http_version,
             credential_status,
             quota_status: quota.status,
             remaining_ratio: quota.remaining_ratio,
@@ -1346,7 +1336,7 @@ fn merge_detected_channels(
 
 fn commit_detected_channel_updates(
     config_path: &PathBuf,
-    proxy_config: &Arc<StdMutex<ClientConfig>>,
+    proxy_config: &Arc<crate::config::LiveClientConfig>,
     original: &ClientConfig,
     detected: &ClientConfig,
     channel_ids: &[String],
@@ -1637,7 +1627,7 @@ pub(crate) fn monitored_channel_ids(
 
 async fn refresh_monitored_channel_health(
     config_path: &PathBuf,
-    proxy_config: &Arc<StdMutex<ClientConfig>>,
+    proxy_config: &Arc<crate::config::LiveClientConfig>,
     requested_channel_ids: &[String],
     scope: ChannelMonitorScope,
 ) -> Result<Option<(ClientConfig, Vec<String>, Vec<SupplierChannelHealth>)>> {
@@ -1763,7 +1753,7 @@ pub(crate) async fn monitor_supplier_channels(
     config_path: PathBuf,
     channel_ids: Vec<String>,
     register_update: Option<mpsc::Sender<SupplierRegistrationUpdate>>,
-    proxy_config: Arc<StdMutex<ClientConfig>>,
+    proxy_config: Arc<crate::config::LiveClientConfig>,
     local_channel_readiness: Arc<StdMutex<HashMap<String, bool>>>,
     local_model_quota_routes: Arc<StdMutex<HashMap<String, LocalModelQuotaRouteState>>>,
     transport_state: Arc<StdMutex<SupplierTransportSnapshot>>,
@@ -2557,6 +2547,11 @@ pub(crate) async fn supplier_status_inner(state: &AppState) -> Result<SupplierSt
     // Reuse the existing local status read, including when the supplier is stopped.
     // Do not probe, reload credentials, or write UI observations into channel config.
     if let Ok(config) = state.proxy_config.lock() {
+        status.channel_metrics = Some(
+            config.channels.iter()
+                .map(|channel| (channel.id.clone(), availability::channel_metrics(channel)))
+                .collect(),
+        );
         status.availability_groups = Some(
             config
                 .channels

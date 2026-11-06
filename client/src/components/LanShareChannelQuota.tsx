@@ -3,6 +3,7 @@ import { LoaderCircle, Network, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { LanShareSelfStatus } from "../appTypes";
+import { startVisibilityPoll } from "../refreshPolicy";
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -42,9 +43,15 @@ export function LanShareChannelQuota({ channelId, enabled }: { channelId: string
       setLoading(false);
       return undefined;
     }
-    void refresh();
-    const timer = window.setInterval(() => void refresh(true), 5000);
-    return () => window.clearInterval(timer);
+    let initial = true;
+    return startVisibilityPoll({
+      intervalMs: 5000,
+      initialDelayMs: 0,
+      refresh: async () => {
+        await refresh(!initial);
+        initial = false;
+      },
+    });
   }, [channelId, enabled, refresh]);
 
   const remainingRatio = status && status.weekly_token_limit > 0

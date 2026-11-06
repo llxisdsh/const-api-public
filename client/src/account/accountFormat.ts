@@ -39,8 +39,8 @@ export function parseCNYMinor(value: string): number | null {
 export function formatAccountMoney(value?: number, cnyPerUSD?: number) {
   if (value === undefined || !Number.isFinite(value)) return "-";
   const currency = accountDisplayCurrency(cnyPerUSD);
-  const displayed = accountDisplayAmountFromUSD(value, cnyPerUSD);
-  const sign = value > 0 ? "+" : "";
+  const displayed = accountDisplayAmountFromUSD(Math.abs(value), cnyPerUSD);
+  const sign = value > 0 ? "+" : value < 0 ? "−" : "";
   return `${sign}${currency === "CNY" ? "¥" : "$"}${formatMoneyNumber(displayed)}`;
 }
 

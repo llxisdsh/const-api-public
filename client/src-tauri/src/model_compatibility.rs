@@ -20,12 +20,19 @@ const ACCOUNT_MODEL_COMPATIBILITY_PATH: &str = "/api/account/model-compatibility
 const LOCAL_MODEL_COMPATIBILITY_PLATFORM_ID: &str = "__local__";
 const LOCAL_MODEL_COMPATIBILITY_USER_ID: &str = "__device__";
 
+mod routing;
+pub(crate) use routing::{
+    cached_platform_model_absent, refresh_routing_inventory_for_runtime,
+    routing_inventory_refresh_due,
+};
+
 #[cfg(test)]
 #[path = "model_compatibility/http_cache_tests.rs"]
 mod http_cache_tests;
 
 #[derive(Default)]
 pub(crate) struct ModelCompatibilityHttpCache {
+    last_routing_demand: Option<Instant>,
     // Per-runtime, memory-only, scoped to endpoint, account, credential and
     // route policy. Never persist private HTTP responses or validators.
     active: Option<(
@@ -42,6 +49,8 @@ struct CompatibilityHttpDocument {
     etag: Option<HeaderValue>,
     checked_at: Option<Instant>,
     last_error: Option<RemoteModelCompatibilityError>,
+    validated_at: Option<Instant>,
+    routing: Option<routing::PlatformRoutingModels>,
 }
 
 impl CompatibilityHttpDocument {
@@ -50,6 +59,8 @@ impl CompatibilityHttpDocument {
         self.etag = None;
         self.checked_at = None;
         self.last_error = None;
+        self.validated_at = None;
+        self.routing = None;
     }
 }
 
@@ -519,6 +530,17 @@ pub(crate) async fn sync_model_compatibility_for_runtime(state: &AppState) -> Re
     Ok(())
 }
 
+#[cfg(test)]
+pub(crate) async fn load_model_inventory_fixture(
+    config: &ClientConfig,
+    cache: &StdMutex<ModelCompatibilityHttpCache>,
+) -> Result<()> {
+    request_account_model_compatibility(config, Method::GET, None, None, cache)
+        .await
+        .map_err(|error| anyhow!(error.detail))?;
+    Ok(())
+}
+
 async fn fetch_model_compatibility_inner(state: &AppState) -> Result<Value> {
     let config = match platform_authorized_config(state) {
         Ok(config) if current_account_scope(&config).is_some() => config,
@@ -954,12 +976,14 @@ async fn send_model_compatibility_request(
 ) -> std::result::Result<Value, RemoteModelCompatibilityError> {
     let is_read = method == Method::GET;
     for attempt in 0..2 {
+        let validation_started = Instant::now();
         let mut request = crate::short_http_client()
             .request(method.clone(), url)
             .bearer_auth(config.account_device_api_key.trim());
         // Request the complete fallback-capable model list from older servers too.
         request = request.header(crate::ALLOW_UNVERIFIED_PLATFORM_ROUTES_HEADER, "1");
         if is_read {
+            request = request.header("X-Const-Model-Snapshot", "inventory-delta-v1");
             if let Some(etag) = cache.etag.as_ref().filter(|_| cache.value.is_some()) {
                 request = request.header(IF_NONE_MATCH, etag.clone());
             }
@@ -996,6 +1020,7 @@ async fn send_model_compatibility_request(
                     }
                     let value = value.clone();
                     cache.checked_at = Some(Instant::now());
+                    cache.validated_at = Some(validation_started);
                     return Ok(value);
                 }
             }
@@ -1036,17 +1061,43 @@ async fn send_model_compatibility_request(
                 },
             });
         }
-        let value: Value =
+        let mut value: Value =
             serde_json::from_str(&raw).map_err(|error| RemoteModelCompatibilityError {
                 status: Some(status.as_u16()),
                 detail: format!("invalid model compatibility response: {error}"),
             })?;
+        let received_delta = is_read
+            && value.get("object").and_then(Value::as_str)
+                == Some("account_model_compatibility_inventory_delta");
+        if received_delta {
+            match routing::merge_inventory_delta(cache, &value, etag.as_ref()) {
+                Some(merged) => value = merged,
+                None => {
+                    cache.invalidate();
+                    if attempt == 0 {
+                        continue;
+                    }
+                    return Err(RemoteModelCompatibilityError {
+                        status: Some(status.as_u16()),
+                        detail: "model inventory delta has no matching complete snapshot".into(),
+                    });
+                }
+            }
+        }
         if is_read {
             cache.invalidate();
-            if value.is_object() && raw.len() <= 4 * 1024 * 1024 {
+            // The bound applies to the complete document, not just the delta.
+            let cache_bytes = if received_delta {
+                value.to_string().len()
+            } else {
+                raw.len()
+            };
+            if value.is_object() && cache_bytes <= 4 * 1024 * 1024 {
+                cache.routing = routing::PlatformRoutingModels::from_payload(&value);
                 cache.value = Some(value.clone());
                 cache.etag = etag;
                 cache.checked_at = Some(Instant::now());
+                cache.validated_at = Some(validation_started);
             }
         }
         return Ok(value);

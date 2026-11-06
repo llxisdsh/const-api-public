@@ -383,6 +383,21 @@ mod model_health_tests {
             ),
             (
                 ProtocolKind::OpenAiResponses,
+                "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"type\":\"server_error\",\"code\":\"budget_reached\",\"headers\":{\"Retry-After\":\"300\"}}}}\n\n",
+                1,
+            ),
+            (
+                ProtocolKind::OpenAiResponses,
+                "data: {\"type\":\"error\",\"error\":{\"code\":\"invalid_audio\",\"headers\":{\"Retry-After\":\"300\"}}}\n\n",
+                1,
+            ),
+            (
+                ProtocolKind::OpenAiResponses,
+                "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"policy_capacity_unavailable\",\"headers\":{\"Retry-After\":\"17\"}}}}\n\n",
+                2,
+            ),
+            (
+                ProtocolKind::OpenAiResponses,
                 "data: {\"type\":\"future.event\"}\n\n",
                 1,
             ),

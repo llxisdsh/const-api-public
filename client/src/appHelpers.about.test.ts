@@ -123,7 +123,7 @@ describe("about endpoint source", () => {
     expect(endpointRegistrySourceNote({
       ...baseMeta,
       endpointStatus: "error",
-      endpointLastError: "network details stay in diagnostics",
+      endpointLastError: "network details stay in the source row tooltip",
     })).toBe("刷新失败");
   });
 });

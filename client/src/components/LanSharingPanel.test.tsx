@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { LanShareHostStatus } from "../appTypes";
 import { changeAppLanguage } from "../i18n";
 import { LanSharingDrawer } from "./LanSharingPanel";
+import { LanShareChannelQuota } from "./LanShareChannelQuota";
 
 const invoke = vi.hoisted(() => vi.fn());
 const askConfirm = vi.fn();
@@ -212,9 +213,58 @@ describe("LanSharingDrawer", () => {
     await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("set_lan_share_models", { models: [] }));
   });
 
+  test.each(["host", "member"])("pauses hidden %s display reads and refreshes on return", async (view) => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const command = view === "host" ? "get_lan_share_status" : "get_lan_share_channel_status";
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "get_model_presentation") return emptyPresentation;
+      if (name === "get_lan_share_channel_status") return {
+        ...hostStatus.members[0],
+        models: hostStatus.shared_models,
+        input_weight: 1,
+        output_weight: 4,
+        usage: hostStatus.members[0],
+      };
+      return hostStatus;
+    });
+    const { unmount } = render(view === "host"
+      ? <LanSharingDrawer enabled proxyRunning onToggle={vi.fn()} copyText={vi.fn()} askConfirm={askConfirm} onClose={vi.fn()} />
+      : <LanShareChannelQuota channelId="channel-a" enabled />);
+    const reads = () => invoke.mock.calls.filter(([name]) => name === command).length;
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(reads()).toBe(0);
+      await act(async () => {
+        visibility.mockReturnValue("visible");
+        document.dispatchEvent(new Event("visibilitychange"));
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(reads()).toBe(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(reads()).toBe(2);
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(reads()).toBe(2);
+      await act(async () => {
+        visibility.mockReturnValue("visible");
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(reads()).toBe(3);
+      unmount();
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(reads()).toBe(3);
+    } finally {
+      unmount();
+      visibility.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   test("refreshes server ordering without clearing drafts or fetching rules on usage polls", async () => {
     const user = userEvent.setup();
-    const interval = vi.spyOn(window, "setInterval");
+    const timer = vi.spyOn(window, "setTimeout");
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     let failRules = false;
     let rules = [{ pattern: "gpt-*", hidden: true }];
@@ -243,7 +293,7 @@ describe("LanSharingDrawer", () => {
       expect(screen.getByRole("checkbox", { name: "claude-a" })).toBeChecked();
       expect(screen.getByRole("checkbox", { name: "gpt-z" })).toBeChecked();
 
-      const poll = interval.mock.calls.find(([, delay]) => delay === 5000)?.[0] as () => void;
+      const poll = timer.mock.calls.find(([, delay]) => delay === 5000)?.[0] as () => void;
       await act(async () => { poll(); });
       expect(invoke.mock.calls.filter(([command]) => command === "get_model_presentation")).toHaveLength(2);
       expect(invoke.mock.calls.filter(([command]) => command === "get_lan_share_status")).toHaveLength(3);
@@ -258,7 +308,7 @@ describe("LanSharingDrawer", () => {
       }));
     } finally {
       unmount();
-      interval.mockRestore();
+      timer.mockRestore();
       warning.mockRestore();
     }
   });

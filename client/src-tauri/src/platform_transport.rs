@@ -64,16 +64,19 @@ impl PlatformHttpTransport {
         // Streaming requests deliberately have no total-duration timeout. They
         // are still bounded by connect/read-inactivity timeouts, downstream
         // cancellation, and the supplier protocol's inactivity watchdog.
-        let tcp_stream_client = crate::http_client::HttpClient::new(|| {
-            crate::http_client::proxy_policy(
-                Client::builder()
-                    .connect_timeout(Duration::from_secs(10))
-                    .read_timeout(MODEL_REQUEST_TIMEOUT)
-                    .pool_idle_timeout(Duration::from_secs(90))
-                    .retry(reqwest::retry::never()),
-                crate::http_client::PLATFORM_USE_SYSTEM_PROXY,
-            )
-        })
+        let tcp_stream_client = crate::http_client::HttpClient::new(
+            crate::http_client::PLATFORM_USE_SYSTEM_PROXY,
+            || {
+                crate::http_client::proxy_policy(
+                    Client::builder()
+                        .connect_timeout(Duration::from_secs(10))
+                        .read_timeout(MODEL_REQUEST_TIMEOUT)
+                        .pool_idle_timeout(Duration::from_secs(90))
+                        .retry(reqwest::retry::never()),
+                    crate::http_client::PLATFORM_USE_SYSTEM_PROXY,
+                )
+            },
+        )
         .expect("platform streaming HTTP client");
         Self {
             tcp_client: tcp_client.into(),

@@ -152,7 +152,6 @@ p,
 }
 
 main > section > header p {
-  max-width: 760px;
   margin-top: 8px;
   color: var(--muted);
   font-size: 13px;

@@ -1,4 +1,4 @@
-//! Refresh the shared HTTP pools after a connection failure, not each request.
+//! Refresh shared HTTP pools after a confirmed relevant configuration change.
 //! Clones held by in-flight requests remain valid; this never replays a request.
 use reqwest::{Client, ClientBuilder};
 use std::sync::{
@@ -46,10 +46,29 @@ pub(crate) fn public_resource_client(url: &str) -> anyhow::Result<Client> {
     ))?)
 }
 static NETWORK_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SYSTEM_PROXY_GENERATION: AtomicU64 = AtomicU64::new(0);
 static LAST_RECOVERY: Mutex<Option<Instant>> = Mutex::new(None);
 
 pub(crate) fn network_generation() -> u64 {
     NETWORK_GENERATION.load(Ordering::Relaxed)
+}
+
+// Proxy-aware clients and matchers also refresh on physical network changes.
+// Direct clients must not be invalidated by proxy settings alone.
+pub(crate) fn system_proxy_generation() -> u64 {
+    SYSTEM_PROXY_GENERATION.load(Ordering::Relaxed)
+}
+
+fn client_generation(use_system_proxy: bool) -> u64 {
+    if use_system_proxy {
+        system_proxy_generation()
+    } else {
+        network_generation()
+    }
+}
+
+pub(crate) fn system_proxy_changed() {
+    SYSTEM_PROXY_GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn observe_error(error: &reqwest::Error) {
@@ -59,15 +78,18 @@ pub(crate) fn observe_error(error: &reqwest::Error) {
 }
 
 pub(crate) fn observe_response(response: &reqwest::Response) {
-    // A reachable proxy can still return gateway errors after its settings or
-    // route change. Re-read proxy settings at the same bounded recovery cadence;
-    // only future snapshots change, and this never retries the failed request.
-    if gateway_response_needs_recovery(response.status(), response.version()) {
+    // A gateway error can come from either the proxy or the origin. Ask the
+    // background monitor to check local settings, never discard healthy pools
+    // merely because one upstream is overloaded.
+    if gateway_response_needs_network_check(response.status(), response.version()) {
         connection_failed();
     }
 }
 
-fn gateway_response_needs_recovery(status: reqwest::StatusCode, version: reqwest::Version) -> bool {
+fn gateway_response_needs_network_check(
+    status: reqwest::StatusCode,
+    version: reqwest::Version,
+) -> bool {
     version != reqwest::Version::HTTP_3 && matches!(status.as_u16(), 502 | 503 | 504)
 }
 
@@ -76,18 +98,19 @@ pub(crate) fn connection_failed() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if begin_recovery(&mut last, Instant::now()) {
-        NETWORK_GENERATION.fetch_add(1, Ordering::Relaxed);
+        crate::network_recovery::request_check();
     }
 }
 
 pub(crate) fn network_changed() {
-    // A real OS configuration change must not be swallowed by an earlier
-    // failure's cooldown, otherwise the next retry still uses the old proxy.
+    // Only the network monitor (or an explicit configuration change) may
+    // invalidate all pools. A failed request alone is not evidence of one.
     let mut last = LAST_RECOVERY
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *last = Some(Instant::now());
     NETWORK_GENERATION.fetch_add(1, Ordering::Relaxed);
+    system_proxy_changed();
 }
 
 fn begin_recovery(last: &mut Option<Instant>, now: Instant) -> bool {
@@ -102,23 +125,39 @@ fn begin_recovery(last: &mut Option<Instant>, now: Instant) -> bool {
 pub(crate) struct HttpClient(Arc<ClientSource>);
 
 struct ClientSource {
+    use_system_proxy: bool,
     factory: Option<Box<dyn Fn() -> ClientBuilder + Send + Sync>>,
-    cached: Mutex<(u64, Client)>,
+    cached: Mutex<CachedClient>,
+}
+
+struct CachedClient {
+    generation: u64,
+    client: Client,
+    failed_rebuild: Option<(u64, Instant)>,
 }
 
 impl HttpClient {
     pub(crate) fn new(
+        use_system_proxy: bool,
         factory: impl Fn() -> ClientBuilder + Send + Sync + 'static,
     ) -> reqwest::Result<Self> {
+        // If settings change while building, the first snapshot must rebuild;
+        // never label a client built from older settings with the newer epoch.
+        let generation = client_generation(use_system_proxy);
         let client = factory().build()?;
         Ok(Self(Arc::new(ClientSource {
+            use_system_proxy,
             factory: Some(Box::new(factory)),
-            cached: Mutex::new((network_generation(), client)),
+            cached: Mutex::new(CachedClient {
+                generation,
+                client,
+                failed_rebuild: None,
+            }),
         })))
     }
 
     pub(crate) fn snapshot(&self) -> Client {
-        self.snapshot_at(network_generation())
+        self.snapshot_at(client_generation(self.0.use_system_proxy))
     }
 
     fn snapshot_at(&self, generation: u64) -> Client {
@@ -127,42 +166,66 @@ impl HttpClient {
             .cached
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cached.0 != generation {
+        if cached.generation == generation {
+            return cached.client.clone();
+        }
+        let now = Instant::now();
+        let rebuild_due = cached
+            .failed_rebuild
+            .is_none_or(|(failed_generation, failed_at)| {
+                failed_generation != generation
+                    || now.duration_since(failed_at) >= RECOVERY_INTERVAL
+            });
+        if rebuild_due {
             if let Some(factory) = &self.0.factory {
                 match factory().build() {
-                    Ok(client) => cached.1 = client,
+                    Ok(client) => {
+                        cached.client = client;
+                        cached.generation = generation;
+                        cached.failed_rebuild = None;
+                    }
                     // Preserve the last usable pool if the OS/TLS configuration
-                    // cannot currently build a replacement. A later failed
-                    // connection permits another attempt, at the shared cadence.
-                    Err(error) => log::warn!(
-                        "[const-api][network] HTTP pool rebuild failed: {}",
-                        error.without_url()
-                    ),
+                    // cannot currently build a replacement. Retry only this
+                    // pool, at a bounded cadence, without invalidating others.
+                    Err(error) => {
+                        cached.failed_rebuild = Some((generation, now));
+                        log::warn!(
+                            "[const-api][network] HTTP pool rebuild failed: {}",
+                            error.without_url()
+                        );
+                    }
                 }
+            } else {
+                cached.generation = generation;
             }
-            cached.0 = generation;
         }
-        cached.1.clone()
+        cached.client.clone()
     }
 }
 
 impl From<Client> for HttpClient {
     fn from(client: Client) -> Self {
         Self(Arc::new(ClientSource {
+            use_system_proxy: false,
             factory: None,
-            cached: Mutex::new((network_generation(), client)),
+            cached: Mutex::new(CachedClient {
+                generation: network_generation(),
+                client,
+                failed_rebuild: None,
+            }),
         }))
     }
 }
 
 pub(crate) fn cached_client(
     slot: &'static OnceLock<HttpClient>,
+    use_system_proxy: bool,
     factory: impl Fn() -> ClientBuilder + Send + Sync + 'static,
 ) -> reqwest::Result<Client> {
     if let Some(client) = slot.get() {
         return Ok(client.snapshot());
     }
-    let client = HttpClient::new(factory)?;
+    let client = HttpClient::new(use_system_proxy, factory)?;
     Ok(slot.get_or_init(|| client).snapshot())
 }
 
@@ -170,26 +233,34 @@ pub(crate) fn cached_client(
 pub(crate) fn channel_client(use_system_proxy: bool) -> reqwest::Result<Client> {
     static DIRECT: OnceLock<HttpClient> = OnceLock::new();
     static PROXY: OnceLock<HttpClient> = OnceLock::new();
-    cached_client(if use_system_proxy { &PROXY } else { &DIRECT }, move || {
-        let builder = Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(crate::MODEL_REQUEST_TIMEOUT)
-            .retry(reqwest::retry::never());
-        proxy_policy(builder, use_system_proxy)
-    })
+    cached_client(
+        if use_system_proxy { &PROXY } else { &DIRECT },
+        use_system_proxy,
+        move || {
+            let builder = Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(crate::MODEL_REQUEST_TIMEOUT)
+                .retry(reqwest::retry::never());
+            proxy_policy(builder, use_system_proxy)
+        },
+    )
 }
 
 pub(crate) fn channel_short_client(use_system_proxy: bool) -> reqwest::Result<Client> {
     static DIRECT: OnceLock<HttpClient> = OnceLock::new();
     static PROXY: OnceLock<HttpClient> = OnceLock::new();
-    cached_client(if use_system_proxy { &PROXY } else { &DIRECT }, move || {
-        proxy_policy(
-            Client::builder()
-                .timeout(Duration::from_secs(30))
-                .retry(reqwest::retry::never()),
-            use_system_proxy,
-        )
-    })
+    cached_client(
+        if use_system_proxy { &PROXY } else { &DIRECT },
+        use_system_proxy,
+        move || {
+            proxy_policy(
+                Client::builder()
+                    .timeout(Duration::from_secs(30))
+                    .retry(reqwest::retry::never()),
+                use_system_proxy,
+            )
+        },
+    )
 }
 
 pub(crate) fn proxy_policy(builder: ClientBuilder, use_system_proxy: bool) -> ClientBuilder {
@@ -242,7 +313,7 @@ pub(crate) async fn connect_websocket(
     url: &str,
 ) -> anyhow::Result<tokio_tungstenite::WebSocketStream<reqwest::Upgraded>> {
     static CLIENT: OnceLock<HttpClient> = OnceLock::new();
-    let client = cached_client(&CLIENT, || {
+    let client = cached_client(&CLIENT, PLATFORM_USE_SYSTEM_PROXY, || {
         proxy_policy(
             Client::builder()
                 .http1_only()
@@ -718,7 +789,7 @@ mod tests {
         let builds = Arc::new(AtomicUsize::new(0));
         let setting = enabled.clone();
         let built = builds.clone();
-        let source = HttpClient::new(move || {
+        let source = HttpClient::new(true, move || {
             built.fetch_add(1, Ordering::Relaxed);
             let builder = Client::builder()
                 .timeout(Duration::from_secs(2))
@@ -731,7 +802,7 @@ mod tests {
         })
         .unwrap();
         let held_source = source.clone();
-        let generation = source.0.cached.lock().unwrap().0;
+        let generation = source.0.cached.lock().unwrap().generation;
         let url = format!("http://{origin_address}/audit");
         assert_eq!(
             source
@@ -796,22 +867,44 @@ mod tests {
     }
 
     #[test]
-    fn gateway_recovery_excludes_auth_limits_and_http3() {
+    fn gateway_network_check_excludes_auth_limits_and_http3() {
         for status in [200, 400, 401, 403, 408, 429, 500, 502, 503, 504] {
             let status = reqwest::StatusCode::from_u16(status).unwrap();
             assert_eq!(
-                gateway_response_needs_recovery(status, reqwest::Version::HTTP_2),
+                gateway_response_needs_network_check(status, reqwest::Version::HTTP_2),
                 matches!(status.as_u16(), 502 | 503 | 504),
             );
-            assert!(!gateway_response_needs_recovery(
+            assert!(!gateway_response_needs_network_check(
                 status,
                 reqwest::Version::HTTP_3
             ));
         }
     }
 
+    #[test]
+    fn gateway_failure_preserves_pools_until_confirmed_network_change() {
+        // Other suites intentionally signal network changes. Isolate global
+        // generation assertions without changing the running app's settings.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "http_client::tests::gateway_recovery_child",
+                "--nocapture",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[tokio::test]
-    async fn gateway_failure_refreshes_proxy_without_replaying_post() {
+    #[ignore = "isolated child of gateway_failure_preserves_pools_until_confirmed_network_change"]
+    async fn gateway_recovery_child() {
         use crate::upstream_transport::AdaptiveRequestBuilderExt;
         let calls = Arc::new(AtomicUsize::new(0));
         let origin_calls = calls.clone();
@@ -831,7 +924,10 @@ mod tests {
         let proxy_task = tokio::spawn(proxy_server);
         let enabled = Arc::new(AtomicBool::new(true));
         let setting = enabled.clone();
-        let source = HttpClient::new(move || {
+        let builds = Arc::new(AtomicUsize::new(0));
+        let built = builds.clone();
+        let source = HttpClient::new(true, move || {
+            built.fetch_add(1, Ordering::Relaxed);
             let builder = Client::builder().no_proxy().retry(reqwest::retry::never());
             if setting.load(Ordering::Relaxed) {
                 builder.proxy(reqwest::Proxy::all(format!("http://{proxy_address}")).unwrap())
@@ -841,21 +937,40 @@ mod tests {
         })
         .unwrap();
         let held_source = source.clone();
+        let other_builds = Arc::new(AtomicUsize::new(0));
+        let built = other_builds.clone();
+        let unrelated = HttpClient::new(false, move || {
+            built.fetch_add(1, Ordering::Relaxed);
+            Client::builder().no_proxy()
+        })
+        .unwrap();
         let snapshot = source.snapshot();
         let generation = network_generation();
+        let proxy_generation = system_proxy_generation();
         enabled.store(false, Ordering::Relaxed);
         let url = format!("http://{origin_address}/responses");
         let response = snapshot.post(&url).send_adaptive().await.unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
         assert_eq!(calls.load(Ordering::Relaxed), 0, "POST was not replayed");
         assert_eq!(proxy_calls.load(Ordering::Relaxed), 1);
-        // Another test/recovery may have just used the process-wide cooldown.
-        // An actual later gateway failure must still invalidate the pool.
-        if network_generation() == generation {
-            tokio::time::sleep(RECOVERY_INTERVAL).await;
+        for _ in 0..10 {
             observe_response(&response);
+            connection_failed();
+            held_source.snapshot();
+            unrelated.snapshot();
         }
-        assert_ne!(network_generation(), generation);
+        assert_eq!(
+            network_generation(),
+            generation,
+            "an origin/proxy error alone must not reset pools"
+        );
+        assert_eq!(system_proxy_generation(), proxy_generation);
+        assert_eq!(builds.load(Ordering::Relaxed), 1);
+        assert_eq!(other_builds.load(Ordering::Relaxed), 1);
+        // Simulate the background monitor confirming changed proxy settings.
+        // This must bypass the preceding failure-check cooldown.
+        system_proxy_changed();
+        assert_eq!(network_generation(), generation);
         assert_eq!(
             held_source
                 .snapshot()
@@ -870,7 +985,79 @@ mod tests {
         );
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         assert_eq!(proxy_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(builds.load(Ordering::Relaxed), 2);
+        unrelated.snapshot();
+        assert_eq!(other_builds.load(Ordering::Relaxed), 1);
+        // A physical network change still refreshes both modes.
+        network_changed();
+        assert_ne!(network_generation(), generation);
+        held_source.snapshot();
+        unrelated.snapshot();
+        assert_eq!(builds.load(Ordering::Relaxed), 3);
+        assert_eq!(other_builds.load(Ordering::Relaxed), 2);
+        let racing_builds = Arc::new(AtomicUsize::new(0));
+        let built = racing_builds.clone();
+        let racing = HttpClient::new(false, move || {
+            if built.fetch_add(1, Ordering::Relaxed) == 0 {
+                network_changed();
+            }
+            Client::builder().no_proxy()
+        })
+        .unwrap();
+        racing.snapshot();
+        assert_eq!(
+            racing_builds.load(Ordering::Relaxed),
+            2,
+            "a network change during construction must not be marked applied"
+        );
         proxy_task.abort();
         origin_task.abort();
+    }
+
+    #[test]
+    fn failed_pool_rebuild_retries_locally_without_consuming_network_change() {
+        let invalid = Arc::new(AtomicBool::new(false));
+        let setting = invalid.clone();
+        let builds = Arc::new(AtomicUsize::new(0));
+        let built = builds.clone();
+        let source = HttpClient::new(false, move || {
+            built.fetch_add(1, Ordering::Relaxed);
+            Client::builder()
+                .no_proxy()
+                .user_agent(if setting.load(Ordering::Relaxed) {
+                    "invalid\nheader"
+                } else {
+                    "test"
+                })
+        })
+        .unwrap();
+        let generation = source.0.cached.lock().unwrap().generation;
+        invalid.store(true, Ordering::Relaxed);
+        source.snapshot_at(generation + 1);
+        assert_eq!(builds.load(Ordering::Relaxed), 2);
+        for _ in 0..10 {
+            source.snapshot_at(generation + 1);
+        }
+        assert_eq!(
+            builds.load(Ordering::Relaxed),
+            2,
+            "failed rebuilds are throttled"
+        );
+        assert_eq!(source.0.cached.lock().unwrap().generation, generation);
+        source.0.cached.lock().unwrap().failed_rebuild =
+            Some((generation + 1, Instant::now() - RECOVERY_INTERVAL));
+        invalid.store(false, Ordering::Relaxed);
+        source.snapshot_at(generation + 1);
+        assert_eq!(builds.load(Ordering::Relaxed), 3);
+        assert_eq!(source.0.cached.lock().unwrap().generation, generation + 1);
+        invalid.store(true, Ordering::Relaxed);
+        source.snapshot_at(generation + 2);
+        invalid.store(false, Ordering::Relaxed);
+        source.snapshot_at(generation + 3);
+        assert_eq!(
+            source.0.cached.lock().unwrap().generation,
+            generation + 3,
+            "a newer configuration bypasses a failed rebuild's cooldown"
+        );
     }
 }

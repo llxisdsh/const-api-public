@@ -78,6 +78,8 @@
   top: 0;
   bottom: 0;
   left: 50%;
+  /* Centered title truncates before it can reach the traffic lights. */
+  max-width: calc(100% - 168px);
   gap: 0;
   padding: 0 8px;
   transform: translateX(-50%);
@@ -323,7 +325,9 @@ main > section {
 
 }
 
-@media (max-width: 420px) {
+/* The brand column already truncates with an ellipsis; drop the name only
+ * when there is no room left beside the window controls. */
+@media (max-width: 260px) {
   .native-titlebar-brand strong {
     display: none;
   }

@@ -374,6 +374,7 @@ mod supplier_auto_recovery_tests {
             route_statuses: Vec::new(),
             channel_transports: Vec::new(),
             availability_groups: None,
+            channel_metrics: None,
         };
 
         let candidate = supplier_auto_recovery_candidate(&channel, &status, true);

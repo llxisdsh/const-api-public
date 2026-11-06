@@ -1,0 +1,720 @@
+/*
+ * Editorial paper
+ *
+ * The final visual layer. Warm paper stock, ink type and one vermilion
+ * accent; hierarchy comes from serif display type and hairline rules, not
+ * from filled blocks, glass or stacked shadows. Floating surfaces (menus,
+ * dialogs, the guidance tray) keep real elevation because they must read as
+ * above the page. Imported after window-shell.css so it wins at equal
+ * specificity.
+ */
+
+:root {
+  --radius-compact: 5px;
+  --radius-control: 7px;
+  --radius-panel: 10px;
+  --radius-dialog: 12px;
+  --editorial-rule-strong: color-mix(in srgb, var(--text) 78%, transparent);
+}
+
+body {
+  font-feature-settings: "kern", "liga", "calt";
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
+}
+
+.supplier-command-metrics b,
+td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Shell and navigation: text-only, a short vermilion rule marks the page. */
+
+aside > button {
+  position: relative;
+  min-height: 42px;
+  margin: 1px 0;
+  color: var(--muted);
+  font-weight: 450;
+  background: transparent;
+  box-shadow: none;
+}
+
+aside > button:hover {
+  background: transparent;
+  color: var(--text);
+}
+
+aside > button.active,
+aside > button.active:hover,
+:root[data-theme="dark"] aside > button.active {
+  background: transparent;
+  color: var(--text);
+  font-weight: 560;
+  box-shadow: none;
+}
+
+/* The marker hangs just left of the icon so it stays attached to it in both
+ * the labelled and the icon-only (narrow) sidebar. */
+aside > button .nav-icon {
+  position: relative;
+}
+
+aside > button.active .nav-icon::before {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: -9px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  content: "";
+}
+
+aside > button.active .nav-icon {
+  color: var(--accent);
+}
+
+aside > button:focus-visible {
+  outline-offset: -3px;
+}
+
+/* Page head: serif display title over a single hairline. */
+
+h1,
+main > section > header h1 {
+  font-family: var(--font-display);
+  font-size: clamp(32px, 2.6vw, 38px);
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.015em;
+}
+
+/* Frame lines: no rule between sidebar and page, which share one paper and
+ * the title bar's colour. The page head ends in a soft hairline set to the
+ * text column instead of running edge to edge. */
+aside::after {
+  content: none;
+}
+
+main > section > header,
+.account-center-page-header {
+  margin-inline: 0;
+  margin-bottom: 26px;
+  padding-inline: 0;
+  border-bottom: 1px solid var(--art-rule);
+}
+
+main > section > header p {
+  max-width: 920px;
+  color: color-mix(in srgb, var(--text) 74%, var(--muted));
+  font-family: var(--font-serif);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+h2 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
+
+.access-section-intro h2,
+.supplier-title-line h2,
+.compact-title-row h2 {
+  font-size: 19px;
+  line-height: 1.25;
+}
+
+/* Quiet links: the text stays in the paragraph's voice; a hairline in the
+ * accent says it can be followed. */
+
+.inline-text-link,
+.about-legal-links .about-legal-link,
+.supplier-command-metrics a.lan-share-model-page-entry,
+button.supplier-field-link,
+.market-channel-scope button {
+  font-weight: 400;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  text-underline-offset: 3px;
+}
+
+/* Links keep the voice of their context: inline links take the paragraph's
+ * colour, standalone ones the muted metadata colour. */
+.inline-text-link {
+  color: inherit;
+}
+
+button.supplier-field-link,
+.market-channel-scope button {
+  color: var(--muted);
+}
+
+.inline-text-link:hover,
+.about-legal-links button.about-legal-link:hover:not(:disabled),
+.about-legal-links .about-legal-link:focus-visible,
+.supplier-command-metrics a.lan-share-model-page-entry:hover,
+button.supplier-field-link:hover,
+.market-channel-scope button:hover {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+/* Commands: outlined pills; primary actions are set in ink. */
+
+button.quiet,
+button.primary,
+button.start,
+button.stop,
+button.danger,
+.actions button {
+  border-radius: 999px !important;
+  font-weight: 520;
+  white-space: nowrap;
+}
+
+button.quiet,
+.secondary-actions button,
+.icon-button {
+  border-color: var(--border-strong);
+  background: transparent;
+  color: var(--text);
+}
+
+button.quiet:hover:not(:disabled),
+.quick-card button:hover,
+.local-entry-actions button:hover,
+.copy-input button:hover,
+.copy-row button:hover,
+.field-with-action button:hover,
+.icon-button:hover:not(:disabled) {
+  border-color: var(--text);
+  background: transparent;
+  color: var(--text);
+}
+
+button.primary,
+.actions button:not(.quiet):not(.start):not(.stop):not(.danger),
+.account-center-submit,
+.guidance-notice-tray .guidance-notice-actions > button.primary {
+  border-color: var(--ink) !important;
+  background: var(--ink) !important;
+  color: var(--bg) !important;
+}
+
+button.primary:hover:not(:disabled),
+.actions button:not(.quiet):not(.start):not(.stop):not(.danger):hover:not(:disabled),
+.account-center-submit:hover:not(:disabled),
+.guidance-notice-tray .guidance-notice-actions > button.primary:hover {
+  border-color: var(--ink-strong) !important;
+  background: var(--ink-strong) !important;
+  color: var(--bg) !important;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--border-strong);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--text);
+}
+
+/* Tool dock: flat paper tiles. The glass refraction/specular layers are
+ * switched off; hover lifts the tile a hair instead. */
+
+.tool-dock-button,
+:root[data-theme="dark"] .tool-dock-button {
+  --tool-frame-refraction-opacity: 0;
+  --tool-frame-specular-opacity: 0;
+  border-color: var(--border) !important;
+  background: var(--panel) !important;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-theme="light"] .tool-dock-button {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.quick-card:hover .tool-dock-button:not(:disabled),
+:root[data-theme="dark"] .quick-card:hover .tool-dock-button:not(:disabled) {
+  border-color: var(--border-strong) !important;
+  background: var(--surface-floating) !important;
+  box-shadow: 0 6px 14px rgba(46, 36, 18, 0.08);
+}
+
+:root[data-theme="dark"] .quick-card:hover .tool-dock-button:not(:disabled) {
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+}
+
+/* Menu open: the tile reads as "held", one step above rest, not outlined. */
+.tool-dock-button.active,
+:root[data-theme="dark"] .tool-dock-button.active {
+  border-color: var(--border-strong) !important;
+  background: var(--surface-floating) !important;
+  box-shadow: none;
+}
+
+.quick-card:hover .tool-dock-button:not(:disabled)::before,
+.quick-card:hover .tool-dock-button:not(:disabled)::after,
+.tool-dock-button.active::before,
+.tool-dock-button.active::after {
+  opacity: 0;
+}
+
+.quick-card .tool-dock-button:focus-visible,
+:root[data-theme="dark"] .quick-card .tool-dock-button:focus-visible {
+  border-color: var(--border-strong) !important;
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+:root[data-theme="dark"] .brand-badge {
+  background: transparent;
+}
+
+/* Guidance tray: a floating editor's note. It stays elevated on purpose so
+ * the guide reads above the page; the tone shows as a rule and eyebrow. */
+
+.guidance-notice-stack {
+  --guidance-notice-shadow:
+    0 22px 48px rgba(46, 36, 18, 0.16),
+    0 2px 8px rgba(46, 36, 18, 0.08);
+}
+
+:root[data-theme="dark"] .guidance-notice-stack {
+  --guidance-notice-shadow:
+    0 24px 56px rgba(0, 0, 0, 0.5),
+    0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+.guidance-notice-tray,
+.guidance-notice-tray.warning {
+  padding: 18px 18px 16px;
+  border: 1px solid var(--surface-floating-border);
+  border-top: 2px solid var(--guidance-notice-accent);
+  border-radius: 4px 4px var(--radius-panel) var(--radius-panel);
+  background: var(--surface-floating);
+}
+
+.guidance-notice-tray .onboarding-callout-eyebrow {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.guidance-notice-tray .onboarding-callout-copy h2 {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: -0.005em;
+}
+
+.guidance-notice-tray .onboarding-callout-copy p {
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
+  font-family: var(--font-serif);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.guidance-notice-tray .guidance-notice-actions > button {
+  min-height: 32px;
+  padding-inline: 16px;
+  border-radius: 999px !important;
+}
+
+.guidance-notice-tray .guidance-notice-actions > button.quiet {
+  background: transparent;
+}
+
+.guidance-notice-tray .guidance-notice-actions > button.quiet:hover {
+  border-color: var(--text);
+  background: transparent;
+  color: var(--text);
+}
+
+.guidance-notice-bubble {
+  background: var(--surface-floating);
+}
+
+.onboarding-callout,
+.onboarding-callout.decision,
+.onboarding-callout.local,
+.onboarding-callout.warning,
+.onboarding-callout.success {
+  border: 0;
+  border-top: 2px solid var(--accent);
+  border-bottom: 1px solid var(--art-rule);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.onboarding-callout.warning {
+  border-top-color: var(--warning-text);
+}
+
+.onboarding-callout.success {
+  border-top-color: var(--success-text);
+}
+
+.onboarding-callout-eyebrow {
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.onboarding-callout-copy h2,
+.onboarding-callout-copy h3 {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 500;
+}
+
+/* Tables: a ruled ledger. Header labels are small caps over an ink rule. */
+
+th {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Channel ledger (Models): open ruled rows instead of a framed card. */
+
+.supplier-channel-table {
+  gap: 0;
+  border: 0;
+  border-top: 1px solid var(--editorial-rule-strong);
+  border-bottom: 1px solid var(--art-rule);
+  border-radius: 0 !important;
+  overflow: visible;
+}
+
+.supplier-channel-header {
+  min-height: 38px;
+  border-bottom: 1px solid var(--art-rule);
+  background: transparent;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.supplier-channel-table .supplier-channel-row {
+  min-height: 64px;
+  border-bottom: 1px solid var(--art-rule);
+  background: transparent;
+}
+
+.supplier-channel-table .supplier-channel-row:last-child {
+  border-bottom: 0;
+}
+
+.supplier-channel-table .supplier-channel-row:hover {
+  background: color-mix(in srgb, var(--text) 2.5%, transparent);
+}
+
+.supplier-channel-row .channel-main strong {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
+
+.supplier-channel-row .channel-main small {
+  color: var(--subtle);
+}
+
+.call-record-row.active,
+.supplier-channel-row.active,
+:root[data-theme="dark"] .supplier-channel-row.active,
+.debug-target-row.selected,
+.route-candidate-row.selected {
+  --selection-surface: color-mix(in srgb, var(--text) 4%, transparent);
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0,
+    var(--accent) 2px,
+    var(--selection-surface) 2px,
+    var(--selection-surface) 100%
+  );
+}
+
+.supplier-command-metrics > .supplier-command-metric {
+  border-left-color: var(--art-rule);
+  color: var(--muted);
+}
+
+.supplier-command-metrics b {
+  font-family: var(--font-display);
+  font-variant-numeric: lining-nums tabular-nums;
+  font-size: 19px;
+  font-weight: 500;
+}
+
+/* Account: figures set like a financial report — ink rule above, serif
+ * lining numerals, no card frames around ledgers. */
+
+.account-center-tabs button.active,
+.account-center-segments button.active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+  font-weight: 620;
+}
+
+.account-center-view-header h2,
+.account-center-section-heading h3 {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
+
+.account-center-eyebrow {
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.account-center-balance-row,
+.account-center-fund-ledger {
+  /* Figures wrap into whole rows instead of squeezing, so a value never
+   * collides with its neighbour. Rows hold 2, 4 or 5 figures depending on the
+   * view; from 960px they share one line, below that five-figure rows use
+   * three columns and the rest two. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 24px;
+  border: 0;
+  border-top: 1px solid var(--editorial-rule-strong);
+  border-bottom: 1px solid var(--art-rule);
+  border-radius: 0 !important;
+  background: transparent;
+}
+
+@media (min-width: 760px) {
+  .account-center-balance-row:has(> :nth-child(5)),
+  .account-center-fund-ledger:has(> :nth-child(5)) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 960px) {
+  .account-center-balance-row,
+  .account-center-balance-row:has(> :nth-child(5)),
+  .account-center-fund-ledger,
+  .account-center-fund-ledger:has(> :nth-child(5)) {
+    grid-template-columns: none;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+  }
+}
+
+/* :nth-child(n) matches the narrow-layout cell rules in
+ * precision-refinement.css so these cells stay rule-free at every width. */
+.account-center-balance-row > div,
+.account-center-balance-row > div:first-child,
+.account-center-balance-row > div:last-child,
+.account-center-fund-ledger > div,
+.account-center-fund-ledger > div:first-child,
+.account-center-fund-ledger > div:last-child,
+.account-center-balance-row > div:nth-child(n),
+.account-center-fund-ledger > div:nth-child(n) {
+  container-type: inline-size;
+  /* Labels may wrap to two lines; figures share the bottom line of a row. */
+  grid-template-rows: 1fr auto;
+  align-content: stretch;
+  gap: 4px;
+  padding: 14px 0 16px;
+  border: 0;
+}
+
+.account-center-balance-row dt,
+.account-center-fund-ledger dt {
+  align-self: end;
+}
+
+.account-center-balance-row dt,
+.account-center-fund-ledger dt {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.account-center-balance-row dd,
+.account-center-fund-ledger dd {
+  overflow: hidden;
+  font-family: var(--font-display);
+  font-size: clamp(17px, 13cqi, 24px);
+  font-weight: 450;
+  font-variant-numeric: lining-nums tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-center-balance-row dd.is-negative,
+.account-center-fund-ledger dd.is-negative {
+  color: var(--red);
+}
+
+.account-center-trend-wrap,
+.account-center-table-wrap {
+  border: 0;
+  border-top: 1px solid var(--editorial-rule-strong);
+  border-radius: 0 !important;
+  background: transparent;
+}
+
+.account-center-trend {
+  padding-inline: 0;
+}
+
+.account-center-trend-bars span.usage {
+  background: color-mix(in srgb, var(--text) 62%, var(--bg));
+}
+
+.account-center-trend-bars span.supply {
+  background: var(--accent);
+}
+
+.account-center-trend-data th,
+.account-center-billing-table th {
+  background: transparent;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.account-center-trend-data th:first-child,
+.account-center-trend-data td:first-child,
+.account-center-billing-table th:first-child,
+.account-center-billing-table td:first-child {
+  padding-left: 0;
+}
+
+.account-center-trend-data td,
+.account-center-billing-table td {
+  border-bottom-color: var(--art-rule);
+  font-variant-numeric: tabular-nums;
+}
+
+main > section table {
+  background: transparent;
+}
+
+/* The panel receives focus programmatically after a tab switch; its outline
+ * drew a stray frame around the whole view. The tabs carry the focus cue. */
+.account-center-panel:focus-visible {
+  outline: 0;
+  box-shadow: none;
+}
+
+.account-center-fund-actions {
+  border: 0;
+  border-top: 1px solid var(--editorial-rule-strong);
+  border-bottom: 1px solid var(--art-rule);
+  border-radius: 0 !important;
+  background: transparent;
+}
+
+.account-center-fund-actions > .account-center-fund-action {
+  padding-inline: 0;
+  background: transparent;
+}
+
+/* Small-caps tracking is for Latin labels; CJK labels set it nearly solid. */
+:lang(zh) th,
+:lang(zh) .supplier-channel-header,
+:lang(zh) .account-center-eyebrow,
+:lang(zh) .account-center-balance-row dt,
+:lang(zh) .account-center-fund-ledger dt,
+:lang(zh) .account-center-trend-data th,
+:lang(zh) .account-center-billing-table th,
+:lang(zh) .onboarding-callout-eyebrow,
+:lang(zh) .guidance-notice-tray .onboarding-callout-eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.account-center-settlement-guide {
+  border-color: var(--art-rule);
+  background: color-mix(in srgb, var(--text) 2.5%, transparent);
+}
+
+/*
+ * Rule system for every page:
+ * - the page head ends in one hairline;
+ * - one ink rule per page, above its key figures or ledger;
+ * - sections are separated by space and their serif heading, not lines;
+ * - lists and tables keep hairlines between rows, none after the last.
+ */
+
+.account-center-tabs,
+.account-center-segments {
+  border-bottom: 0;
+}
+
+.account-center-view > .account-center-view-header {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.account-center-balance-row,
+.account-center-fund-ledger,
+.supplier-channel-table {
+  border-bottom: 0;
+}
+
+.account-center-trend-wrap,
+.account-center-table-wrap,
+.account-center-fund-actions {
+  border-top: 0;
+  border-bottom: 0;
+}
+
+.account-center-fact-list {
+  border-top: 0;
+}
+
+.account-center-fact-list li {
+  border-bottom-color: var(--art-rule);
+}
+
+.account-center-fact-list li:last-child,
+main > section tbody tr:last-child > td {
+  border-bottom: 0;
+}
+
+.about-info-sheet {
+  border-top: 0;
+}
+
+.about-reset-row {
+  border-bottom: 0;
+}
+
+.account-center-view > .account-center-data-section {
+  margin-top: 18px;
+}

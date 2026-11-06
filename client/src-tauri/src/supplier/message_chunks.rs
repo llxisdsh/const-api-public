@@ -170,6 +170,7 @@ struct SupplierMessageParts {
     raw: Vec<u8>,
     offset: usize,
     chunked: bool,
+    _output_credit: Option<Arc<SupplierOutputCredit>>,
 }
 
 impl SupplierMessageParts {
@@ -182,6 +183,7 @@ impl SupplierMessageParts {
             raw,
             offset: 0,
             chunked,
+            _output_credit: None,
         })
     }
 
@@ -367,6 +369,7 @@ mod message_chunk_tests {
     #[test]
     fn small_stream_frames_compress_without_changing_legacy_or_control_frames() {
         let message = SupplierMessage {
+            output_credit: None,
             id: "small-stream".into(),
             kind: "stream_chunk".into(),
             payload: serde_json::json!({"data": "response.output_text.delta ".repeat(16)})
@@ -397,6 +400,7 @@ mod message_chunk_tests {
         let (sender, _) = codec_pair(false);
         let (_, binary) = sender
             .encode(SupplierMessage {
+                output_credit: None,
                 id: "ping".into(),
                 kind: "ping".into(),
                 payload: Default::default(),
@@ -458,6 +462,7 @@ mod message_chunk_tests {
                     frames.push(
                         sender
                             .encode(SupplierMessage {
+                                output_credit: None,
                                 id: format!("pong-{pongs}"),
                                 kind: "pong".into(),
                                 payload: Default::default(),
@@ -541,6 +546,7 @@ mod message_chunk_tests {
             current: None,
         };
         data.send(SupplierMessage {
+            output_credit: None,
             id: "confirm".into(),
             kind: SUPPLIER_PAYLOAD_ENCRYPTION_CONFIRM.into(),
             payload: Default::default(),
@@ -562,6 +568,7 @@ mod message_chunk_tests {
 
     fn large_message() -> SupplierMessage {
         SupplierMessage {
+            output_credit: None,
             id: "large-request".into(),
             kind: "http_response".into(),
             payload: serde_json::json!({"body":"含 UTF-8 🦀 payload ".repeat(30000)})
@@ -592,6 +599,7 @@ mod message_chunk_tests {
                 result = complete;
             } else {
                 let pong = SupplierMessage {
+                    output_credit: None,
                     id: "heartbeat".into(),
                     kind: "pong".into(),
                     payload: Default::default(),
@@ -607,7 +615,8 @@ mod message_chunk_tests {
     #[test]
     fn chunks_reject_unnegotiated_oversized_out_of_order_nested_and_interleaved_data() {
         let part = |offset, total, data: &[u8]| {
-            SupplierMessage {id:String::new(),kind:SUPPLIER_MESSAGE_CHUNK_TYPE.into(),
+            SupplierMessage {
+                output_credit: None,id:String::new(),kind:SUPPLIER_MESSAGE_CHUNK_TYPE.into(),
             payload:serde_json::json!({"offset":offset,"total":total,"data":std::str::from_utf8(data).unwrap()}).as_object().unwrap().clone()}
         };
         assert!(SupplierMessageAssembler::default()
@@ -674,6 +683,7 @@ mod message_chunk_tests {
         );
         let id = enqueue_supplier_heartbeat(&control).unwrap().unwrap();
         data.send(SupplierMessage {
+            output_credit: None,
             id: "after".into(),
             kind: "stream_end".into(),
             payload: Default::default(),

@@ -530,6 +530,43 @@
     }
 
     #[test]
+    fn codex_subscription_preserves_supported_cache_ttl_without_enabling_it_by_default() {
+        for ttl in ["30m", "12h"] {
+            let body = serde_json::json!({
+                "model": "gpt-6-astra", "input": [],
+                "prompt_cache_key": "cache-session-1",
+                "prompt_cache_options": {"ttl": ttl, "mode": "explicit", "future_option": true},
+                "prompt_cache_retention": "24h"
+            });
+            let adjustment = adjust_codex_subscription_request(&body.to_string()).unwrap();
+            let upstream: serde_json::Value = serde_json::from_str(&adjustment.body).unwrap();
+            assert_eq!(upstream["prompt_cache_options"], serde_json::json!({"ttl": ttl, "future_option": true}));
+            assert_eq!(upstream["prompt_cache_key"], "cache-session-1");
+            assert!(upstream.get("prompt_cache_retention").is_none());
+            assert!(adjustment.actions.iter().any(|action| action.path == "$.prompt_cache_options.mode"));
+            assert!(!adjustment.actions.iter().any(|action| action.path == "$.prompt_cache_options"));
+            let repeated = adjust_codex_subscription_request(&adjustment.body).unwrap();
+            assert_eq!(repeated.body, adjustment.body);
+            assert!(!repeated.actions.iter().any(|action| action.code == "codex_prompt_cache_control_omitted"));
+        }
+        for options in [
+            serde_json::Value::Null,
+            serde_json::json!({"ttl": "24h"}),
+            serde_json::json!({"ttl": 30}),
+            serde_json::json!({"mode": "explicit"}),
+            serde_json::json!([{"ttl": "12h"}]),
+        ] {
+            let body = serde_json::json!({"input": [], "prompt_cache_options": options});
+            let adjustment = adjust_codex_subscription_request(&body.to_string()).unwrap();
+            let upstream: serde_json::Value = serde_json::from_str(&adjustment.body).unwrap();
+            assert!(upstream.get("prompt_cache_options").is_none());
+        }
+        let adjustment = adjust_codex_subscription_request(r#"{"input":[]}"#).unwrap();
+        let upstream: serde_json::Value = serde_json::from_str(&adjustment.body).unwrap();
+        assert!(upstream.get("prompt_cache_options").is_none());
+    }
+
+    #[test]
     fn local_route_affinity_reuses_explicit_and_derived_sessions_across_protocols() {
         let mut headers = warp::http::HeaderMap::new();
         headers.insert(
@@ -3340,7 +3377,7 @@ data: {"type":"message_delta","delta":{"stop_reason":"compaction"},"usage":{"out
         use std::sync::atomic::{AtomicBool, Ordering};
         let changed = Arc::new(AtomicBool::new(false));
         let setting = changed.clone();
-        let client = crate::http_client::HttpClient::new(move || {
+        let client = crate::http_client::HttpClient::new(false, move || {
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(
                 "x-test-pool",
@@ -3392,13 +3429,9 @@ data: {"type":"message_delta","delta":{"stop_reason":"compaction"},"usage":{"out
                 .expect("write first chunk trailer");
             if refresh_pool {
                 changed.store(true, Ordering::Relaxed);
-                let generation = crate::http_client::network_generation();
-                // Respect the production throttle even if another test just
-                // reported a failure; only the next send should see this pool.
-                while crate::http_client::network_generation() == generation {
-                    crate::http_client::connection_failed();
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
+                // Model a confirmed local configuration change. A failed stream
+                // alone no longer discards other requests' healthy HTTP pools.
+                crate::http_client::network_changed();
             }
             initial
                 .shutdown()

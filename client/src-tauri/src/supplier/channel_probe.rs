@@ -137,6 +137,16 @@ async fn test_channel_upstream_attempt(
     requested_model: Option<String>,
     prompt: String,
 ) -> Result<ChannelUpstreamTestResult, ProbeError> {
+    let result = test_channel_upstream_attempt_inner(channel.clone(), requested_model, prompt).await?;
+    availability::record_probe_observation(&channel, &result);
+    Ok(result)
+}
+
+async fn test_channel_upstream_attempt_inner(
+    channel: ChannelConfig,
+    requested_model: Option<String>,
+    prompt: String,
+) -> Result<ChannelUpstreamTestResult, ProbeError> {
     let channel = normalize_probe_channel(channel);
     let requested_model = requested_model
         .map(|model| exact_probe_model(&channel, &model))
@@ -224,6 +234,7 @@ async fn test_channel_upstream_attempt(
     Ok(ChannelUpstreamTestResult {
         http_status: status,
         latency_ms: started_at.elapsed().as_millis(),
+        checked_at_unix: now_unix(),
         upstream_http_version,
         model,
         content,
@@ -364,6 +375,7 @@ async fn test_opencode_console_channel_upstream(
     Ok(ChannelUpstreamTestResult {
         http_status: status,
         latency_ms: started_at.elapsed().as_millis(),
+        checked_at_unix: now_unix(),
         upstream_http_version,
         model,
         content,
@@ -430,6 +442,7 @@ pub(crate) async fn test_subscription_channel_upstream(
     Ok(ChannelUpstreamTestResult {
         http_status: status,
         latency_ms: started_at.elapsed().as_millis(),
+        checked_at_unix: now_unix(),
         upstream_http_version: upstream_http_version
             .map(crate::upstream_transport::http_version_transport)
             .unwrap_or_default()

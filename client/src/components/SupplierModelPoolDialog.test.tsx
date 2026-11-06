@@ -3,10 +3,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 
-import {
-  resolveSupplierModelPoolDetails,
-  SupplierModelPoolDialog,
-} from "./SupplierModelPoolDialog";
+import { SupplierModelPoolDialog } from "./SupplierModelPoolDialog";
+import { SupplierModelPoolSummary } from "./SupplierModelPoolSummary";
+import { resolveSupplierModelPoolDetails } from "../supplierModelPool";
+import { changeAppLanguage } from "../i18n";
 
 describe("resolveSupplierModelPoolDetails", () => {
   test("old context-hint reports and new short reports still belong to the observed model", () => {
@@ -70,9 +70,62 @@ describe("resolveSupplierModelPoolDetails", () => {
       unreported: ["model-a", "model-b"],
     });
   });
+
+  test("does not turn an explicit empty receipt into admission of every discovered model", () => {
+    expect(resolveSupplierModelPoolDetails({
+      observedModels: ["model-a", "model-b"],
+      routeStatus: { accepted_models: [], unsupported_models: [] },
+      platformRegistered: true,
+    })).toEqual({ total: 2, accepted: [], unsupported: [], unreported: ["model-a", "model-b"] });
+  });
+
+  test("ignores a retained platform receipt after the channel disconnects", () => {
+    expect(resolveSupplierModelPoolDetails({
+      observedModels: ["model-a"],
+      routeStatus: { accepted_models: ["model-a", "old-model"], unsupported_models: ["old-rejected"] },
+      platformRegistered: false,
+    })).toEqual({ total: 1, accepted: [], unsupported: [], unreported: ["model-a"] });
+  });
+});
+
+describe("SupplierModelPoolSummary", () => {
+  test("shows the admitted subset and opens details without a model selector", () => {
+    const onViewDetails = vi.fn();
+    render(<SupplierModelPoolSummary
+      details={{ total: 3, accepted: ["a"], unsupported: ["b"], unreported: ["c"] }}
+      platformRegistered onViewDetails={onViewDetails}
+    />);
+    expect(screen.getByText("已上架 1 / 共 3 个模型")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "模型详情" }));
+    expect(onViewDetails).toHaveBeenCalledOnce();
+  });
+
+  test("shows local discovery without claiming platform listing, including in English", async () => {
+    await changeAppLanguage("en-US");
+    try {
+      render(<SupplierModelPoolSummary
+        details={{ total: 2, accepted: [], unsupported: [], unreported: ["a", "b"] }}
+        platformRegistered={false} onViewDetails={vi.fn()}
+      />);
+      expect(screen.getByText("2 models discovered")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Model details" })).toBeInTheDocument();
+      expect(screen.queryByText(/listed/)).not.toBeInTheDocument();
+    } finally { await changeAppLanguage("zh-CN"); }
+  });
 });
 
 describe("SupplierModelPoolDialog", () => {
+  test("shows a local model list without stale listing groups or platform notices", () => {
+    render(<SupplierModelPoolDialog
+      channelName="Local" observedModels={["vendor/model-a"]}
+      routeStatus={{ accepted_models: ["old-model"] }} platformRegistered={false}
+      onClose={vi.fn()} onCopy={vi.fn()}
+    />);
+    expect(screen.getByRole("heading", { name: "模型列表" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("已发现 (1)\nmodel-a");
+    expect(screen.queryByText("尚无平台目录回执")).not.toBeInTheDocument();
+  });
   test.each(["OpenRouter", "OpenAI", "Claude", "Antigravity", "Custom endpoint"])(
     "%s displays and copies only model names within every admission group",
     (channelName) => {

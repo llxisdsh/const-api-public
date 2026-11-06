@@ -119,10 +119,19 @@ fn websocket_lifecycle_subscription_counts_turns_and_releases_on_completion_or_c
             ),
         ] {
             let mut request = start(frame);
+            request.mark_sent();
             assert_eq!(current(), 1);
             assert_eq!(request.observe(event), Some(status));
             request.finalize(status, (status == 499).then_some("request"), None, &channel);
             assert_eq!(current(), 0, "a terminal turn must release its slot");
+        }
+        let records = crate::supplier::query_subscription_usage_records(10, None).unwrap();
+        assert_eq!(records.len(), 3);
+        for record in records {
+            assert_eq!(record["upstream_transport"], "websocket");
+            assert_eq!(record["upstream_ws_sent_ms"], record["upstream_send_ms"]);
+            assert!(record["upstream_ws_sent_ms"].is_number());
+            assert!(record["upstream_http_headers_ms"].is_null());
         }
         let request = start(frame);
         assert_eq!(current(), 1);

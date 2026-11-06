@@ -42,7 +42,7 @@ pub(crate) async fn connect(
         .context("missing Codex WebSocket port")?;
     let proxy = if use_system_proxy {
         static MATCHER: OnceLock<Mutex<(u64, Matcher)>> = OnceLock::new();
-        let generation = crate::http_client::network_generation();
+        let generation = crate::http_client::system_proxy_generation();
         let mut matcher = MATCHER
             .get_or_init(|| Mutex::new((generation, Matcher::from_system())))
             .lock()

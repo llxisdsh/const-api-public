@@ -56,6 +56,8 @@ import { createMarketPriceCache } from "./marketPriceCache";
 import { ToolDockMenuProvider } from "./ToolDockMenu";
 import { SupplierSurfaceConfig } from "./components/SupplierSurfaceConfig";
 import { SupplierChannelChecks } from "./components/SupplierChannelChecks";
+import { SupplierModelPoolSummary } from "./components/SupplierModelPoolSummary";
+import { resolveSupplierModelPoolDetails } from "./supplierModelPool";
 import { SupplierRouteNotice } from "./components/SupplierRouteNotice";
 import { ChannelPriorityTable } from "./components/ChannelPriorityTable";
 import { DeviceCodeAuthorization } from "./components/DeviceCodeAuthorization";
@@ -124,7 +126,12 @@ import {
   subscriptionProviderLabel,
   subscriptionWizardTitle,
   supplierChannelTransportForChannel,
+  supplierChannelDiagnostic,
   supplierChannelModelCount,
+  supplierChannelMetrics,
+  supplierActiveRequestsLabel,
+  supplierLatencyLabel,
+  supplierLatencyTitle,
   supplierNetworkState,
   supplierPricingFallbackSummary,
   supplierPricingWarnings,
@@ -166,7 +173,7 @@ import {
 import { GuidanceNoticeCard } from "./components/GuidanceNoticeCard";
 import { LanShareChannelQuota } from "./components/LanShareChannelQuota";
 import { OnboardingGuide } from "./components/OnboardingGuide";
-import { DiagnosticsPanel } from "./diagnostics";
+import { DiagnosticNotice, DiagnosticsPanel } from "./diagnostics";
 import {
   activeGuidanceNotice,
   balanceInterruptionNoticeKey,
@@ -216,6 +223,7 @@ import {
 } from "./sourceDrivers";
 import "./styles.css";
 import "./styles/window-shell.css";
+import "./styles/editorial-paper.css";
 import { supplierConcurrencyGuidance } from "./supplierGuidance";
 import { QuotaVisual, quotaDetailLabel } from "./supplierQuota";
 import {
@@ -492,8 +500,8 @@ function ProductApp({
     hasChanges,
     configActionBusy,
     routingPreferenceSaving,
-    activeDiagnostics,
-    hasDiagnostics,
+    applicationDiagnostics,
+    supplierStartupIssue,
     localEntryIssue,
     brandVersion,
     updateReady,
@@ -516,7 +524,7 @@ function ProductApp({
     selectedChannelCanDetect,
     selectedChannelCanSupply,
     selectedChannelHealth,
-    selectedChannelProtocolLatencyHealth,
+    selectedChannelMetrics,
     selectedChannelQuotaHealth,
     selectedChannelRouteStatus,
     selectedChannelRouteLabel,
@@ -566,6 +574,7 @@ function ProductApp({
     openLocalSupplierCallLog,
     closeCallLog,
     refreshAccount,
+    refreshEndpointRegistry,
     checkAndDownloadUpdate,
     installPreparedUpdate,
     updateSupplier,
@@ -621,7 +630,7 @@ function ProductApp({
     || Object.values(toolLaunching).some(Boolean);
 
   const selectedChannelProtocolLatency = supplierProtocolLatencyParts(
-    selectedChannelProtocolLatencyHealth,
+    selectedChannelMetrics,
   );
 
   const [requestedAccountView, setRequestedAccountView] = useState<AccountViewRequest | null>(null);
@@ -910,6 +919,12 @@ function ProductApp({
     supplierStatus,
     selectedChannel.id,
   );
+  const selectedChannelIssue = supplierChannelDiagnostic(selectedChannel, supplierStatus, pendingSupplierChannelIds);
+  const selectedModelPool = useMemo(() => resolveSupplierModelPoolDetails({
+    observedModels: selectedChannel.models.length > 0 ? selectedChannel.models : [selectedChannelModel].filter(Boolean),
+    routeStatus: selectedChannelRouteStatus,
+    platformRegistered: selectedChannelTransport?.platform_registered === true,
+  }), [selectedChannel.models, selectedChannelModel, selectedChannelRouteStatus, selectedChannelTransport?.platform_registered]);
   const selectedConcurrencyGuidance = supplierConcurrencyGuidance(
     selectedChannel.max_concurrency,
   );
@@ -1067,10 +1082,10 @@ function ProductApp({
           >
             <span className="nav-icon"><Info size={18} /></span>
             <span>{t("nav.about")}</span>
-            {hasDiagnostics && (
+            {applicationDiagnostics.length > 0 && (
               <span
                 className="endpoint-dot error"
-                title={t("nav.diagnostics", { count: activeDiagnostics.length })}
+                title={t("nav.diagnostics", { count: applicationDiagnostics.length })}
               />
             )}
           </button>
@@ -1683,6 +1698,7 @@ function ProductApp({
                     </button>
                   </div>
                 </div>
+                {supplierStartupIssue && <DiagnosticNotice issue={supplierStartupIssue} />}
                 <ChannelPriorityTable
                   channels={displayChannels}
                   allChannels={config.channels.length ? config.channels : displayChannels}
@@ -1710,9 +1726,9 @@ function ProductApp({
                     const routeDetail = supplierRouteStatusDetail(routeStatus);
                     const stateTone = channelStateTone(channel, health, supplierStatus, supplierStartingChannelId, pendingSupplierChannelIds);
                     const runningLabel = channelOnlineLabel(channel, health, supplierStatus, pendingSupplierChannelIds);
-                    const statusTooltip = routeDetail
-                      ? `${runningLabel}${t("supplierRoute.detailSeparator")}${routeDetail}`
-                      : runningLabel;
+                    const channelIssue = supplierChannelDiagnostic(channel, supplierStatus, pendingSupplierChannelIds);
+                    const statusTooltip = [runningLabel, channelIssue?.message, routeDetail]
+                      .filter(Boolean).join(t("supplierRoute.detailSeparator"));
                     const routeAcceptedModelCount = routeStatus?.accepted_models?.length ?? 0;
                     const totalModelCount = supplierChannelModelCount(channel, health, routeStatus);
                     const onlineModelCount = routeStatus?.accepted_models
@@ -1721,10 +1737,7 @@ function ProductApp({
                         ? totalModelCount
                         : 0;
                     const modelCountLabel = totalModelCount > 0 ? `${onlineModelCount}/${totalModelCount}` : "-";
-                    const activeRequestsLabel = channel.kind === "subscription_adapter"
-                      && typeof health?.current_concurrency === "number"
-                      ? String(health.current_concurrency)
-                      : "-";
+                    const metrics = supplierChannelMetrics(supplierStatus, channel.id);
                     const channelDisplayName = sourceDriverDisplayName(
                       sourceDriverById(channel.source_driver),
                       channel.name,
@@ -1752,11 +1765,11 @@ function ProductApp({
                         </div>
                         <div className="channel-stat latency">
                           <small>{t("supplier.latency")}</small>
-                          <span>{health?.latency_ms ? `${health.latency_ms}ms` : "-"}</span>
+                          <span title={supplierLatencyTitle(metrics)}>{supplierLatencyLabel(metrics)}</span>
                         </div>
                         <div className="channel-stat active-requests">
                           <small>{t("supplier.activeRequests")}</small>
-                          <span>{activeRequestsLabel}</span>
+                          <span>{supplierActiveRequestsLabel(metrics)}</span>
                         </div>
                         <button
                           type="button"
@@ -2142,27 +2155,19 @@ function ProductApp({
                       <div>
                         <span>{t("supplier.activeRequests")}</span>
                         <strong>
-                          {selectedChannel.kind === "subscription_adapter"
-                            && typeof selectedChannelHealth?.current_concurrency === "number"
-                            ? selectedChannelHealth.current_concurrency
-                            : "-"}
+                          {supplierActiveRequestsLabel(selectedChannelMetrics)}
                         </strong>
                       </div>
                       <div>
-                        <span>{t("supplier.modelCount")}</span>
-                        <strong>{supplierChannelModelCount(selectedChannel, selectedChannelHealth, selectedChannelRouteStatus) || "-"}</strong>
-                        <button
-                          className="drawer-summary-detail-link"
-                          type="button"
-                          onClick={() => setSupplierModelPoolOpen(true)}
-                        >
-                          {t("supplier.modelPool.viewDetails")}
-                        </button>
+                        <span>{t(selectedChannelTransport?.platform_registered ? "supplier.modelPool.countLabel" : "supplier.modelCount")}</span>
+                        <strong>{selectedChannelTransport?.platform_registered
+                          ? `${selectedModelPool.accepted.length} / ${selectedModelPool.total}`
+                          : selectedModelPool.total}</strong>
                       </div>
                       <div>
                         <span>{t("supplier.protocolLatency")}</span>
                         <strong>{selectedChannelProtocolLatency.primary}</strong>
-                        <small>{selectedChannelProtocolLatency.secondary}</small>
+                        <small title={supplierLatencyTitle(selectedChannelMetrics)}>{selectedChannelProtocolLatency.secondary}</small>
                       </div>
                       <div>
                         <span>{t("supplier.credential")}</span>
@@ -2180,6 +2185,7 @@ function ProductApp({
                       </div>
                     </div>
 
+                    {selectedChannelIssue && <DiagnosticNotice issue={selectedChannelIssue} />}
                     <SupplierRouteNotice status={selectedChannelRouteStatus} />
 
                     {supplierPricingWarnings(selectedChannelRouteStatus).length > 0 && (
@@ -2295,11 +2301,27 @@ function ProductApp({
                             onChange={(e) => updateSupplier({ name: e.target.value })}
                           />
                         </label>
-                        <label>
-                          {selectedChannel.kind === "custom_endpoint"
-                            ? t("supplier.sourceAndDefaultTarget")
-                            : t("supplier.sourceAndProtocol")}
+                        <div className="supplier-source-field">
+                          <div className="supplier-field-heading">
+                            <label htmlFor="supplier-source-summary">
+                              {selectedChannel.kind === "custom_endpoint"
+                                ? t("supplier.sourceAndDefaultTarget")
+                                : t("supplier.sourceAndProtocol")}
+                            </label>
+                            {selectedSourceDriver.homepageUrl && (
+                              <button
+                                type="button"
+                                className="supplier-field-link"
+                                title={t("supplier.sourceHelp", { source: sourceDriverTitle(selectedSourceDriver) })}
+                                onClick={() => void openExternalUrl(selectedSourceDriver.homepageUrl!)}
+                              >
+                                <ExternalLink size={12} />
+                                {t("supplier.projectHomepage")}
+                              </button>
+                            )}
+                          </div>
                           <input
+                            id="supplier-source-summary"
                             value={selectedSourceDriver.fixedConnection
                               ? `${sourceDriverTitle(selectedSourceDriver)} / ${selectedSourceDriver.supportedProtocols.length > 1
                                 ? t("supplier.managedModelProtocol") : protocolLabel(selectedApiFormat)}`
@@ -2314,7 +2336,7 @@ function ProductApp({
                               ? t("supplier.sourceAndDefaultTargetHint")
                               : t("supplier.sourceAndProtocolHint")}
                           </span>
-                        </label>
+                        </div>
                         {selectedChannelFields.showBaseUrl && selectedChannel.kind !== "custom_endpoint" && (
                         <label>
                           {selectedChannel.source_driver === "lan_share" ? "Base URL" : t("supplier.upstreamBaseUrl")}
@@ -2358,18 +2380,6 @@ function ProductApp({
                             )}
                           </div>
                         )}
-                        {selectedSourceDriver.homepageUrl && (
-                          <div className="supplier-source-help">
-                            <span>{t("supplier.sourceHelp", { source: sourceDriverTitle(selectedSourceDriver) })}</span>
-                            <button
-                              type="button"
-                              onClick={() => void openExternalUrl(selectedSourceDriver.homepageUrl!)}
-                            >
-                              <ExternalLink size={14} />
-                              {t("supplier.projectHomepage")}
-                            </button>
-                          </div>
-                        )}
                         {selectedChannel.kind === "custom_endpoint" && (
                           <div className="grid-wide">
                             <SupplierSurfaceConfig
@@ -2384,20 +2394,11 @@ function ProductApp({
                             />
                           </div>
                         )}
-                        <label>
-                          {t("supplier.defaultModel")}
-                          <div>
-                            <ModelInput
-                              value={selectedChannel.default_model}
-                              models={selectedModelOptions}
-                              onChange={(value) => updateSupplier({ default_model: value, upstream_model: value, public_model: value })}
-                            />
-                            <span className="field-hint">{t("supplier.defaultModelHint")}</span>
-                            {selectedChannel.kind === "aws_bedrock" && (
-                              <span className="field-hint">{t("supplier.bedrockModelHint")}</span>
-                            )}
-                          </div>
-                        </label>
+                        <SupplierModelPoolSummary
+                          details={selectedModelPool}
+                          platformRegistered={selectedChannelTransport?.platform_registered === true}
+                          onViewDetails={() => setSupplierModelPoolOpen(true)}
+                        />
                         {selectedChannel.source_driver !== "lan_share" ? (
                           <>
                             {false && (<label>
@@ -2472,7 +2473,12 @@ function ProductApp({
                       canSupply={selectedChannelCanSupply}
                       saving={selectedChannelOperation === "saving"}
                       testing={selectedChannelOperation === "testing"}
-                      model={modelDisplayName(selectedChannelModel)}
+                      model={selectedChannel.default_model}
+                      models={selectedModelOptions}
+                      onModelChange={(value) => updateSupplier({ default_model: value, upstream_model: value, public_model: value })}
+                      modelHint={selectedChannel.kind === "aws_bedrock"
+                        ? <span className="field-hint">{t("supplier.bedrockModelHint")}</span>
+                        : undefined}
                       prompt={supplierTestPrompt}
                       onPromptChange={setSupplierTestPrompt}
                       onFullCheck={() => saveSupplierChanges(selectedChannel, true)}
@@ -2959,6 +2965,11 @@ function ProductApp({
                             {aboutEndpointSourceNote}
                           </small>
                         )}
+                        {appMeta.endpointStatus === "error" && (
+                          <button className="inline-text-link" type="button" onClick={() => void refreshEndpointRegistry()}>
+                            {t("diagnostics.actions.refreshEndpoints")}
+                          </button>
+                        )}
                       </div>
                     </div>)}
                     {clientModePolicy.capabilities.developmentEndpoint
@@ -3128,7 +3139,7 @@ function ProductApp({
                     </button>
                   </div>
                 </div>
-                <DiagnosticsPanel issues={activeDiagnostics} onAction={handleDiagnosticAction} />
+                <DiagnosticsPanel issues={applicationDiagnostics} onAction={handleDiagnosticAction} />
               </div>
             </>
           )}

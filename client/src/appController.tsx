@@ -93,6 +93,8 @@ import {
   sanitizeApiFormat,
   shouldShowSupplierRouteStatusToast,
   supplierChannelRuntimeStarted,
+  supplierChannelMetrics,
+  preserveSupplierChannelMetrics,
   supplierChannelTransportForChannel,
   supplierFromChannel,
   supplierQuicFromEndpoint,
@@ -237,7 +239,6 @@ import {
   channelDetectionInputChanged,
   channelEditorSettingsChanged,
   channelRuntimeNeedsActivation,
-  diagnosticToastEventKey,
   finishSupplierDeletion,
   mergeEndpointDiscoveryConfig,
   reconcileDetectedDefaultModel,
@@ -880,7 +881,7 @@ export function useAppController({
 
   const [status, setStatus] = useState<ProxyStatus>({ running: false, listen: emptyConfig.listen });
 
-  const [supplierStatus, setSupplierStatus] = useState<SupplierStatus>({
+  const [supplierStatus, setSupplierStatusState] = useState<SupplierStatus>({
       running: false,
       starting: false,
       node_id: "",
@@ -893,6 +894,11 @@ export function useAppController({
       route_statuses: [],
       channel_transports: [],
     });
+  const setSupplierStatus = React.useCallback<React.Dispatch<React.SetStateAction<SupplierStatus>>>((update) => {
+    setSupplierStatusState((current) => preserveSupplierChannelMetrics(
+      current, typeof update === "function" ? update(current) : update,
+    ));
+  }, []);
 
   const [supplierQuotaSnapshots, setSupplierQuotaSnapshots] = useState<SupplierQuotaSnapshotMap>(readSupplierQuotaSnapshots);
 
@@ -1159,6 +1165,8 @@ export function useAppController({
   const [copiedField, setCopiedField] = useState<CopyField | null>(null);
 
   const [localEntryDiagnosticReady, setLocalEntryDiagnosticReady] = useState(false);
+  const [localEntryError, setLocalEntryError] = useState("");
+  const [localEntryStoppedByUser, setLocalEntryStoppedByUser] = useState(false);
 
   const localEntryStartupCompleteRef = useRef(false);
 
@@ -1194,8 +1202,6 @@ export function useAppController({
 
   const platformCallGenerationRef = useRef(0);
 
-  const diagnosticToastMessagesRef = useRef<Map<string, string>>(new Map());
-
   const routeStatusToastMessagesRef = useRef<Map<string, ReturnType<typeof supplierRouteStatusToastSnapshot>>>(new Map());
 
   const endpointRefreshWarningRef = useRef<string | undefined>(undefined);
@@ -1216,30 +1222,26 @@ export function useAppController({
     );
 
   const runtimeDiagnostics = useMemo(
-      () => buildRuntimeDiagnostics(status, supplierStatus, appMeta, config, localEntryDiagnosticReady && !configActionBusy),
+      () => buildRuntimeDiagnostics(status, supplierStatus, savedConfig,
+        localEntryDiagnosticReady && !configActionBusy && !localEntryStoppedByUser, localEntryError),
       [
         status.running,
-        status.active_endpoint,
         supplierStatus.running,
         supplierStatus.starting,
-        supplierStatus.active_transport,
-        supplierStatus.last_transport_error,
         supplierStatus.last_error,
-        supplierStatus.route_statuses,
-        appMeta.endpointStatus,
-        appMeta.endpointLastError,
-        appMeta.updateLastError,
-        config.proxy_auto_start,
-        config.listen,
-        config.channels,
+        savedConfig,
         localEntryDiagnosticReady,
         configActionBusy,
+        localEntryStoppedByUser,
+        localEntryError,
       ],
     );
 
-  const { activeDiagnostics, hasDiagnostics, pushDiagnostic, resolveDiagnostic } = useDiagnostics(updateState, runtimeDiagnostics);
+  const { activeDiagnostics, pushDiagnostic, resolveDiagnostic } = useDiagnostics(runtimeDiagnostics);
 
   const localEntryIssue = activeDiagnostics.find((issue) => issue.id === "local-entry");
+  const supplierStartupIssue = activeDiagnostics.find((issue) => issue.id === "supplier-start");
+  const applicationDiagnostics = activeDiagnostics.filter((issue) => issue.scope === "about");
 
   const brandVersion = (updateState.status === "ready" || updateState.status === "ready_waiting_idle") && updateState.version
     ? updateState.version
@@ -1311,14 +1313,7 @@ export function useAppController({
 
   const selectedChannelHealth = supplierStatus.channels?.find((item) => item.channel_id === selectedChannel.id);
 
-  const selectedChannelProtocolLatencyHealth = selectedChannelHealth?.upstream_http_version?.trim()
-      ? selectedChannelHealth
-      : supplierTestResult.status === "success" && supplierTestResult.upstreamHttpVersion?.trim()
-        ? {
-            upstream_http_version: supplierTestResult.upstreamHttpVersion,
-            latency_ms: supplierTestResult.latencyMs ?? 0,
-          }
-        : selectedChannelHealth;
+  const selectedChannelMetrics = supplierChannelMetrics(supplierStatus, selectedChannel.id);
 
   const selectedChannelQuotaHealth = resolveSupplierQuotaHealth(
       selectedChannelHealth,
@@ -1440,32 +1435,11 @@ export function useAppController({
       : "";
 
   useEffect(() => {
-      for (const issue of activeDiagnostics) {
-        if (issue.createdAt !== 0) continue;
-        const messageKey = diagnosticToastEventKey(issue);
-        if (diagnosticToastMessagesRef.current.get(issue.id) === messageKey) continue;
-        diagnosticToastMessagesRef.current.set(issue.id, messageKey);
-        showToast(`${issue.title}: ${issue.message}`, "error", 5200);
+      if (status.running) {
+        setLocalEntryError("");
+        setLocalEntryStoppedByUser(false);
       }
-      if (appMeta.endpointStatus === "success") diagnosticToastMessagesRef.current.delete("endpoint-registry");
-      if (!appMeta.updateLastError && updateState.status !== "error") diagnosticToastMessagesRef.current.delete("update-source");
-      if (!localEntryDiagnosticReady || !config.proxy_auto_start || status.running) diagnosticToastMessagesRef.current.delete("local-entry");
-      const activeDiagnosticIds = new Set(activeDiagnostics.map((issue) => issue.id));
-      for (const issueId of diagnosticToastMessagesRef.current.keys()) {
-        if (issueId.startsWith("supplier-model-catalog-") && !activeDiagnosticIds.has(issueId)) {
-          diagnosticToastMessagesRef.current.delete(issueId);
-        }
-      }
-    }, [
-      activeDiagnostics,
-      appMeta.endpointStatus,
-      appMeta.updateLastError,
-      updateState.status,
-      supplierStatus.active_transport,
-      config.proxy_auto_start,
-      status.running,
-      localEntryDiagnosticReady,
-    ]);
+    }, [status.running]);
 
   useEffect(() => {
       for (const routeStatus of supplierStatus.route_statuses ?? []) {
@@ -2129,21 +2103,6 @@ export function useAppController({
 
   function handleDiagnosticAction(issue: DiagnosticIssue) {
       switch (issue.action) {
-        case "check_update":
-          void checkAndDownloadUpdate(false);
-          return;
-        case "refresh_registry":
-          void refreshEndpointRegistry();
-          return;
-        case "start_proxy":
-          void start();
-          return;
-        case "open_access":
-          setTab("access");
-          return;
-        case "open_supplier":
-          setTab("supplier");
-          return;
         case "open_logs":
           setLogOpen(true);
           return;
@@ -2393,16 +2352,9 @@ export function useAppController({
           const nextStatus = await invoke<ProxyStatus>("start_proxy");
           startupConsoleInfo("[const-api][startup][ui] start_proxy finished in %dms", Math.round(performance.now() - proxyStartedAt));
           setStatus(nextStatus);
-          resolveDiagnostic("local-entry");
+          setLocalEntryError("");
         } catch (error) {
-          pushDiagnostic({
-            id: "local-entry",
-            scope: "access",
-            severity: "error",
-            title: tr("diagnostics.localEntryStartFailed"),
-            message: localizedError(error),
-            action: "start_proxy",
-          });
+          setLocalEntryError(localizedError(error));
           showToast(tr("access.messages.autoStartFailed", { error: localizedError(error) }), "error", 5200);
         }
       }
@@ -2422,17 +2374,8 @@ export function useAppController({
           const nextSupplierStatus = await invoke<SupplierStatus>("start_supplier", { channelId: null, channelIds: null });
           startupConsoleInfo("[const-api][startup][ui] start_supplier finished in %dms", Math.round(performance.now() - supplierStartedAt));
           setSupplierStatus(nextSupplierStatus);
-          resolveDiagnostic("supplier-auto");
         } catch (error) {
           setSupplierStatus({ ...supplierSt, starting: false });
-          pushDiagnostic({
-            id: "supplier-auto",
-            scope: "supplier",
-            severity: "error",
-            title: tr("diagnostics.supplierAutoRestoreFailed"),
-            message: localizedError(error),
-            action: "open_supplier",
-          });
           showToast(tr("access.messages.supplierAutoRestoreFailed", { error: localizedError(error) }), "error", 5200);
         } finally {
           setPendingSupplierChannelIds([]);
@@ -2538,20 +2481,15 @@ export function useAppController({
           showToast(tr("access.messages.saveFailed", { error: localizedError(error) }), "error", 5200);
           return;
         }
+        setLocalEntryStoppedByUser(false);
+        setLocalEntryError("");
         try {
           const st = await invoke<ProxyStatus>("start_proxy");
           setStatus(st);
-          resolveDiagnostic("local-entry");
+          setLocalEntryError("");
           showToast(tr("access.messages.started"), "success");
         } catch (error) {
-          pushDiagnostic({
-            id: "local-entry",
-            scope: "access",
-            severity: "error",
-            title: tr("diagnostics.localEntryStartFailed"),
-            message: localizedError(error),
-            action: "start_proxy",
-          });
+          setLocalEntryError(localizedError(error));
           showToast(tr("access.messages.startFailed", { error: localizedError(error) }), "error", 5200);
         }
       });
@@ -2562,6 +2500,8 @@ export function useAppController({
         try {
           const st = await invoke<ProxyStatus>("stop_proxy");
           setStatus(st);
+          setLocalEntryStoppedByUser(true);
+          setLocalEntryError("");
           showToast(tr("access.messages.stopped"), "info");
         } catch (error) {
           showToast(localizedError(error), "error", 5200);
@@ -2578,14 +2518,17 @@ export function useAppController({
           showToast(tr("access.messages.saveFailed", { error: localizedError(error) }), "error", 5200);
           return;
         }
+        setLocalEntryStoppedByUser(false);
+        setLocalEntryError("");
         try {
           const stopped = await invoke<ProxyStatus>("stop_proxy");
           setStatus(stopped);
           const st = await invoke<ProxyStatus>("start_proxy");
           setStatus(st);
-          resolveDiagnostic("local-entry");
+          setLocalEntryError("");
           showToast(tr("access.messages.started"), "success");
         } catch (error) {
+          setLocalEntryError(localizedError(error));
           showToast(tr("access.messages.startFailed", { error: localizedError(error) }), "error", 5200);
         }
       });
@@ -3008,7 +2951,6 @@ export function useAppController({
           endpointLastError: undefined,
           endpointRefreshWarning: result.refresh_warning,
         }));
-        resolveDiagnostic("endpoint-registry");
         if (!silent) {
           showToast(tr("about.endpointsDiscovered", { count: result.endpoints.length }), "success");
         }
@@ -3021,14 +2963,6 @@ export function useAppController({
           endpointLastError: String(error),
         }));
         if (!silent) {
-          pushDiagnostic({
-            id: "endpoint-registry",
-            scope: "about",
-            severity: "error",
-            title: tr("diagnostics.endpointSourceFailed"),
-            message: localizedError(error),
-            action: "refresh_registry",
-          });
           showToast(localizedError(error), "error", 4200);
         }
       } finally {
@@ -3054,7 +2988,6 @@ export function useAppController({
         error,
         waitingReason,
         checkedAt,
-        showDiagnostic: Boolean(error),
       });
       setAutoInstallUpdatesState(status.automatic);
       setAppMeta((current) => ({
@@ -3066,9 +2999,6 @@ export function useAppController({
         updateLastCheckedAt: checkedAt || current.updateLastCheckedAt,
         updateLastError: error,
       }));
-      if (!error) {
-        resolveDiagnostic("update-source");
-      }
     }
 
   function setAutoInstallUpdates(enabled: boolean) {
@@ -3108,7 +3038,6 @@ export function useAppController({
           status: "error",
           error: message,
           checkedAt: new Date().toLocaleString(),
-          showDiagnostic: !silent,
         }));
         if (!silent) showToast(tr("updates.checkFailed", { error: message }), "error", 5200);
       }
@@ -3129,7 +3058,6 @@ export function useAppController({
           ...current,
           status: "ready",
           error: message,
-          showDiagnostic: true,
         }));
         showToast(tr("updates.installFailed", { error: message }), "error", 5200);
       }
@@ -3516,7 +3444,6 @@ export function useAppController({
           writeSupplierQuotaSnapshots(nextSnapshots);
           return nextSnapshots;
         });
-        resolveDiagnostic(`subscription-detection-${id}`);
         showToast(supplierDeletedNotice(channel.name || channel.id, stoppedRuntime), "info");
       }, 0);
     }
@@ -3908,7 +3835,6 @@ export function useAppController({
             model: channelHealth?.model || activatedChannel.upstream_model,
             content: channelHealth?.message || tr("supplier.messages.liveValidationStarted"),
           });
-          resolveDiagnostic("supplier-auto");
           const channelName = activatedChannel.name || activatedChannel.id;
           const channelTransport = supplierChannelTransportForChannel(st, activatedChannel.id);
           const routeStatus = supplierRouteStatusForChannel(st, activatedChannel.id);
@@ -4035,7 +3961,6 @@ export function useAppController({
             supplierStatusRef.current = refreshed;
             setSupplierStatus(refreshed);
           }
-          resolveDiagnostic(`subscription-detection-${selectedChannel.id}`);
           const warningText = detection.warnings.length > 0 ? `，${detection.warnings[0]}` : "";
           const action = tr("supplier.messages.refreshedChannelInformation");
           showToast(tr("supplier.messages.refreshedModels", {
@@ -5650,24 +5575,12 @@ export function useAppController({
         setSavedConfig(latestConfig);
         rememberDetectedQuota(activatedChannel.id, health);
         setSupplierModels(activatedChannel.models);
-        resolveDiagnostic(`subscription-detection-${activatedChannel.id}`);
-        resolveDiagnostic("supplier-auto");
         showToast(
           tr("subscriptionImport.channelEnabled", { count: activatedChannel.models.length }),
           "success",
           5200,
         );
       } catch (error) {
-        pushDiagnostic({
-          id: `subscription-detection-${channel.id}`,
-          scope: "supplier",
-          severity: "error",
-          title: tr("subscriptionImport.validationFailedTitle", { channel: channel.name }),
-          message: channelRetained
-            ? tr("subscriptionImport.validationFailedRetained", { error: localizedError(error) })
-            : tr("subscriptionImport.saveFailed", { error: localizedError(error) }),
-          action: "open_supplier",
-        });
         if (channelRetained) {
           throw new Error(tr("subscriptionImport.retainedDisabled", { error: localizedError(error) }));
         }
@@ -5927,8 +5840,8 @@ export function useAppController({
     hasChanges,
     configActionBusy,
     routingPreferenceSaving,
-    activeDiagnostics,
-    hasDiagnostics,
+    applicationDiagnostics,
+    supplierStartupIssue,
     localEntryIssue,
     brandVersion,
     updateReady,
@@ -5951,7 +5864,7 @@ export function useAppController({
     selectedChannelCanDetect,
     selectedChannelCanSupply,
     selectedChannelHealth,
-    selectedChannelProtocolLatencyHealth,
+    selectedChannelMetrics,
     selectedChannelQuotaHealth,
     selectedChannelRouteStatus,
     selectedChannelRouteLabel,
@@ -6004,6 +5917,7 @@ export function useAppController({
     openLocalSupplierCallLog,
     closeCallLog,
     refreshAccount,
+    refreshEndpointRegistry,
     checkAndDownloadUpdate,
     installPreparedUpdate,
     updateSupplier,

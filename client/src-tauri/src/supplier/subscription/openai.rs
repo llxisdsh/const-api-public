@@ -334,7 +334,7 @@ pub(crate) async fn forward_openai_subscription_stream_request_with_capacity(
     let mut usable_output_produced = false;
     let mut upstream_usage = SupplierUpstreamUsageAccumulator::new("openai_responses");
     let mut continuation =
-        (!grok).then(|| CodexHttpContinuationCollector::new(&upstream_body_for_log));
+        (!grok).then(|| CodexHttpContinuationCollector::new(config, &upstream_body_for_log));
     let body_read_started = std::time::Instant::now();
     let mut stream_debug = SubscriptionStreamDebug {
         upstream_send_ms,
@@ -540,6 +540,7 @@ pub(crate) async fn forward_openai_subscription_stream_request_with_capacity(
         send_supplier_message(
             outbound,
             SupplierMessage {
+                output_credit: None,
                 id: msg_id.to_string(),
                 kind: "error".to_string(),
                 payload,

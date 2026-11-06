@@ -29,6 +29,85 @@ const LEGACY_DOMESTIC_ENDPOINT_REGISTRY: &str =
     "https://const.tos-cn-shanghai.volces.com/registry/endpoints.json";
 const LEGACY_PUBLISHED_ENDPOINT_REGISTRY: &str = "https://github.com/llxisdsh/const-api-public/releases/download/endpoint-registry/endpoints.json";
 static CONFIG_COMMIT_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+
+/// Requests hold immutable versions. Writers keep the existing config lock and
+/// copy only if an older version is still in use; no request clones the catalog.
+pub(crate) struct LiveClientConfig(StdMutex<Arc<ClientConfig>>);
+
+pub(crate) struct LiveClientConfigGuard<'a>(std::sync::MutexGuard<'a, Arc<ClientConfig>>);
+
+impl LiveClientConfigGuard<'_> {
+    fn replace(&mut self, config: ClientConfig) {
+        // A full replacement must not copy the old snapshot just to discard it.
+        *self.0 = Arc::new(config);
+    }
+}
+
+impl LiveClientConfig {
+    pub(crate) fn new(config: ClientConfig) -> Self {
+        Self(StdMutex::new(Arc::new(config)))
+    }
+
+    pub(crate) fn snapshot(&self) -> std::sync::LockResult<Arc<ClientConfig>> {
+        self.0
+            .lock()
+            .map(|config| Arc::clone(&config))
+            .map_err(|error| std::sync::PoisonError::new(Arc::clone(&error.into_inner())))
+    }
+
+    pub(crate) fn lock(&self) -> std::sync::LockResult<LiveClientConfigGuard<'_>> {
+        self.0
+            .lock()
+            .map(LiveClientConfigGuard)
+            .map_err(|error| std::sync::PoisonError::new(LiveClientConfigGuard(error.into_inner())))
+    }
+}
+
+impl std::ops::Deref for LiveClientConfigGuard<'_> {
+    type Target = ClientConfig;
+    fn deref(&self) -> &ClientConfig {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for LiveClientConfigGuard<'_> {
+    fn deref_mut(&mut self) -> &mut ClientConfig {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+#[cfg(test)]
+mod live_config_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn request_snapshots_share_catalog_and_writes_publish_consistent_versions() {
+        let live = LiveClientConfig::new(default_config());
+        let old = live.snapshot().unwrap();
+        let second = live.snapshot().unwrap();
+        assert!(Arc::ptr_eq(&old, &second));
+        let old_preference = old.prefer_local_supply;
+        {
+            let mut config = live.lock().unwrap();
+            config.prefer_local_supply = !old_preference;
+            config.listen = "127.0.0.1:45555".into();
+        }
+        let current = live.snapshot().unwrap();
+        assert!(!Arc::ptr_eq(&old, &current));
+        assert_eq!(old.prefer_local_supply, old_preference);
+        assert_ne!(old.listen, current.listen);
+        assert_eq!(current.prefer_local_supply, !old_preference);
+        assert!(Arc::ptr_eq(&current, &live.snapshot().unwrap()));
+        drop(current);
+        let before = Arc::as_ptr(&live.snapshot().unwrap());
+        live.lock().unwrap().listen = "127.0.0.1:45556".into();
+        assert_eq!(
+            before,
+            Arc::as_ptr(&live.snapshot().unwrap()),
+            "unshared writes need not copy the catalog"
+        );
+    }
+}
 const LEGACY_PRIVATE_ENDPOINT_REGISTRY: &str =
     "https://raw.githubusercontent.com/llxisdsh/const-api/main/registry/endpoints.json";
 const LEGACY_LOCAL_ENDPOINT_REGISTRY: &str = "http://127.0.0.1:8080/registry/endpoints.json";
@@ -619,7 +698,7 @@ pub(crate) fn write_config_to_path(path: &PathBuf, cfg: &ClientConfig) -> Result
 /// filesystem sync.
 pub(crate) fn commit_config_update<T>(
     path: &PathBuf,
-    live_config: &Arc<StdMutex<ClientConfig>>,
+    live_config: &Arc<crate::config::LiveClientConfig>,
     update: impl FnOnce(&mut ClientConfig) -> Result<T>,
 ) -> Result<(ClientConfig, T)> {
     let _commit = CONFIG_COMMIT_LOCK
@@ -632,7 +711,7 @@ pub(crate) fn commit_config_update<T>(
     let mut live = live_config
         .lock()
         .map_err(|_| anyhow::anyhow!("proxy live config lock poisoned"))?;
-    *live = authoritative.clone();
+    live.replace(authoritative.clone());
     Ok((authoritative, result))
 }
 
@@ -640,7 +719,7 @@ pub(crate) fn commit_config_update<T>(
 /// runtime commit. Normal UI reads can use this as a cheap consistency barrier.
 pub(crate) fn reload_config_authoritatively(
     path: &PathBuf,
-    live_config: &Arc<StdMutex<ClientConfig>>,
+    live_config: &Arc<crate::config::LiveClientConfig>,
 ) -> Result<ClientConfig> {
     let _commit = CONFIG_COMMIT_LOCK
         .get_or_init(|| StdMutex::new(()))
@@ -650,7 +729,7 @@ pub(crate) fn reload_config_authoritatively(
     let mut live = live_config
         .lock()
         .map_err(|_| anyhow::anyhow!("proxy live config lock poisoned"))?;
-    *live = authoritative.clone();
+    live.replace(authoritative.clone());
     Ok(authoritative)
 }
 

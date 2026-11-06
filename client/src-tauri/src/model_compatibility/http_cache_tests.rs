@@ -81,6 +81,292 @@ async fn read(
     request_account_model_compatibility(config, Method::GET, None, None, cache).await
 }
 
+fn inventory_payload(models: &[&str]) -> Value {
+    let mut value = payload("display-only");
+    value["routing_model_inventory"] = json!({"schema_version":1, "models":models,
+        "identity_aliases":{"wire-a":"a", "dated-a":"a", "vendor/special":"a"}});
+    value["aliases"] = json!({"requested":"a|b", "empty-group":"not-supplied", "a":"a|b",
+        "claude-sonnet-test":"not-supplied", "sonnet":"a"});
+    value
+}
+
+fn absent(
+    config: &ClientConfig,
+    cache: &StdMutex<ModelCompatibilityHttpCache>,
+    model: &str,
+    compatible: bool,
+) -> bool {
+    cached_platform_model_absent(
+        cache,
+        config,
+        &config.endpoints[0],
+        &config.account_device_api_key,
+        model,
+        if compatible {
+            crate::proxy::PlatformModelRouteMode::CompatibleOnly
+        } else {
+            crate::proxy::PlatformModelRouteMode::ExactOnly
+        },
+    )
+}
+
+#[tokio::test]
+async fn routing_inventory_filters_exact_and_compatible_without_guessing_or_crossing_scopes() {
+    let (config, _, server) = mock_server(
+        vec![(
+            200,
+            Some("W/\"inventory\""),
+            inventory_payload(&["vendor/special"]),
+        )],
+        0,
+    )
+    .await;
+    let cache = StdMutex::new(ModelCompatibilityHttpCache::default());
+    read(&config, &cache).await.unwrap();
+    assert!(!absent(&config, &cache, "a", false));
+    assert!(!absent(&config, &cache, "special", false));
+    assert!(!absent(&config, &cache, "dated-a[1m]", false));
+    assert!(!absent(&config, &cache, "vendor/special", false));
+    assert!(
+        !absent(&config, &cache, "claude-sonnet-test", true),
+        "family aliases add candidates beyond the literal key"
+    );
+    assert!(absent(&config, &cache, "requested", false));
+    assert!(!absent(&config, &cache, "requested", true));
+    assert!(absent(&config, &cache, "empty-group", true));
+    assert!(
+        absent(&config, &cache, "a", true),
+        "same identity cannot masquerade as an alternative"
+    );
+    assert!(!absent(&config, &cache, "unknown-date-alias", true));
+    for field in ["key", "user", "platform", "endpoint"] {
+        let mut other = config.clone();
+        match field {
+            "key" => other.account_device_api_key = "different".into(),
+            "user" => other.account_user_id = "different".into(),
+            "platform" => other.account_platform_id = "different".into(),
+            _ => other.endpoints[0].base_url.push_str("/other"),
+        }
+        assert!(!absent(&other, &cache, "missing", false), "{field}");
+    }
+    let slot = cache.lock().unwrap().active.as_ref().unwrap().1.clone();
+    slot.lock().await.validated_at = Some(Instant::now() - Duration::from_secs(26));
+    assert!(
+        !absent(&config, &cache, "missing", false),
+        "expired snapshot must not suppress requests"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn routing_inventory_keeps_short_identity_aliases_of_qualified_supply() {
+    let (config, _, server) = mock_server(
+        vec![(200, None, inventory_payload(&["another-provider/wire-a"]))],
+        0,
+    )
+    .await;
+    let cache = StdMutex::new(ModelCompatibilityHttpCache::default());
+    read(&config, &cache).await.unwrap();
+    assert!(!absent(&config, &cache, "a", false));
+    assert!(!absent(&config, &cache, "dated-a", false));
+    assert!(!absent(&config, &cache, "requested", true));
+    server.abort();
+}
+
+#[tokio::test]
+async fn routing_inventory_delta_adds_removes_and_304_revalidates_one_cached_document() {
+    let delta = json!({"object":"account_model_compatibility_inventory_delta",
+        "platform_available_models":["new"], "availability_as_of":"updated",
+        "routing_model_inventory":{"schema_version":1,"models":["b"]}});
+    let (config, seen, server) = mock_server(
+        vec![
+            (
+                200,
+                Some("W/\"compatibility-inventory-v1-policy-one\""),
+                inventory_payload(&["a"]),
+            ),
+            (
+                200,
+                Some("W/\"compatibility-inventory-v1-policy-two\""),
+                delta,
+            ),
+            (
+                304,
+                Some("W/\"compatibility-inventory-v1-policy-two\""),
+                Value::Null,
+            ),
+            (503, None, json!({"error":"offline"})),
+        ],
+        0,
+    )
+    .await;
+    let cache = StdMutex::new(ModelCompatibilityHttpCache::default());
+    read(&config, &cache).await.unwrap();
+    assert!(absent(&config, &cache, "b", false));
+    let updated = read(&config, &cache).await.unwrap();
+    assert_eq!(updated["object"], "account_model_compatibility");
+    assert_eq!(updated["aliases"]["requested"], "a|b");
+    assert!(absent(&config, &cache, "a", false));
+    assert!(!absent(&config, &cache, "b", false));
+    let slot = cache.lock().unwrap().active.as_ref().unwrap().1.clone();
+    slot.lock().await.validated_at = Some(Instant::now() - Duration::from_secs(26));
+    read(&config, &cache).await.unwrap();
+    assert!(absent(&config, &cache, "a", false), "304 renews freshness");
+    assert!(read(&config, &cache).await.is_err());
+    assert!(
+        !absent(&config, &cache, "a", false),
+        "failure cannot renew old routing evidence"
+    );
+    assert_eq!(
+        seen.lock().unwrap()[1].1["x-const-model-snapshot"],
+        "inventory-delta-v1"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn routing_inventory_delta_preserves_the_complete_document_memory_bound() {
+    let mut full = inventory_payload(&["a"]);
+    full["large_fixture"] = json!("x".repeat(3 * 1024 * 1024));
+    let delta = json!({"object":"account_model_compatibility_inventory_delta",
+        "platform_available_models":[],"availability_as_of":"updated",
+        "routing_model_inventory":{"schema_version":1,"models":["y".repeat(2 * 1024 * 1024)]}});
+    let (config, _, server) = mock_server(
+        vec![
+            (
+                200,
+                Some("W/\"compatibility-inventory-v1-policy-one\""),
+                full,
+            ),
+            (
+                200,
+                Some("W/\"compatibility-inventory-v1-policy-two\""),
+                delta,
+            ),
+        ],
+        0,
+    )
+    .await;
+    let cache = StdMutex::new(ModelCompatibilityHttpCache::default());
+    read(&config, &cache).await.unwrap();
+    let slot = cache.lock().unwrap().active.as_ref().unwrap().1.clone();
+    assert!(slot.lock().await.value.is_some());
+    read(&config, &cache).await.unwrap();
+    assert!(slot.lock().await.value.is_none());
+    assert!(!absent(&config, &cache, "a", false));
+    server.abort();
+}
+
+#[tokio::test]
+async fn routing_inventory_unknown_schema_and_old_servers_do_not_filter() {
+    let mut unknown = inventory_payload(&[]);
+    unknown["routing_model_inventory"]["schema_version"] = json!(2);
+    let (config, _, server) =
+        mock_server(vec![(200, None, payload("a")), (200, None, unknown)], 0).await;
+    let cache = StdMutex::new(ModelCompatibilityHttpCache::default());
+    for _ in 0..2 {
+        read(&config, &cache).await.unwrap();
+        assert!(!absent(&config, &cache, "missing", false));
+        cache.lock().unwrap().last_routing_demand = Some(Instant::now());
+        assert!(!routing_inventory_refresh_due(&cache));
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn routing_inventory_refresh_is_bounded_and_stops_without_exclusion_demand() {
+    let (config, _, server) = mock_server(vec![(200, None, inventory_payload(&["a"]))], 0).await;
+    let cache = StdMutex::new(ModelCompatibilityHttpCache::default());
+    read(&config, &cache).await.unwrap();
+    let slot = cache.lock().unwrap().active.as_ref().unwrap().1.clone();
+    slot.lock().await.checked_at = Some(Instant::now() - Duration::from_secs(21));
+    assert!(!absent(&config, &cache, "a", false));
+    assert!(
+        !routing_inventory_refresh_due(&cache),
+        "present models do not enable fast polling"
+    );
+    assert!(absent(&config, &cache, "missing", false));
+    assert!(routing_inventory_refresh_due(&cache));
+    slot.lock().await.checked_at = Some(Instant::now());
+    assert!(
+        !routing_inventory_refresh_due(&cache),
+        "a refresh consumes previous demand"
+    );
+    assert!(absent(&config, &cache, "missing", false));
+    assert!(
+        !routing_inventory_refresh_due(&cache),
+        "more requests do not bypass the interval"
+    );
+    slot.lock().await.checked_at = Some(Instant::now() - Duration::from_secs(21));
+    assert!(routing_inventory_refresh_due(&cache));
+    // Even after a failed refresh, no extra polls are made without new demand.
+    cache.lock().unwrap().last_routing_demand = Some(Instant::now() - Duration::from_secs(30));
+    assert!(!routing_inventory_refresh_due(&cache));
+    server.abort();
+}
+
+#[tokio::test]
+async fn routing_inventory_freshness_starts_before_the_network_round_trip() {
+    let (config, _, server) = mock_server(vec![(200, None, inventory_payload(&[]))], 50).await;
+    let cache = StdMutex::new(ModelCompatibilityHttpCache::default());
+    read(&config, &cache).await.unwrap();
+    let slot = cache.lock().unwrap().active.as_ref().unwrap().1.clone();
+    let document = slot.lock().await;
+    assert!(document.validated_at.unwrap().elapsed() >= Duration::from_millis(50));
+    assert!(document.checked_at.unwrap() > document.validated_at.unwrap());
+    server.abort();
+}
+
+#[tokio::test]
+async fn routing_inventory_rejects_mismatched_or_malformed_deltas_and_refetches_once() {
+    for invalid in ["policy", "schema", "models"] {
+        let mut delta = json!({"object":"account_model_compatibility_inventory_delta",
+            "platform_available_models":[],"availability_as_of":"updated",
+            "routing_model_inventory":{"schema_version":1,"models":[]}});
+        let etag = match invalid {
+            "policy" => "W/\"compatibility-inventory-v1-other-two\"",
+            "schema" => {
+                delta["routing_model_inventory"]["schema_version"] = json!(2);
+                "W/\"compatibility-inventory-v1-policy-two\""
+            }
+            _ => {
+                delta["routing_model_inventory"]["models"] = json!(false);
+                "W/\"compatibility-inventory-v1-policy-two\""
+            }
+        };
+        let (config, seen, server) = mock_server(
+            vec![
+                (
+                    200,
+                    Some("W/\"compatibility-inventory-v1-policy-one\""),
+                    inventory_payload(&["a"]),
+                ),
+                (200, Some(etag), delta),
+                (
+                    200,
+                    Some("W/\"compatibility-inventory-v1-policy-three\""),
+                    inventory_payload(&["b"]),
+                ),
+            ],
+            0,
+        )
+        .await;
+        let cache = StdMutex::new(ModelCompatibilityHttpCache::default());
+        read(&config, &cache).await.unwrap();
+        let result = read(&config, &cache).await.unwrap();
+        assert_eq!(
+            result["routing_model_inventory"]["models"],
+            json!(["b"]),
+            "{invalid}"
+        );
+        assert!(!absent(&config, &cache, "b", false));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        assert!(!seen[2].1.contains_key(IF_NONE_MATCH), "{invalid}");
+        server.abort();
+    }
+}
+
 #[tokio::test]
 async fn conditional_read_reuses_body_and_preserves_live_supply_updates() {
     let (config, seen, server) = mock_server(

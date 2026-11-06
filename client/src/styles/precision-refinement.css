@@ -1408,6 +1408,10 @@ textarea:focus-visible,
   margin: 0;
 }
 
+.detail-drawer .supplier-model-test-controls {
+  margin-top: 5px;
+}
+
 .detail-drawer .supplier-proxy-control {
   align-items: center;
   min-height: var(--control-height);

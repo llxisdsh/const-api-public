@@ -6,66 +6,7 @@ import type { SupplierNodeRouteStatus } from "../appTypes";
 import { DialogBackdrop } from "../DialogBackdrop";
 import { ModalCloseButton } from "../ModalCloseButton";
 import { useEscapeDismiss } from "../useEscapeDismiss";
-import { modelDisplayName, modelDisplayNames } from "../modelPresentation";
-
-export type SupplierModelPoolDetails = {
-  total: number;
-  accepted: string[];
-  unsupported: string[];
-  unreported: string[];
-};
-
-function normalizedModels(models: string[]) {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const rawModel of models) {
-    const model = rawModel.trim();
-    const key = model.toLowerCase();
-    if (!model || seen.has(key)) continue;
-    seen.add(key);
-    result.push(model);
-  }
-  return result;
-}
-
-export function resolveSupplierModelPoolDetails({
-  observedModels,
-  routeStatus,
-  platformRegistered,
-}: {
-  observedModels: string[];
-  routeStatus?: SupplierNodeRouteStatus;
-  platformRegistered: boolean;
-}): SupplierModelPoolDetails {
-  const observed = normalizedModels(observedModels);
-  const acceptedReport = normalizedModels(routeStatus?.accepted_models ?? []);
-  const unsupported = normalizedModels(routeStatus?.unsupported_models ?? []);
-  const hasExplicitReport = acceptedReport.length > 0 || unsupported.length > 0;
-
-  const accepted = hasExplicitReport
-    ? acceptedReport
-    : platformRegistered
-      ? observed
-      : [];
-  // First-source ownership is shared across groups: a later rejected duplicate
-  // must not also appear as the already accepted short model (or vice versa).
-  const labels = modelDisplayNames([...observed, ...accepted, ...unsupported]);
-  const owners = new Map([...labels].map(([wire, name]) => [name, wire.trim().replace(/\[1m\]$/i, "").toLowerCase()]));
-  const display = (models: string[]) => [...new Set(models.flatMap((model) => {
-    const label = modelDisplayName(model);
-    const wire = model.trim().replace(/\[1m\]$/i, "").toLowerCase();
-    return owners.get(label) === wire || label === wire ? [label] : [];
-  }))].sort();
-  const acceptedNames = display(accepted);
-  const unsupportedNames = display(unsupported).filter((name) => !acceptedNames.includes(name));
-  const reportedKeys = new Set([...acceptedNames, ...unsupportedNames]);
-  return {
-    total: labels.size,
-    accepted: acceptedNames,
-    unsupported: unsupportedNames,
-    unreported: display(observed).filter((model) => !reportedKeys.has(model)),
-  };
-}
+import { resolveSupplierModelPoolDetails } from "../supplierModelPool";
 
 export function SupplierModelPoolDialog({
   channelName,
@@ -98,12 +39,13 @@ export function SupplierModelPoolDialog({
       `${label} (${models.length})`,
       models.length > 0 ? models.join("\n") : t("common.none"),
     ].join("\n");
+    if (!platformRegistered) return section(t("supplier.modelPool.discovered"), details.unreported);
     return [
       section(t("supplier.modelPool.accepted"), details.accepted),
       section(t("supplier.modelPool.unsupported"), details.unsupported),
       section(t("supplier.modelPool.unreported"), details.unreported),
     ].join("\n\n");
-  }, [details, t]);
+  }, [details, platformRegistered, t]);
 
   return (
     <DialogBackdrop
@@ -113,14 +55,14 @@ export function SupplierModelPoolDialog({
       <div className="modal-panel supplier-model-pool-modal">
         <div className="supplier-model-pool-header">
           <div>
-            <h2 id="supplier-model-pool-title">{t("supplier.modelPool.title")}</h2>
+            <h2 id="supplier-model-pool-title">{t(platformRegistered ? "supplier.modelPool.title" : "supplier.modelPool.localTitle")}</h2>
             <p>{channelName}</p>
           </div>
           <ModalCloseButton onClick={onClose} />
         </div>
 
         <p className="supplier-model-pool-summary">
-          {t("supplier.modelPool.summary", {
+          {t(platformRegistered ? "supplier.modelPool.summary" : "supplier.modelPool.discoveredSummary", {
             total: details.total,
             accepted: details.accepted.length,
             unsupported: details.unsupported.length,
@@ -137,13 +79,13 @@ export function SupplierModelPoolDialog({
         />
 
         <div className="supplier-model-pool-footer">
-          <small>
+          {platformRegistered && <small>
             {routeStatus?.catalog_release_id
               ? t("supplier.modelPool.catalogRelease", {
                 release: routeStatus.catalog_release_id,
               })
               : t("supplier.modelPool.noCatalogRelease")}
-          </small>
+          </small>}
           <div className="actions">
             <button
               className="quiet"

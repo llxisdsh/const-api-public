@@ -61,16 +61,20 @@ fn client(selected: Option<bool>) -> Result<Client, AuthError> {
         selected,
     )
     .map_err(|_| AuthError::new("invalid_response"))?;
-    crate::http_client::cached_client(if use_system_proxy { &PROXY } else { &DIRECT }, move || {
-        crate::http_client::proxy_policy(
-            Client::builder()
-                .connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(30))
-                .redirect(reqwest::redirect::Policy::none())
-                .retry(reqwest::retry::never()),
-            use_system_proxy,
-        )
-    })
+    crate::http_client::cached_client(
+        if use_system_proxy { &PROXY } else { &DIRECT },
+        use_system_proxy,
+        move || {
+            crate::http_client::proxy_policy(
+                Client::builder()
+                    .connect_timeout(Duration::from_secs(10))
+                    .timeout(Duration::from_secs(30))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .retry(reqwest::retry::never()),
+                use_system_proxy,
+            )
+        },
+    )
     .map_err(|_| AuthError::new("network"))
 }
 

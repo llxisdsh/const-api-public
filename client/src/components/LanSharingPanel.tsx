@@ -25,6 +25,7 @@ import { InlineActionFeedback, type InlineActionFeedbackValue } from "../account
 import { CompactChoiceMenu } from "./AppControls";
 import { lanShareConnectionHost, lanShareOpenAiBaseUrl } from "../lanShareConnectionInfo";
 import { modelDisplayName, modelDisplayNames, type ModelPresentationPolicy } from "../modelPresentation";
+import { startVisibilityPoll } from "../refreshPolicy";
 
 type LanSharingPanelProps = {
   enabled: boolean;
@@ -354,10 +355,19 @@ export function LanSharingPanel({
   }, [refreshPresentation]);
 
   useEffect(() => {
-    void refresh();
-    if (!enabled) return undefined;
-    const timer = window.setInterval(() => void refresh(true), 5000);
-    return () => window.clearInterval(timer);
+    if (!enabled) {
+      void refresh();
+      return undefined;
+    }
+    let initial = true;
+    return startVisibilityPoll({
+      intervalMs: 5000,
+      initialDelayMs: 0,
+      refresh: async () => {
+        await refresh(!initial);
+        initial = false;
+      },
+    });
   }, [enabled, refresh]);
 
   async function runAction(

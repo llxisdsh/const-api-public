@@ -6,6 +6,29 @@ mod tests {
     use warp::http::HeaderMap;
     use warp::Filter;
 
+    #[test]
+    fn request_config_snapshots_share_memory_and_invalidate_lan_permissions_after_save() {
+        let mut config = default_config();
+        config.channels = vec![local_model_channel(&["shared", "private"], "http://127.0.0.1:9")];
+        config.lan_share.shared_models = vec!["shared".into()];
+        config.account_device_api_key = "test-platform-key".into();
+        let shared = ProxyShared::from_config(config, Client::new());
+        let original = shared.config_snapshot();
+        assert!(Arc::ptr_eq(&original, &shared.config_snapshot()));
+        let lan = shared.lan_share_config_snapshot(&original);
+        assert!(Arc::ptr_eq(&lan, &shared.lan_share_config_snapshot(&original)));
+        assert!(lan.account_device_api_key.is_empty());
+        assert!(lan.endpoints.is_empty());
+        assert_eq!(lan.channels[0].models, ["shared"]);
+        assert_eq!(original.channels[0].models, ["shared", "private"]);
+        shared.live_config.lock().unwrap().lan_share.shared_models = vec!["private".into()];
+        let current = shared.config_snapshot();
+        let updated = shared.lan_share_config_snapshot(&current);
+        assert!(!Arc::ptr_eq(&updated, &lan));
+        assert_eq!(updated.channels[0].models, ["private"]);
+        assert_eq!(lan.channels[0].models, ["shared"], "in-flight requests retain their snapshot");
+    }
+
     fn local_model_channel(models: &[&str], upstream_base_url: &str) -> ChannelConfig {
         let first = models.first().copied().unwrap_or_default().to_string();
         let source_driver = crate::source_driver::SourceDriverId::CustomEndpoint;
@@ -231,7 +254,7 @@ mod tests {
             cfg.clone(),
             Client::new(),
             platform_api_key,
-            Arc::new(StdMutex::new(cfg)),
+            Arc::new(crate::config::LiveClientConfig::new(cfg)),
             readiness,
         ));
 

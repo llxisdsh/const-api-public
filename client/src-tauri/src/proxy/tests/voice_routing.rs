@@ -99,7 +99,8 @@ async fn voice_supplier_native_executor_keeps_media_and_consumes_only_lease_cont
     let config = crate::supplier_from_channel(&channel);
     let (commands, receiver) = tokio::sync::mpsc::channel(8);
     let (outbound, mut events) = tokio::sync::mpsc::channel(8);
-    let open = SupplierMessage {id:"voice-native-supplier-test".into(),kind:"duplex_open".into(),payload:serde_json::json!({
+    let open = SupplierMessage {
+        output_credit: None,id:"voice-native-supplier-test".into(),kind:"duplex_open".into(),payload:serde_json::json!({
         "session_kind":"native_realtime", "wire":{
             "version":2,"surface":"openai","operation":crate::surface::ApiOperation::RealtimeWebSocket,
             "method":"GET","escaped_relative_path":"/v1/realtime","raw_query":"future=yes",
@@ -116,6 +117,7 @@ async fn voice_supplier_native_executor_keeps_media_and_consumes_only_lease_cont
     assert_eq!(opened.kind, "duplex_opened", "{opened:?}");
     commands
         .send(SupplierMessage {
+            output_credit: None,
             id: opened.id.clone(),
             kind: "duplex_client_frame".into(),
             payload: serde_json::json!({"control":"media_lease"})
@@ -131,6 +133,7 @@ async fn voice_supplier_native_executor_keeps_media_and_consumes_only_lease_cont
     ] {
         commands
             .send(SupplierMessage {
+                output_credit: None,
                 id: opened.id.clone(),
                 kind: "duplex_client_frame".into(),
                 payload: crate::supplier::platform_frame_payload(frame.clone()),
@@ -151,6 +154,7 @@ async fn voice_supplier_native_executor_keeps_media_and_consumes_only_lease_cont
     }
     commands
         .send(SupplierMessage {
+            output_credit: None,
             id: opened.id,
             kind: "duplex_close".into(),
             payload: serde_json::Map::new(),

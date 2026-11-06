@@ -210,6 +210,8 @@ pub(crate) struct SubscriptionStreamDebug {
 impl SubscriptionStreamDebug {
     fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
+            "upstream_transport": "http",
+            "upstream_http_headers_ms": self.upstream_send_ms,
             "upstream_send_ms": self.upstream_send_ms,
             "first_body_chunk_ms": self.first_body_chunk_ms,
             "first_sse_event_ms": self.first_sse_event_ms,
@@ -655,6 +657,7 @@ async fn send_subscription_stream_chunk(
         send_supplier_message(
             outbound,
             SupplierMessage {
+                output_credit: None,
                 id: msg_id.to_string(),
                 kind: "stream_start".to_string(),
                 payload,
@@ -666,6 +669,7 @@ async fn send_subscription_stream_chunk(
     send_supplier_message(
         outbound,
         SupplierMessage {
+            output_credit: None,
             id: msg_id.to_string(),
             kind: "stream_chunk".to_string(),
             payload: crate::surface_wire::stream_chunk_payload(chunk)?,
@@ -689,6 +693,7 @@ async fn finish_subscription_stream(
         send_supplier_message(
             outbound,
             SupplierMessage {
+                output_credit: None,
                 id: msg_id.to_string(),
                 kind: "stream_start".to_string(),
                 payload,
@@ -702,6 +707,7 @@ async fn finish_subscription_stream(
     send_supplier_message(
         outbound,
         SupplierMessage {
+            output_credit: None,
             id: msg_id.to_string(),
             kind: "stream_end".to_string(),
             payload,
@@ -1532,6 +1538,14 @@ mod buffered_response_tests {
             ..Default::default()
         };
         assert_eq!(debug.routing_latency_ms(), Some(120));
+        let mut payload = serde_json::Map::new();
+        insert_subscription_stream_debug_metrics(&mut payload, &debug);
+        assert_eq!(payload["upstream_transport"], "http");
+        assert_eq!(payload["upstream_http_headers_ms"], 35);
+        assert_eq!(payload["upstream_send_ms"], 35, "legacy field remains unchanged");
+        assert_eq!(payload["routing_latency_ms"], 120, "routing policy remains unchanged");
+        assert!(!payload.contains_key("upstream_ws_sent_ms"));
+        assert_eq!(debug.to_json()["upstream_http_headers_ms"], 35);
 
         let fallback = SubscriptionStreamDebug {
             upstream_send_ms: 35,
@@ -1695,7 +1709,7 @@ mod buffered_response_tests {
             "arguments": "{}"
         })];
         let state = CodexHttpContinuationState {
-            history: Arc::new(history.clone()),
+            history: Arc::new(history.iter().cloned().map(Arc::new).collect()),
             cache_identity: Some("c1_persisted".to_string()),
         };
         persist_codex_http_continuation_to_path(

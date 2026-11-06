@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { LoaderCircle, MessageSquareText, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { AvailabilityGroupChecks, type AvailabilityGroupChecksProps } from "./AvailabilityGroupChecks";
+import { ModelInput } from "./AppControls";
 
 type Props = AvailabilityGroupChecksProps & {
   busy: boolean;
@@ -9,6 +10,9 @@ type Props = AvailabilityGroupChecksProps & {
   saving: boolean;
   testing: boolean;
   model: string;
+  models: string[];
+  onModelChange: (model: string) => void;
+  modelHint?: ReactNode;
   prompt: string;
   onPromptChange: (prompt: string) => void;
   onFullCheck: () => void | Promise<void>;
@@ -21,7 +25,8 @@ export function SupplierChannelChecks(props: Props) {
   const { t } = useTranslation();
   const disabled = props.busy || !props.canSupply;
   return (
-    <div className="supplier-check-panel">
+    <div className="drawer-section supplier-check-panel">
+      <h2>{t("supplier.availability.sectionTitle")}</h2>
       <AvailabilityGroupChecks checks={props.checks} groups={props.groups} renderAction={(showResults) => (
         <button type="button" className="quiet" disabled={disabled} onClick={async () => {
           // Only this explicit action expands results, never background checks or saves.
@@ -32,14 +37,24 @@ export function SupplierChannelChecks(props: Props) {
         </button>
       )} />
       <section className="supplier-test-panel">
-        <div className="supplier-model-test-controls">
-          <span className="supplier-test-model" title={t("supplier.availability.currentModel", { model: props.model || "—" })}>{props.model || "—"}</span>
-          <input aria-label={t("supplier.availability.testPrompt")} value={props.prompt}
-            onChange={(event) => props.onPromptChange(event.target.value)} />
-          <button type="button" className="quiet" onClick={props.onTest} disabled={disabled}>
-            {props.testing ? <LoaderCircle className="spin-icon" size={16} /> : <MessageSquareText size={16} />}
-            {props.testing ? t("supplier.availability.testing") : t("supplier.availability.testCurrentModel")}
-          </button>
+        <div className="grid supplier-test-fields">
+          <label>
+            {t("supplier.defaultModel")}
+            <ModelInput value={props.model} models={props.models} onChange={props.onModelChange} />
+            <span className="field-hint">{t("supplier.defaultModelHint")}</span>
+            {props.modelHint}
+          </label>
+          <label>
+            {t("supplier.availability.testPrompt")}
+            <div className="supplier-model-test-controls">
+              <input aria-label={t("supplier.availability.testPrompt")} value={props.prompt}
+                onChange={(event) => props.onPromptChange(event.target.value)} />
+              <button type="button" className="quiet" onClick={props.onTest} disabled={disabled}>
+                {props.testing ? <LoaderCircle className="spin-icon" size={16} /> : <MessageSquareText size={16} />}
+                {props.testing ? t("supplier.availability.testing") : t("supplier.availability.testCurrentModel")}
+              </button>
+            </div>
+          </label>
         </div>
         {props.children}
       </section>

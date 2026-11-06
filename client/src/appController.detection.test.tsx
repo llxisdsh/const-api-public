@@ -485,6 +485,28 @@ describe("channel refresh and inference command boundaries", () => {
     },
   );
 
+  it("keeps endpoint errors and retries on the existing source row", async () => {
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let fail = true;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "refresh_endpoint_registry") {
+        if (fail) throw new Error("fixture endpoint unavailable");
+        return { platform_id: "fixture", version: 1, endpoints: [], source: "fixture", refresh_warning: "" };
+      }
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    await act(() => result.current.refreshEndpointRegistry());
+    expect(result.current.appMeta.endpointStatus).toBe("error");
+    expect(result.current.appMeta.endpointLastError).toContain("fixture endpoint unavailable");
+    expect(result.current.applicationDiagnostics).toEqual([]);
+    fail = false;
+    await act(() => result.current.refreshEndpointRegistry());
+    expect(result.current.appMeta.endpointStatus).toBe("success");
+    expect(result.current.appMeta.endpointLastError).toBeUndefined();
+  });
+
   it("refreshes native platform status when the About page is entered", async () => {
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
@@ -622,6 +644,71 @@ describe("channel refresh and inference command boundaries", () => {
     expect(result.current.localEntryIssue).toBeUndefined();
     await act(async () => { running = false; await vi.advanceTimersByTimeAsync(5000); });
     expect(result.current.localEntryIssue?.message).toContain("未监听");
+  });
+
+  it("does not turn a deliberate stop into an error on the next status refresh", async () => {
+    vi.useFakeTimers();
+    wire.proxy_auto_start = true;
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let running = true;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "proxy_status") return { running, listen: emptyConfig.listen };
+      if (command === "stop_proxy") { running = false; return { running, listen: emptyConfig.listen }; }
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await act(() => result.current.stop());
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    expect(result.current.status.running).toBe(false);
+    expect(result.current.localEntryIssue).toBeUndefined();
+    expect(result.current.applicationDiagnostics).toEqual([]);
+  });
+
+  it("shows manual start failure with auto-start off and clears it after native recovery", async () => {
+    vi.useFakeTimers();
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let running = false;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "proxy_status") return { running, listen: emptyConfig.listen };
+      if (command === "save_config") return structuredClone(wire);
+      if (command === "start_proxy") throw new Error("fixture address in use");
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await act(() => result.current.start());
+    expect(result.current.localEntryIssue?.message).toContain("fixture address in use");
+    expect(result.current.applicationDiagnostics).toEqual([]);
+    await act(async () => { running = true; await vi.advanceTimersByTimeAsync(5000); });
+    expect(result.current.localEntryIssue).toBeUndefined();
+    await act(async () => { running = false; await vi.advanceTimersByTimeAsync(5000); });
+    expect(result.current.localEntryIssue).toBeUndefined();
+  });
+
+  it("does not show a platform startup failure for Local channels", async () => {
+    vi.useFakeTimers();
+    wire.supplier_auto_start = true;
+    wire.channels[0].enabled = true;
+    wire.channels[0].share_enabled = true;
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let runtime = { running: false, starting: false, channels: [], route_statuses: [], last_error: "" };
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "supplier_status") return runtime;
+      if (command === "start_supplier") {
+        runtime = { ...runtime, last_error: "no channel passed supplier validation" };
+        throw new Error(runtime.last_error);
+      }
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(result.current.supplierStartupIssue).toBeUndefined();
+    expect(result.current.applicationDiagnostics).toEqual([]);
+    runtime = { ...runtime, running: true, last_error: "" };
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(result.current.supplierStartupIssue).toBeUndefined();
+    expect(result.current.applicationDiagnostics).toEqual([]);
   });
 
   it("still reports a real startup failure immediately", async () => {

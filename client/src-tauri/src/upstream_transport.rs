@@ -314,7 +314,7 @@ impl AdaptiveUpstreamTransport {
         Self {
             inner: Arc::new(AdaptiveUpstreamTransportInner {
                 proxy_matcher: StdMutex::new((
-                    crate::http_client::network_generation(),
+                    crate::http_client::system_proxy_generation(),
                     proxy_matcher,
                 )),
                 system_proxy,
@@ -353,7 +353,7 @@ impl AdaptiveUpstreamTransport {
                 .proxy_matcher
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let generation = crate::http_client::network_generation();
+            let generation = crate::http_client::system_proxy_generation();
             if self.inner.system_proxy && matcher.0 != generation {
                 *matcher = (generation, Matcher::from_system());
             }

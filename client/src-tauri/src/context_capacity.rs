@@ -235,7 +235,7 @@ impl TextSize {
     }
 }
 
-pub(crate) fn history_tokens(history: &[Value]) -> (u64, bool) {
+pub(crate) fn history_tokens<'a>(history: impl IntoIterator<Item = &'a Value>) -> (u64, bool) {
     let mut size = TextSize::default();
     for item in history {
         size.add(item);

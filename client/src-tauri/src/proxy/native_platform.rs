@@ -166,6 +166,7 @@ async fn run_supplier_native_duplex(
                 send_native_supplier_message(
                     outbound,
                     SupplierMessage {
+                        output_credit: None,
                         id: open.id,
                         kind: "duplex_error".into(),
                         payload,
@@ -221,6 +222,7 @@ async fn run_supplier_native_duplex(
             send_native_supplier_message(
                 outbound,
                 SupplierMessage {
+                    output_credit: None,
                     id: open.id,
                     kind: "duplex_error".into(),
                     payload,
@@ -239,6 +241,7 @@ async fn run_supplier_native_duplex(
     send_native_supplier_message(
         outbound,
         SupplierMessage {
+            output_credit: None,
             id: open.id.clone(),
             kind: "duplex_opened".into(),
             payload: serde_json::Map::new(),
@@ -278,7 +281,8 @@ async fn run_supplier_native_duplex(
                     _ => continue,
                 };
                 // No turn_terminal: VAD can start another response at any time.
-                if send_native_supplier_message(outbound, SupplierMessage { id:open.id.clone(), kind:"duplex_server_frame".into(), payload:crate::supplier::platform_frame_payload(frame) }).await.is_err() { break; }
+                if send_native_supplier_message(outbound, SupplierMessage {
+                    output_credit: None, id:open.id.clone(), kind:"duplex_server_frame".into(), payload:crate::supplier::platform_frame_payload(frame) }).await.is_err() { break; }
             }
             _ = &mut lifetime => break,
             _ = &mut lease => break,
@@ -289,6 +293,7 @@ async fn run_supplier_native_duplex(
     send_native_supplier_message(
         outbound,
         SupplierMessage {
+            output_credit: None,
             id: open.id,
             kind: "duplex_close".into(),
             payload: serde_json::Map::new(),

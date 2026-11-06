@@ -420,6 +420,7 @@ impl SupplierTransportCodec {
         }
         state.phase = SupplierPayloadEncryptionPhase::ConfirmSent;
         Some(SupplierMessage {
+            output_credit: None,
             id: format!("payload-encryption-{}", now_unix()),
             kind: SUPPLIER_PAYLOAD_ENCRYPTION_CONFIRM.to_string(),
             payload: serde_json::json!({"handshake_id": state.handshake_id})
@@ -439,10 +440,12 @@ impl SupplierTransportCodec {
 
     fn prepare_message(&self, mut msg: SupplierMessage) -> Result<SupplierMessageParts> {
         self.inject_payload_encryption_offer(&mut msg);
-        SupplierMessageParts::new(
+        let mut parts = SupplierMessageParts::new(
             serde_json::to_vec(&msg)?,
             self.message_chunks_enabled.load(Ordering::Relaxed),
-        )
+        )?;
+        parts._output_credit = msg.output_credit;
+        Ok(parts)
     }
 
     fn encode(&self, mut msg: SupplierMessage) -> Result<(Vec<u8>, bool)> {
@@ -665,6 +668,7 @@ mod payload_encryption_tests {
 
     fn message(kind: &str, body: &str) -> SupplierMessage {
         SupplierMessage {
+            output_credit: None,
             id: format!("{kind}-id"),
             kind: kind.to_string(),
             payload: serde_json::json!({"body": body})
@@ -705,6 +709,7 @@ mod payload_encryption_tests {
         let frame = state
             .encode(
                 &SupplierMessage {
+                    output_credit: None,
                     id: "vector".to_string(),
                     kind: "ping".to_string(),
                     payload: serde_json::json!({"value": "hello"})
@@ -730,6 +735,7 @@ mod payload_encryption_tests {
         let codec = SupplierTransportCodec::new(Some(identity_pin));
 
         let authenticate = SupplierMessage {
+            output_credit: None,
             id: "auth-id".to_string(),
             kind: "authenticate".to_string(),
             payload: serde_json::Map::new(),
@@ -783,6 +789,7 @@ mod payload_encryption_tests {
             .expect("derive protocol keys");
 
         let ack = SupplierMessage {
+            output_credit: None,
             id: "auth-id".to_string(),
             kind: "authenticate_ack".to_string(),
             payload: serde_json::json!({
@@ -883,6 +890,7 @@ mod payload_encryption_tests {
     fn supplier_payload_encryption_preserves_legacy_protocol() {
         let legacy_codec = SupplierTransportCodec::default();
         let register = SupplierMessage {
+            output_credit: None,
             id: "legacy-register".to_string(),
             kind: "register".to_string(),
             payload: serde_json::Map::new(),
@@ -899,6 +907,7 @@ mod payload_encryption_tests {
 
         let offered_codec = SupplierTransportCodec::new(Some([9; 32]));
         let authenticate = SupplierMessage {
+            output_credit: None,
             id: "offered-auth".to_string(),
             kind: "authenticate".to_string(),
             payload: serde_json::Map::new(),
@@ -908,6 +917,7 @@ mod payload_encryption_tests {
             .expect("encode offered authentication");
         assert!(!binary);
         let legacy_ack = SupplierMessage {
+            output_credit: None,
             id: "offered-auth".to_string(),
             kind: "authenticate_ack".to_string(),
             payload: serde_json::Map::new(),
