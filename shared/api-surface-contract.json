@@ -1506,8 +1506,8 @@
       "ownership": "routed_known",
       "statefulness": "resource_create",
       "billing_class": "metered",
-      "execution_policy": "native_backend_only",
-      "required_context_declarations": ["api_credential"],
+      "execution_policy": "local_backend_only",
+      "required_context_declarations": ["api_credential", "subscription_driver"],
       "required_conversion_evidence": ["request", "response", "error", "cancel"]
     },
     {
@@ -1538,8 +1538,8 @@
       "ownership": "routed_known",
       "statefulness": "resource_read",
       "billing_class": "none",
-      "execution_policy": "native_backend_only",
-      "required_context_declarations": ["api_credential"],
+      "execution_policy": "local_backend_only",
+      "required_context_declarations": ["api_credential", "subscription_driver"],
       "required_conversion_evidence": ["request", "response", "error", "cancel"]
     },
     {
@@ -1602,8 +1602,8 @@
       "ownership": "routed_known",
       "statefulness": "resource_create",
       "billing_class": "metered",
-      "execution_policy": "native_backend_only",
-      "required_context_declarations": ["api_credential"],
+      "execution_policy": "local_backend_only",
+      "required_context_declarations": ["api_credential", "subscription_driver"],
       "required_conversion_evidence": ["request", "response", "error", "cancel"]
     },
     {
@@ -1618,8 +1618,8 @@
       "ownership": "routed_known",
       "statefulness": "resource_create",
       "billing_class": "metered",
-      "execution_policy": "native_backend_only",
-      "required_context_declarations": ["api_credential"],
+      "execution_policy": "local_backend_only",
+      "required_context_declarations": ["api_credential", "subscription_driver"],
       "required_conversion_evidence": ["request", "response", "error", "cancel"]
     },
     {

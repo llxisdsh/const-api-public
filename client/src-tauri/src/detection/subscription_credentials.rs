@@ -171,6 +171,7 @@ fn subscription_channel_from_managed_credential(
         "kiro" => crate::source_driver::SourceDriverId::KiroSubscription,
         "cursor" => crate::source_driver::SourceDriverId::CursorSubscription,
         "opencode" => crate::source_driver::SourceDriverId::OpencodeConsole,
+        "opendesign" => crate::source_driver::SourceDriverId::OpenDesignSubscription,
         _ => crate::source_driver::SourceDriverId::ClaudeSubscription,
     };
     let mut v2 = channel_v2_contract_for_source(source_driver);
@@ -364,6 +365,16 @@ pub(crate) fn subscription_account_identity_from_value(value: &serde_json::Value
     .flatten()
     .map(|identity| identity.trim().to_string())
     .find(|identity| !identity.is_empty())?;
+    // The same OpenDesign user can fund independent workspaces. Never merge
+    // their managed files, catalog caches or quota accounting across scopes.
+    let stable_identity = if provider == "opendesign" {
+        format!(
+            "{stable_identity}:{}",
+            json_string(value, &["workspace_id"])?
+        )
+    } else {
+        stable_identity
+    };
     Some(generated_id_from_seed(
         &format!("subscription-account:{provider}:{stable_identity}"),
         "credential",
@@ -412,6 +423,9 @@ pub(crate) fn normalize_subscription_token(
     if provider == "antigravity" {
         token = normalize_antigravity_credential_value(&token)
             .ok_or_else(|| anyhow!("token JSON is not a supported Antigravity credential"))?;
+    }
+    if provider == "opendesign" {
+        crate::opendesign::validate_credential(&token)?;
     }
     if provider == "cursor" {
         token = crate::cursor::normalize_token(token, None)?;
@@ -1281,7 +1295,13 @@ pub(crate) fn subscription_credential_candidate_from_value(
     let has_refresh_token = json_string(&value, &["refresh_token"])
         .map(|token| !token.trim().is_empty())
         .unwrap_or(false);
-    let status = if provider == "cursor" && has_access_token && !credential_is_expired(value) {
+    let status = if provider == "opendesign" {
+        if crate::opendesign::validate_credential(value).is_ok() {
+            "ready"
+        } else {
+            "invalid_credential"
+        }
+    } else if provider == "cursor" && has_access_token && !credential_is_expired(value) {
         "ready"
     } else if !has_refresh_token {
         "missing_refresh"
@@ -1358,7 +1378,7 @@ pub(crate) fn infer_subscription_provider(value: &serde_json::Value) -> Option<S
 
 pub(crate) fn normalize_subscription_provider(value: &str) -> Option<String> {
     let value = value.trim().to_lowercase();
-    if matches!(value.as_str(), "kiro" | "cursor") {
+    if matches!(value.as_str(), "kiro" | "cursor" | "opendesign") {
         return Some(value);
     }
     if value.contains("opencode") {
@@ -1423,6 +1443,7 @@ pub(crate) fn subscription_provider_label(provider: &str) -> &'static str {
         "kiro" => "Kiro Account Subscription",
         "cursor" => "Cursor Account Subscription",
         "opencode" => "OpenCode Console Subscription",
+        "opendesign" => "OpenDesign Account Subscription",
         _ => "Account Authorization",
     }
 }
@@ -1436,6 +1457,7 @@ pub(crate) fn subscription_channel_name(provider: &str) -> &'static str {
         "kiro" => "Kiro Account Subscription",
         "cursor" => "Cursor Account Subscription",
         "opencode" => "OpenCode Console Subscription",
+        "opendesign" => "OpenDesign Account Subscription",
         _ => "Account Subscription",
     }
 }

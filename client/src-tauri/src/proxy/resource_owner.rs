@@ -1011,7 +1011,7 @@ fn local_resource_owners_from_json_response(
         | crate::surface::ApiOperation::VideosRemix
         | crate::surface::ApiOperation::VideosEdit
         | crate::surface::ApiOperation::VideosExtend => {
-            if let Some(id) = value.get("id").and_then(local_resource_id_from_json) {
+            if let Some(id) = value.get("id").or_else(|| value.get("request_id")).and_then(local_resource_id_from_json) {
                 resources.push(("video", id));
             }
         }

@@ -39,7 +39,11 @@ pub(crate) fn anthropic_model_dialect(model: &str) -> AnthropicModelDialect {
             adaptive_thinking_only: true,
             thinking_always_on: true,
             forced_tool_choice_unsupported: model_family_matches(&model, "claude-fable-5-1")
-                || model_family_matches(&model, "claude-mythos-5-1"),
+                || model_family_matches(&model, "claude-mythos-5-1")
+                // The 5.2 migration guide keeps the 5.1 restriction. Avoid
+                // sending forced-tool capability probes that must return 400.
+                || model_family_matches(&model, "claude-fable-5-2")
+                || model_family_matches(&model, "claude-mythos-5-2"),
             ..Default::default()
         };
     }
@@ -191,7 +195,13 @@ mod tests {
             );
             assert!(!dialect.forced_tool_choice_unsupported, "{model}");
         }
-        for model in ["claude-fable-5-1", "anthropic/claude-mythos-5.1"] {
+        for model in [
+            "claude-fable-5-1",
+            "anthropic/claude-mythos-5.1",
+            "claude-fable-5-2",
+            "claude-fable-5-2-20261109",
+            "anthropic/claude-mythos-5.2",
+        ] {
             assert!(
                 anthropic_model_dialect(model).forced_tool_choice_unsupported,
                 "{model}"

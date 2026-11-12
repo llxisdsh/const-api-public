@@ -2053,6 +2053,10 @@ pub(crate) fn update_local_channel_readiness(
                     // Presence with a zero value records that this channel has
                     // an exact model quota scope. Runtime 429s can then be
                     // isolated to this model instead of disabling the channel.
+                    let existing = if existing.runtime_quota_failure
+                        && checked_at_unix > existing.runtime_failed_at_unix {
+                        LocalModelQuotaRouteState::default()
+                    } else { existing };
                     routes.insert(
                         key,
                         LocalModelQuotaRouteState {
@@ -2567,22 +2571,7 @@ pub(crate) async fn record_supplier_channel_upstream_observation(
     state: &AppState,
     channel_id: &str,
     result: &ChannelUpstreamTestResult,
-    failure_generation: u64,
 ) {
-    if (200..300).contains(&result.http_status) {
-        if let Ok(mut routes) = state.local_model_quota_routes.lock() {
-            if let Some(route) = routes.get_mut(&model_quota_route_key(channel_id, &result.model)) {
-                // Only this checked model is proven; an older check cannot
-                // erase failures that arrived while it was still running.
-                if route.runtime_failure_sequence < failure_generation {
-                    route.record_success();
-                }
-            }
-        }
-        if let Ok(mut readiness) = state.local_channel_readiness.lock() {
-            readiness.insert(channel_id.to_string(), true);
-        }
-    }
     let version = result.upstream_http_version.trim();
     let checked_at_unix = now_unix();
     let transport_state = {

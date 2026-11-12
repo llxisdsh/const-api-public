@@ -54,7 +54,7 @@ describe("OperationCapabilityMatrix", () => {
     expect(screen.queryByText(/C0|L2|待渠道验证/)).not.toBeInTheDocument();
   });
 
-  it("does not claim unsupported subscription resources", () => {
+  it("shows limited OpenAI subscription images without advertising unsupported resources", () => {
     render(<OperationCapabilityMatrix driver={sourceDriverById("openai_subscription")} />);
 
     expect(screen.getByRole("heading", { name: "可处理的 API 请求" })).toBeInTheDocument();
@@ -65,7 +65,10 @@ describe("OperationCapabilityMatrix", () => {
       .getByText("有限支持")).toBeInTheDocument();
     expect(within(capabilityRow("Chat Completions 与已存储对话"))
       .getByText("支持核心调用，部分扩展操作暂不可用")).toBeInTheDocument();
+    expect(within(capabilityRow("图片输入与生成")).getByText("有限支持")).toBeInTheDocument();
+    expect(within(capabilityRow("图片输入与生成"))
+      .getByText("支持核心调用，部分扩展操作暂不可用")).toBeInTheDocument();
     expect(screen.queryByText("嵌入向量")).not.toBeInTheDocument();
-    expect(screen.queryByText("图片输入与生成")).not.toBeInTheDocument();
+    expect(screen.queryByText("视频")).not.toBeInTheDocument();
   });
 });

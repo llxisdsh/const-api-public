@@ -1837,7 +1837,7 @@ mod tests {
 
         assert_eq!(
             model_compatibility_candidates(&config, "claude-opus-5-5"),
-            vec!["claude-fable-5-1", "gpt-6-astra"]
+            vec!["claude-fable-5-2", "gpt-6-astra", "gemini-4-carbon"]
         );
     }
 
@@ -1990,18 +1990,15 @@ mod tests {
                 .map(|group| group.id.as_str());
             assert_eq!(actual, Some(expected_group), "{model}");
         }
-        // Ordinary tool/legacy identities are visible candidates, appended
-        // after each tier's primary models. Keep specialized Guardian separate.
+        // Retained tool/legacy candidates keep their assigned tiers.
         for (model, expected_group) in [
             ("gpt-5.5", "elite"),
             ("gpt-5.4", "expert"),
             ("gemini-3.1-pro-preview", "advanced"),
-            ("gemini-3.7-flash", "advanced"),
             ("gpt-5.3-codex", "advanced"),
             ("gpt-5.2", "capable"),
             ("gpt-5.2-codex", "capable"),
             ("gemini-3.6-flash", "capable"),
-            ("gemini-3.5-flash", "capable"),
             ("gpt-5.4-mini", "capable"),
             ("gemini-3-flash-preview", "standard"),
             ("gpt-5.3-codex-spark", "standard"),
@@ -2029,6 +2026,30 @@ mod tests {
                     .iter()
                     .any(|candidate| candidate.id == model),
                 "{model} must remain selectable"
+            );
+        }
+        for (model, expected_group) in [
+            ("claude-fable-5-1", "apex"),
+            ("gemini-3.7-flash", "advanced"),
+            ("gemini-3.5-flash", "capable"),
+        ] {
+            assert_eq!(
+                profile
+                    .model_groups
+                    .iter()
+                    .find(|group| group
+                        .match_models
+                        .iter()
+                        .any(|candidate| candidate == model))
+                    .map(|group| group.id.as_str()),
+                Some(expected_group),
+                "{model} must remain matchable at its original tier"
+            );
+            assert!(
+                profile
+                    .model_groups
+                    .iter()
+                    .all(|group| { !group.models.iter().any(|candidate| candidate == model) })
             );
         }
     }
@@ -2248,15 +2269,14 @@ mod tests {
             .iter()
             .find(|group| group.id == "apex")
             .expect("current apex");
-        assert_eq!(
-            apex.models,
-            [
-                "claude-opus-5-5",
-                "claude-fable-5-1",
-                "gpt-6-astra",
-                "custom/local-gpt-6",
-            ]
-        );
+        let mut expected = client_default_model_compatibility_profile()
+            .model_groups
+            .into_iter()
+            .find(|group| group.id == "apex")
+            .expect("default apex")
+            .models;
+        expected.push("custom/local-gpt-6".to_string());
+        assert_eq!(apex.models, expected);
         assert!(!merged.model_groups.iter().any(|group| {
             group
                 .models
@@ -2529,14 +2549,12 @@ mod tests {
             !review_candidates
                 .iter()
                 .any(|model| model == "codex-auto-review"
-                    || (model.starts_with("gemini-") && model != "gemini-4-argon")
+                    || model == "gemini-3.8-flash"
                     || model == "gpt-5.3-codex-spark")
         );
-        assert!(
-            review_candidates
-                .iter()
-                .any(|model| model == "gemini-4-argon")
-        );
+        for model in ["gemini-4-argon", "gemini-4-carbon"] {
+            assert!(review_candidates.iter().any(|candidate| candidate == model));
+        }
         assert!(profile.model_groups.iter().all(|group| {
             !group
                 .models

@@ -81,7 +81,7 @@ export function currentAppLanguage(): SupportedLanguage {
   return i18n.resolvedLanguage === "zh-CN" ? "zh-CN" : "en-US";
 }
 
-export function tr(key: string, options?: TOptions) {
+export function tr(key: string, options: TOptions = {}) {
   return String(i18n.t(key, options));
 }
 
@@ -158,13 +158,27 @@ function errorDescriptor(value: unknown): ErrorDescriptor {
     // Plain-text server errors are handled by the stable-code patterns below.
   }
   const objectStart = message.indexOf("{");
-  const objectEnd = message.lastIndexOf("}");
-  if (objectStart >= 0 && objectEnd > objectStart) {
-    try {
-      const embedded = descriptorFromObject(JSON.parse(message.slice(objectStart, objectEnd + 1)));
-      if (embedded) return embedded;
-    } catch {
-      // Continue with code-only patterns when a transport prefix contains non-JSON braces.
+  // A failed rollback can append a second structured error. Decode the first
+  // complete object so the original stage/path are not lost to a greedy slice.
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let end = objectStart; end >= 0 && end < message.length; end += 1) {
+    const char = message[end];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') quoted = true;
+    else if (char === "{") depth += 1;
+    else if (char === "}" && --depth === 0) {
+      try {
+        const embedded = descriptorFromObject(JSON.parse(message.slice(objectStart, end + 1)));
+        if (embedded) return embedded;
+      } catch {
+        // Continue with code-only patterns for a non-JSON prefix.
+      }
+      break;
     }
   }
   const jsonMatch = message.match(/"code"\s*:\s*"([^"]+)"/i);
@@ -193,6 +207,10 @@ export function localizedError(value: unknown) {
   const raw = value instanceof Error ? value.message : String(value ?? "");
   const { code, params } = normalizeErrorDescriptor(errorDescriptor(value));
   if (!code) return raw;
+  if (code === "tool_config_file_failed") {
+    const stageKey = `errors.toolConfigStages.${params.stage}`;
+    if (i18n.exists(stageKey)) params.stage = tr(stageKey);
+  }
   if (code === "tool_config_trae_advanced_verification_failed") {
     const fieldKey = `errors.traeFields.${params.field}`;
     if (i18n.exists(fieldKey)) params.field = tr(fieldKey);

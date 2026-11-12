@@ -6,7 +6,7 @@ pub(crate) fn upsert_codex_toml(raw: &str, base_url: &str, api_key: &str) -> Res
         DocumentMut::new()
     } else {
         raw.parse::<DocumentMut>()
-            .with_context(|| "parse Codex config.toml")?
+            .map_err(|err| tool_config_file_error("parse", &codex_home().join("config.toml"), err.into()))?
     };
 
     doc["model_provider"] = toml_value(CODEX_CONST_API_PROVIDER_ID);
@@ -218,6 +218,18 @@ pub(crate) fn apply_codex_config(base_url: &str, api_key: &str) -> Result<ToolAp
     apply_codex_config_with_progress(base_url, api_key, &mut ignore_progress)
 }
 
+fn backup_codex_config_before_close() -> Result<Vec<String>> {
+    let mut backups = Vec::new();
+    // Protect user configuration before termination, not the session DB/history
+    // or generated model catalog. The normal writer still backs up after close.
+    for filename in ["config.toml", "auth.json"] {
+        let path = codex_home().join(filename);
+        backup_if_exists(&path, "codex", &mut backups)
+            .map_err(|err| tool_config_file_error("backup", &path, err))?;
+    }
+    Ok(backups)
+}
+
 pub(crate) fn apply_codex_config_with_progress(
     base_url: &str,
     api_key: &str,
@@ -297,8 +309,8 @@ pub(crate) fn apply_codex_config_with_catalog_and_progress(
     let mut finished = result.finish("codex");
     finished.details = codex_status_details(&auth, &config);
     let active_const_provider = codex_effective_provider_from_config_text(&config);
-    let sync =
-        sync_codex_sessions_to_provider_inner(&active_const_provider, report_progress)?;
+    let sync = sync_codex_sessions_to_provider_inner(&active_const_provider, report_progress)
+        .map_err(|err| tool_config_file_error("session_sync", &dir, err))?;
     attach_codex_session_sync_details(&mut finished, Ok(sync));
     Ok(finished)
 }
@@ -379,12 +391,8 @@ fn attach_codex_session_sync_details_with_prefix(
 
 fn verify_codex_config_written(config_path: &Path, base_url: &str, api_key: &str) -> Result<()> {
     let raw = read_text_or_empty(config_path)?;
-    let doc = raw.parse::<DocumentMut>().with_context(|| {
-        format!(
-            "parse Codex config.toml after write {}",
-            config_path.display()
-        )
-    })?;
+    let doc = raw.parse::<DocumentMut>()
+        .map_err(|err| tool_config_file_error("verify", config_path, err.into()))?;
     let active_provider = doc.get("model_provider").and_then(|value| value.as_str());
     let provider_matches = doc
         .get("model_providers")

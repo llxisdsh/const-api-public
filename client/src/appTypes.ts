@@ -198,7 +198,7 @@ export type SubscriptionAdapterConfig = {
   audit_enabled: boolean;
 };
 
-export type SubscriptionProvider = "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor" | "opencode";
+export type SubscriptionProvider = "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor" | "opencode" | "opendesign";
 
 export type SubscriptionOAuthSession = {
   provider: string;

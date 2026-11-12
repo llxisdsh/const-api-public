@@ -132,7 +132,7 @@
     #[test]
     fn image_generation_selects_account_subscription_without_exposing_it_to_other_opaque_routes() {
         let mut config = default_config();
-        config.channels = vec![openai_subscription_channel(&["gpt-5.6-sol"])];
+        config.channels = vec![openai_subscription_channel(&["gpt-5.6-sol", "gpt-image-2"])];
         let ready = HashSet::from(["openai-account-subscription".to_string()]);
         let body = br#"{
             "model":"gpt-image-2",
@@ -285,11 +285,14 @@
     }
 
     #[test]
-    fn image_generation_prefers_ready_account_subscription_over_openai_api() {
-        let direct =
+    fn image_generation_prefers_ready_account_subscription_at_higher_priority() {
+        let mut direct =
             verified_openai_channel("openai-api", &["gpt-image-2"], "https://api.openai.com/v1");
+        direct.v2.local_priority = Some(2);
+        let mut subscription = openai_subscription_channel(&["gpt-5.6-sol", "gpt-image-2"]);
+        subscription.v2.local_priority = Some(1);
         let mut config = default_config();
-        config.channels = vec![openai_subscription_channel(&["gpt-5.6-sol"]), direct];
+        config.channels = vec![subscription, direct];
         let ready = HashSet::from([
             "openai-account-subscription".to_string(),
             "openai-api".to_string(),
@@ -319,7 +322,7 @@
         let direct =
             verified_openai_channel("openai-api", &["gpt-image-2"], "https://api.openai.com/v1");
         let mut config = default_config();
-        config.channels = vec![openai_subscription_channel(&["gpt-5.6-sol"]), direct];
+        config.channels = vec![openai_subscription_channel(&["gpt-5.6-sol", "gpt-image-2"]), direct];
         let ready = HashSet::from(["openai-api".to_string()]);
 
         let selected = select_ready_local_channel(
@@ -393,6 +396,28 @@
             ),
             "https://example.test/backend-api/codex/images/edits?client_version=1.2.3"
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn subscription_images_obey_channel_capacity_before_contacting_upstream() {
+        let _home_guard = crate::tool_config::test_home_lock()
+            .lock().unwrap_or_else(|error| error.into_inner());
+        let mut channel = local_model_channel(&["gpt-image-2"], "http://127.0.0.1:9");
+        channel.id = "safety-local-image-capacity".into();
+        channel.set_source_driver(crate::source_driver::SourceDriverId::OpenAiSubscription);
+        channel.v2.max_concurrency = 1;
+        // No credentials: reaching token loading instead of rejecting at admission
+        // is a regression, and cannot accidentally execute a live generation.
+        let _active = crate::channel_concurrency::Guard::acquire(&channel.id, 1).unwrap();
+        let response = forward_openai_subscription_image_request(
+            &Client::new(), &channel, "/v1/images/generations", &HeaderMap::new(),
+            bytes::Bytes::from_static(br#"{"model":"gpt-image-2","prompt":"one dot"}"#),
+        ).await.unwrap();
+        assert_eq!(response.status().as_u16(), 429);
+        assert_eq!(response.headers().get("retry-after").unwrap(), "1");
+        let body = crate::test_body_bytes(response.into_body()).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("concurrency_full"));
     }
 
     #[test]
@@ -2860,14 +2885,20 @@
 
     #[tokio::test]
     async fn local_model_details_use_the_requested_native_surface_shape() {
-        let model = serde_json::json!({
-            "id": "Claude-Sonnet-5-5",
-            "object": "model",
-            "owned_by": "local",
-            "const_api": { "source": "local_supplier" }
-        });
+        let models = ["Claude-Sonnet-5-5", "Model:free", "Model%3Afree", "Model+Plus"]
+            .map(|id| serde_json::json!({
+                "id": id,
+                "object": "model",
+                "owned_by": "local",
+                "const_api": { "source": "local_supplier" }
+            }));
         let tests = [
             ("/v1/models/claude-sonnet-5-5", "id", "claude-sonnet-5-5"),
+            ("/v1/models/model:free", "id", "model:free"),
+            ("/v1/models/model%3Afree", "id", "model:free"),
+            ("/v1/models/model%3afree", "id", "model:free"),
+            ("/v1/models/model%253Afree", "id", "model%3afree"),
+            ("/v1/models/model+plus", "id", "model+plus"),
             (
                 "/anthropic/v1/models/claude-sonnet-5-5",
                 "display_name",
@@ -2878,12 +2909,15 @@
                 "name",
                 "models/claude-sonnet-5-5",
             ),
+            ("/gemini/v1beta/models/model:free", "name", "models/model:free"),
+            ("/gemini/v1beta/models/model%3Afree", "name", "models/model:free"),
         ];
         let config = default_config();
         for (path, field, expected) in tests {
             let route = crate::surface::resolve_api_route("GET", path, false).unwrap();
+            assert_eq!(route.operation, crate::surface::ApiOperation::GetModel, "{path}");
             let response =
-                local_model_control_response(&config, &route, std::slice::from_ref(&model), false)
+                local_model_control_response(&config, &route, &models, false)
                     .expect("model detail response");
             assert_eq!(response.status(), StatusCode::OK, "{path}");
             let body = crate::test_body_bytes(response.into_body())
@@ -2892,6 +2926,41 @@
             let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(payload[field], expected, "{path}: {payload}");
         }
+    }
+
+    #[tokio::test]
+    async fn local_model_details_with_suffixes_do_not_forward_to_supplier() {
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let upstream_requests = requests.clone();
+        let upstream = warp::any().map(move || {
+            upstream_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            warp::reply::with_status("unexpected supplier request", StatusCode::BAD_GATEWAY)
+        });
+        let (upstream_addr, upstream_server) =
+            crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let upstream_task = tokio::spawn(upstream_server);
+        let mut config = default_config();
+        config.endpoints.clear();
+        config.account_device_api_key.clear();
+        config.prefer_local_supply = true;
+        config.api_key = "sk-model-details".to_string();
+        config.channels = vec![local_model_channel(
+            &["model:free"], &format!("http://{upstream_addr}/v1"),
+        )];
+        let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+        for path in ["/v1/models/model:free", "/v1/models/model%3Afree"] {
+            let response = warp::test::request()
+                .method("GET")
+                .path(path)
+                .header("authorization", "Bearer sk-model-details")
+                .reply(&crate::proxy_routes(shared.clone()))
+                .await;
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+            assert_eq!(body["id"], "model:free", "{path}");
+        }
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 0);
+        upstream_task.abort();
     }
 
     #[tokio::test]
@@ -6274,4 +6343,58 @@ data: [DONE]\n\n",
         }
         assert_eq!(*calls.lock().unwrap(), vec!["small", "large"]);
         task.abort();
+    }
+    #[test]
+    fn native_media_routing_matches_account_models_and_respects_api_priority() {
+        let mut config = default_config();
+        let mut openai = openai_subscription_channel(&["gpt-image-2"]);
+        openai.v2.local_priority = Some(1);
+        let mut grok = openai_subscription_channel(&["grok-imagine-image", "grok-imagine-video"]);
+        grok.id = "grok-media-routing".into();
+        grok.set_source_driver(crate::source_driver::SourceDriverId::GrokSubscription);
+        grok.v2.local_priority = Some(2);
+        config.channels = vec![openai, grok];
+        let ready = config.channels.iter().map(|c| c.id.clone()).collect::<HashSet<_>>();
+        for (path, model, expected) in [
+            ("/v1/images/generations", "grok-imagine-image", Some("grok-media-routing")),
+            ("/v1/images/edits", "gpt-image-2", Some("openai-account-subscription")),
+            ("/v1/videos/generations", "grok-imagine-video", Some("grok-media-routing")),
+            ("/v1/images/generations", "unknown-image", None),
+            ("/v1/videos", "gpt-image-2", None),
+        ] {
+            let body = serde_json::json!({"model":model}).to_string();
+            let selected = select_ready_local_channel_with_model_route_policy(&config, &warp::http::Method::POST,
+                path, body.as_bytes(), &ready, &HashMap::new(), now_unix(), ModelMatchMode::Configured,
+                None, &HashSet::new(), &HashSet::new());
+            assert_eq!(selected.map(|s| s.channel.id.as_str()), expected, "{path} {model}");
+        }
+        let mut api = openai_api_channel("image-api", "gpt-image-2", "https://example.test/v1");
+        api.v2.local_priority = Some(1);
+        config.channels[0].v2.local_priority = Some(2);
+        config.channels.push(api);
+        let route = crate::surface::resolve_api_route("POST", "/v1/images/generations", false).unwrap();
+        assert_eq!(select_native_media_channel_where(&config, &route, "gpt-image-2", |_| true).unwrap().id, "image-api");
+    }
+
+    #[test]
+    fn non_text_model_does_not_inherit_channel_wide_dialogue_capabilities() {
+        let mut channel = openai_subscription_channel(&["gpt-image-2", "gpt-6-astra"]);
+        channel.capability_profiles = vec![
+            crate::model::ChannelCapabilityProfile {
+                protocol:"openai_responses".into(), verification_state:"verified".into(),
+                tool_calls:true, tool_choice:true, reasoning:true, json_schema:true, ..Default::default()
+            },
+            crate::model::ChannelCapabilityProfile {
+                protocol:"openai_responses".into(), model_pattern:"gpt-image-2".into(),
+                verification_state:"declared".into(), catalog_metadata:true,
+                catalog_text_output:Some(false), image_output:true, image_input:true, ..Default::default()
+            },
+        ];
+        let image = LocalModelCapability::from_channel(&channel, "gpt-image-2").into_metadata();
+        assert_eq!(image["image_output"], true);
+        assert_eq!(image["image_input"], true);
+        for field in ["tool_calls", "tool_choice", "reasoning", "json_schema"] { assert_eq!(image[field], false); }
+        let text = LocalModelCapability::from_channel(&channel, "gpt-6-astra").into_metadata();
+        assert_eq!(text["tool_calls"], true);
+        assert_eq!(text["reasoning"], true);
     }

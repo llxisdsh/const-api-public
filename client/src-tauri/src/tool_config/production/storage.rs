@@ -2,6 +2,34 @@ fn const_api_state_path(filename: &str) -> PathBuf {
     crate::client_data_root().join(filename)
 }
 
+// Parser Display implementations can include the source line (and credentials).
+// Only expose typed error metadata; leave existing domain-specific errors intact.
+fn tool_config_file_error(stage: &str, path: &Path, error: anyhow::Error) -> anyhow::Error {
+    let detail = if let Some(cause) = error.downcast_ref::<std::io::Error>() {
+        match cause.raw_os_error() {
+            Some(code) => format!("{:?} (OS {code})", cause.kind()),
+            None => format!("{:?}", cause.kind()),
+        }
+    } else if let Some(cause) = error.downcast_ref::<toml_edit::TomlError>() {
+        match cause.span() {
+            Some(span) => format!("TOML (byte {})", span.start + 1),
+            None => "TOML".to_string(),
+        }
+    } else if let Some(cause) = error.downcast_ref::<serde_json::Error>() {
+        format!("JSON ({:?}, line {}, column {})", cause.classify(), cause.line(), cause.column())
+    } else if let Some(rusqlite::Error::SqliteFailure(cause, _)) =
+        error.downcast_ref::<rusqlite::Error>()
+    {
+        format!("SQLite {:?} ({})", cause.code, cause.extended_code)
+    } else {
+        return error;
+    };
+    anyhow!(serde_json::json!({
+        "code": "tool_config_file_failed",
+        "params": { "stage": stage, "path": path.display().to_string(), "detail": detail }
+    }).to_string())
+}
+
 pub(crate) fn backup_if_exists(path: &Path, tool: &str, backups: &mut Vec<String>) -> Result<()> {
     if !path.exists() {
         return Ok(());
@@ -229,19 +257,19 @@ fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("{} has no parent directory", path.display()))?;
-    fs::create_dir_all(parent)?;
+    fs::create_dir_all(parent)
+        .map_err(|err| tool_config_file_error("write", path, err.into()))?;
     let mut temp = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("create temp file beside {}", path.display()))?;
+        .map_err(|err| tool_config_file_error("write", path, err.into()))?;
     temp.write_all(content)
-        .with_context(|| format!("write temp file for {}", path.display()))?;
+        .map_err(|err| tool_config_file_error("write", path, err.into()))?;
     temp.flush()
-        .with_context(|| format!("flush temp file for {}", path.display()))?;
+        .map_err(|err| tool_config_file_error("write", path, err.into()))?;
     temp.as_file()
         .sync_all()
-        .with_context(|| format!("sync temp file for {}", path.display()))?;
+        .map_err(|err| tool_config_file_error("write", path, err.into()))?;
     temp.persist(path)
-        .map_err(|err| err.error)
-        .with_context(|| format!("replace {}", path.display()))?;
+        .map_err(|err| tool_config_file_error("replace", path, err.error.into()))?;
     Ok(())
 }
 
@@ -345,9 +373,10 @@ fn load_tool_config_manifest() -> Result<ToolConfigManifest> {
             ..Default::default()
         });
     }
-    let raw = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let raw = fs::read_to_string(&path)
+        .map_err(|err| tool_config_file_error("read", &path, err.into()))?;
     let mut manifest = serde_json::from_str::<ToolConfigManifest>(&raw)
-        .with_context(|| format!("parse {}", path.display()))?;
+        .map_err(|err| tool_config_file_error("parse", &path, err.into()))?;
     manifest.version = 2;
     migrate_deepseek_harness_settings_ownership(&mut manifest);
     Ok(manifest)
@@ -1646,7 +1675,7 @@ fn restore_managed_toml_fields_for_reapply(
         DocumentMut::new()
     } else {
         raw.parse::<DocumentMut>()
-            .with_context(|| format!("parse {} during managed-field reapply", path.display()))?
+            .map_err(|err| tool_config_file_error("parse", path, err.into()))?
     };
     for field_path in field_paths {
         let field_path = field_path
@@ -2360,24 +2389,24 @@ fn write_text_with_backup(
     // Match the Codex preview's semantic comparison. In particular, serializing an
     // unchanged official auth.json must not back up or rewrite its credentials.
     if tool == "codex" {
-        let mut status = semantic_file_status_for(path, after)?;
+        let mut status = semantic_file_status_for(path, after)
+            .map_err(|err| tool_config_file_error("parse", path, err))?;
         if status.already_configured {
             status.after_sha256.clone_from(&status.before_sha256);
             result.file_statuses.push(status);
             return Ok(());
         }
     }
-    let status = file_status_for(path, after)?;
+    let status = file_status_for(path, after)
+        .map_err(|err| tool_config_file_error("read", path, err))?;
     remember_tool_config_write(tool, path, after)?;
     if status.already_configured {
         result.file_statuses.push(status);
         return Ok(());
     }
     if status.exists_before {
-        backup_if_exists(path, tool, &mut result.backups)?;
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        backup_if_exists(path, tool, &mut result.backups)
+            .map_err(|err| tool_config_file_error("backup", path, err))?;
     }
     atomic_write(path, after)?;
     result.files.push(path.display().to_string());
@@ -2387,7 +2416,8 @@ fn write_text_with_backup(
 
 pub(crate) fn read_text_or_empty(path: &Path) -> Result<String> {
     if path.exists() {
-        fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
+        fs::read_to_string(path)
+            .map_err(|err| tool_config_file_error("read", path, err.into()))
     } else {
         Ok(String::new())
     }
@@ -2400,8 +2430,10 @@ pub(crate) fn read_json_or_default(
     if !path.exists() {
         return Ok(default);
     }
-    let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    serde_json::from_str(&raw).with_context(|| format!("parse json {}", path.display()))
+    let raw = fs::read_to_string(path)
+        .map_err(|err| tool_config_file_error("read", path, err.into()))?;
+    serde_json::from_str(&raw)
+        .map_err(|err| tool_config_file_error("parse", path, err.into()))
 }
 
 pub(crate) fn read_json5_or_default(

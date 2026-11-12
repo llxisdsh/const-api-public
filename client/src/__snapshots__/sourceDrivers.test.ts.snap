@@ -950,6 +950,84 @@ exports[`source drivers > encodes the complete V2 defaults used to create every 
     ],
   },
   {
+    "apiFormat": "openai_chat",
+    "baseUrl": "https://amr-link.open-design.ai/v1",
+    "credentialRef": "",
+    "defaultTarget": {
+      "protocol": "openai_chat",
+      "surface": "open_ai",
+    },
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": true,
+      "strategy": "openai_models",
+    },
+    "executionKind": "http_surface",
+    "executor": {
+      "type": "http_surface",
+    },
+    "kind": "subscription_adapter",
+    "models": [],
+    "sourceDriver": "opendesign_subscription",
+    "subscription": {
+      "platform": "opendesign",
+    },
+    "supportedProtocols": [
+      "openai_chat",
+    ],
+    "surfaceBindings": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://amr-link.open-design.ai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://amr-link.open-design.ai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
     "apiFormat": "openai_responses",
     "baseUrl": "https://api.openai.com/v1",
     "credentialRef": "",
@@ -5111,6 +5189,147 @@ exports[`source drivers > encodes the complete V2 defaults used to create every 
   },
   {
     "apiFormat": "openai_chat",
+    "baseUrl": "https://amr-link.open-design.ai/v1",
+    "credentialRef": "",
+    "defaultTarget": {
+      "protocol": "openai_chat",
+      "surface": "open_ai",
+    },
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": false,
+      "strategy": "openai_models",
+    },
+    "executionKind": "http_surface",
+    "executor": {
+      "type": "http_surface",
+    },
+    "kind": "openai_compatible",
+    "models": [],
+    "sourceDriver": "opendesign_api",
+    "supportedProtocols": [
+      "openai_chat",
+      "openai_responses",
+      "anthropic_messages",
+    ],
+    "surfaceBindings": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://amr-link.open-design.ai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://amr-link.open-design.ai",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://amr-link.open-design.ai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://amr-link.open-design.ai",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+  },
+  {
+    "apiFormat": "openai_chat",
     "baseUrl": "http://192.168.1.10:38787/v1",
     "credentialRef": "",
     "defaultTarget": {
@@ -6113,6 +6332,78 @@ exports[`source drivers > round-trips every source driver through the V5-only ch
           },
         ],
         "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+    "use_system_proxy": true,
+  },
+  {
+    "created_at_unix_ms": 0,
+    "credential_ref": "credential://opendesign_subscription",
+    "default_model": "",
+    "default_target": {
+      "protocol": "openai_chat",
+      "surface": "open_ai",
+    },
+    "detection_evidence": [],
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": true,
+      "strategy": "openai_models",
+    },
+    "enabled": false,
+    "executor": {
+      "type": "http_surface",
+    },
+    "id": "channel-opendesign_subscription",
+    "max_concurrency": 20,
+    "model_capability_evidence": [],
+    "models": [],
+    "name": "OpenDesign 账号订阅",
+    "node_id": "node-opendesign_subscription",
+    "price_ratio": 1,
+    "quota_reserve_percent": 0,
+    "server_quic_url": "platform.example.test:443",
+    "server_ws_url": "wss://platform.example.test/supplier/ws",
+    "share_enabled": false,
+    "source_driver": "opendesign_subscription",
+    "subscription": {
+      "account_label": "",
+      "audit_enabled": false,
+      "claude_fast_enabled": false,
+      "cooldown_until_unix": 0,
+      "daily_request_limit": 0,
+      "max_concurrency": 20,
+      "platform": "opendesign",
+      "quota_reserve_percent": 0,
+      "responses_ws_pool_enabled": true,
+      "responses_ws_subscription_multiplex_probe_enabled": false,
+      "risk_note": "",
+      "rpm_limit": 0,
+    },
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://amr-link.open-design.ai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
         "verification": {
           "checked_at_unix": 0,
           "state": "declared",
@@ -8960,6 +9251,96 @@ exports[`source drivers > round-trips every source driver through the V5-only ch
       {
         "auth_scheme": "bearer",
         "base_url": "https://api.poe.com/v1",
+        "endpoint_profile": "anthropic_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "anthropic_messages",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "anthropic",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+    ],
+    "use_system_proxy": true,
+  },
+  {
+    "created_at_unix_ms": 0,
+    "credential_ref": "credential://opendesign_api",
+    "default_model": "",
+    "default_target": {
+      "protocol": "openai_chat",
+      "surface": "open_ai",
+    },
+    "detection_evidence": [],
+    "discovery": {
+      "catalog": true,
+      "metadata": true,
+      "quota": false,
+      "strategy": "openai_models",
+    },
+    "enabled": false,
+    "executor": {
+      "type": "http_surface",
+    },
+    "id": "channel-opendesign_api",
+    "max_concurrency": 20,
+    "model_capability_evidence": [],
+    "models": [],
+    "name": "OpenDesign Cloud API",
+    "node_id": "node-opendesign_api",
+    "price_ratio": 1,
+    "quota_reserve_percent": 0,
+    "server_quic_url": "platform.example.test:443",
+    "server_ws_url": "wss://platform.example.test/supplier/ws",
+    "share_enabled": false,
+    "source_driver": "opendesign_api",
+    "surfaces": [
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://amr-link.open-design.ai/v1",
+        "endpoint_profile": "openai_compatible",
+        "operation_overrides": [],
+        "protocols": [
+          {
+            "preferred": true,
+            "protocol": "openai_chat",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+          {
+            "preferred": false,
+            "protocol": "openai_responses",
+            "verification": {
+              "checked_at_unix": 0,
+              "state": "declared",
+              "summary": "",
+            },
+          },
+        ],
+        "surface": "open_ai",
+        "verification": {
+          "checked_at_unix": 0,
+          "state": "declared",
+          "summary": "",
+        },
+      },
+      {
+        "auth_scheme": "bearer",
+        "base_url": "https://amr-link.open-design.ai",
         "endpoint_profile": "anthropic_compatible",
         "operation_overrides": [],
         "protocols": [

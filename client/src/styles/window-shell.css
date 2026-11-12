@@ -21,7 +21,7 @@
 :root[data-desktop-runtime="tauri"] .native-titlebar-surface {
   display: grid;
   position: relative;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: stretch;
   min-width: 0;
   min-height: var(--native-titlebar-height);
@@ -44,58 +44,8 @@
   display: none;
 }
 
-.native-titlebar-brand {
-  display: flex;
-  align-items: center;
-  align-self: stretch;
-  grid-column: 1;
-  gap: 6px;
-  min-width: 0;
-  padding: 0 10px;
-  box-sizing: border-box;
-  pointer-events: auto;
-}
-
-.native-titlebar-brand img {
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
-  border-radius: 3px;
-}
-
-.native-titlebar-brand strong {
-  overflow: hidden;
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 640;
-  letter-spacing: -0.01em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-:root[data-platform="macos"][data-desktop-runtime="tauri"] .native-titlebar-brand {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  /* Centered title truncates before it can reach the traffic lights. */
-  max-width: calc(100% - 168px);
-  gap: 0;
-  padding: 0 8px;
-  transform: translateX(-50%);
-}
-
-:root[data-platform="macos"][data-desktop-runtime="tauri"] .native-titlebar-brand img {
-  display: none;
-}
-
-:root[data-platform="macos"][data-desktop-runtime="tauri"] .native-titlebar-brand strong {
-  font-size: 12px;
-  font-weight: 580;
-}
-
 .native-window-controls {
-  grid-column: 3;
+  grid-column: 2;
   display: flex;
   align-items: stretch;
   justify-self: end;
@@ -295,7 +245,7 @@ aside > button {
 }
 
 .sidebar-nav-start {
-  margin-top: 30px;
+  margin-top: var(--page-block);
 }
 
 main > section {
@@ -313,22 +263,9 @@ main > section {
     padding: 0;
   }
 
-  .sidebar-nav-start {
-    margin-top: 30px;
-  }
-
   .sidebar-about .endpoint-dot {
     top: 7px;
     right: 7px;
     transform: none;
-  }
-
-}
-
-/* The brand column already truncates with an ellipsis; drop the name only
- * when there is no room left beside the window controls. */
-@media (max-width: 260px) {
-  .native-titlebar-brand strong {
-    display: none;
   }
 }

@@ -58,6 +58,13 @@
       "upstream_error": "Meta 授权请求失败，可重新登录；未启用按量计费回退。"
     }
   },
+  "opendesign": {
+    "hint": "从本机 OpenDesign / Vela 导入登录，并检测启用渠道（检测会消耗额度）。凭证独立保存，固定使用默认工作区；应用内免费权益不保证适用。",
+    "importLocal": "导入本机 OpenDesign 登录",
+    "chooseFile": "选择 Vela 登录文件",
+    "importing": "正在读取登录与工作区…",
+    "importFailed": "无法导入本机登录，请确认 OpenDesign 已登录且系统代理配置可用。"
+  },
   "opencode": {
     "login": "登录 OpenCode Console",
     "starting": "正在生成设备授权…",
@@ -1187,7 +1194,7 @@
       "allStatuses": "全部状态",
       "model": "模型",
       "modelPlaceholder": "模型名称",
-      "applyFilters": "应用筛选",
+      "searchModel": "搜索模型",
       "recordsUnavailable": "账单记录暂不可用",
       "loading": "正在加载账单",
       "empty": "暂无账单记录",
@@ -1714,6 +1721,7 @@
       "grok": "Grok 账号订阅",
       "kiro": "Kiro 账号订阅",
       "cursor": "Cursor 账号订阅",
+      "opendesign": "OpenDesign 账号订阅",
       "opencode": "OpenCode Console 订阅",
       "connect": "连接 {{provider}}"
     },
@@ -2832,6 +2840,14 @@
       "title": "Ollama Cloud",
       "description": "使用 Ollama Cloud API Key；不是本机 Ollama"
     },
+    "opendesign_subscription": {
+      "title": "OpenDesign 账号订阅",
+      "description": "导入本机 OpenDesign / Vela 登录，独立管理账号凭证"
+    },
+    "opendesign_api": {
+      "title": "OpenDesign Cloud API",
+      "description": "使用 Cloud API Key，支持 Chat、Responses 和 Messages"
+    },
     "muse_code": {
       "title": "Meta Muse Code 订阅",
       "description": "登录 Meta 获取订阅专用 Key；标准 API 接入，订阅计费待实测"
@@ -2891,6 +2907,15 @@
     "expand": "展开提醒：{{title}}"
   },
   "errors": {
+    "toolConfigStages": {
+      "read": "读取配置",
+      "parse": "解析配置",
+      "backup": "备份配置（尚未修改目标文件）",
+      "write": "写入临时配置",
+      "replace": "替换配置文件",
+      "verify": "校验已写入配置",
+      "session_sync": "同步 Codex 会话（配置已写入）"
+    },
     "traeFields": {
       "multimodal": "图片输入",
       "thinking_enable": "思考模式",
@@ -2988,6 +3013,7 @@
       "tool_config_start_failed": "无法启动程序。",
       "tool_config_start_precheck_failed": "启动前无法确认程序状态。",
       "tool_config_write_failed": "无法写入配置。",
+      "tool_config_file_failed": "{{stage}}失败（{{path}}）：{{detail}}。",
       "tool_config_trae_http_failed": "Trae 模型配置服务返回 HTTP {{status}}，配置未完成，请稍后重试。",
       "tool_config_trae_rejected": "Trae 模型配置服务拒绝了操作（错误码 {{vendor_code}}），配置未完成。",
       "tool_config_trae_verification_failed": "Trae 模型连接或高级配置未通过回读校验。未删除已有模型，请检查 Trae 中的相应模型后重新配置。",

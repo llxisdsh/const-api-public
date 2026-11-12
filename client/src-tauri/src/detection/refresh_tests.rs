@@ -113,10 +113,13 @@ async fn information_refresh_for_direct_http_drivers_never_requests_generation()
         ) {
             continue;
         }
-        // OpenCode Console uses an authenticated control-plane catalog and
-        // cannot consume this generic local API-key fixture. Its catalog and
-        // token-refresh paths are covered by the dedicated OpenCode tests.
-        if driver == SourceDriverId::OpencodeConsole {
+        // Managed HTTP subscriptions cannot consume the generic API-key
+        // fixture. Dedicated OpenCode/OpenDesign tests cover their credentials
+        // and read-only catalogs.
+        if matches!(
+            driver,
+            SourceDriverId::OpencodeConsole | SourceDriverId::OpenDesignSubscription
+        ) {
             continue;
         }
         for verified in [false, true] {

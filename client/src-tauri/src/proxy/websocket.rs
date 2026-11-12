@@ -1,8 +1,8 @@
 const RESPONSES_WEBSOCKET_FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
-const RESPONSES_WEBSOCKET_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+const RESPONSES_WEBSOCKET_MAX_MESSAGE_BYTES: usize = MODEL_MESSAGE_MAX_BYTES;
 const RESPONSES_WEBSOCKET_BETA: &str = "responses_websockets=2026-02-06";
 const DUPLEX_WEBSOCKET_FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
-const DUPLEX_WEBSOCKET_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+const DUPLEX_WEBSOCKET_MAX_MESSAGE_BYTES: usize = MODEL_MESSAGE_MAX_BYTES;
 const WEBSOCKET_UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const WEBSOCKET_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -2803,9 +2803,14 @@ pub(crate) async fn proxy_websocket_request(
     let raw_query = strip_local_auth_query(path, &raw_query, &headers, &config);
     let operation = route.operation;
     let websocket_path = path.to_string();
+    let message_limit = if operation == crate::surface::ApiOperation::ResponsesWebSocket {
+        RESPONSES_WEBSOCKET_MAX_MESSAGE_BYTES
+    } else {
+        DUPLEX_WEBSOCKET_MAX_MESSAGE_BYTES
+    };
     let websocket = websocket
-        .max_message_size(DUPLEX_WEBSOCKET_MAX_MESSAGE_BYTES)
-        .max_frame_size(DUPLEX_WEBSOCKET_MAX_MESSAGE_BYTES);
+        .max_message_size(message_limit)
+        .max_frame_size(message_limit);
     Ok(websocket
         .on_upgrade(move |socket| async move {
             if operation == crate::surface::ApiOperation::ResponsesWebSocket {
@@ -2888,7 +2893,18 @@ async fn run_responses_websocket_proxy(
         }
         first = tokio::time::timeout(
             RESPONSES_WEBSOCKET_FIRST_FRAME_TIMEOUT,
-            client_receiver.next(),
+            async {
+                loop {
+                    match client_receiver.next().await {
+                        // Tungstenite answers Ping when polled again. Control
+                        // frames are not response.create and do not reset the
+                        // first-message deadline.
+                        Some(Ok(message)) if message.is_ping() || message.is_pong() => continue,
+                        Some(Ok(message)) if message.is_close() => return None,
+                        message => return message,
+                    }
+                }
+            },
         ) => first,
         _ = crate::update_activity::wait_for_update_drain() => {
             let _ = client_sender
@@ -2898,7 +2914,11 @@ async fn run_responses_websocket_proxy(
         }
     } {
         Ok(Some(Ok(message))) => message,
-        Ok(Some(Err(_))) | Ok(None) => return,
+        Ok(Some(Err(error))) => {
+            report_responses_websocket_read_error(&mut client_sender, &error).await;
+            return;
+        }
+        Ok(None) => return,
         Err(_) => {
             let _ = send_responses_websocket_error(
                 &mut client_sender,
@@ -3255,16 +3275,20 @@ async fn run_responses_websocket_proxy(
                     }
                     break;
                 };
-                let Ok(client_message) = client_message else {
-                    if let (Some(request), Some(channel)) =
-                        (active_subscription_request.take(), channel.as_ref())
-                    {
-                        request.finalize(499, Some("request"), Some(&shared), channel);
+                let client_message = match client_message {
+                    Ok(message) => message,
+                    Err(error) => {
+                        report_responses_websocket_read_error(&mut client_sender, &error).await;
+                        if let (Some(request), Some(channel)) =
+                            (active_subscription_request.take(), channel.as_ref())
+                        {
+                            request.finalize(499, Some("request"), Some(&shared), channel);
+                        }
+                        if let Some(diagnostics) = upstream_diagnostics.as_mut() {
+                            diagnostics.set_close_reason("downstream_read_error");
+                        }
+                        break;
                     }
-                    if let Some(diagnostics) = upstream_diagnostics.as_mut() {
-                        diagnostics.set_close_reason("downstream_read_error");
-                    }
-                    break;
                 };
                 if client_message.is_text() || client_message.is_binary() {
                     if turn_active
@@ -5270,8 +5294,13 @@ async fn run_responses_websocket_http_bridge(
                 }
                 message = client_receiver.next() => message,
             };
-            let Some(Ok(message)) = message else {
-                return;
+            let message = match message {
+                Some(Ok(message)) => message,
+                Some(Err(error)) => {
+                    report_responses_websocket_read_error(&mut client_sender, &error).await;
+                    return;
+                }
+                None => return,
             };
             if message.is_ping() {
                 if client_sender
@@ -5496,7 +5525,11 @@ async fn forward_responses_websocket_bridge_response(
                     }
                     Some(Ok(message)) if message.is_pong() => continue,
                     Some(Ok(message)) if message.is_close() => return None,
-                    None | Some(Err(_)) => return None,
+                    Some(Err(error)) => {
+                        report_responses_websocket_read_error(client_sender, &error).await;
+                        return None;
+                    }
+                    None => return None,
                     Some(Ok(_)) if !capture.terminal => {
                         if send_responses_websocket_error(
                             client_sender,
@@ -5668,6 +5701,27 @@ async fn forward_responses_websocket_sse_frame(
         .send(warp::ws::Message::text(frame.data))
         .await
         .is_ok()
+}
+
+async fn report_responses_websocket_read_error(
+    sender: &mut futures_util::stream::SplitSink<warp::ws::WebSocket, warp::ws::Message>,
+    error: &warp::Error,
+) {
+    use std::error::Error;
+    // Warp wraps its own Tungstenite version. Match its typed capacity error,
+    // not the registry/fork transport or a substring in a network error.
+    let Some(warp_tungstenite::Error::Capacity(
+        warp_tungstenite::error::CapacityError::MessageTooLong { size, max_size },
+    )) = error.source().and_then(|source| source.downcast_ref::<warp_tungstenite::Error>()) else {
+        return;
+    };
+    let message = format!(
+        "Responses WebSocket message exceeds the receive limit ({size} > {max_size} bytes); reduce attachments or conversation size"
+    );
+    let _ = tokio::time::timeout(WEBSOCKET_CLOSE_TIMEOUT, async {
+        send_responses_websocket_status_error(sender, 413, "payload_too_large", &message).await?;
+        sender.send(warp::ws::Message::close_with(1009u16, "message too large")).await
+    }).await;
 }
 
 async fn send_responses_websocket_error(

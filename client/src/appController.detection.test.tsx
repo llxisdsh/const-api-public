@@ -445,6 +445,32 @@ describe("channel refresh and inference command boundaries", () => {
     expect(result.current.subscriptionWizardOpen).toBe(false);
   });
 
+  it.each(["opendesign_subscription", "opencode_console"] as const)(
+    "%s imports a new credential after an earlier prepared import failed", async (id) => {
+      const driver = sourceDriverById(id);
+      const prepared = ["first", "second"].map(name => sourceDriverInitialChannelV5(driver, {
+        id: name, name, credentialRef: `.pending/${name}.json`,
+      }));
+      const base = vi.mocked(invoke).getMockImplementation()!;
+      let imports = 0;
+      vi.mocked(invoke).mockImplementation(async (command, args) => {
+        if (command === "import_subscription_token_json") return prepared[imports++];
+        if (command === "finalize_subscription_import") throw new Error("fixture storage unavailable");
+        if (command === "discard_subscription_import") return true;
+        return base(command, args);
+      });
+      const { result } = renderHook(() => useAppController());
+      await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+      act(() => { result.current.addSubscriptionPreset(driver); });
+      await act(async () => { await result.current.importSubscriptionJson('{"access_token":"first"}'); });
+      await act(async () => { await result.current.importSubscriptionJson('{"access_token":"second"}'); });
+      expect(imports).toBe(2);
+      expect(invoke).toHaveBeenCalledWith("discard_subscription_import", { channel: prepared[0] });
+      expect(invoke).toHaveBeenLastCalledWith("finalize_subscription_import", { channel: prepared[1], createDuplicate: true });
+      expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "activate_supplier_channel")).toBe(false);
+    },
+  );
+
   it("on-add presets use a fresh channel id without duplicate discovery", async () => {
     const driver = sourceDriverById("ollama");
     const base = vi.mocked(invoke).getMockImplementation()!;

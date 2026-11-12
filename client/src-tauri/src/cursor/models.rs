@@ -23,6 +23,7 @@ fn variant(model: &str) -> Variant {
         "gemini-",
         "grok-",
         "cursor-grok-",
+        "deepseek-",
         "glm-",
         "kimi-",
         "muse-",
@@ -80,6 +81,11 @@ fn variant(model: &str) -> Variant {
         && matches!(family, "sonnet" | "opus" | "haiku" | "fable")
     {
         public = format!("claude-{family}-{}", version.replace('.', "-"));
+    }
+    // Cursor omits the version separator in this wire ID. Restore the dated
+    // model spelling, then let the active catalog decide its public identity.
+    if public == "deepseek-v41-flash-1017" {
+        public = "deepseek-v4.1-flash-1017".into();
     }
     public = crate::tool_model_metadata::model_identity(&public);
     Variant {
@@ -309,6 +315,19 @@ mod tests {
         serde_json::from_str(include_str!("model_catalog_fixture.json")).unwrap()
     }
 
+    fn deepseek_fixture() -> Vec<String> {
+        [
+            "deepseek-v41-flash-1017-high",
+            "deepseek-v41-flash-1017-low",
+            "deepseek-v41-flash-1017-max",
+            "deepseek-v41-flash-1017-medium",
+            "deepseek-v41-flash-1017-none",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+
     #[test]
     fn normalizes_catalog_names_without_collapsing_fast_or_unknown_products() {
         for (wire, public) in [
@@ -325,12 +344,196 @@ mod tests {
             ("new-vendor-high", "new-vendor-high"),
             ("gpt-5-mini", "gpt-5-mini"),
             ("kimi-k2.7-code", "kimi-k2.7-code"),
+            ("deepseek-v41-flash-1017-high", "deepseek-v4.1-flash"),
+            ("deepseek-v41-flash-1017", "deepseek-v4.1-flash"),
+            ("deepseek-v4.1-flash", "deepseek-v4.1-flash"),
+            ("deepseek-v41-flash-1020-high", "deepseek-v41-flash-1020"),
+            ("deepseek-v41-pro-1017-high", "deepseek-v41-pro-1017"),
+            (
+                "deepseek-r1-distill-qwen-32b",
+                "deepseek-r1-distill-qwen-32b",
+            ),
         ] {
             assert_eq!(public_id(wire), public);
         }
         for id in fixture() {
             assert_eq!(public_id(&public_id(&id)), public_id(&id), "{id}");
         }
+    }
+
+    #[test]
+    fn deepseek_variants_migrate_without_losing_wire_ids_or_changing_other_channels() {
+        let ids = deepseek_fixture();
+        let mut channel = crate::channel_from_supplier(
+            "cursor-deepseek".into(),
+            &crate::default_supplier_config(),
+        );
+        channel.models = ids.clone();
+        channel.public_model = ids[0].clone();
+        channel.upstream_model = ids[0].clone();
+        channel.v2 = crate::channel_v2_contract_for_source(SourceDriverId::OpenAiApi);
+        normalize_channel(&mut channel);
+        assert_eq!(channel.models, ids);
+        assert_eq!(channel.public_model, ids[0]);
+
+        channel.v2 = crate::channel_v2_contract_for_source(SourceDriverId::CursorSubscription);
+        // A saved catalog can contain only part of the source-ID evidence.
+        channel.capability_profiles = vec![ChannelCapabilityProfile {
+            model_pattern: ids[0].clone(),
+            catalog_metadata: true,
+            ..Default::default()
+        }];
+        normalize_channel(&mut channel);
+        assert_eq!(channel.models, ["deepseek-v4.1-flash"]);
+        assert_eq!(channel.public_model, "deepseek-v4.1-flash");
+        assert_eq!(channel.upstream_model, "deepseek-v4.1-flash");
+        assert_eq!(source_ids(&channel), ids);
+        assert!(
+            channel
+                .capability_profiles
+                .iter()
+                .all(|profile| profile.model_pattern == "deepseek-v4.1-flash")
+        );
+        let once = channel.clone();
+        normalize_channel(&mut channel);
+        assert_eq!(channel.capability_profiles, once.capability_profiles);
+        let stored = serde_json::to_value(crate::model::ChannelConfigV2::from(channel)).unwrap();
+        let restored: ChannelConfig =
+            serde_json::from_value::<crate::model::ChannelConfigV2>(stored)
+                .unwrap()
+                .into();
+        assert_eq!(source_ids(&restored), ids);
+        assert_eq!(restored.models, once.models);
+        for model in ids
+            .iter()
+            .map(String::as_str)
+            .chain(["deepseek-v4.1-flash"])
+        {
+            assert!(crate::proxy::channel_supports_model(&restored, model));
+        }
+        let supplier = crate::supplier_from_channel_unfiltered(&restored);
+        let registration = crate::supplier::supplier_register_payload(
+            &crate::supplier::SupplierAgentConfig::single(supplier.clone()),
+            &supplier,
+        );
+        assert_eq!(
+            registration["models"],
+            serde_json::json!(["deepseek-v4.1-flash"])
+        );
+    }
+
+    #[test]
+    fn deepseek_reasoning_selects_original_wire_ids_across_protocols() {
+        use crate::{
+            cursor::{request, wire as w},
+            protocol::kind::ProtocolKind,
+        };
+        let ids = deepseek_fixture();
+        for protocol in [
+            ProtocolKind::OpenAiChat,
+            ProtocolKind::OpenAiResponses,
+            ProtocolKind::AnthropicMessages,
+            ProtocolKind::GeminiNative,
+        ] {
+            for effort in [
+                None,
+                Some("none"),
+                Some("low"),
+                Some("medium"),
+                Some("high"),
+                Some("max"),
+            ] {
+                let mut body = match protocol {
+                    ProtocolKind::OpenAiChat => {
+                        let mut body =
+                            serde_json::json!({"messages":[{"role":"user","content":"hi"}]});
+                        if let Some(effort) = effort {
+                            body["reasoning_effort"] = effort.into();
+                        }
+                        body
+                    }
+                    ProtocolKind::OpenAiResponses => {
+                        let mut body = serde_json::json!({"input":"hi"});
+                        if let Some(effort) = effort {
+                            body["reasoning"] = serde_json::json!({"effort":effort});
+                        }
+                        body
+                    }
+                    ProtocolKind::AnthropicMessages => {
+                        let mut body = serde_json::json!({"messages":[{"role":"user","content":"hi"}],"max_tokens":32});
+                        match effort {
+                            Some("none") => {
+                                body["thinking"] = serde_json::json!({"type":"disabled"})
+                            }
+                            Some(effort) => {
+                                body["thinking"] = serde_json::json!({"type":"adaptive"});
+                                body["output_config"] = serde_json::json!({"effort":effort});
+                            }
+                            None => {}
+                        }
+                        body
+                    }
+                    ProtocolKind::GeminiNative => {
+                        let mut body = serde_json::json!({"contents":[{"role":"user","parts":[{"text":"hi"}]}]});
+                        let thinking = match effort {
+                            Some("max") => continue, // Gemini has no MAX thinking level.
+                            Some("none") => Some(serde_json::json!({"thinkingBudget":0})),
+                            Some(effort) => Some(
+                                serde_json::json!({"thinkingLevel":effort.to_ascii_uppercase()}),
+                            ),
+                            None => None,
+                        };
+                        if let Some(thinking) = thinking {
+                            body["generationConfig"] =
+                                serde_json::json!({"thinkingConfig":thinking});
+                        }
+                        body
+                    }
+                };
+                body["model"] = serde_json::json!("deepseek-v4.1-flash");
+                let prepared = request::prepare_with_models(
+                    protocol,
+                    &body,
+                    "deepseek-v4.1-flash",
+                    "caller",
+                    &ids,
+                )
+                .unwrap();
+                assert_eq!(prepared.model, "deepseek-v4.1-flash");
+                assert!(!prepared.fast);
+                let run =
+                    w::fields(w::data(&w::fields(&prepared.run).unwrap(), 1).unwrap()).unwrap();
+                let model = w::fields(w::data(&run, 9).unwrap()).unwrap();
+                let expected = format!("deepseek-v41-flash-1017-{}", effort.unwrap_or("medium"));
+                assert_eq!(w::string(&model, 1).unwrap(), expected, "{protocol:?}");
+                assert!(w::data(&model, 3).is_none());
+                let details = w::fields(w::data(&run, 3).unwrap()).unwrap();
+                for field in [1, 3, 4] {
+                    assert_eq!(w::string(&details, field).unwrap(), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn deepseek_selection_respects_available_variants_and_explicit_wire_ids() {
+        let ids = vec![
+            "deepseek-v41-flash-1017-high".to_string(),
+            "deepseek-v41-flash-1017-max".to_string(),
+        ];
+        let disabled = ReasoningConfig {
+            effort: Some(ReasoningEffort::None),
+            ..Default::default()
+        };
+        let low = ReasoningConfig {
+            effort: Some(ReasoningEffort::Low),
+            ..Default::default()
+        };
+        for model in ["deepseek-v4.1-flash", "deepseek-v4.1-flash-1017"] {
+            assert!(resolve(&ids, model, &disabled, false).is_err());
+            assert_eq!(resolve(&ids, model, &low, false).unwrap(), ids[0]);
+        }
+        assert_eq!(resolve(&ids, &ids[1], &low, false).unwrap(), ids[1]);
     }
 
     #[test]

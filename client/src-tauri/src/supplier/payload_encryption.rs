@@ -284,6 +284,7 @@ struct SupplierTransportCodec {
     activity: SupplierConnectionActivity,
     frame_compression_enabled: AtomicBool,
     message_chunks_enabled: AtomicBool,
+    large_messages_enabled: AtomicBool,
     message_assembler: StdMutex<SupplierMessageAssembler>,
     payload_encryption: StdMutex<SupplierPayloadEncryption>,
 }
@@ -302,6 +303,7 @@ impl SupplierTransportCodec {
             activity: SupplierConnectionActivity::default(),
             frame_compression_enabled: AtomicBool::new(false),
             message_chunks_enabled: AtomicBool::new(false),
+            large_messages_enabled: AtomicBool::new(false),
             message_assembler: StdMutex::new(SupplierMessageAssembler::default()),
             payload_encryption: StdMutex::new(SupplierPayloadEncryption { offer, state: None }),
         }
@@ -440,9 +442,10 @@ impl SupplierTransportCodec {
 
     fn prepare_message(&self, mut msg: SupplierMessage) -> Result<SupplierMessageParts> {
         self.inject_payload_encryption_offer(&mut msg);
-        let mut parts = SupplierMessageParts::new(
-            serde_json::to_vec(&msg)?,
+        let mut parts = SupplierMessageParts::serialize_with_limit(
+            &msg,
             self.message_chunks_enabled.load(Ordering::Relaxed),
+            self.message_limit(),
         )?;
         parts._output_credit = msg.output_credit;
         Ok(parts)
@@ -482,6 +485,11 @@ impl SupplierTransportCodec {
             .any(|feature| feature == SUPPLIER_MESSAGE_CHUNKS_FEATURE)
         {
             self.message_chunks_enabled.store(true, Ordering::Relaxed);
+            if supplier_transport_string_array(&message.payload, "transport_features")
+                .iter().any(|feature| feature == SUPPLIER_LARGE_MESSAGES_FEATURE)
+            {
+                self.large_messages_enabled.store(true, Ordering::Relaxed);
+            }
         }
         if supplier_payload_accepts_frame_compression(&message.payload) {
             self.frame_compression_enabled
@@ -491,6 +499,16 @@ impl SupplierTransportCodec {
         // never a reason to take a working supplier connection offline.
         let _ = self.accept_payload_encryption_ack(&message);
         Ok(serde_json::to_string(&message)?)
+    }
+
+    fn message_limit(&self) -> usize {
+        if self.message_chunks_enabled.load(Ordering::Relaxed)
+            && self.large_messages_enabled.load(Ordering::Relaxed)
+        {
+            SUPPLIER_LARGE_MESSAGE_BYTES
+        } else {
+            SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN
+        }
     }
 
     fn decode_binary_frame(&self, frame: &[u8]) -> Result<SupplierMessage> {
@@ -542,7 +560,7 @@ impl SupplierTransportCodec {
             .message_assembler
             .lock()
             .map_err(|_| anyhow!("supplier message assembler is poisoned"))?
-            .accept(message, self.message_chunks_enabled.load(Ordering::Relaxed))?;
+            .accept_with_limit(message, self.message_chunks_enabled.load(Ordering::Relaxed), self.message_limit())?;
         self.activity.received(business);
         message
             .map(|message| self.normalize_message(message))
@@ -646,7 +664,7 @@ impl SupplierTransportCodec {
                 .message_assembler
                 .lock()
                 .map_err(|_| anyhow!("supplier message assembler is poisoned"))?
-                .accept(message, self.message_chunks_enabled.load(Ordering::Relaxed))?;
+                .accept_with_limit(message, self.message_chunks_enabled.load(Ordering::Relaxed), self.message_limit())?;
             self.activity.received(business);
             if let Some(message) = message {
                 return Ok(Some(self.normalize_message(message)?));

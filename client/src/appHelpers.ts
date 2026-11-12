@@ -1322,6 +1322,7 @@ export function subscriptionProviderLabel(provider: SubscriptionProvider) {
   if (provider === "kiro") return tr("labels.subscription.kiro");
   if (provider === "cursor") return tr("labels.subscription.cursor");
   if (provider === "opencode") return tr("labels.subscription.opencode");
+  if (provider === "opendesign") return tr("labels.subscription.opendesign");
   return tr("labels.subscription.claude");
 }
 

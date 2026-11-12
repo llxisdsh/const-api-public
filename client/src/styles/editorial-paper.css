@@ -401,7 +401,7 @@ th {
   border-top: 1px solid var(--editorial-rule-strong);
   border-bottom: 1px solid var(--art-rule);
   border-radius: 0 !important;
-  overflow: visible;
+  overflow: auto;
 }
 
 .supplier-channel-header {
@@ -425,7 +425,7 @@ th {
   border-bottom: 0;
 }
 
-.supplier-channel-table .supplier-channel-row:hover {
+.supplier-channel-table .supplier-channel-row:where(:hover) {
   background: color-mix(in srgb, var(--text) 2.5%, transparent);
 }
 

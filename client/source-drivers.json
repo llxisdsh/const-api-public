@@ -27,6 +27,28 @@
         "special_operations": [
           {
             "surface": "open_ai",
+            "operation": "images_generations",
+            "capability": {
+              "modes": ["buffered"],
+              "conversion": { "request": "c0", "response": "c0", "stream": "c3", "error": "c0" },
+              "usage_confidence": "reported_or_unknown",
+              "evidence": "component_verified",
+              "default_enabled": true
+            }
+          },
+          {
+            "surface": "open_ai",
+            "operation": "images_edits",
+            "capability": {
+              "modes": ["buffered"],
+              "conversion": { "request": "c1", "response": "c0", "stream": "c3", "error": "c0" },
+              "usage_confidence": "reported_or_unknown",
+              "evidence": "component_verified",
+              "default_enabled": true
+            }
+          },
+          {
+            "surface": "open_ai",
             "operation": "responses_compact",
             "capability": {
               "modes": ["buffered"],
@@ -195,7 +217,116 @@
           "evidence": "component_verified",
           "default_enabled": true
         },
-        "special_operations": []
+        "special_operations": [
+          {
+            "surface": "open_ai",
+            "operation": "images_generations",
+            "capability": {
+              "modes": [
+                "buffered"
+              ],
+              "conversion": {
+                "request": "c0",
+                "response": "c0",
+                "stream": "c3",
+                "error": "c0"
+              },
+              "usage_confidence": "reported_or_unknown",
+              "evidence": "component_verified",
+              "default_enabled": true
+            }
+          },
+          {
+            "surface": "open_ai",
+            "operation": "images_edits",
+            "capability": {
+              "modes": [
+                "buffered"
+              ],
+              "conversion": {
+                "request": "c0",
+                "response": "c0",
+                "stream": "c3",
+                "error": "c0"
+              },
+              "usage_confidence": "reported_or_unknown",
+              "evidence": "component_verified",
+              "default_enabled": true
+            }
+          },
+          {
+            "surface": "open_ai",
+            "operation": "videos_create",
+            "capability": {
+              "modes": [
+                "buffered"
+              ],
+              "conversion": {
+                "request": "c0",
+                "response": "c0",
+                "stream": "c3",
+                "error": "c0"
+              },
+              "usage_confidence": "reported_or_unknown",
+              "evidence": "component_verified",
+              "default_enabled": true
+            }
+          },
+          {
+            "surface": "open_ai",
+            "operation": "videos_get",
+            "capability": {
+              "modes": [
+                "buffered"
+              ],
+              "conversion": {
+                "request": "c0",
+                "response": "c0",
+                "stream": "c3",
+                "error": "c0"
+              },
+              "usage_confidence": "reported_or_unknown",
+              "evidence": "component_verified",
+              "default_enabled": true
+            }
+          },
+          {
+            "surface": "open_ai",
+            "operation": "videos_edit",
+            "capability": {
+              "modes": [
+                "buffered"
+              ],
+              "conversion": {
+                "request": "c0",
+                "response": "c0",
+                "stream": "c3",
+                "error": "c0"
+              },
+              "usage_confidence": "reported_or_unknown",
+              "evidence": "component_verified",
+              "default_enabled": true
+            }
+          },
+          {
+            "surface": "open_ai",
+            "operation": "videos_extend",
+            "capability": {
+              "modes": [
+                "buffered"
+              ],
+              "conversion": {
+                "request": "c0",
+                "response": "c0",
+                "stream": "c3",
+                "error": "c0"
+              },
+              "usage_confidence": "reported_or_unknown",
+              "evidence": "component_verified",
+              "default_enabled": true
+            }
+          }
+        ]
       },
       "default_target": { "surface": "open_ai", "protocol": "openai_responses" },
       "discovery": { "strategy": "subscription_catalog", "catalog": true, "quota": true, "metadata": true },
@@ -1108,6 +1239,140 @@
       "surfaces": [{"surface":"open_ai","base_url":"https://api.meta.ai/v1","endpoint_profile":"openai_compatible","auth_scheme":"bearer","protocols":["openai_responses","openai_chat"],"preferred_protocol":"openai_responses"},{"surface":"anthropic","base_url":"https://api.meta.ai","endpoint_profile":"anthropic_compatible","auth_scheme":"bearer","protocols":["anthropic_messages"],"preferred_protocol":"anthropic_messages"}],
       "creation": {"trigger":"on_save","basic_verification":"surface_preferred","advanced_conversational":"driver_preferred_only"},
       "periodic": {"catalog":true,"quota":false,"metadata":true,"conversational_probe":false}
+    },
+    {
+      "id": "opendesign_subscription",
+      "default_use_system_proxy": true,
+      "fixed_connection": true,
+      "category": "subscription",
+      "order": 60,
+      "title": "OpenDesign 账号订阅",
+      "description": "导入本机 OpenDesign / Vela 登录，独立管理账号凭证",
+      "icon_key": "opendesign",
+      "action_label": "连接",
+      "homepage_url": "https://open-design.ai/help/cloud-api/",
+      "advanced": false,
+      "execution_kind": "http_surface",
+      "executor": {
+        "type": "http_surface"
+      },
+      "default_target": {
+        "surface": "open_ai",
+        "protocol": "openai_chat"
+      },
+      "discovery": {
+        "strategy": "openai_models",
+        "catalog": true,
+        "quota": true,
+        "metadata": true
+      },
+      "kind": "subscription_adapter",
+      "protocols": [
+        {
+          "protocol": "openai_chat",
+          "preferred": true
+        }
+      ],
+      "surfaces": [
+        {
+          "surface": "open_ai",
+          "base_url": "https://amr-link.open-design.ai/v1",
+          "endpoint_profile": "openai_compatible",
+          "auth_scheme": "bearer",
+          "protocols": [
+            "openai_chat"
+          ],
+          "preferred_protocol": "openai_chat"
+        }
+      ],
+      "creation": {
+        "trigger": "on_save",
+        "basic_verification": "surface_preferred",
+        "advanced_conversational": "driver_preferred_only"
+      },
+      "periodic": {
+        "catalog": true,
+        "quota": true,
+        "metadata": true,
+        "conversational_probe": false
+      },
+      "subscription_provider": "opendesign"
+    },
+    {
+      "id": "opendesign_api",
+      "default_use_system_proxy": true,
+      "fixed_connection": true,
+      "category": "compatible_gateway",
+      "order": 23,
+      "title": "OpenDesign Cloud API",
+      "description": "使用 Cloud API Key，支持 Chat、Responses 和 Messages",
+      "icon_key": "opendesign",
+      "action_label": "添加",
+      "homepage_url": "https://open-design.ai/help/cloud-api/",
+      "advanced": false,
+      "execution_kind": "http_surface",
+      "executor": {
+        "type": "http_surface"
+      },
+      "default_target": {
+        "surface": "open_ai",
+        "protocol": "openai_chat"
+      },
+      "discovery": {
+        "strategy": "openai_models",
+        "catalog": true,
+        "quota": false,
+        "metadata": true
+      },
+      "kind": "openai_compatible",
+      "protocols": [
+        {
+          "protocol": "openai_chat",
+          "preferred": true
+        },
+        {
+          "protocol": "openai_responses",
+          "preferred": false
+        },
+        {
+          "protocol": "anthropic_messages",
+          "preferred": false
+        }
+      ],
+      "surfaces": [
+        {
+          "surface": "open_ai",
+          "base_url": "https://amr-link.open-design.ai/v1",
+          "endpoint_profile": "openai_compatible",
+          "auth_scheme": "bearer",
+          "protocols": [
+            "openai_chat",
+            "openai_responses"
+          ],
+          "preferred_protocol": "openai_chat"
+        },
+        {
+          "surface": "anthropic",
+          "base_url": "https://amr-link.open-design.ai",
+          "endpoint_profile": "anthropic_compatible",
+          "auth_scheme": "bearer",
+          "protocols": [
+            "anthropic_messages"
+          ],
+          "preferred_protocol": "anthropic_messages"
+        }
+      ],
+      "creation": {
+        "trigger": "on_save",
+        "basic_verification": "surface_preferred",
+        "advanced_conversational": "driver_preferred_only"
+      },
+      "periodic": {
+        "catalog": true,
+        "quota": false,
+        "metadata": true,
+        "conversational_probe": false
+      }
     },
     {
       "id": "abacus_routellm",

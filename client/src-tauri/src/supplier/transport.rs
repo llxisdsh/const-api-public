@@ -1372,7 +1372,7 @@ fn supplier_auth_message(config: &SupplierAgentConfig, kind: &str, token: &str) 
             "client_id": config.client_id,
             // Negotiate on the small authentication exchange, before the first
             // potentially multi-megabyte registration (also after reconnect).
-            "transport_features": [SUPPLIER_TRANSPORT_FRAME_COMPRESSION_FEATURE, SUPPLIER_MESSAGE_CHUNKS_FEATURE],
+            "transport_features": [SUPPLIER_TRANSPORT_FRAME_COMPRESSION_FEATURE, SUPPLIER_MESSAGE_CHUNKS_FEATURE, SUPPLIER_LARGE_MESSAGES_FEATURE],
         })
         .as_object()
         .cloned()
@@ -2114,6 +2114,7 @@ fn supplier_node_route_status_from_payload(
     payload: &serde_json::Map<String, serde_json::Value>,
 ) -> SupplierNodeRouteStatus {
     SupplierNodeRouteStatus {
+        recovery_token: payload_string(payload, "recovery_token"),
         node_id: payload_string(payload, "node_id"),
         channel_id: payload_string(payload, "channel_id"),
         supplier_unit_id: payload_string(payload, "supplier_unit_id"),

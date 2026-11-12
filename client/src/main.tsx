@@ -35,8 +35,6 @@ import {
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useTranslation } from "react-i18next";
-import titlebarLogo from "../src-tauri/icons/20x20.png";
-import titlebarLogo2x from "../src-tauri/icons/40x40.png";
 import { AppErrorBoundary, RendererFailure } from "./AppErrorBoundary";
 import { DialogBackdrop } from "./DialogBackdrop";
 import { AccessPageHeader } from "./components/AccessPageHeader";
@@ -60,6 +58,7 @@ import { SupplierModelPoolSummary } from "./components/SupplierModelPoolSummary"
 import { resolveSupplierModelPoolDetails } from "./supplierModelPool";
 import { SupplierRouteNotice } from "./components/SupplierRouteNotice";
 import { ChannelPriorityTable } from "./components/ChannelPriorityTable";
+import { OpenDesignImport } from "./components/OpenDesignImport";
 import { DeviceCodeAuthorization } from "./components/DeviceCodeAuthorization";
 import { PageFindBar } from "./components/PageFindBar";
 import {
@@ -1970,7 +1969,7 @@ function ProductApp({
                       />
                     </div>
 
-                    {!["cursor", "opencode"].includes(subscriptionWizardProvider) && <div className="wizard-steps">
+                    {!["cursor", "opencode", "opendesign"].includes(subscriptionWizardProvider) && <div className="wizard-steps">
                       <div className={`wizard-step ${subscriptionOAuthSession ? "done" : "active"}`}>
                         <div className="wizard-step-index">1</div>
                         <div>
@@ -2003,7 +2002,11 @@ function ProductApp({
                         />
                         <span className="field-hint">{t("supplier.accountTypeHint")}</span>
                       </label>
-                      {["cursor", "opencode"].includes(subscriptionWizardProvider) ? <DeviceCodeAuthorization
+                      {subscriptionWizardProvider === "opendesign" ? <OpenDesignImport
+                        useSystemProxy={subscriptionUseSystemProxy}
+                        disabled={subscriptionWizardBusy}
+                        onImported={(token) => { setSubscriptionTokenJson(token); void importSubscriptionJson(token); }}
+                      /> : ["cursor", "opencode"].includes(subscriptionWizardProvider) ? <DeviceCodeAuthorization
                         useSystemProxy={subscriptionUseSystemProxy}
                         provider={subscriptionWizardProvider === "cursor" ? "cursor" : "opencode"}
                         disabled={subscriptionWizardBusy}
@@ -2033,9 +2036,10 @@ function ProductApp({
                         <span id="subscription-proxy-hint" className="field-hint">{t("subscriptionImport.proxyHint")}</span>
                       </label>
 
-                      {["cursor", "opencode"].includes(subscriptionWizardProvider) && subscriptionTokenJson && <div className="wizard-actions grid-wide">
-                        <button className="primary" onClick={() => void importSubscriptionJson()} disabled={subscriptionWizardBusy}>
-                          <Save size={16} />{t("supplier.saveImportJson")}
+                      {["cursor", "opencode", "opendesign"].includes(subscriptionWizardProvider) && subscriptionTokenJson && <div className="wizard-actions grid-wide">
+                        <button className="primary" onClick={() => void importSubscriptionJson()} disabled={subscriptionWizardBusy} aria-busy={subscriptionWizardBusy}>
+                          {subscriptionWizardBusy ? <LoaderCircle className="spin-icon" size={16} aria-hidden="true" /> : <Save size={16} />}
+                          {t(subscriptionWizardBusy ? "supplier.checkingAndStarting" : "supplier.saveImportJson")}
                         </button>
                       </div>}
 
@@ -2110,8 +2114,9 @@ function ProductApp({
                             <span className="field-hint">{t("supplier.manualImportHint")}</span>
                           </label>
                           <div className="wizard-actions grid-wide">
-                            <button className="primary" onClick={() => void importSubscriptionJson()} disabled={subscriptionWizardBusy || !subscriptionTokenJson.trim()}>
-                              <Save size={16} />{t("supplier.saveImportJson")}
+                            <button className="primary" onClick={() => void importSubscriptionJson()} disabled={subscriptionWizardBusy || !subscriptionTokenJson.trim()} aria-busy={subscriptionWizardBusy}>
+                              {subscriptionWizardBusy ? <LoaderCircle className="spin-icon" size={16} aria-hidden="true" /> : <Save size={16} />}
+                              {t(subscriptionWizardBusy ? "supplier.checkingAndStarting" : "supplier.saveImportJson")}
                             </button>
                           </div>
                         </>
@@ -2753,6 +2758,10 @@ function ProductApp({
                                       ? "Kiro"
                                     : selectedChannel.subscription.platform === "cursor"
                                       ? "Cursor"
+                                    : selectedChannel.subscription.platform === "opencode"
+                                      ? "OpenCode"
+                                    : selectedChannel.subscription.platform === "opendesign"
+                                      ? "OpenDesign"
                                     : selectedChannel.subscription.platform === "antigravity"
                                       ? "Antigravity"
                                       : selectedChannel.subscription.platform === "gemini"
@@ -3692,18 +3701,8 @@ function DesktopWindowFrame({
       <div
         className="native-titlebar-surface"
         data-tauri-drag-region
+        aria-label={applicationDisplayName}
       >
-        <div className="native-titlebar-brand" data-tauri-drag-region aria-label={applicationDisplayName}>
-          <img
-            src={titlebarLogo}
-            srcSet={`${titlebarLogo} 1x, ${titlebarLogo2x} 2x`}
-            alt=""
-            aria-hidden="true"
-            draggable={false}
-            data-tauri-drag-region
-          />
-          <strong data-tauri-drag-region>{applicationDisplayName}</strong>
-        </div>
         <div className="native-window-controls">
           <button
             type="button"

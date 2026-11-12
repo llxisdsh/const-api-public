@@ -916,6 +916,137 @@
     }
 
     #[tokio::test]
+    async fn responses_websocket_http_bridge_requires_pre_execution_confirmation() {
+        use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message as WsMessage};
+
+        for (safe, output_started, error_code) in [
+            (true, false, "websocket_unavailable"),
+            (false, false, "first_frame_timeout"),
+            (true, true, "websocket_unavailable"),
+        ] {
+            let requests = Arc::new(StdMutex::new(Vec::<serde_json::Value>::new()));
+            let captured = requests.clone();
+            let http = warp::path!("v1" / "responses").and(warp::post())
+                .and(warp::header::optional::<String>("content-encoding"))
+                .and(warp::body::bytes())
+                .map(move |encoding: Option<String>, body: bytes::Bytes| {
+                    let raw = if encoding.as_deref() == Some("zstd") {
+                        zstd::stream::decode_all(std::io::Cursor::new(body)).unwrap()
+                    } else { body.to_vec() };
+                    let body: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+                    captured.lock().unwrap().push(body);
+                    warp::reply::with_header(
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-bridge\",\"status\":\"completed\",\"output\":[]}}\n\n",
+                        "content-type", "text/event-stream",
+                    )
+                });
+            let (http_address, server) = crate::bind_ephemeral!(http, ([127, 0, 0, 1], 0));
+            let http_task = tokio::spawn(server);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let ws_address = listener.local_addr().unwrap();
+            let (finish, finished) = tokio::sync::oneshot::channel();
+            let platform_task = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let auth: SupplierMessage = serde_json::from_str(
+                    &socket.next().await.unwrap().unwrap().into_text().unwrap(),
+                ).unwrap();
+                socket.send(WsMessage::Text(serde_json::json!({
+                    "id":auth.id,"type":"authenticate_ack","payload":{
+                        "ok":true,"transport_features":["platform_duplex_v1","platform_duplex_resume_v1"]
+                    }
+                }).to_string().into())).await.unwrap();
+                let open: SupplierMessage = serde_json::from_str(
+                    &socket.next().await.unwrap().unwrap().into_text().unwrap(),
+                ).unwrap();
+                socket.send(WsMessage::Text(serde_json::json!({
+                    "id":open.id,"type":"platform_duplex_opened","payload":{"ok":true}
+                }).to_string().into())).await.unwrap();
+                let first: SupplierMessage = serde_json::from_str(
+                    &socket.next().await.unwrap().unwrap().into_text().unwrap(),
+                ).unwrap();
+                assert_eq!(first.kind, "platform_duplex_client_frame");
+                // The proxy must distinguish a positive pre-execution guarantee
+                // from a timeout or an error after the response has started.
+                if output_started {
+                    socket.send(WsMessage::Text(serde_json::json!({
+                        "id":open.id,"type":"platform_duplex_server_frame","payload":{
+                            "frame_type":"text","_const_platform_seq":1,
+                            "_const_duplex_turn_id":first.payload["_const_duplex_turn_id"],
+                            "_const_duplex_turn_seq":1,"data":r#"{"type":"response.created"}"#
+                        }
+                    }).to_string().into())).await.unwrap();
+                }
+                socket.send(WsMessage::Text(serde_json::json!({
+                    "id":open.id,"type":"platform_duplex_server_frame","payload":{
+                        "frame_type":"text","_const_platform_seq":if output_started {2} else {1},
+                        "turn_terminal":true,"status":408,
+                        "data":serde_json::json!({"type":"error","status":408,
+                            "safe_to_retry_http_bridge":safe,
+                            "error":{"code":error_code,"message":"simulated platform failure"}
+                        }).to_string()
+                    }
+                }).to_string().into())).await.unwrap();
+                let _ = finished.await;
+            });
+            let mut config = default_config();
+            config.api_key = "sk-local-first-frame".into();
+            config.account_device_api_key = "sk-device-test".into();
+            config.channels.clear();
+            config.endpoints = vec![Endpoint {
+                server_id: String::new(), name: "first-frame-probe".into(), enabled: true,
+                base_url: format!("http://{http_address}"),
+                supplier_ws_url: format!("ws://{ws_address}/supplier/ws"), supplier_quic_url: String::new(),
+            }];
+            let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+            *shared.platform_access_token.lock().unwrap() = "test-access".into();
+            let (address, server) = crate::bind_ephemeral!(crate::proxy_routes(shared), ([127, 0, 0, 1], 0));
+            let proxy_task = tokio::spawn(server);
+            let mut request = format!("ws://{address}/v1/responses").into_client_request().unwrap();
+            request.headers_mut().insert("authorization", "Bearer sk-local-first-frame".parse().unwrap());
+            let (mut client, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+            let create = serde_json::json!({
+                "type":"response.create","model":"platform-model","stream":true,"store":false,
+                "instructions":"Review the code and preserve the conversation.",
+                "reasoning":{"effort":"high"},"future":{"keep":true},
+                "tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}],
+                "input":[
+                    {"role":"user","content":"long coding context\n".repeat(20000)},
+                    {"type":"compaction","encrypted_content":"opaque-compacted-context"},
+                    {"type":"function_call","call_id":"call-1","name":"read_file","arguments":"{}"},
+                    {"type":"function_call_output","call_id":"call-1","output":"source code"}
+                ]
+            });
+            client.send(WsMessage::Text(create.to_string().into())).await.unwrap();
+            let event = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let text = client.next().await.unwrap().unwrap().into_text().unwrap();
+                    let event: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    if event["type"] != "response.created" { break event; }
+                }
+            }).await.expect("first-frame error must not enter another WS retry loop");
+            {
+                let requests = requests.lock().unwrap();
+                if safe && !output_started {
+                    assert_eq!(event["type"], "response.completed", "{event}");
+                    assert_eq!(requests.len(), 1, "exactly one HTTP bridge submission");
+                    for field in ["input", "tools", "instructions", "reasoning", "future"] {
+                        assert!(requests[0][field] == create[field], "lost {field}");
+                    }
+                } else {
+                    assert_eq!(event["error"]["code"], error_code);
+                    assert!(requests.is_empty(), "ambiguous or already-started requests must not be replayed");
+                }
+            }
+            let _ = client.close(None).await;
+            let _ = finish.send(());
+            platform_task.await.unwrap();
+            proxy_task.abort();
+            http_task.abort();
+        }
+    }
+
+    #[tokio::test]
     async fn responses_websocket_platform_duplex_keeps_custom_tool_output_on_one_session() {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         use tokio_tungstenite::tungstenite::Message as WsMessage;

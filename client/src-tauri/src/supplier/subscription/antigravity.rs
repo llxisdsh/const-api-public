@@ -580,10 +580,9 @@ pub(crate) async fn forward_antigravity_subscription_stream_request_with_capacit
         if saw_meaningful_event {
             timing_sse_decoder = None;
         }
-        upstream_usage.push(&chunk);
         let text = upstream_utf8.push(&chunk)?;
         terminal_raw.push_str(&text);
-        let native = antigravity.push(&text);
+        let native = antigravity.push(&text, &mut |event| upstream_usage.observe_json(event));
         let converted = converter.push(native.as_bytes());
         let conversion_failed = converter.failure().is_some();
         if conversion_failed && !started {
@@ -613,7 +612,7 @@ pub(crate) async fn forward_antigravity_subscription_stream_request_with_capacit
     }
     stream_debug.body_read_ms = elapsed_millis_u64(body_read_started);
     terminal_raw.push_str(&upstream_utf8.finish()?);
-    let native_tail = antigravity.finish();
+    let native_tail = antigravity.finish(&mut |event| upstream_usage.observe_json(event));
     let mut converted = converter.push(native_tail.as_bytes()).to_vec();
     converted.extend_from_slice(&converter.finish());
     let conversion_failed = converter.failure().is_some();

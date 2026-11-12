@@ -13,6 +13,7 @@ pub(crate) fn has_quota(driver: SourceDriverId) -> bool {
             | SourceDriverId::GlmCodingPlan
             | SourceDriverId::MinimaxTokenPlan
             | SourceDriverId::CopilotSubscription
+            | SourceDriverId::OpenDesignSubscription
     )
 }
 
@@ -103,6 +104,9 @@ pub(crate) async fn fetch_quota(
 ) -> Result<Vec<QuotaWindow>> {
     if channel.source_driver() == SourceDriverId::CopilotSubscription {
         return crate::copilot::quota(channel).await;
+    }
+    if channel.source_driver() == SourceDriverId::OpenDesignSubscription {
+        return crate::opendesign::quota(channel).await;
     }
     validate_key(channel)?;
     let url = quota_url(channel.source_driver()).expect("quota driver has a fixed endpoint");

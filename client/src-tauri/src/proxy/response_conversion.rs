@@ -238,6 +238,9 @@ pub(crate) fn improvement_faults_from_stream_notices(
         .collect()
 }
 
+// Tests without tool remapping use these convenience wrappers. Runtime callers
+// retain the request's ToolWireMap through the *_with_tools entry points.
+#[cfg(test)]
 pub(crate) fn response_body_from_target_as_inbound(
     raw: &str,
     inbound_protocol: &str,
@@ -253,6 +256,7 @@ pub(crate) fn response_body_from_target_as_inbound(
     .body)
 }
 
+#[cfg(test)]
 pub(crate) fn response_body_from_target_as_inbound_with_report(
     raw: &str,
     inbound_protocol: &str,
@@ -299,6 +303,7 @@ pub(crate) fn response_body_from_target_as_inbound_with_report_with_tools(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn sse_body_from_target_as_inbound(
     raw: &str,
     inbound_protocol: &str,
@@ -382,6 +387,7 @@ pub(crate) fn sse_body_from_target_as_inbound_with_report_with_tools(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn sse_body_from_target_body_as_inbound(
     raw: &str,
     inbound_protocol: &str,
@@ -397,6 +403,7 @@ pub(crate) fn sse_body_from_target_body_as_inbound(
     .body)
 }
 
+#[cfg(test)]
 pub(crate) fn sse_body_from_target_body_as_inbound_with_report(
     raw: &str,
     inbound_protocol: &str,
@@ -477,13 +484,14 @@ pub(crate) fn canonical_stream_events_from_target_sse_with_report(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn sse_from_canonical_stream_events(
     events: &[crate::protocol::ir::CanonicalStreamEvent],
     inbound_protocol: &str,
     model: &str,
 ) -> Result<String> {
     let inbound = crate::protocol::kind::ProtocolKind::parse(inbound_protocol)?;
-    render_events(events, inbound, model)
+    render_events_with_source(events, None, inbound, model)
 }
 
 pub(crate) fn sse_from_canonical_stream_events_with_source(
@@ -548,14 +556,6 @@ fn canonical_response_from_target_sse_with_notices(
         accumulator.push(event)?;
     }
     Ok((accumulator.finish()?, notices))
-}
-
-fn render_events(
-    events: &[crate::protocol::ir::CanonicalStreamEvent],
-    protocol: crate::protocol::kind::ProtocolKind,
-    model: &str,
-) -> Result<String> {
-    render_events_with_source(events, None, protocol, model)
 }
 
 fn render_events_with_source(

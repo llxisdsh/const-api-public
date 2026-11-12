@@ -606,6 +606,8 @@ describe("QuickCard", () => {
       fireEvent.click(logo);
       expect(onAction).toHaveBeenCalledTimes(1);
     } finally {
+      // Flush jsdom's pending focus/render work before restoring real timers.
+      act(() => vi.runOnlyPendingTimers());
       vi.useRealTimers();
     }
   });
@@ -676,6 +678,7 @@ describe("QuickCard", () => {
       fireEvent.contextMenu(screen.getByRole("button", { name: "VS Code" }), { button: 2 });
       expect(container.querySelector(".tool-dock-context")).toBeNull();
     } finally {
+      act(() => vi.runOnlyPendingTimers());
       vi.useRealTimers();
     }
   });
@@ -1079,6 +1082,7 @@ describe("QuickCard", () => {
       fireEvent.click(addButton);
       expect(screen.getByRole("menu")).toBeInTheDocument();
     } finally {
+      act(() => vi.runOnlyPendingTimers());
       vi.useRealTimers();
     }
   });

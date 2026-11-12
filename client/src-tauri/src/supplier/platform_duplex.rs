@@ -1,10 +1,14 @@
 const PLATFORM_DUPLEX_FEATURE: &str = "platform_duplex_v1";
 const PLATFORM_DUPLEX_RESUME_FEATURE: &str = "platform_duplex_resume_v1";
 const PLATFORM_DUPLEX_OPEN_TIMEOUT: Duration = Duration::from_secs(20);
-const PLATFORM_DUPLEX_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+// Allow a slow platform link to finish one chunk or answer a written ping.
+// Only the receive-side assembler bounds the lifetime of a complete upload.
+const PLATFORM_DUPLEX_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const PLATFORM_WIRE_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 const PLATFORM_DUPLEX_RESUME_WINDOW: Duration = Duration::from_secs(120);
-const PLATFORM_DUPLEX_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+// Physical private-tunnel frames only. Larger logical messages use negotiated
+// 64 KiB transport chunks and are checked separately after reassembly.
+const PLATFORM_DUPLEX_MAX_MESSAGE_BYTES: usize = SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN;
 const PLATFORM_DUPLEX_TURN_ID_FIELD: &str = "_const_duplex_turn_id";
 const PLATFORM_DUPLEX_TURN_SEQUENCE_FIELD: &str = "_const_duplex_turn_seq";
 const PLATFORM_DUPLEX_SEQUENCE_FIELD: &str = "_const_platform_seq";
@@ -113,6 +117,7 @@ struct PlatformPhysicalConnection {
     commands: mpsc::Sender<PlatformPhysicalCommand>,
     transport: String,
     closed: Arc<AtomicBool>,
+    data_failed: Arc<AtomicBool>,
     authenticated_token: Arc<StdMutex<String>>,
     resume_supported: bool,
     output_budget: crate::output_buffer::OutputBudget,
@@ -127,7 +132,7 @@ enum PlatformPhysicalCommand {
     },
     Send {
         message: SupplierMessage,
-        completed: oneshot::Sender<std::result::Result<(), String>>,
+        completed: oneshot::Sender<Result<()>>,
     },
     Close {
         session_id: String,
@@ -136,12 +141,138 @@ enum PlatformPhysicalCommand {
 
 struct PlatformWireCommand {
     message: SupplierMessage,
-    completed: oneshot::Sender<std::result::Result<(), String>>,
+    completed: oneshot::Sender<Result<()>>,
+}
+
+enum PlatformWriteCompletion {
+    Open { session_id: String, completed: oneshot::Sender<std::result::Result<(), String>> },
+    Send { session_id: String, close: bool, completed: oneshot::Sender<Result<()>> },
+    Control,
+}
+
+struct PlatformPendingWrite {
+    future: std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>,
+    completion: PlatformWriteCompletion,
+}
+
+enum PlatformWireWriter {
+    Websocket(futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, WsMessage>),
+    Quic(quinn::SendStream),
+}
+
+impl PlatformWireWriter {
+    async fn write(&mut self, mut wire: Vec<u8>, binary: bool) -> Result<()> {
+        // A write must finish within this budget; it is not a per-byte idle
+        // timer. Legacy unsplit frames retain their larger size allowance.
+        let timeout = PLATFORM_DUPLEX_IO_TIMEOUT.max(supplier_transport_write_timeout(wire.len()));
+        tokio::time::timeout(timeout, async {
+            match self {
+                Self::Websocket(writer) => {
+                    let message = if binary { WsMessage::Binary(wire.into()) }
+                        else { WsMessage::Text(String::from_utf8(wire)?.into()) };
+                    writer.send(message).await?;
+                }
+                Self::Quic(writer) => {
+                    if !binary { wire.push(b'\n'); }
+                    writer.write_all(&wire).await?;
+                    writer.flush().await?;
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        }).await.context("platform frame write timed out")?
+    }
+
+    async fn heartbeat(&mut self, codec: &SupplierTransportCodec, command: PlatformWireCommand) -> Result<()> {
+        let result = async {
+            let (wire, binary) = codec.encode(command.message)?;
+            self.write(wire, binary).await
+        }.await;
+        let detail = result.as_ref().err().map(|e| format!("{e:#}"));
+        let _ = command.completed.send(result);
+        match detail { Some(error) => Err(anyhow!(error)), None => Ok(()) }
+    }
+}
+
+async fn run_platform_writer(
+    mut writer: PlatformWireWriter,
+    codec: Arc<SupplierTransportCodec>,
+    mut outbound: mpsc::Receiver<PlatformWireCommand>,
+    mut heartbeats: mpsc::Receiver<PlatformWireCommand>,
+    errors: mpsc::Sender<std::result::Result<SupplierMessage, String>>,
+) {
+    loop {
+        let command = tokio::select! {
+            biased;
+            Some(command) = heartbeats.recv() => {
+                if let Err(error) = writer.heartbeat(&codec, command).await {
+                    let _ = errors.send(Err(format!("{error:#}"))).await;
+                    break;
+                }
+                continue;
+            }
+            command = outbound.recv() => match command { Some(command) => command, None => break },
+        };
+        let kind = command.message.kind.clone();
+        let frame_bytes = command.message.payload.get("data").and_then(serde_json::Value::as_str)
+            .map(str::len).unwrap_or_default();
+        let started = Instant::now();
+        let mut wire_bytes = 0usize;
+        let progress_id = (kind == "platform_duplex_client_frame").then(|| command.message.id.clone());
+        // Validate the entire envelope before writing anything, preserving the
+        // typed pre-send rejection introduced by cf34c16a.
+        let result = async {
+            let mut parts = codec.prepare_message(command.message)?;
+            if let Some(id) = progress_id { parts.progress_id = id; }
+            let mut first = true;
+            while let Some(raw) = parts.next()? {
+                // Never interleave business messages or auth/crypto barriers.
+                // Only ping/pong may overtake the remaining chunks.
+                if !first {
+                    while let Ok(heartbeat) = heartbeats.try_recv() {
+                        writer.heartbeat(&codec, heartbeat).await?;
+                    }
+                }
+                first = false;
+                let (wire, binary) = codec.encode_raw(raw)?;
+                wire_bytes += wire.len();
+                writer.write(wire, binary).await?;
+                codec.activity.written(&kind);
+            }
+            Ok::<_, anyhow::Error>(())
+        }.await;
+        let rejected = result.as_ref().is_err_and(|e| e.is::<SupplierMessageSizeError>());
+        // The reader/network branch can finish the connection actor before it
+        // polls this completion. Record the original write cause at its owner.
+        if let Err(error) = &result {
+            if let Some(size) = error.downcast_ref::<SupplierMessageSizeError>() {
+                log::warn!("[const-api][platform-duplex] request_rejected_before_send code=payload_too_large message_type={} frame_bytes={} serialized_bytes={} limit_bytes={}",
+                    kind, frame_bytes, size.serialized_bytes, size.limit_bytes);
+            } else {
+                log::warn!("[const-api][platform-duplex] write_failed transport={} message_type={} frame_bytes={} wire_bytes={} elapsed_ms={} timed_out={} diagnostics={}",
+                    if matches!(writer, PlatformWireWriter::Quic(_)) { "quic" } else { "websocket" }, kind, frame_bytes,
+                    wire_bytes, started.elapsed().as_millis(),
+                    error.is::<tokio::time::error::Elapsed>(),
+                    serde_json::to_string(&execution_evidence_for_error(error).diagnostics).unwrap_or_default());
+            }
+        }
+        let detail = result.as_ref().err().map(|e| format!("{e:#}"));
+        let _ = command.completed.send(result);
+        if !rejected && let Some(detail) = detail {
+            let _ = errors.send(Err(detail)).await;
+            break;
+        }
+    }
+    match writer {
+        PlatformWireWriter::Websocket(mut writer) => { let _ = writer.close().await; }
+        PlatformWireWriter::Quic(mut writer) => { let _ = writer.finish(); }
+    }
 }
 
 struct PlatformWireConnection {
     codec: Arc<SupplierTransportCodec>,
     outbound: mpsc::Sender<PlatformWireCommand>,
+    heartbeats: mpsc::Sender<PlatformWireCommand>,
     inbound: mpsc::Receiver<std::result::Result<SupplierMessage, String>>,
     writer: tokio::task::JoinHandle<()>,
     reader: tokio::task::JoinHandle<()>,
@@ -150,29 +281,34 @@ struct PlatformWireConnection {
 }
 
 impl PlatformWireConnection {
-    async fn send(&self, message: SupplierMessage) -> Result<()> {
-        let kind = message.kind.clone();
-        tokio::time::timeout(PLATFORM_DUPLEX_WRITE_TIMEOUT, async {
-            let (completed, result) = oneshot::channel();
-            self.outbound
-                .send(PlatformWireCommand { message, completed })
-                .await
+    // Own the handles so the connection actor can poll reads/network changes
+    // while this send is pending; do not borrow its inbound receiver.
+    fn send(&self, message: SupplierMessage) -> impl std::future::Future<Output = Result<()>> + Send + 'static {
+        let outbound = self.outbound.clone();
+        async move {
+            let (completed, completion) = oneshot::channel();
+            // The actor keeps only one business send pending. The bounded
+            // writer queue closes on failure; it needs no separate queue timer.
+            outbound.send(PlatformWireCommand { message, completed }).await
                 .map_err(|_| anyhow!("platform long connection is closed"))?;
-            result
-                .await
-                .map_err(|_| anyhow!("platform long-connection writer stopped"))?
-                .map_err(anyhow::Error::msg)
-        })
-        .await
-        .map_err(|_| anyhow!("platform long-connection write timed out"))??;
-        self.codec.activity.written(&kind);
-        Ok(())
+            // The writer owns per-chunk deadlines; assembly owns total lifetime.
+            completion.await.map_err(|_| anyhow!("platform long-connection writer stopped"))?
+        }
+    }
+
+    fn heartbeat(&self, message: SupplierMessage) -> Result<oneshot::Receiver<Result<()>>> {
+        let (completed, completion) = oneshot::channel();
+        self.heartbeats.try_send(PlatformWireCommand {
+            message, completed,
+        }).map_err(|_| anyhow!("platform heartbeat queue is unavailable"))?;
+        Ok(completion)
     }
 
     async fn stop(self) {
         let PlatformWireConnection {
             codec: _,
             outbound,
+            heartbeats,
             inbound,
             mut writer,
             mut reader,
@@ -181,6 +317,7 @@ impl PlatformWireConnection {
         } = self;
         drop(inbound);
         drop(outbound);
+        drop(heartbeats);
 
         // Give WebSocket a chance to flush its close frame and QUIC a chance to
         // finish its send stream. A broken peer must not keep the shared
@@ -213,6 +350,8 @@ fn platform_auth_message(token: &str, kind: &str) -> SupplierMessage {
             "client_id": machine_client_id(),
             "transport_features": [
                 SUPPLIER_TRANSPORT_FRAME_COMPRESSION_FEATURE,
+                SUPPLIER_MESSAGE_CHUNKS_FEATURE,
+                SUPPLIER_LARGE_MESSAGES_FEATURE,
                 PLATFORM_DUPLEX_FEATURE,
                 PLATFORM_DUPLEX_RESUME_FEATURE
             ],
@@ -427,6 +566,22 @@ fn platform_legacy_turn_error(message: &SupplierMessage) -> bool {
             && event.get("error").is_some_and(serde_json::Value::is_object))
 }
 
+fn platform_first_frame_not_received(message: &SupplierMessage) -> bool {
+    // This is the platform's rejection before supplier selection. An upstream
+    // timeout, any turn metadata, or a partially tagged legacy error does not
+    // prove that execution never started. HTTP continuation is not authorized.
+    if !platform_legacy_turn_error(message)
+        || message.payload.get("status").and_then(serde_json::Value::as_u64) != Some(408)
+        || message.payload.get("turn_terminal").and_then(serde_json::Value::as_bool) != Some(true)
+    {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(&payload_string(&message.payload, "data"))
+        .is_ok_and(|event| event.get("status").and_then(serde_json::Value::as_u64) == Some(408)
+            && event.pointer("/error/type").and_then(serde_json::Value::as_str) == Some("const_api_error")
+            && event.pointer("/error/code").and_then(serde_json::Value::as_str) == Some("first_frame_timeout"))
+}
+
 async fn platform_ws_send(
     websocket: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -494,34 +649,13 @@ async fn connect_platform_websocket_wire(
         platform_ws_send(&mut websocket, &codec, confirmation).await?;
     }
 
-    let (mut writer, mut reader) = websocket.split();
-    let (outbound, mut outbound_rx) = mpsc::channel::<PlatformWireCommand>(32);
+    let (writer, mut reader) = websocket.split();
+    let (outbound, outbound_rx) = mpsc::channel::<PlatformWireCommand>(32);
+    let (heartbeats, heartbeat_rx) = mpsc::channel(8);
     let (inbound_tx, inbound) = mpsc::channel(32);
-    let writer_codec = codec.clone();
-    let writer_errors = inbound_tx.clone();
-    let writer_task = crate::spawn_logged("platform websocket writer", async move {
-        while let Some(command) = outbound_rx.recv().await {
-            let result = (|| writer_codec.encode(command.message))()
-                .and_then(|(wire, compressed)| {
-                    if compressed {
-                        Ok(WsMessage::Binary(wire.into()))
-                    } else {
-                        Ok(WsMessage::Text(String::from_utf8(wire)?.into()))
-                    }
-                });
-            let result = match result {
-                Ok(message) => writer.send(message).await.map_err(anyhow::Error::from),
-                Err(error) => Err(error),
-            };
-            let detail = result.as_ref().err().map(|error| format!("{error:#}"));
-            let _ = command.completed.send(result.map(|_| ()).map_err(|error| format!("{error:#}")));
-            if let Some(detail) = detail {
-                let _ = writer_errors.send(Err(detail)).await;
-                return;
-            }
-        }
-        let _ = writer.close().await;
-    });
+    let writer_task = crate::spawn_logged("platform websocket writer", run_platform_writer(
+        PlatformWireWriter::Websocket(writer), codec.clone(), outbound_rx, heartbeat_rx, inbound_tx.clone(),
+    ));
     let reader_codec = codec.clone();
     let reader_task = crate::spawn_logged("platform websocket reader", async move {
         while let Some(message) = reader.next().await {
@@ -560,6 +694,7 @@ async fn connect_platform_websocket_wire(
     Ok(PlatformWireConnection {
         codec,
         outbound,
+        heartbeats,
         inbound,
         writer: writer_task,
         reader: reader_task,
@@ -623,22 +758,12 @@ async fn connect_platform_quic_wire(
         platform_quic_send(&mut send, &codec, confirmation).await?;
     }
 
-    let (outbound, mut outbound_rx) = mpsc::channel::<PlatformWireCommand>(32);
+    let (outbound, outbound_rx) = mpsc::channel::<PlatformWireCommand>(32);
+    let (heartbeats, heartbeat_rx) = mpsc::channel(8);
     let (inbound_tx, inbound) = mpsc::channel(32);
-    let writer_codec = codec.clone();
-    let writer_errors = inbound_tx.clone();
-    let writer_task = crate::spawn_logged("platform quic writer", async move {
-        while let Some(command) = outbound_rx.recv().await {
-            let result = platform_quic_send(&mut send, &writer_codec, command.message).await;
-            let detail = result.as_ref().err().map(|error| format!("{error:#}"));
-            let _ = command.completed.send(result.map_err(|error| format!("{error:#}")));
-            if let Some(detail) = detail {
-                let _ = writer_errors.send(Err(detail)).await;
-                return;
-            }
-        }
-        let _ = send.finish();
-    });
+    let writer_task = crate::spawn_logged("platform quic writer", run_platform_writer(
+        PlatformWireWriter::Quic(send), codec.clone(), outbound_rx, heartbeat_rx, inbound_tx.clone(),
+    ));
     let reader_codec = codec.clone();
     let reader_task = crate::spawn_logged("platform quic reader", async move {
         loop {
@@ -657,6 +782,7 @@ async fn connect_platform_quic_wire(
     Ok(PlatformWireConnection {
         codec,
         outbound,
+        heartbeats,
         inbound,
         writer: writer_task,
         reader: reader_task,
@@ -668,11 +794,19 @@ async fn connect_platform_quic_wire(
 async fn open_platform_wire(
     endpoint: &Endpoint,
     token: &str,
+    prefer_websocket: bool,
+    websocket_only: bool,
 ) -> Result<(PlatformWireConnection, String)> {
-    let candidates = supplier_transport_candidates_for_urls(
+    let mut candidates = supplier_transport_candidates_for_urls(
         &endpoint.supplier_quic_url,
         &endpoint.supplier_ws_url,
     );
+    if websocket_only {
+        candidates.retain(|candidate| candidate.transport == "websocket");
+    }
+    if prefer_websocket {
+        candidates.sort_by_key(|candidate| candidate.transport != "websocket");
+    }
     if candidates.is_empty() {
         return Err(safe_platform_duplex_open_error(
             "the selected platform endpoint has no QUIC or WebSocket tunnel",
@@ -739,12 +873,14 @@ fn platform_physical_connection(
 ) -> Arc<PlatformPhysicalConnection> {
     let (commands, command_rx) = mpsc::channel(64);
     let closed = Arc::new(AtomicBool::new(false));
+    let data_failed = Arc::new(AtomicBool::new(false));
     let authenticated_token = Arc::new(StdMutex::new(token.clone()));
     let resume_supported = wire.resume_supported;
     let connection = Arc::new(PlatformPhysicalConnection {
         commands,
         transport,
         closed: closed.clone(),
+        data_failed: data_failed.clone(),
         authenticated_token: authenticated_token.clone(),
         resume_supported,
         output_budget: Default::default(),
@@ -756,6 +892,7 @@ fn platform_physical_connection(
             wire,
             command_rx,
             closed,
+            data_failed,
             authenticated_token,
             token,
             access_token,
@@ -801,6 +938,7 @@ async fn run_platform_physical_connection(
     mut wire: PlatformWireConnection,
     mut commands: mpsc::Receiver<PlatformPhysicalCommand>,
     closed: Arc<AtomicBool>,
+    data_failed: Arc<AtomicBool>,
     authenticated_token: Arc<StdMutex<String>>,
     mut last_token: String,
     access_token: Arc<StdMutex<String>>,
@@ -822,10 +960,15 @@ async fn run_platform_physical_connection(
     let mut token_tick = tokio::time::interval(Duration::from_secs(5));
     token_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     token_tick.tick().await;
-    let pong_timeout = tokio::time::sleep(supplier_heartbeat_response_timeout());
+    let pong_timeout = tokio::time::sleep(PLATFORM_DUPLEX_IO_TIMEOUT);
     tokio::pin!(pong_timeout);
     let mut heartbeat = SupplierHeartbeat::default();
     let mut pending_refresh: Option<(String, String)> = None;
+    // Exactly one business write is pending. Keep receiving while it uploads,
+    // but preserve ordering and the existing bounded command/output queues.
+    let mut pending_write: Option<PlatformPendingWrite> = None;
+    let mut deferred_close: Option<String> = None;
+    let mut pending_ping: Option<(String, oneshot::Receiver<Result<()>>)> = None;
     let mut terminal_error = "platform long connection closed".to_string();
 
     loop {
@@ -833,12 +976,42 @@ async fn run_platform_physical_connection(
             // Explicit local session cancellation, not a slow consumer.
             pending_output = None;
         }
+        if pending_write.is_none() && let Some(session_id) = deferred_close.take() {
+            pending_write = Some(PlatformPendingWrite {
+                future: Box::pin(wire.send(SupplierMessage {
+                    output_credit: None, id: session_id, kind: "platform_duplex_close".into(),
+                    payload: serde_json::Map::new(),
+                })),
+                completion: PlatformWriteCompletion::Control,
+            });
+        }
         tokio::select! {
             _ = network_changes.changed() => {
                 terminal_error = "local network configuration changed".to_string();
                 break;
             }
-            command = commands.recv() => {
+            result = async { pending_write.as_mut().unwrap().future.as_mut().await }, if pending_write.is_some() => {
+                let pending = pending_write.take().unwrap();
+                let rejected = result.as_ref().is_err_and(|e| e.is::<SupplierMessageSizeError>());
+                let failed = result.is_err() && !rejected;
+                if failed {
+                    data_failed.store(true, Ordering::Release);
+                    terminal_error = format!("{:#}", result.as_ref().unwrap_err());
+                }
+                match pending.completion {
+                    PlatformWriteCompletion::Open { session_id, completed } => {
+                        if result.is_err() { sessions.remove(&session_id); }
+                        let _ = completed.send(result.map_err(|e| format!("{e:#}")));
+                    }
+                    PlatformWriteCompletion::Send { session_id, close, completed } => {
+                        if close { sessions.remove(&session_id); }
+                        let _ = completed.send(result);
+                    }
+                    PlatformWriteCompletion::Control => {}
+                }
+                if failed { break; }
+            }
+            command = commands.recv(), if pending_write.is_none() => {
                 let Some(command) = command else {
                     break;
                 };
@@ -850,39 +1023,22 @@ async fn run_platform_physical_connection(
                         }
                         let session_id = message.id.clone();
                         sessions.insert(session_id.clone(), events);
-                        let result = wire.send(message).await.map_err(|error| format!("{error:#}"));
-                        if result.is_err() {
-                            sessions.remove(&session_id);
-                        }
-                        let failed = result.is_err();
-                        let _ = completed.send(result);
-                        if failed {
-                            terminal_error = "platform long-connection write failed".to_string();
-                            break;
-                        }
+                        pending_write = Some(PlatformPendingWrite {
+                            future: Box::pin(wire.send(message)),
+                            completion: PlatformWriteCompletion::Open { session_id, completed },
+                        });
                     }
                     PlatformPhysicalCommand::Send { message, completed } => {
                         let close = message.kind == "platform_duplex_close";
                         let session_id = message.id.clone();
-                        let result = wire.send(message).await.map_err(|error| format!("{error:#}"));
-                        let failed = result.is_err();
-                        let _ = completed.send(result);
-                        if close {
-                            sessions.remove(&session_id);
-                        }
-                        if failed {
-                            terminal_error = "platform long-connection write failed".to_string();
-                            break;
-                        }
+                        pending_write = Some(PlatformPendingWrite {
+                            future: Box::pin(wire.send(message)),
+                            completion: PlatformWriteCompletion::Send { session_id, close, completed },
+                        });
                     }
                     PlatformPhysicalCommand::Close { session_id } => {
                         sessions.remove(&session_id);
-                        let _ = wire.send(SupplierMessage {
-                            output_credit: None,
-                            id: session_id,
-                            kind: "platform_duplex_close".to_string(),
-                            payload: serde_json::Map::new(),
-                        }).await;
+                        deferred_close = Some(session_id);
                     }
                 }
             }
@@ -891,7 +1047,7 @@ async fn run_platform_physical_connection(
                     return futures_util::future::pending().await;
                 };
                 events.reserve(*bytes).await
-            }, if pending_output.is_some() => {
+            }, if pending_output.is_some() && deferred_close.is_none() => {
                 if let Some((events, message, _)) = pending_output.take() {
                     let session_id = message.id.clone();
                     let terminal = matches!(message.kind.as_str(), "platform_duplex_error" | "platform_duplex_close");
@@ -900,26 +1056,23 @@ async fn run_platform_physical_connection(
                         sessions.remove(&session_id);
                     }
                     if !sent {
-                        let _ = wire.send(SupplierMessage {
-                            output_credit: None,
-                            id: session_id,
-                            kind: "platform_duplex_close".to_string(),
-                            payload: serde_json::Map::new(),
-                        }).await;
+                        deferred_close = Some(session_id);
                     }
                     // Local backpressure is not a missed remote heartbeat.
                     if heartbeat.pending() {
-                        pong_timeout.as_mut().reset(tokio::time::Instant::now() + supplier_heartbeat_response_timeout());
+                        pong_timeout.as_mut().reset(tokio::time::Instant::now() + PLATFORM_DUPLEX_IO_TIMEOUT);
                     }
                 }
             }
             incoming = wire.inbound.recv(), if pending_output.is_none() => {
                 let Some(incoming) = incoming else {
+                    data_failed.fetch_or(!sessions.is_empty(), Ordering::Release);
                     break;
                 };
                 let message = match incoming {
                     Ok(message) => message,
                     Err(error) => {
+                        data_failed.fetch_or(!sessions.is_empty(), Ordering::Release);
                         terminal_error = error;
                         break;
                     }
@@ -934,12 +1087,13 @@ async fn run_platform_physical_connection(
                         continue;
                     }
                     "ping" => {
-                        if let Err(error) = wire.send(SupplierMessage {
+                        if let Err(error) = wire.heartbeat(SupplierMessage {
                             output_credit: None,
                             id: message.id,
                             kind: "pong".to_string(),
                             payload: serde_json::Map::new(),
-                        }).await {
+                        }) {
+                            data_failed.store(true, Ordering::Release);
                             terminal_error = format!("{error:#}");
                             break;
                         }
@@ -972,7 +1126,7 @@ async fn run_platform_physical_connection(
                 let bytes = platform_output_heap_bytes(&message);
                 pending_output = Some((events, message, bytes));
             }
-            _ = heartbeat_tick.tick(), if !heartbeat.pending() && pending_output.is_none() => {
+            _ = heartbeat_tick.tick(), if !heartbeat.pending() && pending_ping.is_none() && pending_output.is_none() => {
                 heartbeat.observe(&wire.codec.activity);
                 if !heartbeat.needs_probe(&wire.codec.activity) {
                     continue;
@@ -980,16 +1134,32 @@ async fn run_platform_physical_connection(
                 let message = supplier_heartbeat_message();
                 let id = message.id.clone();
                 heartbeat.queued(id.clone());
-                if let Err(error) = wire.send(message).await {
-                    terminal_error = format!("{error:#}");
-                    break;
+                match wire.heartbeat(message) {
+                    Ok(completion) => pending_ping = Some((id, completion)),
+                    Err(error) => {
+                        data_failed.store(true, Ordering::Release);
+                        terminal_error = format!("{error:#}");
+                        break;
+                    }
                 }
-                heartbeat.written(&id, supplier_heartbeat_response_timeout());
-                pong_timeout.as_mut().reset(
-                    tokio::time::Instant::now() + supplier_heartbeat_response_timeout(),
-                );
             }
-            _ = token_tick.tick() => {
+            result = async { (&mut pending_ping.as_mut().unwrap().1).await }, if pending_ping.is_some() => {
+                let (id, _) = pending_ping.take().unwrap();
+                match result {
+                    Ok(Ok(())) => {
+                        heartbeat.observe(&wire.codec.activity);
+                        if heartbeat.written(&id, PLATFORM_DUPLEX_IO_TIMEOUT) {
+                            pong_timeout.as_mut().reset(tokio::time::Instant::now() + PLATFORM_DUPLEX_IO_TIMEOUT);
+                        }
+                    }
+                    _ => {
+                        data_failed.store(true, Ordering::Release);
+                        terminal_error = "platform heartbeat write failed".into();
+                        break;
+                    }
+                }
+            }
+            _ = token_tick.tick(), if pending_write.is_none() => {
                 heartbeat.observe(&wire.codec.activity);
                 if pending_refresh.is_some() {
                     continue;
@@ -1006,22 +1176,26 @@ async fn run_platform_physical_connection(
                 }
                 let message = platform_auth_message(&token, "auth_refresh");
                 let id = message.id.clone();
-                if let Err(error) = wire.send(message).await {
-                    terminal_error = format!("{error:#}");
-                    break;
-                }
                 pending_refresh = Some((id, token));
+                pending_write = Some(PlatformPendingWrite {
+                    future: Box::pin(wire.send(message)), completion: PlatformWriteCompletion::Control,
+                });
             }
-            _ = &mut pong_timeout, if heartbeat.pending() && pending_output.is_none() => {
+            _ = &mut pong_timeout, if heartbeat.pending() && pending_ping.is_none() && pending_output.is_none() => {
                 if heartbeat.observe(&wire.codec.activity) {
                     continue;
                 }
                 terminal_error = format!("platform long-connection heartbeat timed out: {}", heartbeat.timeout_detail());
+                data_failed.store(true, Ordering::Release);
                 break;
             }
         }
     }
 
+    // Release callers before stopping the socket; a network change must not
+    // wait for an in-flight chunk's write deadline.
+    drop(pending_write);
+    drop(pending_ping);
     closed.store(true, Ordering::Release);
     wire.reader.abort();
     wire.inbound.close();
@@ -1048,8 +1222,17 @@ async fn run_platform_physical_connection(
 }
 
 impl PlatformPhysicalConnection {
+    fn prefer_websocket_after_failure(&self, token: &str) -> bool {
+        self.transport == "quic"
+            && self.data_failed.load(Ordering::Acquire)
+            && !self.network_changes.has_changed().unwrap_or(true)
+            && self.authenticated_token.lock()
+                .is_ok_and(|current| current.as_str() == token)
+    }
+
     fn usable_with_token(&self, token: &str) -> bool {
         !self.closed.load(Ordering::Acquire)
+            && !self.data_failed.load(Ordering::Acquire)
             && !self.network_changes.has_changed().unwrap_or(true)
             && self
                 .authenticated_token
@@ -1130,7 +1313,20 @@ impl PlatformPhysicalConnection {
         result
             .await
             .map_err(|_| anyhow!("platform long-connection writer stopped"))?
-            .map_err(anyhow::Error::msg)
+    }
+
+    async fn open_responses_session(
+        &self,
+        headers: &reqwest::header::HeaderMap,
+    ) -> Result<(String, crate::output_buffer::OutputReceiver<std::result::Result<SupplierMessage, String>>)> {
+        let session_id = format!("platform-session-{:032x}", rand::random::<u128>());
+        match self.open(platform_duplex_open_message(&session_id, headers)).await {
+            Ok((events, _)) => Ok((session_id, events)),
+            Err(error) => {
+                let _ = self.commands.send(PlatformPhysicalCommand::Close { session_id }).await;
+                Err(error)
+            }
+        }
     }
 }
 
@@ -1141,6 +1337,16 @@ impl PlatformDuplexPool {
         access_token: Arc<StdMutex<String>>,
         account_refresh_notify: Arc<Notify>,
     ) -> Result<Arc<PlatformPhysicalConnection>> {
+        self.connection_for_transport(endpoint, access_token, account_refresh_notify, false).await
+    }
+
+    async fn connection_for_transport(
+        &self,
+        endpoint: &Endpoint,
+        access_token: Arc<StdMutex<String>>,
+        account_refresh_notify: Arc<Notify>,
+        websocket_only: bool,
+    ) -> Result<Arc<PlatformPhysicalConnection>> {
         let token = access_token
             .lock()
             .map(|token| token.trim().to_string())
@@ -1150,7 +1356,18 @@ impl PlatformDuplexPool {
                 "platform account authentication is unavailable",
             ));
         }
-        let key = platform_endpoint_connection_key(endpoint);
+        let mut key = platform_endpoint_connection_key(endpoint);
+        if websocket_only {
+            // A logical first-frame rejection must not retire a healthy QUIC
+            // connection used by other conversations. Retain the original
+            // endpoint (including its identity pin) in the separate WS slot.
+            if let Some(connection) = self.connections.lock().await.get(&key).cloned()
+                && connection.transport == "websocket" && connection.usable_with_token(&token)
+            {
+                return Ok(connection);
+            }
+            key.push_str("\u{1f}websocket");
+        }
         if let Some(connection) = self.connections.lock().await.get(&key).cloned() {
             if connection.usable_with_token(&token) {
                 return Ok(connection);
@@ -1164,15 +1381,24 @@ impl PlatformDuplexPool {
                 .clone()
         };
         let _connect_guard = connect_lock.lock().await;
-        if let Some(connection) = self.connections.lock().await.get(&key).cloned() {
+        let previous = self.connections.lock().await.get(&key).cloned();
+        if let Some(connection) = &previous {
             if connection.usable_with_token(&token) {
-                return Ok(connection);
+                return Ok(connection.clone());
             }
         }
+        // A successful small QUIC handshake is not proof that it can carry the
+        // request. Keep the failure scoped to this endpoint/account/network;
+        // a healthy fallback is reused, not interrupted by QUIC probing.
+        let prefer_websocket = previous.as_ref()
+            .is_some_and(|connection| connection.prefer_websocket_after_failure(&token));
         // Subscribe before connecting, so a proxy/route change during the
         // handshake cannot leave a freshly cached connection on the old route.
         let network_changes = crate::network_recovery::subscribe();
-        let (wire, transport) = open_platform_wire(endpoint, &token).await?;
+        let (wire, transport) = open_platform_wire(endpoint, &token, prefer_websocket, websocket_only).await?;
+        if prefer_websocket && transport == "websocket" {
+            log::warn!("[const-api][platform-duplex] transport_failover from=quic to=websocket reason=data_path_failed");
+        }
         let connection = platform_physical_connection(
             wire,
             transport,
@@ -1200,6 +1426,7 @@ async fn reconnect_platform_logical_session(
     active_turn_id: Option<&str>,
     after_turn_sequence: u64,
     after_platform_sequence: u64,
+    websocket_only: bool,
 ) -> Result<(
     Arc<PlatformPhysicalConnection>,
     crate::output_buffer::OutputReceiver<std::result::Result<SupplierMessage, String>>,
@@ -1209,10 +1436,11 @@ async fn reconnect_platform_logical_session(
     let mut retry_delay = Duration::from_millis(250);
     loop {
         let last_error = match pool
-            .connection(
+            .connection_for_transport(
                 endpoint,
                 access_token.clone(),
                 account_refresh_notify.clone(),
+                websocket_only,
             )
             .await
         {
@@ -1288,20 +1516,7 @@ pub(crate) async fn open_platform_responses_duplex(
             account_refresh_notify.clone(),
         )
         .await?;
-    let session_id = format!("platform-session-{:032x}", rand::random::<u128>());
-    let open = platform_duplex_open_message(&session_id, &headers);
-    let (mut events, _) = match physical.open(open).await {
-        Ok(events) => events,
-        Err(error) => {
-            let _ = physical
-                .commands
-                .send(PlatformPhysicalCommand::Close {
-                    session_id: session_id.clone(),
-                })
-                .await;
-            return Err(error);
-        }
-    };
+    let (mut session_id, mut events) = physical.open_responses_session(&headers).await?;
     let transport = physical.transport.clone();
     let pool = pool.clone();
     let endpoint = endpoint.clone();
@@ -1317,6 +1532,12 @@ pub(crate) async fn open_platform_responses_duplex(
         let mut last_platform_sequence = 0u64;
         let mut reconnect_before_send = false;
         let mut recovering_closed_turn = false;
+        let mut websocket_only = false;
+        let mut can_retry_first_frame = physical.transport == "quic"
+            && !endpoint.supplier_ws_url.trim().is_empty();
+        // Reuse the original frame allocation only until the first response.
+        // No history is reconstructed, normalized, or retained across turns.
+        let mut first_request = None;
         loop {
             tokio::select! {
                 command = command_rx.recv() => {
@@ -1331,13 +1552,15 @@ pub(crate) async fn open_platform_responses_duplex(
                         match reconnect_platform_logical_session(
                             &pool, &endpoint, reconnect_access_token.clone(),
                             reconnect_notify.clone(), &headers, &session_id,
-                            None, 0, last_platform_sequence,
+                            None, 0, last_platform_sequence, websocket_only,
                         ).await {
                             Ok((next_physical, next_events, fresh)) => {
                                 physical = next_physical;
                                 events = next_events;
                                 if fresh {
                                     last_platform_sequence = 0;
+                                    can_retry_first_frame = false;
+                                    first_request = None;
                                 }
                                 reconnect_before_send = false;
                             }
@@ -1372,12 +1595,33 @@ pub(crate) async fn open_platform_responses_duplex(
                     } else {
                         "platform_duplex_client_frame"
                     };
+                    if can_retry_first_frame && first_request.is_none()
+                        && matches!(&command.frame, PlatformDuplexFrame::Text(_))
+                    {
+                        first_request = Some(command.frame);
+                    }
                     let result = physical.send(SupplierMessage {
                         output_credit: None,
                         id: session_id.clone(),
                         kind: kind.to_string(),
                         payload,
                     }).await;
+                    if let Err(error) = &result && let Some(size) = error.downcast_ref::<SupplierMessageSizeError>() {
+                        // Encoding rejected the complete envelope before any
+                        // bytes were written. There is no executed turn to
+                        // resume, and the shared transport remains healthy.
+                        let event = serde_json::json!({
+                            "type": "error", "status": 413,
+                            "error": {"type": "invalid_request_error", "code": "payload_too_large",
+                                "message": format!("The request is too large for the platform tunnel ({} serialized bytes; limit {}). Reduce the request size before retrying.", size.serialized_bytes, size.limit_bytes)}
+                        });
+                        let _ = command.completed.send(Ok(()));
+                        let _ = frames.send(Ok(PlatformDuplexFrame::Text(event.to_string()))).await;
+                        let _ = physical.commands.send(PlatformPhysicalCommand::Close {
+                            session_id: session_id.clone(),
+                        }).await;
+                        break;
+                    }
                     if result.is_err() && active_turn_id.is_some() && physical.resume_supported {
                         match reconnect_platform_logical_session(
                             &pool,
@@ -1389,6 +1633,7 @@ pub(crate) async fn open_platform_responses_duplex(
                             active_turn_id.as_deref(),
                             last_turn_sequence,
                             last_platform_sequence,
+                            websocket_only,
                         ).await {
                             Ok((next_physical, next_events, _fresh)) => {
                                 physical = next_physical;
@@ -1432,6 +1677,7 @@ pub(crate) async fn open_platform_responses_duplex(
                             active_turn_id.as_deref(),
                             last_turn_sequence,
                             last_platform_sequence,
+                            websocket_only,
                         ).await {
                             Ok((next_physical, next_events, _fresh)) => {
                                 physical = next_physical;
@@ -1473,6 +1719,81 @@ pub(crate) async fn open_platform_responses_duplex(
                             break;
                         }
                     }
+                    if matches!(message.kind.as_str(), "platform_duplex_server_frame" | "platform_duplex_error") {
+                        // Only the first response can authorize this one retry.
+                        // Receipt of any normal/terminal event releases the body.
+                        let retry = can_retry_first_frame && last_platform_sequence == 0
+                            && platform_first_frame_not_received(&message);
+                        can_retry_first_frame = false;
+                        let original = first_request.take();
+                        if retry && let Some(original) = original {
+                            let replacement = async {
+                                let next = pool.connection_for_transport(
+                                    &endpoint, reconnect_access_token.clone(), reconnect_notify.clone(), true,
+                                ).await?;
+                                let (id, events) = next.open_responses_session(&headers).await?;
+                                Ok::<_, anyhow::Error>((next, id, events))
+                            }.await;
+                            match replacement {
+                                Ok((next, next_id, next_events)) => {
+                                    // The server has ended the old handler before
+                                    // selecting a supplier. Late old input cannot
+                                    // execute. Keep WS semantics and all headers;
+                                    // this is not the HTTP continuation bridge.
+                                    let _ = physical.commands.send(PlatformPhysicalCommand::Close {
+                                        session_id: session_id.clone(),
+                                    }).await;
+                                    physical = next;
+                                    session_id = next_id;
+                                    events = next_events;
+                                    websocket_only = true;
+                                    last_platform_sequence = 0;
+                                    last_turn_sequence = 0;
+                                    recovering_closed_turn = false;
+                                    let mut payload = platform_frame_payload(original);
+                                    if let Some(turn_id) = &active_turn_id {
+                                        payload.insert(PLATFORM_DUPLEX_TURN_ID_FIELD.into(), turn_id.clone().into());
+                                    }
+                                    log::warn!("[const-api][platform-duplex] first_frame_retry transport=websocket reason=platform_confirmed_not_received attempt=1");
+                                    let result = physical.send(SupplierMessage {
+                                        output_credit: None, id: session_id.clone(),
+                                        kind: "platform_duplex_client_frame".into(), payload,
+                                    }).await;
+                                    if let Err(error) = result {
+                                        // The second write can be ambiguous too.
+                                        // Recover its return stream, never send
+                                        // the request for a third execution.
+                                        if active_turn_id.is_some() && physical.resume_supported {
+                                            match reconnect_platform_logical_session(
+                                                &pool, &endpoint, reconnect_access_token.clone(), reconnect_notify.clone(),
+                                                &headers, &session_id, active_turn_id.as_deref(), 0, 0, true,
+                                            ).await {
+                                                Ok((next, next_events, _)) => {
+                                                    physical = next;
+                                                    events = next_events;
+                                                }
+                                                Err(error) => {
+                                                    let _ = frames.send(Err(format!("{error:#}"))).await;
+                                                    break;
+                                                }
+                                            }
+                                        } else {
+                                            let _ = frames.send(Err(format!("{error:#}"))).await;
+                                            break;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                Err(error) => {
+                                    // Keep the original terminal response when
+                                    // the alternate transport cannot be opened.
+                                    let diagnostics = execution_evidence_for_error(&error).diagnostics;
+                                    log::warn!("[const-api][platform-duplex] first_frame_retry_unavailable diagnostics={}",
+                                        serde_json::to_string(&diagnostics).unwrap_or_default());
+                                }
+                            }
+                        }
+                    }
                     if message.kind == "platform_duplex_close" {
                         // Close is a sequenced frame too. Acknowledge it before
                         // any recovery, or the server replays the same close.
@@ -1496,7 +1817,7 @@ pub(crate) async fn open_platform_responses_duplex(
                         match reconnect_platform_logical_session(
                             &pool, &endpoint, reconnect_access_token.clone(),
                             reconnect_notify.clone(), &headers, &session_id,
-                            active_turn_id.as_deref(), last_turn_sequence, last_platform_sequence,
+                            active_turn_id.as_deref(), last_turn_sequence, last_platform_sequence, websocket_only,
                         ).await {
                             Ok((next_physical, next_events, _fresh)) => {
                                 physical = next_physical;
@@ -1729,11 +2050,16 @@ mod platform_duplex_tests {
         mpsc::UnboundedReceiver<SupplierMessage>,
     ) {
         let (outbound, mut writes) = mpsc::channel::<PlatformWireCommand>(16);
+        let (heartbeats, mut heartbeat_rx) = mpsc::channel::<PlatformWireCommand>(8);
         let (inbound, received) = mpsc::channel(32);
         let (observed, observations) = mpsc::unbounded_channel();
         let replies = inbound.clone();
         let writer = tokio::spawn(async move {
-            while let Some(command) = writes.recv().await {
+            loop {
+                let command = tokio::select! {
+                    Some(command) = heartbeat_rx.recv() => command,
+                    command = writes.recv() => match command { Some(command) => command, None => break },
+                };
                 let message = command.message;
                 if message.kind == "platform_duplex_open" {
                     replies
@@ -1754,6 +2080,7 @@ mod platform_duplex_tests {
             PlatformWireConnection {
                 codec: Arc::new(SupplierTransportCodec::new(None)),
                 outbound,
+                heartbeats,
                 inbound: received,
                 writer,
                 reader: tokio::spawn(async {}),
@@ -1776,6 +2103,94 @@ mod platform_duplex_tests {
             kind: "platform_duplex_server_frame".into(),
             payload: platform_frame_payload(PlatformDuplexFrame::Text(text)),
         }
+    }
+
+    #[tokio::test]
+    async fn pending_platform_upload_does_not_block_inbound_heartbeats_or_network_change() {
+        let (outbound, mut writes) = mpsc::channel::<PlatformWireCommand>(16);
+        let (heartbeats, mut heartbeat_writes) = mpsc::channel::<PlatformWireCommand>(8);
+        let (incoming, inbound) = mpsc::channel(32);
+        let (changes, receiver) = tokio::sync::watch::channel(0);
+        let physical = platform_physical_connection(PlatformWireConnection {
+            codec: Arc::new(SupplierTransportCodec::new(None)), outbound, heartbeats, inbound,
+            writer: tokio::spawn(async {}), reader: tokio::spawn(async {}),
+            _quic_endpoint: None, resume_supported: false,
+        }, "mock".into(), "access".into(), Arc::new(StdMutex::new("access".into())), Arc::new(Notify::new()), receiver);
+        let opener = physical.clone();
+        let opened = tokio::spawn(async move { opener.open(platform_duplex_open_message("upload", &Default::default())).await });
+        let open = writes.recv().await.unwrap();
+        open.completed.send(Ok(())).unwrap();
+        incoming.send(Ok(SupplierMessage {
+            output_credit: None, id: "upload".into(), kind: "platform_duplex_opened".into(), payload: Default::default(),
+        })).await.unwrap();
+        let (mut events, _) = opened.await.unwrap().unwrap();
+        let uploader = physical.clone();
+        let upload = tokio::spawn(async move { uploader.send(SupplierMessage {
+            output_credit: None, id: "upload".into(), kind: "platform_duplex_client_frame".into(), payload: Default::default(),
+        }).await });
+        let held_write = writes.recv().await.unwrap();
+        // A server rejection or another response must be dispatched even when
+        // the socket writer has not completed the large upload.
+        incoming.send(Ok(buffered_mock_frame("upload", "received while writing".into()))).await.unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(1), events.recv()).await
+            .expect("upload blocked inbound dispatch").unwrap().unwrap();
+        assert_eq!(payload_string(&event.payload, "data"), "received while writing");
+        incoming.send(Ok(SupplierMessage { output_credit: None, id: "probe".into(), kind: "ping".into(), payload: Default::default() })).await.unwrap();
+        let pong = tokio::time::timeout(Duration::from_secs(1), heartbeat_writes.recv()).await
+            .expect("upload blocked heartbeat").unwrap();
+        assert_eq!((pong.message.kind.as_str(), pong.message.id.as_str()), ("pong", "probe"));
+        let _ = pong.completed.send(Ok(())); // Pong receipts need no response timer.
+        changes.send_modify(|generation| *generation += 1);
+        let error = tokio::time::timeout(Duration::from_secs(1), events.recv()).await
+            .expect("upload blocked network change").unwrap().unwrap_err();
+        assert!(error.contains("network configuration changed"));
+        assert!(tokio::time::timeout(Duration::from_secs(1), upload).await.unwrap().unwrap().is_err());
+        assert!(physical.closed.load(Ordering::Acquire));
+        assert!(!physical.data_failed.load(Ordering::Acquire), "network change must not poison transport preference");
+        drop(held_write);
+    }
+
+    #[tokio::test]
+    async fn platform_websocket_negotiates_chunks_and_preserves_large_frame() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = serde_json::json!({"type":"response.create", "input": "工具输出 🦀 \"code\"\n".repeat(120_000)}).to_string();
+        let expected = <sha2::Sha256 as sha2::Digest>::digest(body.as_bytes());
+        let (stop, stopped) = oneshot::channel();
+        let peer = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let auth = read_mock_message(&mut socket).await;
+            assert!(supplier_transport_string_array(&auth.payload, "transport_features").iter().any(|f| f == SUPPLIER_MESSAGE_CHUNKS_FEATURE));
+            socket.send(WsMessage::Text(serde_json::json!({"id":auth.id,"type":"authenticate_ack","payload":{
+                "ok":true,"transport_features":[PLATFORM_DUPLEX_FEATURE,SUPPLIER_MESSAGE_CHUNKS_FEATURE,
+                SUPPLIER_LARGE_MESSAGES_FEATURE,SUPPLIER_TRANSPORT_FRAME_COMPRESSION_FEATURE]
+            }}).to_string().into())).await.unwrap();
+            let codec = SupplierTransportCodec::new(None);
+            codec.message_chunks_enabled.store(true, Ordering::Relaxed);
+            let mut chunks = 0;
+            let digest = loop {
+                let frame = socket.next().await.unwrap().unwrap();
+                let WsMessage::Binary(bytes) = frame else { panic!("expected compressed chunk") };
+                let decoded = decode_supplier_transport_frame(&bytes).unwrap();
+                assert_eq!(decoded.kind, SUPPLIER_MESSAGE_CHUNK_TYPE);
+                assert_eq!(decoded.id, "chunk-session");
+                chunks += 1;
+                if let Some(normalized) = codec.decode_websocket(WsMessage::Binary(bytes)).unwrap() {
+                    let message: SupplierMessage = serde_json::from_str(&normalized).unwrap();
+                    break <sha2::Sha256 as sha2::Digest>::digest(payload_string(&message.payload, "data").as_bytes());
+                }
+            };
+            assert!(chunks > 2);
+            let _ = stopped.await;
+            digest
+        });
+        let wire = connect_platform_websocket_wire(&format!("ws://{address}/supplier/ws"), None, "access").await.unwrap();
+        wire.send(SupplierMessage { output_credit: None, id: "chunk-session".into(), kind: "platform_duplex_client_frame".into(),
+            payload: platform_frame_payload(PlatformDuplexFrame::Text(body)) }).await.unwrap();
+        let _ = stop.send(());
+        assert_eq!(peer.await.unwrap(), expected);
+        wire.stop().await;
     }
 
     #[tokio::test]
@@ -2293,6 +2708,613 @@ mod platform_duplex_tests {
     }
 
     #[tokio::test]
+    async fn failed_quic_preference_is_scoped_to_account_and_network() {
+        let (changes, receiver) = tokio::sync::watch::channel(0);
+        let (mut physical, _incoming, _writes) = buffered_mock_physical_with_network_changes(receiver);
+        Arc::get_mut(&mut physical).unwrap().transport = "quic".into();
+        assert!(!physical.prefer_websocket_after_failure("access"));
+        physical.data_failed.store(true, Ordering::Release);
+        assert!(!physical.usable_with_token("access"));
+        assert!(physical.prefer_websocket_after_failure("access"));
+        assert!(!physical.prefer_websocket_after_failure("different-account"));
+        changes.send_modify(|generation| *generation += 1);
+        assert!(!physical.prefer_websocket_after_failure("access"));
+    }
+
+    #[tokio::test]
+    async fn oversized_platform_frame_is_rejected_without_recovery_or_connection_loss() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (stop, stopped) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let auth = read_mock_message(&mut socket).await;
+            socket.send(WsMessage::Text(serde_json::json!({"id":auth.id,"type":"authenticate_ack","payload":{
+                "ok":true,"transport_features":[PLATFORM_DUPLEX_FEATURE,PLATFORM_DUPLEX_RESUME_FEATURE]
+            }}).to_string().into())).await.unwrap();
+            let open = read_mock_message(&mut socket).await;
+            assert_eq!(open.kind, "platform_duplex_open");
+            socket.send(WsMessage::Text(serde_json::json!({"id":open.id,"type":"platform_duplex_opened",
+                "payload":{"ok":true}
+            }).to_string().into())).await.unwrap();
+            let close = read_mock_message(&mut socket).await;
+            assert_eq!(close.kind, "platform_duplex_close", "oversized input must not be written or resumed");
+            assert_eq!(close.id, open.id, "only the rejected logical session is closed");
+            // A different conversation must work on the same physical socket.
+            let next = read_mock_message(&mut socket).await;
+            assert_eq!(next.kind, "platform_duplex_open");
+            assert_ne!(next.id, open.id);
+            socket.send(WsMessage::Text(serde_json::json!({"id":next.id,"type":"platform_duplex_opened",
+                "payload":{"ok":true}
+            }).to_string().into())).await.unwrap();
+            let request = read_mock_message(&mut socket).await;
+            assert_eq!(request.kind, "platform_duplex_client_frame");
+            assert_eq!(request.id, next.id);
+            let body: serde_json::Value = serde_json::from_str(&payload_string(&request.payload, "data")).unwrap();
+            assert_eq!(body["input"], "new conversation");
+            socket.send(WsMessage::Text(serde_json::json!({"id":next.id,"type":"platform_duplex_server_frame","payload":{
+                "frame_type":"text","_const_platform_seq":1,"_const_duplex_turn_seq":1,
+                "_const_duplex_turn_id":request.payload[PLATFORM_DUPLEX_TURN_ID_FIELD],
+                "turn_terminal":true,"status":200,"data":r#"{"type":"response.completed"}"#
+            }}).to_string().into())).await.unwrap();
+            let _ = stopped.await;
+        });
+        let endpoint = Endpoint {
+            server_id: String::new(), name: "local-size-rejection".into(), enabled: true,
+            base_url: format!("http://{address}"), supplier_ws_url: format!("ws://{address}/supplier/ws"),
+            supplier_quic_url: String::new(),
+        };
+        let pool = PlatformDuplexPool::default();
+        let token = Arc::new(StdMutex::new("test-access".into()));
+        let notify = Arc::new(Notify::new());
+        let (session, _) = open_platform_responses_duplex(&pool, &endpoint, token.clone(), notify.clone(), Default::default()).await.unwrap();
+        let (sender, mut receiver) = session.split();
+        // Valid JSON below the local WS limit, but whitespace escaping makes
+        // the enclosing tunnel message exceed its own limit before compression.
+        let oversized = format!("{}{}", r#"{"type":"response.create","model":"code-test","input":"large request"}"#,
+            "\n".repeat(PLATFORM_DUPLEX_MAX_MESSAGE_BYTES / 2));
+        assert!(oversized.len() < PLATFORM_DUPLEX_MAX_MESSAGE_BYTES);
+        tokio::time::timeout(Duration::from_secs(10), sender.send(PlatformDuplexFrame::Text(oversized))).await.unwrap().unwrap();
+        let frame = tokio::time::timeout(Duration::from_secs(2), receiver.next()).await
+            .expect("local size rejection must not wait for first-frame or recovery timeout").unwrap().unwrap();
+        let PlatformDuplexFrame::Text(text) = frame else { panic!("missing size error") };
+        let error: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(error["status"], 413);
+        assert_eq!(error["error"]["code"], "payload_too_large");
+        drop(sender);
+        drop(receiver);
+        let (session, _) = tokio::time::timeout(Duration::from_secs(5),
+            open_platform_responses_duplex(&pool, &endpoint, token, notify, Default::default()),
+        ).await.expect("encoding rejection must not retire the shared connection").unwrap();
+        let (sender, mut receiver) = session.split();
+        sender.send(PlatformDuplexFrame::Text(r#"{"type":"response.create","model":"code-test","input":"new conversation"}"#.into())).await.unwrap();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(2), receiver.next()).await.unwrap().unwrap().unwrap(),
+            PlatformDuplexFrame::Text(r#"{"type":"response.completed"}"#.into()));
+        let _ = stop.send(());
+        server.await.unwrap();
+    }
+
+    fn first_frame_rejection(id: &str) -> SupplierMessage {
+        SupplierMessage {
+            output_credit: None, id: id.into(), kind: "platform_duplex_server_frame".into(),
+            payload: serde_json::json!({"frame_type":"text","_const_platform_seq":1,
+                "status":408,"turn_terminal":true,
+                "data":serde_json::json!({"type":"error","status":408,
+                    "error":{"type":"const_api_error","code":"first_frame_timeout"}}).to_string()
+            }).as_object().unwrap().clone(),
+        }
+    }
+
+    #[test]
+    fn first_frame_retry_requires_platform_rejection_outside_any_turn() {
+        let timeout = first_frame_rejection("first");
+        assert!(platform_first_frame_not_received(&timeout));
+        for (field, value) in [
+            (PLATFORM_DUPLEX_TURN_ID_FIELD, serde_json::json!("executed-turn")),
+            (PLATFORM_DUPLEX_TURN_SEQUENCE_FIELD, serde_json::json!(1)),
+            (PLATFORM_DUPLEX_TURN_ID_FIELD, serde_json::Value::Null),
+            ("turn_terminal", serde_json::json!(false)),
+            ("status", serde_json::json!(502)),
+            ("frame_type", serde_json::json!("binary")),
+        ] {
+            let mut ambiguous = timeout.clone();
+            ambiguous.payload.insert(field.into(), value);
+            assert!(!platform_first_frame_not_received(&ambiguous), "accepted {field}");
+        }
+        for event in [
+            serde_json::json!({"type":"error","status":408,"error":{"code":"first_frame_timeout"}}),
+            serde_json::json!({"type":"error","status":408,"error":{"type":"upstream_error","code":"first_frame_timeout"}}),
+            serde_json::json!({"type":"error","status":408,"error":{"type":"const_api_error","code":"request_timeout"}}),
+            serde_json::json!({"type":"response.created"}),
+        ] {
+            let mut ambiguous = timeout.clone();
+            ambiguous.payload.insert("data".into(), event.to_string().into());
+            assert!(!platform_first_frame_not_received(&ambiguous));
+        }
+    }
+
+    #[tokio::test]
+    async fn first_frame_retry_preserves_context_and_keeps_healthy_quic_sessions() {
+        check_first_frame_retry(false).await;
+    }
+
+    #[tokio::test]
+    async fn first_frame_retry_stops_if_websocket_also_times_out() {
+        check_first_frame_retry(true).await;
+    }
+
+    #[tokio::test]
+    async fn first_frame_retry_is_forbidden_after_any_turn_response() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let endpoint = Endpoint {
+            server_id: String::new(), name: "already-started".into(), enabled: true,
+            base_url: format!("http://{address}"), supplier_ws_url: format!("ws://{address}/supplier/ws"),
+            supplier_quic_url: "quic://127.0.0.1:9/supplier".into(),
+        };
+        let pool = PlatformDuplexPool::default();
+        let (mut quic, incoming, mut writes) = buffered_mock_physical();
+        Arc::get_mut(&mut quic).unwrap().transport = "quic".into();
+        Arc::get_mut(&mut quic).unwrap().resume_supported = true;
+        pool.connections.lock().await.insert(platform_endpoint_connection_key(&endpoint), quic);
+        let (session, _) = open_platform_responses_duplex(&pool, &endpoint,
+            Arc::new(StdMutex::new("access".into())), Arc::new(Notify::new()), Default::default(),
+        ).await.unwrap();
+        let (sender, mut receiver) = session.split();
+        let open = writes.recv().await.unwrap();
+        sender.send(PlatformDuplexFrame::Text(r#"{"type":"response.create","model":"code-test","input":"review"}"#.into())).await.unwrap();
+        let request = writes.recv().await.unwrap();
+        incoming.send(Ok(SupplierMessage {
+            output_credit: None, id: open.id.clone(), kind: "platform_duplex_server_frame".into(),
+            payload: serde_json::json!({"frame_type":"text","_const_platform_seq":1,
+                "_const_duplex_turn_id":request.payload[PLATFORM_DUPLEX_TURN_ID_FIELD],
+                "_const_duplex_turn_seq":1,"data":r#"{"type":"response.created"}"#
+            }).as_object().unwrap().clone(),
+        })).await.unwrap();
+        assert!(matches!(receiver.next().await.unwrap().unwrap(), PlatformDuplexFrame::Text(text) if text.contains("response.created")));
+        // Even an otherwise valid legacy rejection must be forwarded once the
+        // server has already acknowledged an executing turn.
+        let mut timeout = first_frame_rejection(&open.id);
+        timeout.payload.insert(PLATFORM_DUPLEX_SEQUENCE_FIELD.into(), 2.into());
+        incoming.send(Ok(timeout)).await.unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(2), receiver.next()).await.unwrap().unwrap().unwrap();
+        assert!(matches!(response, PlatformDuplexFrame::Text(text) if text.contains("first_frame_timeout")));
+        assert!(tokio::time::timeout(Duration::from_millis(50), listener.accept()).await.is_err(),
+            "a response that may have executed was replayed on a new transport");
+    }
+
+    async fn check_first_frame_retry(second_timeout: bool) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let endpoint = Endpoint {
+            server_id: "same-home".into(), name: "first-frame".into(), enabled: true,
+            base_url: format!("http://{address}"), supplier_ws_url: format!("ws://{address}/supplier/ws"),
+            supplier_quic_url: "quic://127.0.0.1:9/supplier".into(),
+        };
+        let pool = PlatformDuplexPool::default();
+        let (mut quic, incoming, mut writes) = buffered_mock_physical();
+        Arc::get_mut(&mut quic).unwrap().transport = "quic".into();
+        Arc::get_mut(&mut quic).unwrap().resume_supported = true;
+        pool.connections.lock().await.insert(platform_endpoint_connection_key(&endpoint), quic.clone());
+        let original = serde_json::json!({"type":"response.create","model":"code-test",
+            "previous_response_id":"resp-parent","instructions":"Review the code",
+            "reasoning":{"effort":"high"},"unknown_field":{"retain":true},
+            "tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}],
+            "input":[{"type":"compaction","encrypted_content":"opaque-context"},
+                {"type":"function_call_output","call_id":"call-1","output":"source code\n".repeat(32000)}]
+        }).to_string();
+        let following = r#"{"type":"response.create","model":"code-test","previous_response_id":"resp-done","input":[{"role":"user","content":"continue"}]}"#.to_string();
+        let expected = original.clone();
+        let expected_following = following.clone();
+        let (stop, stopped) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let auth = read_mock_message(&mut socket).await;
+            assert_eq!(auth.kind, "authenticate");
+            socket.send(WsMessage::Text(serde_json::json!({"id":auth.id,"type":"authenticate_ack","payload":{
+                "ok":true,"transport_features":[PLATFORM_DUPLEX_FEATURE,PLATFORM_DUPLEX_RESUME_FEATURE]
+            }}).to_string().into())).await.unwrap();
+            let open = read_mock_message(&mut socket).await;
+            assert_eq!(open.kind, "platform_duplex_open", "retry must open a fresh logical session");
+            assert_eq!(open.payload["request"]["headers"]["session_id"][0], "codex-session");
+            assert_eq!(open.payload["request"]["headers"]["x-codex-turn-state"][0], "routing-state");
+            socket.send(WsMessage::Text(serde_json::json!({"id":open.id,"type":"platform_duplex_opened","payload":{"ok":true}}).to_string().into())).await.unwrap();
+            for (index, expected) in [expected, expected_following].into_iter().enumerate() {
+                let request = read_mock_message(&mut socket).await;
+                assert_eq!(request.kind, "platform_duplex_client_frame", "do not register a supply channel");
+                assert_eq!(request.id, open.id);
+                assert!(request.payload["data"] == expected, "request history/opaque fields changed");
+                let response = if second_timeout {
+                    first_frame_rejection(&open.id)
+                } else {
+                    SupplierMessage {
+                        output_credit: None, id: open.id.clone(), kind: "platform_duplex_server_frame".into(),
+                        payload: serde_json::json!({"frame_type":"text","_const_platform_seq":index + 1,
+                            "_const_duplex_turn_id":request.payload[PLATFORM_DUPLEX_TURN_ID_FIELD],
+                            "_const_duplex_turn_seq":1,"turn_terminal":true,"status":200,
+                            "data":r#"{"type":"response.completed","response":{"id":"resp-done"}}"#
+                        }).as_object().unwrap().clone(),
+                    }
+                };
+                socket.send(WsMessage::Text(serde_json::to_string(&response).unwrap().into())).await.unwrap();
+                assert_eq!(read_mock_message(&mut socket).await.kind, "platform_duplex_ack");
+                if second_timeout { break; }
+            }
+            // Any third execution/open on the alternate connection is a bug.
+            tokio::select! {
+                _ = stopped => {}
+                next = socket.next() => panic!("unexpected retry/frame: {}", next.is_some()),
+                next = listener.accept() => panic!("unexpected additional connection: {}", next.is_ok()),
+            }
+        });
+        let token = Arc::new(StdMutex::new("access".into()));
+        let notify = Arc::new(Notify::new());
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("session_id", "codex-session".parse().unwrap());
+        headers.insert("x-codex-turn-state", "routing-state".parse().unwrap());
+        let (session, _) = open_platform_responses_duplex(&pool, &endpoint, token.clone(), notify.clone(), headers).await.unwrap();
+        let (sender, mut receiver) = session.split();
+        let old = writes.recv().await.unwrap();
+        sender.send(PlatformDuplexFrame::Text(original)).await.unwrap();
+        assert_eq!(writes.recv().await.unwrap().kind, "platform_duplex_client_frame");
+        incoming.send(Ok(first_frame_rejection(&old.id))).await.unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(5), receiver.next()).await.unwrap().unwrap().unwrap();
+        let PlatformDuplexFrame::Text(text) = response else { panic!("expected response") };
+        if second_timeout {
+            assert!(text.contains("first_frame_timeout"), "the final cause must be preserved");
+        } else {
+            assert!(text.contains("response.completed"), "first frame did not recover");
+            sender.send(PlatformDuplexFrame::Text(following)).await.unwrap();
+            let response = tokio::time::timeout(Duration::from_secs(5), receiver.next()).await.unwrap().unwrap().unwrap();
+            assert!(matches!(response, PlatformDuplexFrame::Text(text) if text.contains("response.completed")));
+        }
+        assert!(!quic.closed.load(Ordering::Acquire));
+        assert!(!quic.data_failed.load(Ordering::Acquire));
+        assert!(Arc::ptr_eq(&quic, &pool.connection(&endpoint, token, notify).await.unwrap()));
+        let _ = stop.send(());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_platform_quic_upload_preserves_history_after_slow_receiver_resumes() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let key = rustls_pki_types::PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
+        let mut tls = rustls::ServerConfig::builder().with_no_client_auth()
+            .with_single_cert(vec![cert.cert.der().clone()], key.into()).unwrap();
+        tls.alpn_protocols = vec![SUPPLIER_QUIC_ALPN.to_vec()];
+        let mut config = quinn::ServerConfig::with_crypto(Arc::new(
+            quinn::crypto::rustls::QuicServerConfig::try_from(tls).unwrap(),
+        ));
+        // Prevent QUIC's buffers from accepting the entire upload before the
+        // peer reads it. This models a slow receiver, not an inference delay.
+        let mut transport = quinn::TransportConfig::default();
+        transport.stream_receive_window((32 * 1024u32).into());
+        transport.receive_window((32 * 1024u32).into());
+        config.transport_config(Arc::new(transport));
+        let peer = quinn::Endpoint::server(config, "127.0.0.1:0".parse().unwrap()).unwrap();
+        let endpoint = peer.clone();
+        let (stop, stopped) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let connection = endpoint.accept().await.unwrap().await.unwrap();
+            let (mut writer, reader) = connection.accept_bi().await.unwrap();
+            let mut reader = BufReader::new(reader);
+            let codec = SupplierTransportCodec::new(None);
+            let auth = platform_quic_read(&mut reader, &codec).await.unwrap();
+            platform_quic_send(&mut writer, &codec, SupplierMessage {
+                output_credit: None, id: auth.id, kind: "authenticate_ack".into(),
+                payload: serde_json::json!({"ok":true,"transport_features":[
+                    PLATFORM_DUPLEX_FEATURE, PLATFORM_DUPLEX_RESUME_FEATURE,
+                    SUPPLIER_TRANSPORT_FRAME_COMPRESSION_FEATURE,
+                ]}).as_object().unwrap().clone(),
+            }).await.unwrap();
+            let open = platform_quic_read(&mut reader, &codec).await.unwrap();
+            platform_quic_send(&mut writer, &codec, SupplierMessage {
+                output_credit: None, id: open.id, kind: "platform_duplex_opened".into(),
+                payload: serde_json::json!({"ok":true}).as_object().unwrap().clone(),
+            }).await.unwrap();
+            // An older peer has no chunk support. Exercise an upload exceeding
+            // the former 10-second whole-frame deadline without losing history.
+            tokio::time::sleep(Duration::from_secs(12)).await;
+            let request = platform_quic_read(&mut reader, &codec).await.unwrap();
+            let digest = <sha2::Sha256 as sha2::Digest>::digest(payload_string(&request.payload, "data").as_bytes());
+            let _ = stopped.await;
+            digest
+        });
+        // Incompressible opaque context keeps the encoded frame above QUIC's
+        // send buffer. Include tool history and compaction without real data.
+        let mut opaque = vec![0u8; 16 * 1024 * 1024];
+        rand::RngExt::fill(&mut rand::rng(), opaque.as_mut_slice());
+        let body = serde_json::json!({"type":"response.create","model":"code-test",
+            "tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}],
+            "input":[{"type":"function_call_output","call_id":"call-1","output":"source code"},
+                {"type":"compaction","encrypted_content":BASE64.encode(&opaque)}]
+        }).to_string();
+        let expected = <sha2::Sha256 as sha2::Digest>::digest(body.as_bytes());
+        drop(opaque);
+        let mut wire = connect_platform_quic_wire(
+            &format!("quic://{}/supplier", peer.local_addr().unwrap()), "test-access",
+        ).await.unwrap();
+        wire.send(platform_duplex_open_message("slow-upload", &Default::default())).await.unwrap();
+        assert_eq!(wire.inbound.recv().await.unwrap().unwrap().kind, "platform_duplex_opened");
+        let upload_started = Instant::now();
+        let result = wire.send(SupplierMessage {
+            output_credit: None, id: "slow-upload".into(), kind: "platform_duplex_client_frame".into(),
+            payload: platform_frame_payload(PlatformDuplexFrame::Text(body)),
+        }).await;
+        assert!(result.is_ok(), "legacy upload was interrupted: {result:?}");
+        assert!(upload_started.elapsed() > Duration::from_secs(10),
+            "the fixture did not exercise a slow legacy upload");
+        let _ = stop.send(());
+        assert_eq!(server.await.unwrap(), expected, "tool/compaction history changed in transit");
+        wire.stop().await;
+        peer.close(0u32.into(), b"test finished");
+    }
+
+    #[tokio::test]
+    async fn chunked_platform_quic_upload_survives_slow_receiver_with_heartbeats() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let key = rustls_pki_types::PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
+        let mut tls = rustls::ServerConfig::builder().with_no_client_auth()
+            .with_single_cert(vec![cert.cert.der().clone()], key.into()).unwrap();
+        tls.alpn_protocols = vec![SUPPLIER_QUIC_ALPN.to_vec()];
+        let mut config = quinn::ServerConfig::with_crypto(Arc::new(
+            quinn::crypto::rustls::QuicServerConfig::try_from(tls).unwrap(),
+        ));
+        let mut transport = quinn::TransportConfig::default();
+        transport.stream_receive_window((32 * 1024u32).into());
+        transport.receive_window((32 * 1024u32).into());
+        config.transport_config(Arc::new(transport));
+        let peer = quinn::Endpoint::server(config, "127.0.0.1:0".parse().unwrap()).unwrap();
+        let endpoint = peer.clone();
+        let (stop, stopped) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let connection = endpoint.accept().await.unwrap().await.unwrap();
+            let (mut writer, reader) = connection.accept_bi().await.unwrap();
+            let mut reader = BufReader::new(reader);
+            let codec = SupplierTransportCodec::new(None);
+            let auth = platform_quic_read(&mut reader, &codec).await.unwrap();
+            // Deliberately omit compression: a small receive window and paced
+            // reads must exercise the wire, rather than compress into one packet.
+            platform_quic_send(&mut writer, &codec, SupplierMessage {
+                output_credit: None, id: auth.id, kind: "authenticate_ack".into(),
+                payload: serde_json::json!({"ok":true,"transport_features":[PLATFORM_DUPLEX_FEATURE,SUPPLIER_MESSAGE_CHUNKS_FEATURE]}).as_object().unwrap().clone(),
+            }).await.unwrap();
+            let open = platform_quic_read(&mut reader, &codec).await.unwrap();
+            platform_quic_send(&mut writer, &codec, SupplierMessage {
+                output_credit: None, id: open.id, kind: "platform_duplex_opened".into(), payload: Default::default(),
+            }).await.unwrap();
+            // Backpressure must survive a temporary pause longer than the old
+            // 15-second chunk budget, then sustain a slow, progressing upload.
+            tokio::time::sleep(Duration::from_secs(20)).await;
+            let mut assembler = SupplierMessageAssembler::default();
+            let mut chunks = 0;
+            let mut saw_pong = false;
+            let request = loop {
+                let mut raw = String::new();
+                assert!(reader.read_line(&mut raw).await.unwrap() > 0);
+                let message: SupplierMessage = serde_json::from_str(&raw).unwrap();
+                match message.kind.as_str() {
+                    "ping" => {
+                        platform_quic_send(&mut writer, &codec, SupplierMessage {
+                            output_credit: None, id: message.id, kind: "pong".into(), payload: Default::default(),
+                        }).await.unwrap();
+                    }
+                    "pong" => { saw_pong = true; }
+                    SUPPLIER_MESSAGE_CHUNK_TYPE => {
+                        assert_eq!(message.id, "paced-upload");
+                        chunks += 1;
+                        if chunks == 1 {
+                            platform_quic_send(&mut writer, &codec, SupplierMessage {
+                                output_credit: None, id: "during-upload".into(), kind: "ping".into(), payload: Default::default(),
+                            }).await.unwrap();
+                        }
+                        if let Some(complete) = assembler.accept(message, true).unwrap() { break complete; }
+                        tokio::time::sleep(Duration::from_millis(600)).await;
+                    }
+                    _ => panic!("business messages must not interleave with chunks"),
+                }
+            };
+            assert!(chunks > 50 && saw_pong, "upload did not allow heartbeats between chunks");
+            let digest = <sha2::Sha256 as sha2::Digest>::digest(payload_string(&request.payload, "data").as_bytes());
+            let _ = stopped.await;
+            digest
+        });
+        let wire = connect_platform_quic_wire(&format!("quic://{}/supplier", peer.local_addr().unwrap()), "access").await.unwrap();
+        let (_network, changes) = tokio::sync::watch::channel(0);
+        let physical = platform_physical_connection(wire, "quic".into(), "access".into(),
+            Arc::new(StdMutex::new("access".into())), Arc::new(Notify::new()), changes);
+        let (_events, _) = physical.open(platform_duplex_open_message("paced-upload", &Default::default())).await.unwrap();
+        let body = serde_json::json!({"type":"response.create","input":"history ".repeat(512 * 1024)}).to_string();
+        let expected = <sha2::Sha256 as sha2::Digest>::digest(body.as_bytes());
+        let started = Instant::now();
+        tokio::time::timeout(Duration::from_secs(100), physical.send(SupplierMessage {
+            output_credit: None, id: "paced-upload".into(), kind: "platform_duplex_client_frame".into(),
+            payload: platform_frame_payload(PlatformDuplexFrame::Text(body)),
+        })).await.expect("paced upload stalled").expect("continuous upload must not expire as one large frame");
+        assert!(started.elapsed() > Duration::from_secs(50));
+        let _ = stop.send(());
+        assert_eq!(server.await.unwrap(), expected);
+        peer.close(0u32.into(), b"test finished");
+    }
+
+    #[tokio::test]
+    async fn quic_session_timeout_does_not_poison_other_sessions() {
+        check_quic_recovery_boundary(true).await;
+    }
+
+    #[tokio::test]
+    async fn quic_disconnect_resumes_over_websocket_without_replaying_request() {
+        check_quic_recovery_boundary(false).await;
+    }
+
+    async fn check_quic_recovery_boundary(session_timeout: bool) {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let key = rustls_pki_types::PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
+        let mut tls = rustls::ServerConfig::builder().with_no_client_auth()
+            .with_single_cert(vec![cert.cert.der().clone()], key.into()).unwrap();
+        tls.alpn_protocols = vec![SUPPLIER_QUIC_ALPN.to_vec()];
+        let config = quinn::ServerConfig::with_crypto(Arc::new(
+            quinn::crypto::rustls::QuicServerConfig::try_from(tls).unwrap(),
+        ));
+        let quic = quinn::Endpoint::server(config, "127.0.0.1:0".parse().unwrap()).unwrap();
+        let ws = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = Endpoint {
+            server_id: String::new(), name: "data-failure".into(), enabled: true,
+            base_url: format!("http://{}", ws.local_addr().unwrap()),
+            supplier_ws_url: if session_timeout { String::new() } else { format!("ws://{}/supplier/ws", ws.local_addr().unwrap()) },
+            supplier_quic_url: format!("quic://{}/supplier", quic.local_addr().unwrap()),
+        };
+        let create = serde_json::json!({
+            "type":"response.create", "model":"code-test", "previous_response_id":"resp-parent",
+            "instructions":"Review the code", "reasoning":{"effort":"high"},
+            "tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}],
+            "input":[{"type":"compaction","encrypted_content":"opaque-state"},
+                {"type":"function_call_output","call_id":"call-1","output":"source code\n".repeat(32000)}]
+        }).to_string();
+        let expected = create.clone();
+        let new_conversation = serde_json::json!({
+            "type":"response.create", "model":"code-test", "input":"new conversation"
+        }).to_string();
+        let expected_new = new_conversation.clone();
+        let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let executed = executions.clone();
+        let peer = quic.clone();
+        let (uploaded, upload_ready) = oneshot::channel();
+        let (stop, stopped) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let connection = peer.accept().await.unwrap().await.unwrap();
+            let (mut writer, reader) = connection.accept_bi().await.unwrap();
+            let mut lines = BufReader::new(reader).lines();
+            let auth: SupplierMessage = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            let ack = serde_json::json!({"id":auth.id,"type":"authenticate_ack","payload":{
+                "ok":true,"transport_features":[PLATFORM_DUPLEX_FEATURE,PLATFORM_DUPLEX_RESUME_FEATURE]
+            }});
+            writer.write_all(format!("{ack}\n").as_bytes()).await.unwrap();
+            let open: SupplierMessage = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            let ack = serde_json::json!({"id":open.id,"type":"platform_duplex_opened","payload":{"ok":true}});
+            writer.write_all(format!("{ack}\n").as_bytes()).await.unwrap();
+            // A logical timeout and a physical disconnect have different
+            // recovery boundaries even when both follow a successful upload.
+            upload_ready.await.unwrap();
+            if session_timeout {
+                // Simulate a logical first-frame deadline. Late input cannot
+                // execute, but a new conversation on the same wire can succeed.
+                let error = serde_json::json!({"id":open.id,"type":"platform_duplex_server_frame","payload":{
+                    "frame_type":"text","_const_platform_seq":1,"turn_terminal":true,"status":408,
+                    "data":r#"{"type":"error","status":408,"error":{"type":"const_api_error","code":"first_frame_timeout"}}"#
+                }});
+                writer.write_all(format!("{error}\n").as_bytes()).await.unwrap();
+                let new_open = loop {
+                    let line = tokio::select! {
+                        line = lines.next_line() => line.unwrap().unwrap(),
+                        _ = ws.accept() => panic!("a logical timeout must not poison the shared QUIC connection"),
+                    };
+                    let message: SupplierMessage = serde_json::from_str(&line).unwrap();
+                    if message.kind == "platform_duplex_open" {
+                        assert_ne!(message.id, open.id);
+                        break message;
+                    }
+                    assert_eq!(message.id, open.id, "unexpected session before new open");
+                    if message.kind == "platform_duplex_client_frame" {
+                        assert!(message.payload["data"] == expected, "late input changed");
+                    }
+                };
+                let ack = serde_json::json!({"id":new_open.id,"type":"platform_duplex_opened","payload":{"ok":true}});
+                writer.write_all(format!("{ack}\n").as_bytes()).await.unwrap();
+                let request = loop {
+                    let message: SupplierMessage = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+                    if message.id == new_open.id {
+                        break message;
+                    }
+                    assert_eq!(message.id, open.id);
+                };
+                assert_eq!(request.kind, "platform_duplex_client_frame");
+                assert!(request.payload["data"] == expected_new, "new conversation changed");
+                executed.fetch_add(1, Ordering::SeqCst);
+                let completed = serde_json::json!({"id":new_open.id,"type":"platform_duplex_server_frame","payload":{
+                    "frame_type":"text","_const_platform_seq":1,"_const_duplex_turn_seq":1,
+                    "_const_duplex_turn_id":request.payload[PLATFORM_DUPLEX_TURN_ID_FIELD],
+                    "turn_terminal":true,"status":200,"data":r#"{"type":"response.completed"}"#
+                }});
+                writer.write_all(format!("{completed}\n").as_bytes()).await.unwrap();
+                let _ = stopped.await;
+                return;
+            }
+            let request: SupplierMessage = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(request.kind, "platform_duplex_client_frame");
+            assert!(request.payload["data"] == expected, "the original context changed");
+            executed.fetch_add(1, Ordering::SeqCst);
+            let turn_id = request.payload[PLATFORM_DUPLEX_TURN_ID_FIELD].clone();
+            let created = serde_json::json!({"id":open.id,"type":"platform_duplex_server_frame","payload":{
+                "frame_type":"text","_const_platform_seq":1,"_const_duplex_turn_seq":1,
+                "_const_duplex_turn_id":turn_id,"data":r#"{"type":"response.created"}"#
+            }});
+            writer.write_all(format!("{created}\n").as_bytes()).await.unwrap();
+            let ack: SupplierMessage = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(ack.kind, "platform_duplex_ack");
+            connection.close(1u32.into(), b"simulated data path failure");
+            let (tcp, _) = ws.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let auth = read_mock_message(&mut socket).await;
+            socket.send(WsMessage::Text(serde_json::json!({"id":auth.id,"type":"authenticate_ack","payload":{
+                "ok":true,"transport_features":[PLATFORM_DUPLEX_FEATURE,PLATFORM_DUPLEX_RESUME_FEATURE]
+            }}).to_string().into())).await.unwrap();
+            let open = read_mock_message(&mut socket).await;
+            assert_eq!(open.kind, "platform_duplex_resume");
+            socket.send(WsMessage::Text(serde_json::json!({"id":open.id,"type":"platform_duplex_opened",
+                "payload":{"ok":true,"resumed":true}
+            }).to_string().into())).await.unwrap();
+            assert_eq!(open.payload["turn_id"], turn_id);
+            assert_eq!(open.payload["after_turn_sequence"], 1);
+            socket.send(WsMessage::Text(serde_json::json!({"id":open.id,"type":"platform_duplex_server_frame","payload":{
+                "frame_type":"text","_const_platform_seq":2,"_const_duplex_turn_seq":2,
+                "_const_duplex_turn_id":turn_id,"turn_terminal":true,"status":200,
+                "data":r#"{"type":"response.completed"}"#
+            }}).to_string().into())).await.unwrap();
+            let ack = read_mock_message(&mut socket).await;
+            assert_eq!(ack.kind, "platform_duplex_ack", "recovery must not resend an executed request");
+            let _ = stopped.await;
+        });
+        let pool = PlatformDuplexPool::default();
+        let token = Arc::new(StdMutex::new("test-access".into()));
+        let notify = Arc::new(Notify::new());
+        let (session, transport) = open_platform_responses_duplex(&pool, &endpoint, token.clone(), notify.clone(), Default::default()).await.unwrap();
+        assert_eq!(transport, "quic");
+        let (sender, mut receiver) = session.split();
+        sender.send(PlatformDuplexFrame::Text(create.clone())).await.unwrap();
+        uploaded.send(()).unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(5), receiver.next()).await.unwrap().unwrap().unwrap();
+        if session_timeout {
+            assert!(matches!(first, PlatformDuplexFrame::Text(ref text) if text.contains("first_frame_timeout")));
+            assert_eq!(executions.load(Ordering::SeqCst), 0);
+            drop(sender);
+            drop(receiver);
+            let (new_session, transport) = tokio::time::timeout(Duration::from_secs(5),
+                open_platform_responses_duplex(&pool, &endpoint, token, notify, Default::default()),
+            ).await.expect("new conversation must still work on the shared connection").unwrap();
+            assert_eq!(transport, "quic");
+            let (sender, mut receiver) = new_session.split();
+            sender.send(PlatformDuplexFrame::Text(new_conversation)).await.unwrap();
+            let completed = tokio::time::timeout(Duration::from_secs(5), receiver.next()).await.unwrap().unwrap().unwrap();
+            assert_eq!(completed, PlatformDuplexFrame::Text(r#"{"type":"response.completed"}"#.into()));
+        } else {
+            assert_eq!(first, PlatformDuplexFrame::Text(r#"{"type":"response.created"}"#.into()));
+            let completed = tokio::time::timeout(Duration::from_secs(5), receiver.next()).await
+                .expect("response recovery stayed on the failed QUIC path").unwrap().unwrap();
+            assert_eq!(completed, PlatformDuplexFrame::Text(r#"{"type":"response.completed"}"#.into()));
+        }
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        let _ = stop.send(());
+        server.await.unwrap();
+        quic.close(0u32.into(), b"test finished");
+    }
+
+    #[tokio::test]
     async fn platform_websocket_resumes_response_without_replaying_request() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -2491,6 +3513,7 @@ mod platform_duplex_tests {
         let closed = Arc::new(AtomicBool::new(false));
         let physical = Arc::new(PlatformPhysicalConnection {
             commands, transport: "mock".into(), closed: closed.clone(),
+            data_failed: Arc::new(AtomicBool::new(false)),
             authenticated_token: Arc::new(StdMutex::new("access".into())),
             resume_supported: true, output_budget: Default::default(),
             network_changes: crate::network_recovery::subscribe(),
@@ -2512,7 +3535,7 @@ mod platform_duplex_tests {
                     PlatformPhysicalCommand::Send { message, completed } => {
                         if message.kind == "platform_duplex_ack" {
                             closed.store(true, Ordering::Release);
-                            let _ = completed.send(Err("simulated ACK write failure".into()));
+                            let _ = completed.send(Err(anyhow!("simulated ACK write failure")));
                             break;
                         }
                         assert_eq!(message.kind, "platform_duplex_client_frame");

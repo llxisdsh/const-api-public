@@ -73,6 +73,8 @@ where
         | SourceDriverId::BaiduQianfanApi
         | SourceDriverId::TencentHunyuanApi
         | SourceDriverId::OpencodeConsole
+        | SourceDriverId::OpenDesignApi
+        | SourceDriverId::OpenDesignSubscription
         | SourceDriverId::CustomEndpoint => API_MODEL_CATALOG_REFRESH_INTERVAL,
         _ => return fetch.await,
     };
@@ -175,6 +177,8 @@ pub(crate) fn is_gateway(driver: SourceDriverId) -> bool {
             | SourceDriverId::MinimaxTokenPlan
             | SourceDriverId::OllamaCloud
             | SourceDriverId::MuseCode
+            | SourceDriverId::OpenDesignApi
+            | SourceDriverId::OpenDesignSubscription
             | SourceDriverId::CopilotSubscription
             | SourceDriverId::AbacusRoutellm
             | SourceDriverId::PoeApi
@@ -950,6 +954,21 @@ pub(crate) mod tests {
     fn gateway_urls_preserve_the_documented_api_roots() {
         for (driver, base, expected) in [
             (
+                SourceDriverId::OpenDesignApi,
+                "https://amr-link.open-design.ai",
+                "https://amr-link.open-design.ai/v1/models",
+            ),
+            (
+                SourceDriverId::OpenDesignApi,
+                "https://amr-link.open-design.ai/v1",
+                "https://amr-link.open-design.ai/v1/models",
+            ),
+            (
+                SourceDriverId::OpenDesignSubscription,
+                "https://amr-link.open-design.ai/v1",
+                "https://amr-link.open-design.ai/v1/models",
+            ),
+            (
                 SourceDriverId::MuseCode,
                 "https://api.meta.ai/v1",
                 "https://api.meta.ai/v1/models",
@@ -1075,6 +1094,7 @@ pub(crate) mod tests {
             SourceDriverId::CommandCode,
             SourceDriverId::MuseCode,
             SourceDriverId::AbacusRoutellm,
+            SourceDriverId::OpenDesignApi,
         ] {
             let mut channel = channel(driver, &base);
             let result = crate::detection::refresh_channel(channel.clone())
@@ -1140,7 +1160,7 @@ pub(crate) mod tests {
         }
         assert_eq!(
             gets.load(std::sync::atomic::Ordering::Relaxed),
-            7,
+            8,
             "one shared catalog GET per refresh"
         );
         server.abort();

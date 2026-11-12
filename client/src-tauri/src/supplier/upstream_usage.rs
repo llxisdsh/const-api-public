@@ -452,7 +452,14 @@ impl SupplierUpstreamUsage {
             }
             "gemini_native" => {
                 for (details, output) in [
-                    (usage.get("promptTokensDetails"), false),
+                    (
+                        // EmbeddingUsageMetadata uses the singular Token spelling.
+                        // Keep generation's field authoritative when both exist.
+                        usage
+                            .get("promptTokensDetails")
+                            .or_else(|| usage.get("promptTokenDetails")),
+                        false,
+                    ),
                     (
                         usage
                             .get("candidatesTokensDetails")
@@ -948,6 +955,10 @@ impl SupplierUpstreamUsageAccumulator {
             line: Vec::new(),
             multiline_data: Vec::new(),
         }
+    }
+
+    pub(crate) fn observe_json(&mut self, value: &serde_json::Value) {
+        self.usage.absorb_json(value);
     }
 
     pub(crate) fn push(&mut self, chunk: &[u8]) {
@@ -1463,6 +1474,85 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
         assert_eq!(meters.get("cached_document_input_tokens"), Some(&3));
         assert_eq!(meters.get("tool_input_tokens"), Some(&12));
         assert_eq!(meters.get("tool_image_input_tokens"), Some(&7));
+    }
+
+    #[test]
+    fn preserves_gemini_embedding_input_details_without_combining_aliases() {
+        let singular = serde_json::json!([
+            {"modality":"IMAGE","tokenCount":20},
+            {"modality":"AUDIO","tokenCount":15},
+            {"modality":"VIDEO","tokenCount":25},
+            {"modality":"DOCUMENT","tokenCount":30}
+        ]);
+        for (name, plural, expected) in [
+            ("singular", None, [20, 15, 25, 30]),
+            (
+                "plural_precedence",
+                Some(serde_json::json!([{"modality":"IMAGE","tokenCount":7}])),
+                [7, 0, 0, 0],
+            ),
+            ("empty_plural_precedence", Some(serde_json::json!([])), [0; 4]),
+            (
+                "zero_plural_precedence",
+                Some(serde_json::json!([{"modality":"IMAGE","tokenCount":0}])),
+                [0; 4],
+            ),
+        ] {
+            let mut metadata = serde_json::json!({
+                "promptTokenCount":100,
+                "promptTokenDetails":singular
+            });
+            if let Some(plural) = plural {
+                metadata["promptTokensDetails"] = plural;
+            }
+            for wrapped in [false, true] {
+                let body = serde_json::json!({
+                    "embedding":{"values":[0.1]},
+                    "usageMetadata":metadata
+                });
+                let body = if wrapped {
+                    serde_json::json!({"response":body})
+                } else {
+                    body
+                };
+                let usage = upstream_usage_from_body(
+                    "gemini_native",
+                    &serde_json::to_vec(&body).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(usage.input_tokens, Some(100), "{name} wrapped={wrapped}");
+                let mut expected_count = 0;
+                for (kind, quantity) in [
+                    "image_input_tokens",
+                    "audio_input_tokens",
+                    "video_input_tokens",
+                    "document_input_tokens",
+                ]
+                .into_iter()
+                .zip(expected)
+                {
+                    let meter = usage
+                        .usage_meters
+                        .iter()
+                        .find(|meter| meter.meter_kind == kind);
+                    if quantity == 0 {
+                        assert!(meter.is_none(), "{name} wrapped={wrapped}: {kind}");
+                        continue;
+                    }
+                    expected_count += 1;
+                    let meter = meter.expect("input modality meter");
+                    assert_eq!(meter.quantity, quantity, "{name} wrapped={wrapped}: {kind}");
+                    assert_eq!(meter.unit, "per_1m_tokens");
+                    assert_eq!(meter.quantity_scale, 1);
+                    assert!(meter.included_in_total);
+                }
+                assert_eq!(
+                    usage.usage_meters.len(),
+                    expected_count,
+                    "{name} wrapped={wrapped}"
+                );
+            }
+        }
     }
 
     #[test]

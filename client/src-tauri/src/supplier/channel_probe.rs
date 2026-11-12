@@ -139,6 +139,7 @@ async fn test_channel_upstream_attempt(
 ) -> Result<ChannelUpstreamTestResult, ProbeError> {
     let result = test_channel_upstream_attempt_inner(channel.clone(), requested_model, prompt).await?;
     availability::record_probe_observation(&channel, &result);
+    health_recovery::record_model_success(&result.model);
     Ok(result)
 }
 
@@ -151,8 +152,12 @@ async fn test_channel_upstream_attempt_inner(
     let requested_model = requested_model
         .map(|model| exact_probe_model(&channel, &model))
         .transpose()?;
-    if channel.source_driver() == crate::source_driver::SourceDriverId::OpencodeConsole {
-        return test_opencode_console_channel_upstream(
+    // Managed HTTP subscriptions must use the same credential adapter as real
+    // traffic. Their presentation kind alone does not select the legacy bridge.
+    if channel.kind.trim() == "subscription_adapter"
+        && matches!(channel.v2.executor, crate::model::ChannelExecutorLocator::HttpSurface)
+    {
+        return test_http_subscription_channel_upstream(
             &channel,
             requested_model.as_deref(),
             &prompt,
@@ -244,7 +249,7 @@ async fn test_channel_upstream_attempt_inner(
     })
 }
 
-fn opencode_probe_request(
+fn http_subscription_probe_request(
     channel: &ChannelConfig,
     model: &str,
     prompt: &str,
@@ -292,7 +297,7 @@ fn opencode_probe_request(
     Ok((protocol, path, bytes::Bytes::from(serde_json::to_vec(&body)?)))
 }
 
-async fn test_opencode_console_channel_upstream(
+async fn test_http_subscription_channel_upstream(
     channel: &ChannelConfig,
     requested_model: Option<&str>,
     prompt: &str,
@@ -305,9 +310,9 @@ async fn test_opencode_console_channel_upstream(
     }
     let prompt = normalized_health_prompt(prompt);
     let (protocol, path, body) =
-        opencode_probe_request(channel, &model, &prompt).map_err(|error| ProbeError {
+        http_subscription_probe_request(channel, &model, &prompt).map_err(|error| ProbeError {
             failure: None,
-            message: format!("OpenCode Console probe request is invalid: {error}"),
+            message: format!("HTTP subscription probe request is invalid: {error}"),
             deferred: false,
         })?;
     let mut headers = reqwest::header::HeaderMap::new();
@@ -337,7 +342,7 @@ async fn test_opencode_console_channel_upstream(
     .await
     .map_err(|error| ProbeError {
         failure: None,
-        message: format!("OpenCode Console probe request failed: {error}"),
+        message: format!("HTTP subscription probe request failed: {error}"),
         deferred: true,
     })?;
     let response = execution.response;
@@ -356,7 +361,7 @@ async fn test_opencode_console_channel_upstream(
         .collect::<Vec<_>>();
     let raw = response.text().await.map_err(|error| ProbeError {
         failure: None,
-        message: format!("OpenCode Console probe response could not be read: {error}"),
+        message: format!("HTTP subscription probe response could not be read: {error}"),
         deferred: true,
     })?;
     let header_refs = headers
@@ -538,6 +543,204 @@ mod channel_probe_tests {
     use super::*;
 
     #[test]
+    fn manual_probe_futures_stay_bounded_on_worker_stacks() {
+        // Inspect the types without constructing a possibly oversized future
+        // on the test thread's stack.
+        fn future_size<F: std::future::Future>(_: impl FnOnce() -> F) -> usize {
+            std::mem::size_of::<F>()
+        }
+        fn command_size<F: std::future::Future>(
+            _: impl FnOnce(tauri::State<'static, AppState>, ChannelConfig, String, String) -> F,
+        ) -> usize {
+            std::mem::size_of::<F>()
+        }
+        fn channel_command_size<F: std::future::Future>(
+            _: impl FnOnce(tauri::State<'static, AppState>, ChannelConfig) -> F,
+        ) -> usize {
+            std::mem::size_of::<F>()
+        }
+        let channel =
+            channel_from_supplier("probe-stack-fixture".into(), &default_supplier_config());
+        let sizes = [
+            (
+                "subscription probe",
+                future_size(|| test_subscription_channel_upstream(&channel, Some("fixture"), "OK")),
+            ),
+            (
+                "selected-model probe",
+                future_size(|| {
+                    test_channel_upstream_model_inner(
+                        channel.clone(),
+                        "fixture".into(),
+                        "OK".into(),
+                    )
+                }),
+            ),
+            (
+                "automatic probe",
+                future_size(|| test_channel_upstream_inner(channel.clone(), "OK".into())),
+            ),
+            (
+                "manual test command with recovery",
+                command_size(crate::test_channel_upstream),
+            ),
+            (
+                "refresh command with recovery",
+                channel_command_size(crate::refresh_channel_upstream),
+            ),
+            (
+                "validation command with recovery",
+                channel_command_size(crate::validate_channel_upstream),
+            ),
+        ];
+        for (name, size) in sizes {
+            std::eprintln!("{name}: {size} bytes");
+        }
+        for (name, size) in sizes {
+            assert!(size < 64 * 1024, "{name} future is {size} bytes");
+        }
+        for (name, size) in [
+            (
+                "probe budget",
+                future_size(|| {
+                    crate::upstream_transport::with_probe_budget(
+                        2,
+                        test_channel_upstream_model_inner(
+                            channel.clone(),
+                            "fixture".into(),
+                            "OK".into(),
+                        ),
+                    )
+                }),
+            ),
+            (
+                "HTTP observer",
+                future_size(|| {
+                    crate::upstream_transport::observe_http_version(
+                        test_subscription_channel_upstream(&channel, Some("fixture"), "OK"),
+                    )
+                }),
+            ),
+        ] {
+            assert!(
+                size < 4 * 1024,
+                "{name} wrapper embeds a large future: {size} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn manual_probe_invalid_input_returns_error_on_worker_stack() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(2 * 1024 * 1024)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async {
+                let dir = tempfile::tempdir().unwrap();
+                let state = crate::runtime::create_runtime_state(
+                    dir.path().join("client.json"),
+                    default_config(),
+                );
+                let mut channel =
+                    channel_from_supplier("probe-stack-fixture".into(), &default_supplier_config());
+                channel.set_source_driver(crate::source_driver::SourceDriverId::GrokSubscription);
+                channel.v2.use_system_proxy = false;
+                channel.subscription.credential_ref =
+                    dir.path().join("missing.json").to_string_lossy().into();
+                // Include Tauri's actual result-future wrapper: direct Rust calls
+                // passed while the UI command exhausted the worker stack.
+                // No credentials or upstream access are needed to reproduce it.
+                let error = tauri::ipc::private::ResultFutureTag
+                    .future(health_recovery::check_channel(&state, &channel, async {
+                        test_channel_upstream_model_inner(
+                            channel.clone(),
+                            String::new(),
+                            "OK".into(),
+                        )
+                        .await
+                    }))
+                    .await
+                    .unwrap_err();
+                assert!(format!("{error:?}").contains("upstream model is required"));
+                // Also enter the subscription executor, still without contacting
+                // a provider: the fixture has no credential file.
+                let error = tauri::ipc::private::ResultFutureTag
+                    .future(health_recovery::check_channel(&state, &channel, async {
+                        test_channel_upstream_model_inner(
+                            channel.clone(),
+                            "grok-4.7".into(),
+                            "OK".into(),
+                        )
+                        .await
+                    }))
+                    .await
+                    .unwrap_err();
+                assert!(format!("{error:?}").contains("credential"), "{error:?}");
+            })
+            .await
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn manual_probe_roundtrip_and_recovery_fit_worker_stack() {
+        use warp::Filter as _;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(2 * 1024 * 1024)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async {
+                let route = warp::path!("v1" / "responses")
+                    .and(warp::body::json())
+                    .map(|body: serde_json::Value| {
+                        assert_eq!(body["model"], "gpt-4o-mini");
+                        warp::reply::json(&serde_json::json!({
+                            "object": "response", "status": "completed",
+                            "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "OK"}]}]
+                        }))
+                    });
+                let (addr, server) = crate::bind_ephemeral!(route, ([127, 0, 0, 1], 0));
+                let server = tokio::spawn(server);
+                let mut channel = crate::coding_gateway::tests::channel(
+                    crate::source_driver::SourceDriverId::OpenAiApi,
+                    &format!("http://{addr}/v1"),
+                );
+                channel.id = "probe-roundtrip-stack-fixture".into();
+                channel.v2.use_system_proxy = false;
+                channel.models = vec!["gpt-4o-mini".into()];
+                channel.upstream_model = "gpt-4o-mini".into();
+                let mut config = default_config();
+                config.channels = vec![channel.clone()];
+                let dir = tempfile::tempdir().unwrap();
+                let state = crate::runtime::create_runtime_state(dir.path().join("client.json"), config);
+                let key = model_quota_route_key(&channel.id, "gpt-4o-mini");
+                let mut failed = LocalModelQuotaRouteState::default();
+                failed.record_runtime_overload(now_unix(), 60, true);
+                state.local_model_quota_routes.lock().unwrap().insert(key.clone(), failed);
+                let result = tauri::ipc::private::ResultFutureTag.future(health_recovery::check_channel(&state, &channel, async {
+                    test_channel_upstream_model_inner(channel.clone(), "gpt-4o-mini".into(), "OK".into()).await
+                }))
+                .await
+                .unwrap();
+                let tauri::ipc::InvokeResponseBody::Json(json) = result else { panic!("expected JSON response") };
+                let result: serde_json::Value = serde_json::from_str(&json).unwrap();
+                assert_eq!(result["content"], "OK");
+                assert!(state.local_model_quota_routes.lock().unwrap().get(&key)
+                    .is_none_or(|route| !route.has_runtime_failure()));
+                server.abort();
+            })
+            .await
+            .unwrap();
+        });
+    }
+
+    #[test]
     fn gateway_model_checks_follow_catalog_endpoints_before_family_defaults() {
         use crate::source_driver::SourceDriverId;
         for (driver, base) in [
@@ -680,7 +883,7 @@ mod channel_probe_tests {
         ];
         for (model, path, field) in cases {
             let (protocol, actual_path, body) =
-                opencode_probe_request(&channel, model, "Reply OK.").expect("probe request");
+                http_subscription_probe_request(&channel, model, "Reply OK.").expect("probe request");
             assert_eq!(actual_path, path);
             let route = crate::surface::resolve_api_route("POST", &actual_path, false)
                 .expect("probe path should be a canonical API route");

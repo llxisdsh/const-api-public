@@ -4,6 +4,7 @@
 //! with protocol-specific compression. Payload buffers move without copying.
 
 use anyhow::{Result, anyhow};
+use codex::protocol::frame::{Fragment, Frame, coding::Data};
 use codex_tokio_tungstenite as codex_ws;
 use codex_tungstenite as codex;
 use futures_util::{Sink, Stream};
@@ -19,11 +20,16 @@ type RegistrySocket = registry_ws::WebSocketStream<registry_ws::MaybeTlsStream<T
 type CodexSocket =
     codex_ws::WebSocketStream<codex_ws::MaybeTlsStream<crate::openai_transport::dialer::Socket>>;
 
+// Same framing as Codex Responses. This is not a logical-message size limit.
+const CODEX_RESPONSES_FRAGMENT_BYTES: usize = 1024 * 1024;
+
 pub(crate) struct CodexConnection {
     socket: CodexSocket,
     handshake_headers: http::HeaderMap,
     metadata: Option<serde_json::Map<String, serde_json::Value>>,
     pending: Option<registry::Message>,
+    fragment_responses: bool,
+    outgoing: Option<bytes::Bytes>,
 }
 
 impl std::fmt::Debug for CodexConnection {
@@ -33,6 +39,55 @@ impl std::fmt::Debug for CodexConnection {
 }
 
 impl CodexConnection {
+    fn start_send(&mut self, message: registry::Message) -> Result<()> {
+        match message {
+            registry::Message::Text(text)
+                if self.fragment_responses && text.len() > CODEX_RESPONSES_FRAGMENT_BYTES =>
+            {
+                let mut data = bytes::Bytes::from(text);
+                let first = data.split_to(CODEX_RESPONSES_FRAGMENT_BYTES);
+                Pin::new(&mut self.socket)
+                    .start_send(codex::Message::Frame(Frame::message_fragment(
+                        first,
+                        Data::Text,
+                        Fragment::More,
+                    )))
+                    .map_err(codex_error)?;
+                // Bytes slices share the original allocation. Flush one fragment
+                // before queuing the next, preserving backpressure and compression.
+                self.outgoing = Some(data);
+                Ok(())
+            }
+            message => Pin::new(&mut self.socket)
+                .start_send(to_codex(message)?)
+                .map_err(codex_error),
+        }
+    }
+
+    fn poll_flush(&mut self, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        loop {
+            std::task::ready!(Pin::new(&mut self.socket).poll_flush(cx)).map_err(codex_error)?;
+            let Some(data) = self.outgoing.as_mut() else {
+                return Poll::Ready(Ok(()));
+            };
+            std::task::ready!(Pin::new(&mut self.socket).poll_ready(cx)).map_err(codex_error)?;
+            let payload = data.split_to(data.len().min(CODEX_RESPONSES_FRAGMENT_BYTES));
+            let fragment = if data.is_empty() {
+                self.outgoing = None;
+                Fragment::Final
+            } else {
+                Fragment::More
+            };
+            Pin::new(&mut self.socket)
+                .start_send(codex::Message::Frame(Frame::message_fragment(
+                    payload,
+                    Data::Continue,
+                    fragment,
+                )))
+                .map_err(codex_error)?;
+        }
+    }
+
     fn project_handshake(&mut self, message: &registry::Message) -> Option<registry::Message> {
         let headers = self.metadata.as_mut()?;
         let registry::Message::Text(text) = message else {
@@ -100,11 +155,16 @@ impl ResponsesUpstreamSocket {
         match self {
             Self::Registry(socket) => socket.close(frame).await.map_err(Into::into),
             Self::ProxiedRegistry(socket) => socket.close(frame).await.map_err(Into::into),
-            Self::Codex(connection) => connection
-                .socket
-                .close(frame.map(to_codex_close))
-                .await
-                .map_err(codex_error),
+            Self::Codex(connection) => {
+                // Cleanup after a cancelled/failed send must not finish an
+                // incomplete request and accidentally start upstream execution.
+                connection.outgoing = None;
+                connection
+                    .socket
+                    .close(frame.map(to_codex_close))
+                    .await
+                    .map_err(codex_error)
+            }
         }
     }
 }
@@ -187,6 +247,8 @@ impl CodexSubscriptionWebSocketConnector {
                     handshake_headers,
                     metadata,
                     pending: None,
+                    fragment_responses: responses_metadata,
+                    outgoing: None,
                 })))
             },
             super::WEBSOCKET_UPSTREAM_CONNECT_TIMEOUT,
@@ -312,9 +374,14 @@ impl Sink<registry::Message> for ResponsesUpstreamSocket {
         match self.get_mut() {
             Self::Registry(socket) => Pin::new(socket).poll_ready(cx).map_err(Into::into),
             Self::ProxiedRegistry(socket) => Pin::new(socket).poll_ready(cx).map_err(Into::into),
-            Self::Codex(connection) => Pin::new(&mut connection.socket)
-                .poll_ready(cx)
-                .map_err(codex_error),
+            Self::Codex(connection) => {
+                if connection.outgoing.is_some() {
+                    std::task::ready!(connection.poll_flush(cx))?;
+                }
+                Pin::new(&mut connection.socket)
+                    .poll_ready(cx)
+                    .map_err(codex_error)
+            }
         }
     }
 
@@ -322,9 +389,7 @@ impl Sink<registry::Message> for ResponsesUpstreamSocket {
         match self.get_mut() {
             Self::Registry(socket) => Pin::new(socket).start_send(item).map_err(Into::into),
             Self::ProxiedRegistry(socket) => Pin::new(socket).start_send(item).map_err(Into::into),
-            Self::Codex(connection) => Pin::new(&mut connection.socket)
-                .start_send(to_codex(item)?)
-                .map_err(codex_error),
+            Self::Codex(connection) => connection.start_send(item),
         }
     }
 
@@ -332,9 +397,7 @@ impl Sink<registry::Message> for ResponsesUpstreamSocket {
         match self.get_mut() {
             Self::Registry(socket) => Pin::new(socket).poll_flush(cx).map_err(Into::into),
             Self::ProxiedRegistry(socket) => Pin::new(socket).poll_flush(cx).map_err(Into::into),
-            Self::Codex(connection) => Pin::new(&mut connection.socket)
-                .poll_flush(cx)
-                .map_err(codex_error),
+            Self::Codex(connection) => connection.poll_flush(cx),
         }
     }
 
@@ -342,9 +405,12 @@ impl Sink<registry::Message> for ResponsesUpstreamSocket {
         match self.get_mut() {
             Self::Registry(socket) => Pin::new(socket).poll_close(cx).map_err(Into::into),
             Self::ProxiedRegistry(socket) => Pin::new(socket).poll_close(cx).map_err(Into::into),
-            Self::Codex(connection) => Pin::new(&mut connection.socket)
-                .poll_close(cx)
-                .map_err(codex_error),
+            Self::Codex(connection) => {
+                connection.outgoing = None;
+                Pin::new(&mut connection.socket)
+                    .poll_close(cx)
+                    .map_err(codex_error)
+            }
         }
     }
 }

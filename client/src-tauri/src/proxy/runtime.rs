@@ -478,6 +478,10 @@ impl ProxyShared {
                     retry_after,
                     matching_evidence.is_some_and(|evidence| evidence.soft),
                 );
+                state.runtime_network_failure = matching_evidence.is_some_and(|evidence|
+                    matches!(evidence.error_kind.as_str(), "network_error" | "timeout"));
+                state.runtime_quota_failure = matching_evidence.is_some_and(|evidence|
+                    evidence.error_kind == "quota_exhausted");
             }
             return true;
         }
@@ -3222,12 +3226,21 @@ impl LocalModelCapability {
         capability.max_context_tokens = limits.max_context_tokens;
         capability.input_tokens = limits.input_tokens;
         capability.output_tokens = limits.output_tokens;
+        let non_text_model = channel.capability_profiles.iter().any(|profile| {
+            profile.catalog_metadata && profile.catalog_text_output == Some(false)
+                && profile.model_pattern.eq_ignore_ascii_case(model)
+                && matches!(profile.verification_state.as_str(), "verified" | "declared")
+                && !matches!(profile.release_status.as_str(), "prepared" | "suspended")
+        });
         for protocol in &channel.supported_protocols {
             if native.is_none_or(|native| native.as_str() == protocol) {
                 push_unique_string(&mut capability.protocols, protocol);
             }
         }
         for profile in &channel.capability_profiles {
+            // Channel-wide conversational probes do not establish tool/reasoning
+            // capabilities for a catalog-declared image/video-only model.
+            if non_text_model && !profile.model_pattern.eq_ignore_ascii_case(model) { continue; }
             if native.is_some_and(|native| native.as_str() != profile.protocol) { continue; }
             if !crate::model::capability_layer_is_routable(&profile.capability_layer) {
                 continue;
@@ -3469,7 +3482,10 @@ fn local_model_for_route(
         crate::surface::ApiSurface::Gemini => "/v1beta/models/",
         _ => "/v1/models/",
     };
-    let requested = public_model_name(route.relative_path.strip_prefix(prefix)?);
+    // The local HTTP path is still escaped; decode the model parameter once,
+    // preserving literal plus signs and percent escapes in the model ID.
+    let requested = urlencoding::decode(route.relative_path.strip_prefix(prefix)?).ok()?;
+    let requested = public_model_name(&requested);
     if requested.is_empty() {
         return None;
     }
@@ -4114,8 +4130,8 @@ fn select_ready_local_channel_with_model_route_policy<'a>(
                         substituted: false,
                     });
                 }
-                if subscription_image {
-                    let subscription = select_openai_subscription_image_channel_where(cfg, |channel| {
+                if crate::supplier::grok_media_operation(&route).is_some() {
+                    return select_native_media_channel_where(cfg, &route, &direct_route_model, |channel| {
                             ready_channel_ids.contains(&channel.id)
                                 && !excluded_channel_ids.contains(&channel.id)
                                 && local_model_quota_route_available(
@@ -4131,14 +4147,11 @@ fn select_ready_local_channel_with_model_route_policy<'a>(
                                     required_route_key,
                                     excluded_route_keys,
                                 )
-                        });
-                    if let Some(channel) = subscription {
-                        return Some(LocalChannelSelection {
+                        }).map(|channel| LocalChannelSelection {
                             channel,
                             route_model: direct_route_model,
                             substituted: false,
                         });
-                    }
                 }
                 let require_verified_surface = route.operation == crate::surface::ApiOperation::Opaque
                     || crate::surface::api_operation_requires_native_api_credential(route.operation)
@@ -4299,18 +4312,36 @@ fn select_direct_http_surface_channel_where<'a>(
         .iter().copied().map(|channel| (channel, evidence_rank(channel), 0)))
 }
 
-fn select_openai_subscription_image_channel_where<'a>(
+fn select_native_media_channel_where<'a>(
     cfg: &'a ClientConfig,
+    route: &crate::surface::ApiRoute,
+    model: &str,
     predicate: impl Fn(&ChannelConfig) -> bool,
 ) -> Option<&'a ChannelConfig> {
-    select_local_priority_channel(cfg, local_channels(cfg).filter(|channel| {
-        predicate(channel)
-                && crate::channel_executor::execution_kind_for_source(channel.source_driver())
-                    .is_ok_and(|kind| {
-                        kind == crate::source_driver::ExecutionKind::OpenAiSubscription
-                    })
-                && channel_can_execute_protocol(channel, "openai_responses")
-    }).map(|channel| (channel, 0, 0)))
+    let candidates = local_channels(cfg).filter(|channel| {
+        if !predicate(channel) { return false; }
+        match crate::channel_executor::execution_kind_for_source(channel.source_driver()) {
+            Ok(crate::source_driver::ExecutionKind::HttpSurface) => {
+                crate::channel_surface::channel_surface_target(channel, route.surface, None, true)
+                    .is_some_and(|target| target.surface == route.surface)
+            }
+            Ok(crate::source_driver::ExecutionKind::OpenAiSubscription | crate::source_driver::ExecutionKind::GrokSubscription) => {
+                !model.is_empty() && channel_supports_model(channel, model)
+                    && crate::channel_executor::admit_retained_subscription_operation(channel, route, false).is_ok()
+            }
+            _ => false,
+        }
+    }).collect::<Vec<_>>();
+    // Use the same priority policy for API and subscription media. Subscription
+    // rights belong to the account catalog: never send another provider's model
+    // to the first OpenAI account merely because the path is /images/… .
+    select_local_priority_channel(cfg, candidates.iter().copied()
+        .filter(|channel| !model.is_empty() && channel_supports_model(channel, model))
+        .map(|channel| (channel, 0, 0)))
+        .or_else(|| select_local_priority_channel(cfg, candidates.into_iter()
+            .filter(|channel| crate::channel_executor::execution_kind_for_source(channel.source_driver())
+                .is_ok_and(|kind| kind == crate::source_driver::ExecutionKind::HttpSurface))
+            .map(|channel| (channel, 0, 0))))
 }
 
 fn select_openai_realtime_call_channel_where<'a>(

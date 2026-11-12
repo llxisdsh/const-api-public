@@ -1,9 +1,141 @@
 // Negotiated transport framing only; logical request IDs, replay and business
 // message ordering are unchanged. Only heartbeats may overtake a partial message.
 const SUPPLIER_MESSAGE_CHUNKS_FEATURE: &str = "message_chunks_v1";
+const SUPPLIER_LARGE_MESSAGES_FEATURE: &str = "message_chunks_256m_v1";
+const SUPPLIER_LARGE_MESSAGE_BYTES: usize = crate::MODEL_MESSAGE_MAX_BYTES;
 const SUPPLIER_MESSAGE_CHUNK_TYPE: &str = "transport_chunk";
 const SUPPLIER_MESSAGE_CHUNK_BYTES: usize = 64 * 1024;
 const SUPPLIER_MESSAGE_CHUNK_THRESHOLD: usize = 256 * 1024;
+const SUPPLIER_MESSAGE_MEMORY_BYTES: usize = 4 * 1024 * 1024;
+// One partial message occupies this ordered stream; bound that ownership here,
+// rather than adding independent total-upload deadlines at each caller.
+const SUPPLIER_MESSAGE_ASSEMBLY_TIMEOUT: Duration = Duration::from_secs(600);
+
+#[derive(Debug)]
+struct SupplierMessageSizeError {
+    serialized_bytes: usize,
+    limit_bytes: usize,
+}
+
+impl std::fmt::Display for SupplierMessageSizeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "supplier message exceeds max size: serialized_bytes={} limit_bytes={}",
+            self.serialized_bytes, self.limit_bytes)
+    }
+}
+
+impl std::error::Error for SupplierMessageSizeError {}
+
+// This is transient transport storage, separate from SQLite continuation and
+// usage history. Anonymous files are removed by the OS when their last handle
+// closes, including cancellation/process exit; no persistent cleanup job is needed.
+struct SupplierMessageBuffer {
+    storage: tempfile::SpooledData,
+    len: usize,
+    oversized: Option<usize>,
+    limit: usize,
+}
+
+impl SupplierMessageBuffer {
+    fn new() -> Self {
+        Self::from_bytes(Vec::new())
+    }
+
+    fn with_limit(limit: usize) -> Self {
+        Self { limit, ..Self::new() }
+    }
+
+    fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self {
+            len: bytes.len(),
+            storage: tempfile::SpooledData::InMemory(std::io::Cursor::new(bytes)),
+            oversized: None,
+            limit: SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn read_at(&mut self, offset: usize, length: usize) -> std::io::Result<Vec<u8>> {
+        use std::io::{Read, Seek};
+        match &mut self.storage {
+            tempfile::SpooledData::InMemory(cursor) => {
+                Ok(cursor.get_ref()[offset..offset + length].to_vec())
+            }
+            tempfile::SpooledData::OnDisk(file) => {
+                file.seek(std::io::SeekFrom::Start(offset as u64))?;
+                let mut bytes = vec![0; length];
+                file.read_exact(&mut bytes)?;
+                Ok(bytes)
+            }
+        }
+    }
+
+    fn into_message(self) -> Result<SupplierMessage> {
+        use std::io::Seek;
+        match self.storage {
+            tempfile::SpooledData::InMemory(cursor) => {
+                serde_json::from_slice(cursor.get_ref()).context("invalid reassembled supplier message")
+            }
+            tempfile::SpooledData::OnDisk(mut file) => {
+                file.rewind()?;
+                serde_json::from_reader(std::io::BufReader::with_capacity(SUPPLIER_MESSAGE_CHUNK_BYTES, file))
+                    .context("invalid reassembled supplier message")
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn memory_capacity(&self) -> usize {
+        match &self.storage {
+            tempfile::SpooledData::InMemory(cursor) => cursor.get_ref().capacity(),
+            tempfile::SpooledData::OnDisk(_) => 0,
+        }
+    }
+}
+
+impl std::io::Write for SupplierMessageBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let required = self.len.saturating_add(bytes.len());
+        if required > self.limit {
+            self.oversized = Some(required);
+            return Err(std::io::Error::other("supplier message exceeds max size"));
+        }
+        if required > SUPPLIER_MESSAGE_MEMORY_BYTES {
+            if let tempfile::SpooledData::InMemory(cursor) = &self.storage {
+                // Use the profile's existing state directory rather than /tmp,
+                // which may be a RAM filesystem on Linux. Tests use an isolated home.
+                let directory = crate::client_data_root().join("state");
+                std::fs::create_dir_all(&directory)?;
+                let mut file = tempfile::tempfile_in(directory)?;
+                file.write_all(cursor.get_ref())?;
+                self.storage = tempfile::SpooledData::OnDisk(file);
+            }
+        }
+        match &mut self.storage {
+            tempfile::SpooledData::InMemory(cursor) => {
+                let memory = cursor.get_mut();
+                if required > memory.capacity() {
+                    let capacity = required.max(memory.capacity().saturating_mul(2))
+                        .min(SUPPLIER_MESSAGE_MEMORY_BYTES);
+                    memory.reserve_exact(capacity - memory.len());
+                }
+                memory.extend_from_slice(bytes);
+            }
+            tempfile::SpooledData::OnDisk(file) => file.write_all(bytes)?,
+        }
+        self.len = required;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        // Storage is unbuffered; durability across process restarts is not part
+        // of the private transport-fragment contract.
+        Ok(())
+    }
+}
 
 struct SupplierHeartbeatWritten {
     id: String,
@@ -167,22 +299,63 @@ impl SupplierTransportSendQueue {
 }
 
 struct SupplierMessageParts {
-    raw: Vec<u8>,
+    raw: SupplierMessageBuffer,
     offset: usize,
     chunked: bool,
+    // Optional identity for per-session receive progress; older peers ignore it.
+    progress_id: String,
     _output_credit: Option<Arc<SupplierOutputCredit>>,
 }
 
 impl SupplierMessageParts {
     fn new(raw: Vec<u8>, enabled: bool) -> Result<Self> {
         if raw.len() > SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN {
-            return Err(anyhow!("supplier message exceeds max size"));
+            return Err(SupplierMessageSizeError {
+                serialized_bytes: raw.len(), limit_bytes: SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN,
+            }.into());
         }
         let chunked = enabled && raw.len() > SUPPLIER_MESSAGE_CHUNK_THRESHOLD;
         Ok(Self {
-            raw,
+            raw: SupplierMessageBuffer::from_bytes(raw),
             offset: 0,
             chunked,
+            progress_id: String::new(),
+            _output_credit: None,
+        })
+    }
+
+    #[cfg(test)]
+    fn serialize(message: &SupplierMessage, enabled: bool) -> Result<Self> {
+        Self::serialize_with_limit(message, enabled, SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN)
+    }
+
+    fn serialize_with_limit(message: &SupplierMessage, enabled: bool, limit: usize) -> Result<Self> {
+        use std::io::Write;
+        // Legacy peers still require a single complete frame. Keep their old
+        // path; negotiated chunks can serialize directly to bounded storage.
+        if !enabled {
+            return Self::new(serde_json::to_vec(message)?, false);
+        }
+        let mut raw = SupplierMessageBuffer::with_limit(limit);
+        let result = (|| -> Result<()> {
+            let mut writer = std::io::BufWriter::with_capacity(SUPPLIER_MESSAGE_CHUNK_BYTES, &mut raw);
+            serde_json::to_writer(&mut writer, message)?;
+            writer.flush()?;
+            Ok(())
+        })();
+        // Preserve the typed pre-send rejection used by duplex retry handling.
+        if let Some(serialized_bytes) = raw.oversized {
+            return Err(SupplierMessageSizeError {
+                serialized_bytes,
+                limit_bytes: limit,
+            }.into());
+        }
+        result.context("buffering supplier transport message")?;
+        Ok(Self {
+            chunked: raw.len() > SUPPLIER_MESSAGE_CHUNK_THRESHOLD,
+            raw,
+            offset: 0,
+            progress_id: String::new(),
             _output_credit: None,
         })
     }
@@ -193,28 +366,35 @@ impl SupplierMessageParts {
         }
         if !self.chunked {
             self.offset = self.raw.len();
-            return Ok(Some(std::mem::take(&mut self.raw)));
+            let raw = std::mem::replace(&mut self.raw, SupplierMessageBuffer::new());
+            // Non-chunked messages use the in-memory/legacy path above.
+            let tempfile::SpooledData::InMemory(cursor) = raw.storage else {
+                return Err(anyhow!("unchunked supplier message unexpectedly spilled"));
+            };
+            return Ok(Some(cursor.into_inner()));
         }
-        let mut end = (self.offset + SUPPLIER_MESSAGE_CHUNK_BYTES).min(self.raw.len());
+        let length = SUPPLIER_MESSAGE_CHUNK_BYTES.min(self.raw.len() - self.offset);
+        let bytes = self.raw.read_at(self.offset, length)?;
         // The logical wire is UTF-8 JSON already. String fragments avoid the
         // extra base64 expansion for large bodies which are themselves base64.
-        while end < self.raw.len() && self.raw[end] & 0xc0 == 0x80 {
-            end -= 1;
-        }
-        let data = std::str::from_utf8(&self.raw[self.offset..end])?;
+        let data = match std::str::from_utf8(&bytes) {
+            Ok(data) => data,
+            Err(error) if error.error_len().is_none() => std::str::from_utf8(&bytes[..error.valid_up_to()])?,
+            Err(error) => return Err(error.into()),
+        };
         let part = serde_json::to_vec(&serde_json::json!({
-            "id":"", "type":SUPPLIER_MESSAGE_CHUNK_TYPE,
+            "id":self.progress_id, "type":SUPPLIER_MESSAGE_CHUNK_TYPE,
             "payload":{"offset":self.offset,"total":self.raw.len(),
                 "data":data}
         }))?;
-        self.offset = end;
+        self.offset += data.len();
         Ok(Some(part))
     }
 }
 
 struct SupplierPartialMessage {
     total: usize,
-    bytes: Vec<u8>,
+    bytes: SupplierMessageBuffer,
     started: Instant,
 }
 
@@ -222,15 +402,25 @@ struct SupplierPartialMessage {
 struct SupplierMessageAssembler(Option<SupplierPartialMessage>);
 
 impl SupplierMessageAssembler {
+    #[cfg(test)]
     fn accept(
         &mut self,
         message: SupplierMessage,
         enabled: bool,
     ) -> Result<Option<SupplierMessage>> {
+        self.accept_with_limit(message, enabled, SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN)
+    }
+
+    fn accept_with_limit(
+        &mut self,
+        message: SupplierMessage,
+        enabled: bool,
+        limit: usize,
+    ) -> Result<Option<SupplierMessage>> {
         if self
             .0
             .as_ref()
-            .is_some_and(|partial| partial.started.elapsed() > Duration::from_secs(300))
+            .is_some_and(|partial| partial.started.elapsed() > SUPPLIER_MESSAGE_ASSEMBLY_TIMEOUT)
         {
             return Err(anyhow!("supplier incomplete message expired"));
         }
@@ -254,7 +444,7 @@ impl SupplierMessageAssembler {
             .payload
             .get("total")
             .and_then(serde_json::Value::as_u64)
-            .filter(|n| *n > 0 && *n <= SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN as u64)
+            .filter(|n| *n > 0 && *n <= limit as u64)
             .ok_or_else(|| anyhow!("invalid supplier chunk total"))? as usize;
         let data = message
             .payload
@@ -269,7 +459,7 @@ impl SupplierMessageAssembler {
             }
             self.0 = Some(SupplierPartialMessage {
                 total,
-                bytes: Vec::new(),
+                bytes: SupplierMessageBuffer::with_limit(total),
                 started: Instant::now(),
             });
         }
@@ -282,25 +472,15 @@ impl SupplierMessageAssembler {
         {
             return Err(anyhow!("supplier chunk order, size or lifetime is invalid"));
         }
-        let required = partial.bytes.len() + bytes.len();
-        if required > partial.bytes.capacity() {
-            let capacity = partial
-                .bytes
-                .capacity()
-                .saturating_mul(2)
-                .max(required)
-                .min(total);
-            partial.bytes.reserve_exact(capacity - partial.bytes.len());
-        }
-        partial.bytes.extend_from_slice(bytes);
+        std::io::Write::write_all(&mut partial.bytes, bytes)
+            .context("buffering incoming supplier transport message")?;
         if partial.bytes.len() < total {
             return Ok(None);
         }
         let Some(partial) = self.0.take() else {
             return Err(anyhow!("missing supplier completed chunks"));
         };
-        let message: SupplierMessage = serde_json::from_slice(&partial.bytes)
-            .context("invalid reassembled supplier message")?;
+        let message = partial.bytes.into_message()?;
         if message.kind == SUPPLIER_MESSAGE_CHUNK_TYPE {
             return Err(anyhow!("nested supplier message chunks are forbidden"));
         }
@@ -327,7 +507,13 @@ struct SupplierPreparedPayload {
 
 impl SupplierPreparedPayload {
     fn new(raw: Vec<u8>, compression: bool) -> Result<Self> {
-        if raw.is_empty() || raw.len() > SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN {
+        if raw.len() > SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN {
+            return Err(SupplierMessageSizeError {
+                serialized_bytes: raw.len(),
+                limit_bytes: SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN,
+            }.into());
+        }
+        if raw.is_empty() {
             return Err(anyhow!("supplier message exceeds max size"));
         }
         let raw_len = raw.len();
@@ -365,6 +551,90 @@ impl SupplierPreparedPayload {
 #[cfg(test)]
 mod message_chunk_tests {
     use super::*;
+
+    #[test]
+    fn large_transport_messages_spill_and_reassemble_without_a_full_wire_buffer() {
+        let message = SupplierMessage {
+            output_credit: None,
+            id: "disk-backed-transport".into(),
+            kind: "duplex_client_frame".into(),
+            payload: serde_json::json!({"data": "编程🦀\n".repeat(6_500_000), "frame_type": "text"})
+                .as_object().unwrap().clone(),
+        };
+        assert!(SupplierMessageParts::serialize(&message, true).err().unwrap().downcast_ref::<SupplierMessageSizeError>().is_some());
+        let mut parts = SupplierMessageParts::serialize_with_limit(&message, true, SUPPLIER_LARGE_MESSAGE_BYTES).unwrap();
+        assert!(parts.raw.len() > SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN);
+        assert_eq!(parts.raw.memory_capacity(), 0);
+        let mut assembler = SupplierMessageAssembler::default();
+        let (sender, receiver) = codec_pair(true);
+        let mut saw_disk_receive = false;
+        let mut decoded = None;
+        while let Some(raw) = parts.next().unwrap() {
+            assert!(raw.len() <= 2 * SUPPLIER_MESSAGE_CHUNK_BYTES);
+            let (wire, binary) = sender.encode_raw(raw).unwrap();
+            assert!(binary);
+            assert!(wire.len() < SUPPLIER_MESSAGE_CHUNK_BYTES);
+            // The complete decoded message exceeds 64 MiB, while each
+            // decrypted/decompressed private frame remains a small fragment.
+            let part = receiver.decode_binary_frame(&wire).unwrap();
+            if let Some(result) = assembler.accept_with_limit(part, true, SUPPLIER_LARGE_MESSAGE_BYTES).unwrap() {
+                decoded = Some(result);
+            } else if let Some(partial) = &assembler.0 {
+                if partial.bytes.len() > SUPPLIER_MESSAGE_MEMORY_BYTES {
+                    assert_eq!(partial.bytes.memory_capacity(), 0);
+                    saw_disk_receive = true;
+                }
+            }
+        }
+        let result = decoded.unwrap();
+        assert_eq!(result.payload, message.payload);
+        assert_eq!(result.id, message.id);
+        assert!(saw_disk_receive);
+        assert!(assembler.0.is_none());
+    }
+
+    #[test]
+    fn small_transport_messages_keep_the_memory_fast_path() {
+        let message = SupplierMessage { output_credit: None, id: "small".into(), kind: "pong".into(), payload: Default::default() };
+        let expected = serde_json::to_vec(&message).unwrap();
+        let mut parts = SupplierMessageParts::serialize(&message, true).unwrap();
+        assert!(parts.raw.memory_capacity() > 0);
+        assert_eq!(parts.next().unwrap().unwrap(), expected);
+        assert!(parts.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn transport_spool_rejects_disk_errors_without_growing_memory() {
+        use std::io::Write;
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let read_only = std::fs::File::open(file.path()).unwrap();
+        let mut buffer = SupplierMessageBuffer {
+            storage: tempfile::SpooledData::OnDisk(read_only), len: 0, oversized: None,
+            limit: SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN,
+        };
+        assert!(buffer.write_all(b"private request bytes").is_err());
+        assert_eq!(buffer.len(), 0);
+        assert_eq!(buffer.memory_capacity(), 0);
+    }
+
+    #[test]
+    fn spilled_partial_message_cannot_be_delivered_after_disconnect() {
+        let message = SupplierMessage {
+            output_credit: None, id: "incomplete-disk-message".into(), kind: "http_request".into(),
+            payload: serde_json::json!({"body": "x".repeat(2 * SUPPLIER_MESSAGE_MEMORY_BYTES)}).as_object().unwrap().clone(),
+        };
+        let mut parts = SupplierMessageParts::serialize(&message, true).unwrap();
+        let mut assembler = SupplierMessageAssembler::default();
+        while assembler.0.as_ref().is_none_or(|partial| partial.bytes.len() <= SUPPLIER_MESSAGE_MEMORY_BYTES) {
+            let part = serde_json::from_slice(&parts.next().unwrap().unwrap()).unwrap();
+            assert!(assembler.accept(part, true).unwrap().is_none());
+        }
+        assert_eq!(assembler.0.as_ref().unwrap().bytes.memory_capacity(), 0);
+        assert!(assembler.finish().is_err());
+        drop(assembler);
+        // A new physical connection starts with no pending body or file handle.
+        assert!(SupplierMessageAssembler::default().finish().is_ok());
+    }
 
     #[test]
     fn small_stream_frames_compress_without_changing_legacy_or_control_frames() {
@@ -592,7 +862,7 @@ mod message_chunk_tests {
             let part: SupplierMessage = serde_json::from_slice(&raw).unwrap();
             let complete = assembler.accept(part, true).unwrap();
             if let Some(partial) = &assembler.0 {
-                assert!(partial.bytes.capacity() <= partial.total);
+                assert!(partial.bytes.memory_capacity() <= SUPPLIER_MESSAGE_MEMORY_BYTES);
             }
             if complete.is_some() {
                 assert!(result.is_none());
@@ -642,8 +912,32 @@ mod message_chunk_tests {
         assert!(SupplierMessageAssembler::default()
             .accept(part(0, nested.len(), &nested), true)
             .is_err());
-        assembler.0.as_mut().unwrap().started = Instant::now() - Duration::from_secs(301);
-        assert!(assembler.accept(part(5, 10, b"hello"), true).is_err());
+    }
+
+    #[test]
+    fn progressing_chunks_can_exceed_five_minutes_but_cannot_hold_the_stream_forever() {
+        let raw = serde_json::to_vec(&large_message()).unwrap();
+        let mut parts = SupplierMessageParts::new(raw.clone(), true).unwrap();
+        let first = serde_json::from_slice(&parts.next().unwrap().unwrap()).unwrap();
+        let mut assembler = SupplierMessageAssembler::default();
+        assert!(assembler.accept(first, true).unwrap().is_none());
+        assembler.0.as_mut().unwrap().started = Instant::now() - Duration::from_secs(360);
+        while let Some(part) = parts.next().unwrap() {
+            if let Some(message) = assembler.accept(serde_json::from_slice(&part).unwrap(), true).unwrap() {
+                assert_eq!(serde_json::to_vec(&message).unwrap(), raw);
+            }
+        }
+        assert!(assembler.0.is_none(), "valid slow upload did not finish");
+
+        let mut parts = SupplierMessageParts::new(raw, true).unwrap();
+        let first = serde_json::from_slice(&parts.next().unwrap().unwrap()).unwrap();
+        assert!(assembler.accept(first, true).unwrap().is_none());
+        assembler.0.as_mut().unwrap().started =
+            Instant::now() - SUPPLIER_MESSAGE_ASSEMBLY_TIMEOUT - Duration::from_secs(1);
+        let pong = SupplierMessage {
+            output_credit: None, id: "heartbeat".into(), kind: "pong".into(), payload: Default::default(),
+        };
+        assert!(assembler.accept(pong, true).unwrap_err().to_string().contains("incomplete message expired"));
     }
 
     #[test]

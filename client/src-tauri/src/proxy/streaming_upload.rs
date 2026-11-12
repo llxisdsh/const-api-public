@@ -28,11 +28,22 @@ impl std::error::Error for StreamingUploadLimitExceeded {}
 pub(crate) async fn match_streaming_upload_request(
     method: warp::http::Method,
     path: warp::path::FullPath,
+    content_type: Option<String>,
 ) -> std::result::Result<StreamingUploadRequest, warp::Rejection> {
     let Some(route) = crate::surface::resolve_api_route(method.as_str(), path.as_str(), false)
     else {
         return Err(warp::reject::not_found());
     };
+    // Native xAI video calls carry JSON references. Route these through the
+    // bounded JSON executor so model selection, OAuth and task affinity apply;
+    // large multipart API uploads keep their existing streaming path.
+    if matches!(route.operation, crate::surface::ApiOperation::VideosCreate
+        | crate::surface::ApiOperation::VideosEdit | crate::surface::ApiOperation::VideosExtend)
+        && content_type.as_deref().is_some_and(|value| value.split(';').next()
+            .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("application/json")))
+    {
+        return Err(warp::reject::not_found());
+    }
     let body_limit = if method == warp::http::Method::POST {
         streaming_upload_body_limit(&route, path.as_str())
     } else {

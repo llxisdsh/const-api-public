@@ -17,6 +17,7 @@ pub(crate) fn supplier_register_message(config: &SupplierAgentConfig) -> Supplie
         "transport_features": [
             SUPPLIER_TRANSPORT_FRAME_COMPRESSION_FEATURE,
             SUPPLIER_MESSAGE_CHUNKS_FEATURE,
+            SUPPLIER_LARGE_MESSAGES_FEATURE,
             SUPPLIER_TRANSPORT_STREAM_RESUME_FEATURE,
             SUPPLIER_TRANSPORT_STREAM_PROGRESS_FEATURE
         ]
@@ -168,6 +169,9 @@ pub(crate) fn supplier_register_payload(
         .as_object()
         .cloned()
         .unwrap_or_default();
+    if let Some(observation) = availability::health_observation(&channel_from_supplier(channel_id.clone(), config)) {
+        payload.insert("health_observation".into(), serde_json::json!(observation));
+    }
     payload.insert(
         "quota_reserve_percent".to_string(),
         serde_json::json!(config.quota_reserve_percent()),
@@ -844,6 +848,8 @@ fn supplier_provider_kind(config: &SupplierConfig) -> String {
         crate::source_driver::SourceDriverId::MinimaxTokenPlan => "minimax",
         crate::source_driver::SourceDriverId::OllamaCloud => "ollama",
         crate::source_driver::SourceDriverId::MuseCode => "meta",
+        crate::source_driver::SourceDriverId::OpenDesignApi
+        | crate::source_driver::SourceDriverId::OpenDesignSubscription => "opendesign",
         crate::source_driver::SourceDriverId::CopilotSubscription => "github_copilot",
         crate::source_driver::SourceDriverId::AbacusRoutellm => "abacus",
         crate::source_driver::SourceDriverId::PoeApi => "poe",
@@ -866,6 +872,7 @@ fn supplier_endpoint_kind(config: &SupplierConfig) -> String {
         | crate::source_driver::SourceDriverId::KiroSubscription
         | crate::source_driver::SourceDriverId::CursorSubscription
         | crate::source_driver::SourceDriverId::OpencodeConsole
+        | crate::source_driver::SourceDriverId::OpenDesignSubscription
         | crate::source_driver::SourceDriverId::CopilotSubscription => "subscription",
         crate::source_driver::SourceDriverId::Ollama
         | crate::source_driver::SourceDriverId::LmStudio
@@ -883,6 +890,7 @@ fn supplier_endpoint_kind(config: &SupplierConfig) -> String {
         | crate::source_driver::SourceDriverId::MinimaxTokenPlan
         | crate::source_driver::SourceDriverId::OllamaCloud
         | crate::source_driver::SourceDriverId::MuseCode
+        | crate::source_driver::SourceDriverId::OpenDesignApi
         | crate::source_driver::SourceDriverId::Omniroute => "compatible_api",
         crate::source_driver::SourceDriverId::AbacusRoutellm
         | crate::source_driver::SourceDriverId::PoeApi => "compatible_api",
@@ -1159,6 +1167,44 @@ fn source_driver_owns_provider_metadata(
 #[cfg(test)]
 mod surface_operation_evidence_tests {
     use super::*;
+
+    #[test]
+    fn openai_subscription_registers_images_without_claiming_video_operations() {
+        let mut channel = crate::channel_from_supplier(
+            "subscription-images".into(),
+            &crate::default_supplier_config(),
+        );
+        channel.set_source_driver(crate::source_driver::SourceDriverId::OpenAiSubscription);
+        channel.surface_bindings = crate::source_driver_surface_bindings(channel.source_driver(), "");
+        crate::channel_surface::validate_channel_v2(&channel).unwrap();
+        channel.models = vec!["gpt-image-2".into()];
+        channel.capability_profiles.push(ChannelCapabilityProfile {
+            protocol: "openai_responses".into(),
+            model_pattern: "gpt-image-2".into(),
+            capability_layer: "model_wire".into(),
+            verification_state: "declared".into(),
+            catalog_metadata: true,
+            catalog_text_output: Some(false),
+            image_output: true,
+            ..Default::default()
+        });
+        let config = crate::supplier_from_channel(&channel);
+        let operations = supplier_supported_operations(&config);
+        assert!(
+            operations
+                .iter()
+                .any(|op| op == "openai.images_generations")
+        );
+        // Edits remain local-backend-only in the platform surface contract.
+        assert!(!operations.iter().any(|op| op == "openai.images_edits"));
+        assert!(!operations.iter().any(|op| op.starts_with("openai.videos")));
+        let protocols = supplier_native_protocols(&config);
+        assert_eq!(protocols, ["openai_responses"]);
+        let evidence = supplier_native_capability_evidence(&config, &protocols);
+        assert!(evidence.iter().any(|e| e.feature == "image_output"
+            && e.state == "supported"
+            && e.model_pattern.as_deref() == Some("gpt-image-2")));
+    }
 
     #[test]
     fn subscription_evidence_distinguishes_adapter_catalog_and_live_probes() {

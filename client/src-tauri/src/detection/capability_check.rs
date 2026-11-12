@@ -72,12 +72,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn claude_55_probes_do_not_force_an_unsupported_tool_choice() {
+    fn current_claude_probes_do_not_force_an_unsupported_tool_choice() {
         let channel = channel_from_supplier("claude-55-probe".into(), &default_supplier_config());
         for model in [
             "claude-sonnet-5-5",
             "anthropic/claude-sonnet-5.5",
             "claude-opus-5-5",
+            "claude-fable-5-2",
+            "anthropic/claude-mythos-5.2",
         ] {
             assert!(!probe_uses_named_tool_choice(&channel, &[], model));
         }

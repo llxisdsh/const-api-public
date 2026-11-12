@@ -344,7 +344,10 @@ pub(crate) async fn forward_supplier_request(
                 "channel representative check paused this model group; refresh route selection"));
         }
     }
-    if let crate::channel_executor::ChannelExecutionBackend::RetainedSubscription { provider } =
+    let openai_images = channel.source_driver() == crate::source_driver::SourceDriverId::OpenAiSubscription
+        && is_openai_subscription_image_request(&resolved.method, &resolved.canonical_path);
+    if !openai_images
+        && let crate::channel_executor::ChannelExecutionBackend::RetainedSubscription { provider } =
         crate::channel_executor::channel_execution_backend(&channel, &resolved.route)?
     {
         let retained_target = match provider {
@@ -460,7 +463,41 @@ pub(crate) async fn forward_supplier_request(
     let body = bytes::Bytes::from(wire.body.decode().map_err(|error| {
         platform_execution_failure("request_surface_decode", "invalid_surface_body", error)
     })?);
-    let execution = crate::channel_executor::execute_channel_request(
+    let execution = if openai_images {
+        crate::channel_executor::admit_retained_subscription_operation(&channel, &resolved.route, stream_requested)?;
+        let guard = match subscription_safety_enter_with_capacity(config, "", request_capacity) {
+            Ok(guard) => guard,
+            Err(payload) => return Ok(Some(payload)),
+        };
+        let headers = wire.header_map()?;
+        let operation = openai_subscription_image_operation(&resolved.canonical_path)
+            .expect("image route was classified above");
+        let mut payload = normalize_openai_subscription_image_payload(operation, &headers, body).await?;
+        if let Some(model) = target_upstream_model {
+            let raw = std::str::from_utf8(&payload.body)?;
+            payload.body = bytes::Bytes::from(rewrite_supplier_body_model(raw, model));
+        }
+        let model = requested_model_from_body_or_path(
+            std::str::from_utf8(&payload.body)?, &resolved.canonical_path,
+        ).unwrap_or_default();
+        let base = retained_subscription_upstream_override("openai").unwrap_or_else(codex_responses_url);
+        let url = codex_image_url_from_responses_url(&base, operation);
+        let mut response = send_openai_subscription_image_request(
+            client, &channel, &url, &headers, payload,
+        ).await?;
+        response.headers_mut().remove(reqwest::header::SET_COOKIE);
+        crate::channel_executor::ChannelExecution {
+            response: guard.hold_response(response),
+            inbound_protocol: None,
+            target_protocol: "openai_responses".to_string(),
+            upstream_model: model,
+            inbound_stream_requested: stream_requested,
+            native_passthrough: true,
+            opaque: false,
+            improvement_faults: Vec::new(),
+            tool_mapping: Default::default(),
+        }
+    } else { crate::channel_executor::execute_channel_request(
         client,
         &channel,
         crate::channel_executor::ChannelRequest {
@@ -487,7 +524,7 @@ pub(crate) async fn forward_supplier_request(
                 .map(str::to_string),
         },
     )
-    .await?;
+    .await? };
     let diagnostics = crate::openrouter::response_diagnostics(&execution.response);
     let upstream_model = execution.upstream_model;
     let target_protocol = execution.target_protocol;
@@ -655,7 +692,13 @@ pub(crate) async fn forward_supplier_request(
     }
     if native_passthrough && !is_event_stream {
         let body = resp.bytes().await?;
-        let upstream_usage = upstream_usage_from_body(usage_protocol, &body);
+        let upstream_usage = if channel.source_driver() == crate::source_driver::SourceDriverId::GrokSubscription
+            && matches!(resolved.route.operation, crate::surface::ApiOperation::ImagesGenerations | crate::surface::ApiOperation::ImagesEdits)
+        {
+            grok_image_response_usage(&body)
+        } else {
+            upstream_usage_from_body(usage_protocol, &body)
+        };
         return Ok(Some(channel_http_response_payload(
             status,
             &response_headers,

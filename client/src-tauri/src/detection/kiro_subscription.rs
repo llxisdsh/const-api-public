@@ -132,6 +132,7 @@ pub(super) async fn catalog(
     .await;
     match result {
         Ok(models) => {
+            crate::supplier::health_recovery::record_metadata_success();
             *cached = Some(Catalog {
                 models: models.clone(),
                 refresh_after: Instant::now() + CATALOG_INTERVAL,

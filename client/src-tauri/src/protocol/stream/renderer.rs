@@ -1214,7 +1214,7 @@ fn data_event(output: &mut Vec<u8>, value: Value) {
     output.extend_from_slice(b"\n\n");
 }
 
-fn usage_value(value: &crate::protocol::ir::UsageValue) -> u64 {
+fn usage_value(value: &UsageValue) -> u64 {
     value.value.unwrap_or(0)
 }
 

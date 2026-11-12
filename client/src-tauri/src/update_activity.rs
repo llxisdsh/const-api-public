@@ -288,6 +288,12 @@ pub(crate) async fn scope_supplier_request_outputs<F: Future>(
         .await
 }
 
+// The same platform request ID already scopes execution and outbound credits.
+// Reading it for diagnostics adds no wire header or cross-request global state.
+pub(crate) fn current_supplier_request_id() -> Option<String> {
+    SUPPLIER_REQUEST_OUTPUT_SCOPE.try_with(Clone::clone).ok()
+}
+
 pub(crate) struct SupplierOutputPendingGuard {
     activity: &'static UpdateActivity,
     request_id: Option<String>,
@@ -328,7 +334,7 @@ impl Drop for SupplierOutputPendingGuard {
 
 pub(crate) fn track_supplier_output_before_send() -> SupplierOutputPendingGuard {
     let activity = update_activity();
-    let request_id = SUPPLIER_REQUEST_OUTPUT_SCOPE.try_with(Clone::clone).ok();
+    let request_id = current_supplier_request_id();
     if let Some(request_id) = request_id.as_deref() {
         activity.begin_supplier_pending(request_id);
     }
@@ -393,6 +399,21 @@ pub(crate) fn release_update_install_gate() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn diagnostic_request_ids_follow_concurrent_scopes_without_leaking() {
+        assert!(current_supplier_request_id().is_none());
+        let request = |id: &'static str| {
+            scope_supplier_request_outputs(id.to_string(), async move {
+                for _ in 0..3 {
+                    tokio::task::yield_now().await;
+                    assert_eq!(current_supplier_request_id().as_deref(), Some(id));
+                }
+            })
+        };
+        tokio::join!(request("request-a"), request("request-b"));
+        assert!(current_supplier_request_id().is_none());
+    }
 
     #[test]
     fn install_gate_uses_distinct_logical_requests_not_message_count() {

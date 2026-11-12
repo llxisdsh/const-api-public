@@ -247,6 +247,8 @@ pub(crate) fn channel_execution_backend(
 ) -> Result<ChannelExecutionBackend> {
     if route.operation == ApiOperation::Opaque
         || subscription_uses_local_token_count(channel, route)?
+        || (channel.source_driver() == crate::source_driver::SourceDriverId::GrokSubscription
+            && crate::supplier::grok_media_operation(route).is_some())
     {
         return Ok(ChannelExecutionBackend::HttpSurface);
     }
@@ -342,6 +344,14 @@ pub(crate) async fn execute_channel_request(
         )
     })?;
     let opaque = route.operation == ApiOperation::Opaque;
+    if channel.source_driver() == crate::source_driver::SourceDriverId::GrokSubscription
+        && crate::supplier::grok_media_operation(&route).is_some()
+    {
+        return Box::pin(crate::supplier::execute_grok_media_request(
+            client, channel, request,
+        ))
+        .await;
+    }
     if !crate::detection::responses_features::channel_allows_path(channel, &request.path) {
         return Err(execution_error(
             ChannelExecutionErrorCode::SurfaceOperationNotSupported,
@@ -353,7 +363,7 @@ pub(crate) async fn execute_channel_request(
         .as_deref()
         // A generation-protocol hint from platform routing must not redirect
         // resource/media operations away from their own API surface.
-        .filter(|_| route.protocol.is_some())
+        .filter(|_| route.protocol.is_some() && route.operation != ApiOperation::EmbedContent)
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let mut target = if opaque {
@@ -552,10 +562,16 @@ pub(crate) async fn execute_channel_request(
             | ApiOperation::InteractionsDelete
             | ApiOperation::InteractionsCancel
     );
-    if resource_native_operation && target.surface != route.surface {
+    if (resource_native_operation
+        || matches!(
+            route.operation,
+            ApiOperation::Embeddings | ApiOperation::EmbedContent
+        ))
+        && target.surface != route.surface
+    {
         return Err(execution_error(
             ChannelExecutionErrorCode::SurfaceOperationNotSupported,
-            "stateful resource operations require a native matching API surface",
+            "this operation requires a native matching API surface",
         ));
     }
     let mut tool_mapping = crate::protocol::conversion::ToolWireMap::default();
@@ -612,39 +628,11 @@ pub(crate) async fn execute_channel_request(
                     body = Bytes::from(rewritten);
                 }
             }
-            // Embeddings has no protocol IR today. Preserve the compatibility attempt instead of
-            // filtering the channel, and report the semantic risk until a real cross-surface adapter
-            // exists.
-            let improvement_faults = if route.operation == ApiOperation::Embeddings
-                && target.surface != route.surface
-            {
-                let summary = format!(
-                    "{} has no protocol-neutral cross-surface adapter; the original operation shape was forwarded as a compatibility attempt",
-                    route.operation.as_str()
-                );
-                eprintln!(
-                    "[const-api][protocol] conversion warning code=special_operation_approximated source={} target={} path={} summary={}",
-                    route.surface.as_str(),
-                    target_protocol,
-                    request.path,
-                    summary
-                );
-                vec![crate::supplier::ImprovementFault::conversion_warning(
-                    "special_operation_approximated",
-                    route.surface.as_str(),
-                    &target_protocol,
-                    requested_model.as_deref().unwrap_or(&upstream_model),
-                    &request.path,
-                    &summary,
-                )]
-            } else {
-                Vec::new()
-            };
             (
                 supplier_upstream_path(&route.relative_path, &upstream_model),
                 body,
                 target.surface == route.surface,
-                improvement_faults,
+                Vec::new(),
             )
         };
 
@@ -817,10 +805,10 @@ pub(crate) async fn execute_channel_request(
             reqwest::header::HeaderValue::from_static("identity"),
         );
     }
-    let opencode_auth_channel = prepare_opencode_console_auth(client, channel, &mut headers)
+    let managed_auth_channel = prepare_managed_http_auth(client, channel, &mut headers)
         .await
-        .map_err(opencode_auth_error)?;
-    let auth_channel = opencode_auth_channel.as_ref().unwrap_or(channel);
+        .map_err(managed_http_auth_error)?;
+    let auth_channel = managed_auth_channel.as_ref().unwrap_or(channel);
     if channel.source_driver() != crate::source_driver::SourceDriverId::CopilotSubscription {
         apply_upstream_auth(&mut headers, auth_channel, &target, !opaque).map_err(|error| {
             execution_error(ChannelExecutionErrorCode::AuthenticationFailed, error)
@@ -1011,10 +999,10 @@ pub(crate) async fn execute_native_streaming_channel_request(
         reqwest::header::ACCEPT_ENCODING,
         reqwest::header::HeaderValue::from_static("identity"),
     );
-    let opencode_auth_channel = prepare_opencode_console_auth(client, channel, &mut headers)
+    let managed_auth_channel = prepare_managed_http_auth(client, channel, &mut headers)
         .await
-        .map_err(opencode_auth_error)?;
-    let auth_channel = opencode_auth_channel.as_ref().unwrap_or(channel);
+        .map_err(managed_http_auth_error)?;
+    let auth_channel = managed_auth_channel.as_ref().unwrap_or(channel);
     apply_upstream_auth(&mut headers, auth_channel, &target, true)
         .map_err(|error| execution_error(ChannelExecutionErrorCode::AuthenticationFailed, error))?;
 
@@ -1264,11 +1252,14 @@ pub(crate) fn apply_upstream_auth(
     Ok(())
 }
 
-async fn prepare_opencode_console_auth(
+async fn prepare_managed_http_auth(
     client: &Client,
     channel: &ChannelConfig,
     headers: &mut HeaderMap,
 ) -> Result<Option<ChannelConfig>> {
+    if channel.source_driver() == crate::source_driver::SourceDriverId::OpenDesignSubscription {
+        return crate::opendesign::prepare_auth(channel, headers).map(Some);
+    }
     if channel.source_driver() != crate::source_driver::SourceDriverId::OpencodeConsole {
         return Ok(None);
     }
@@ -1285,7 +1276,7 @@ async fn prepare_opencode_console_auth(
 }
 
 // Token-endpoint network/429/5xx failures are not invalid credentials.
-fn opencode_auth_error(error: anyhow::Error) -> anyhow::Error {
+fn managed_http_auth_error(error: anyhow::Error) -> anyhow::Error {
     let unavailable = error
         .chain()
         .any(|cause| cause.is::<crate::upstream_transport::UpstreamTransportError>())
@@ -1330,8 +1321,6 @@ fn strip_http_hop_by_hop_headers(headers: &mut HeaderMap) {
         headers.remove(name);
     }
 }
-
-pub(crate) const ANTHROPIC_1M_BETA: &str = "context-1m-2025-08-07";
 
 pub(crate) fn strip_http_request_headers(headers: &mut HeaderMap) {
     strip_http_hop_by_hop_headers(headers);
@@ -1498,8 +1487,12 @@ mod tests {
         surface: ApiSurface,
         verification_state: &str,
     ) -> ChannelConfig {
-        let mut channel =
-            channel_from_supplier("channel-1".to_string(), &default_supplier_config());
+        // Admission is process-wide and keyed by channel ID. Independent
+        // protocol fixtures must not consume one another's concurrency slots.
+        let mut channel = channel_from_supplier(
+            format!("executor-fixture-{:032x}", rand::random::<u128>()),
+            &default_supplier_config(),
+        );
         let protocol = match surface {
             ApiSurface::OpenAi => "openai_chat",
             ApiSurface::Anthropic => "anthropic_messages",
@@ -1609,7 +1602,7 @@ mod tests {
     #[test]
     fn opencode_token_endpoint_outage_is_not_an_authentication_failure() {
         let oauth = |status, body| {
-            opencode_auth_error(
+            managed_http_auth_error(
                 crate::subscription_oauth_error::SubscriptionOAuthError::from_response(
                     "opencode", status, &body,
                 )
@@ -1660,10 +1653,172 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn opendesign_and_opencode_api_presets_preserve_real_path_prefixes() {
+        use crate::protocol::kind::ProtocolKind;
+        use crate::source_driver::SourceDriverId;
+
+        // Keep the shipped per-protocol paths; replacing every base with /v1
+        // would miss an incorrect preset prefix or a duplicated version segment.
+        for (driver, protocol, expected) in [
+            (
+                SourceDriverId::OpenDesignApi,
+                ProtocolKind::OpenAiChat,
+                "/v1/chat/completions",
+            ),
+            (
+                SourceDriverId::OpenDesignApi,
+                ProtocolKind::OpenAiResponses,
+                "/v1/responses",
+            ),
+            (
+                SourceDriverId::OpenDesignApi,
+                ProtocolKind::AnthropicMessages,
+                "/v1/messages",
+            ),
+            (
+                SourceDriverId::OpencodeGo,
+                ProtocolKind::OpenAiChat,
+                "/zen/go/v1/chat/completions",
+            ),
+            (
+                SourceDriverId::OpencodeGo,
+                ProtocolKind::OpenAiResponses,
+                "/zen/go/v1/responses",
+            ),
+            (
+                SourceDriverId::OpencodeGo,
+                ProtocolKind::AnthropicMessages,
+                "/zen/go/v1/messages",
+            ),
+            (
+                SourceDriverId::OpencodeGo,
+                ProtocolKind::GeminiNative,
+                "/inference/go/google/v1beta/models/gemini-4-argon:generateContent",
+            ),
+            (
+                SourceDriverId::OpencodeZen,
+                ProtocolKind::OpenAiChat,
+                "/zen/v1/chat/completions",
+            ),
+            (
+                SourceDriverId::OpencodeZen,
+                ProtocolKind::OpenAiResponses,
+                "/zen/v1/responses",
+            ),
+            (
+                SourceDriverId::OpencodeZen,
+                ProtocolKind::AnthropicMessages,
+                "/zen/v1/messages",
+            ),
+            (
+                SourceDriverId::OpencodeZen,
+                ProtocolKind::GeminiNative,
+                "/zen/v1/models/gemini-4-argon:generateContent",
+            ),
+        ] {
+            let (base, captured, server) = capture_server().await;
+            let mut channel = crate::coding_gateway::tests::channel(driver, &base);
+            channel.surface_bindings = crate::source_driver_surface_bindings(driver, "");
+            for binding in &mut channel.surface_bindings {
+                let official = Url::parse(&binding.base_url).unwrap();
+                assert_eq!(official.scheme(), "https");
+                assert_eq!(
+                    official.host_str(),
+                    Some(if driver == SourceDriverId::OpenDesignApi {
+                        "amr-link.open-design.ai"
+                    } else {
+                        "opencode.ai"
+                    })
+                );
+                binding.base_url = format!("{base}{}", official.path().trim_end_matches('/'));
+            }
+            channel = crate::project_channel_legacy_fields(channel);
+            let (model, path, body) = match protocol {
+                ProtocolKind::OpenAiChat => (
+                    "glm-5.3",
+                    "/v1/chat/completions",
+                    serde_json::json!({"model":"glm-5.3","messages":[{"role":"user","content":"OK"}]}),
+                ),
+                ProtocolKind::OpenAiResponses => (
+                    "gpt-6-luna",
+                    "/v1/responses",
+                    serde_json::json!({"model":"gpt-6-luna","input":"OK"}),
+                ),
+                ProtocolKind::AnthropicMessages => (
+                    "claude-haiku-5-5",
+                    "/anthropic/v1/messages",
+                    serde_json::json!({"model":"claude-haiku-5-5","max_tokens":8,"messages":[{"role":"user","content":"OK"}]}),
+                ),
+                ProtocolKind::GeminiNative => (
+                    "gemini-4-argon",
+                    "/gemini/v1beta/models/gemini-4-argon:generateContent",
+                    serde_json::json!({"contents":[{"role":"user","parts":[{"text":"OK"}]}]}),
+                ),
+            };
+            let body = body.to_string();
+            let mut req = request(Method::POST, path, "", Bytes::from(body.clone()));
+            req.selected_upstream_model = Some(model.into());
+            req.selected_target_protocol = Some(protocol.as_str().into());
+            req.cache_identity = Some("api-path-review-session".into());
+            req.headers
+                .insert("authorization", "Bearer downstream-secret".parse().unwrap());
+            let client = Client::builder()
+                .no_proxy()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let execution = execute_channel_request(&client, &channel, req)
+                .await
+                .unwrap();
+            assert!(execution.native_passthrough, "{driver:?} {protocol:?}");
+            assert_eq!(execution.response.status(), 200);
+            let captured = captured.await.unwrap();
+            assert_eq!(captured.target, expected, "{driver:?} {protocol:?}");
+            assert_eq!(captured.body, body.as_bytes());
+            let auth = if driver == SourceDriverId::OpenDesignApi {
+                ("authorization", "Bearer test-key")
+            } else {
+                match protocol {
+                    ProtocolKind::AnthropicMessages => ("x-api-key", "test-key"),
+                    ProtocolKind::GeminiNative => ("x-goog-api-key", "test-key"),
+                    _ => ("authorization", "Bearer test-key"),
+                }
+            };
+            assert_eq!(captured_header(&captured, auth.0), Some(auth.1));
+            assert!(!captured.headers.contains("downstream-secret"));
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn coding_gateways_preserve_native_tools_headers_and_streams() {
         use crate::source_driver::SourceDriverId;
         use reqwest::header::HeaderValue;
         for (driver, model, protocol, path) in [
+            (
+                SourceDriverId::OpenDesignApi,
+                "deepseek-v4.1-flash",
+                "openai_chat",
+                "/v1/chat/completions",
+            ),
+            (
+                SourceDriverId::OpenDesignApi,
+                "gpt-6-astra",
+                "openai_responses",
+                "/v1/responses",
+            ),
+            (
+                SourceDriverId::OpenDesignApi,
+                "claude-sonnet-5-5",
+                "anthropic_messages",
+                "/v1/messages",
+            ),
+            (
+                SourceDriverId::OpenDesignSubscription,
+                "deepseek-v4.1-flash",
+                "openai_chat",
+                "/v1/chat/completions",
+            ),
             (
                 SourceDriverId::OpencodeGo,
                 "gpt-5.6-luna",
@@ -1773,7 +1928,17 @@ mod tests {
                     "application/json"
                 };
                 let (base, captured, server) = capture_server_with_response(format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}", response_body.len()).into_bytes()).await;
-                let channel = crate::coding_gateway::tests::channel(driver, &format!("{base}/v1"));
+                let mut channel =
+                    crate::coding_gateway::tests::channel(driver, &format!("{base}/v1"));
+                let credentials = tempfile::tempdir().unwrap();
+                if driver == SourceDriverId::OpenDesignSubscription {
+                    crate::opendesign::tests::attach_credential(&mut channel, credentials.path());
+                }
+                let expected_key = if driver == SourceDriverId::OpenDesignSubscription {
+                    "runtime-test"
+                } else {
+                    channel.v2.credential_ref.as_str()
+                };
                 let body = format!(
                     r#"{{ "model":"{model}","stream":{stream},"tools":[{{"type":"custom","name":"edit","format":{{"type":"text"}}}}],"future_option":{{"keep":true}},"input":[{{"additional_tools":[]}}] }}"#
                 );
@@ -1794,6 +1959,14 @@ mod tests {
                     "authorization",
                     HeaderValue::from_static("Bearer downstream-secret"),
                 );
+                req.headers.insert(
+                    "x-vela-workspace-id",
+                    HeaderValue::from_static("downstream-workspace"),
+                );
+                req.headers.insert(
+                    "x-amr-client-source",
+                    HeaderValue::from_static("downstream-client"),
+                );
                 req.headers
                     .insert("anthropic-beta", HeaderValue::from_static("future-beta"));
                 if stream {
@@ -1809,6 +1982,21 @@ mod tests {
                 let captured = captured.await.unwrap();
                 assert_eq!(captured.target, path);
                 assert_eq!(captured.body, body.as_bytes());
+                if driver == SourceDriverId::OpenDesignSubscription {
+                    assert_eq!(
+                        captured_header(&captured, "x-vela-workspace-id"),
+                        Some("workspace-a")
+                    );
+                    assert_eq!(
+                        captured_header(&captured, "x-amr-client-source"),
+                        Some("standalone")
+                    );
+                    assert_eq!(
+                        captured_header(&captured, "x-amr-request-role"),
+                        Some("primary")
+                    );
+                    assert!(!format!("{:?}", captured.headers).contains("control-test"));
+                }
                 if protocol == "anthropic_messages"
                     && matches!(
                         driver,
@@ -1822,7 +2010,7 @@ mod tests {
                 } else {
                     assert_eq!(
                         captured_header(&captured, "authorization"),
-                        Some(format!("Bearer {}", channel.v2.credential_ref).as_str())
+                        Some(format!("Bearer {expected_key}").as_str())
                     );
                 }
                 if protocol == "anthropic_messages" {
@@ -2579,6 +2767,76 @@ mod tests {
             Some("application/json")
         );
         assert_eq!(captured.body, body.as_ref());
+    }
+
+    #[tokio::test]
+    async fn native_video_api_preserves_job_lifecycle_and_binary_download() {
+        // This proves the native transport contract, not access to a live
+        // video provider or support for asynchronous platform settlement.
+        for (method, path, body, response_type, response_body) in [
+            (
+                Method::POST,
+                "/v1/videos",
+                br#"{"model":"video-fixture","prompt":"one dot","seconds":"4"}"#.as_slice(),
+                "application/json",
+                br#"{"id":"video_1","status":"queued"}"#.as_slice(),
+            ),
+            (
+                Method::GET,
+                "/v1/videos/video_1",
+                b"".as_slice(),
+                "application/json",
+                br#"{"id":"video_1","status":"completed"}"#.as_slice(),
+            ),
+            (
+                Method::GET,
+                "/v1/videos/video_1/content",
+                b"".as_slice(),
+                "video/mp4",
+                b"\x00\x00\x00\x18ftypmp42\xff\x00".as_slice(),
+            ),
+            (
+                Method::DELETE,
+                "/v1/videos/video_1",
+                b"".as_slice(),
+                "application/json",
+                br#"{"id":"video_1","deleted":true}"#.as_slice(),
+            ),
+        ] {
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {response_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response_body.len()
+            )
+            .into_bytes();
+            response.extend_from_slice(response_body);
+            let (base_url, receiver, server) = capture_server_with_response(response).await;
+            let mut channel = channel_for_surface(&base_url, ApiSurface::OpenAi, "verified");
+            channel.upstream_api_key = "video-fixture-key".into();
+            channel.surface_bindings[0].auth_scheme = "bearer".into();
+            let mut request = request(method.clone(), path, "", Bytes::copy_from_slice(body));
+            request.headers.insert(
+                reqwest::header::CONTENT_TYPE,
+                "application/json".parse().unwrap(),
+            );
+            let execution = execute_channel_request(&Client::new(), &channel, request)
+                .await
+                .unwrap();
+            let captured = receiver.await.unwrap();
+            server.await.unwrap();
+            assert!(execution.native_passthrough);
+            assert_eq!(captured.method, method.as_str());
+            assert_eq!(captured.target, path);
+            assert_eq!(captured.body, body);
+            assert_eq!(
+                captured_header(&captured, "authorization"),
+                Some("Bearer video-fixture-key"),
+            );
+            assert_eq!(execution.response.headers()["content-type"], response_type);
+            assert_eq!(
+                execution.response.bytes().await.unwrap().as_ref(),
+                response_body,
+            );
+        }
     }
 
     #[tokio::test]
@@ -3500,6 +3758,70 @@ mod tests {
             captured.body,
             br#"{"model":"selected-target-model","input":"hello"}"#
         );
+    }
+
+    #[tokio::test]
+    async fn embedding_operations_reject_cross_surface_before_upstream_execution() {
+        for (path, body, targets) in [
+            (
+                "/v1/embeddings",
+                br#"{"model":"public-model","input":"hello"}"#.as_slice(),
+                [ApiSurface::Gemini, ApiSurface::Anthropic],
+            ),
+            (
+                "/gemini/v1beta/models/public-model:embedContent",
+                br#"{"content":{"parts":[{"text":"hello"}]}}"#.as_slice(),
+                [ApiSurface::OpenAi, ApiSurface::Anthropic],
+            ),
+        ] {
+            for target in targets {
+                let channel = channel_for_surface("http://127.0.0.1:1", target, "verified");
+                let error = execute_channel_request(
+                    &Client::new(),
+                    &channel,
+                    request(Method::POST, path, "", Bytes::copy_from_slice(body)),
+                )
+                .await
+                .err()
+                .expect("embedding requires its native surface");
+                assert_eq!(
+                    channel_execution_error_code(&error),
+                    Some("surface_operation_not_supported"),
+                    "{path} to {target:?}: {error}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn native_embedding_keeps_its_operation_and_fields_despite_generation_hint() {
+        for selected_protocol in [None, Some("openai_chat")] {
+            let (base_url, receiver, server) = capture_server().await;
+            let mut channel = channel_for_surface(&base_url, ApiSurface::Gemini, "verified");
+            let openai = channel_for_surface("http://127.0.0.1:1", ApiSurface::OpenAi, "verified");
+            channel.surface_bindings.extend(openai.surface_bindings);
+            channel.v2.default_target = openai.v2.default_target;
+            let body = Bytes::from_static(br#"{ "content": {"parts":[{"text":"hello"}]}, "taskType":"RETRIEVAL_DOCUMENT", "outputDimensionality":512, "future_option":{"keep":true} }"#);
+            let mut inbound = request(
+                Method::POST,
+                "/gemini/v1beta/models/public-model:embedContent",
+                "trace=kept",
+                body.clone(),
+            );
+            inbound.selected_target_protocol = selected_protocol.map(str::to_string);
+            let execution = execute_channel_request(&Client::new(), &channel, inbound)
+                .await
+                .unwrap();
+            let captured = receiver.await.unwrap();
+            server.await.unwrap();
+            assert!(execution.native_passthrough);
+            assert!(execution.improvement_faults.is_empty());
+            assert_eq!(
+                captured.target,
+                "/v1beta/models/selected-target-model:embedContent?trace=kept"
+            );
+            assert_eq!(captured.body, body);
+        }
     }
 
     #[tokio::test]

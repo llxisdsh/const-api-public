@@ -30,10 +30,13 @@ pub(crate) fn log_reasoning_rejection(channel_id: &str, protocol: &str, status: 
     }
     if let Some(settings) = reasoning_request_settings(body) {
         log::info!(
-            "[const-api][upstream] parameter_rejection channel_id={} protocol={} status={} reasoning_settings={}",
+            "[const-api][upstream] parameter_rejection channel_id={} protocol={} status={} request_id={:?} reasoning_settings={}",
             channel_id,
             protocol,
             status,
+            crate::update_activity::current_supplier_request_id()
+                .as_deref()
+                .unwrap_or("-"),
             settings
         );
     }

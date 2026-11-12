@@ -477,19 +477,24 @@ pub(crate) fn query_subscription_usage_records(
     flush_subscription_usage_writer()?;
     with_subscription_usage_db(|connection| {
         let mut statement = connection.prepare(
-            "SELECT record_json
+            "SELECT id, record_json
              FROM channel_usage_records
              WHERE (?1 IS NULL OR ts_ms > ?1)
              ORDER BY ts_ms DESC, id DESC
              LIMIT ?2",
         )?;
         let rows = statement.query_map(params![after_ms, limit as i64], |row| {
-            row.get::<_, String>(0)
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?;
         let mut records = Vec::new();
         for row in rows {
-            if let Ok(record) = serde_json::from_str::<serde_json::Value>(&row?) {
-                records.push(record);
+            let (id, raw) = row?;
+            if let Ok(serde_json::Value::Object(mut record)) = serde_json::from_str(&raw) {
+                // Use the persisted row identity for both old and new records.
+                // Timestamp/channel/path (even with milliseconds) can collide;
+                // the UI also uses this ID when merging incremental snapshots.
+                record.insert("id".into(), serde_json::json!(format!("local-call-{id}")));
+                records.push(serde_json::Value::Object(record));
             }
         }
         Ok(records)

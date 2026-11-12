@@ -313,9 +313,9 @@ impl RoutePath {
     fn matches(self, path: &str) -> bool {
         match self {
             Self::Exact(expected) => path == expected,
-            Self::ModelDetail(prefix) => path.strip_prefix(prefix).is_some_and(|value| {
-                !value.is_empty() && !value.contains('/') && !value.contains(':')
-            }),
+            Self::ModelDetail(prefix) => path
+                .strip_prefix(prefix)
+                .is_some_and(|value| !value.is_empty() && !value.contains('/')),
             Self::GeminiAction(suffix) => path
                 .strip_prefix("/gemini/v1beta/models/")
                 .and_then(|value| value.strip_suffix(suffix))
@@ -393,7 +393,31 @@ pub(crate) struct RouteSpec {
 
 impl RouteSpec {
     fn matches(self, method: &str, path: &str) -> bool {
-        self.method == method && self.path.matches(path)
+        self.method == method && self.matches_path(path)
+    }
+
+    fn matches_path(self, path: &str) -> bool {
+        // xAI's native spelling is an alias of the same operation. Preserve the
+        // request path without registering a duplicate operation in the manifest.
+        if self.operation == ApiOperation::VideosCreate && path == "/v1/videos/generations" {
+            return true;
+        }
+        if !self.path.matches(path) {
+            return false;
+        }
+        // Colons can belong to model IDs. Only registered Gemini RPCs take
+        // precedence over model details, including their allowed methods.
+        if self.surface == ApiSurface::Gemini && matches!(self.path, RoutePath::ModelDetail(_)) {
+            // Decode only to exclude RPCs from model lookup. Execution still
+            // requires the literal action separator used by downstream parsers.
+            let Ok(decoded_path) = urlencoding::decode(path) else {
+                return false;
+            };
+            return !ROUTE_SPECS.iter().any(|spec| {
+                matches!(spec.path, RoutePath::GeminiAction(_)) && spec.path.matches(&decoded_path)
+            });
+        }
+        true
     }
 
     fn operation_id(self) -> String {
@@ -557,14 +581,10 @@ pub(crate) const fn api_operation_requires_native_api_credential(operation: ApiO
             | ApiOperation::AudioSpeech
             | ApiOperation::AudioTranscriptions
             | ApiOperation::AudioTranslations
-            | ApiOperation::VideosCreate
             | ApiOperation::VideosList
-            | ApiOperation::VideosGet
             | ApiOperation::VideosDelete
             | ApiOperation::VideosContent
             | ApiOperation::VideosRemix
-            | ApiOperation::VideosEdit
-            | ApiOperation::VideosExtend
             | ApiOperation::BatchesCreate
             | ApiOperation::BatchesList
             | ApiOperation::BatchesGet
@@ -585,6 +605,10 @@ pub(crate) const fn api_operation_requires_local_backend(operation: ApiOperation
     matches!(
         operation,
         ApiOperation::ImagesEdits
+            | ApiOperation::VideosCreate
+            | ApiOperation::VideosGet
+            | ApiOperation::VideosEdit
+            | ApiOperation::VideosExtend
             | ApiOperation::RealtimeCallsCreate
             | ApiOperation::RealtimeLiveCallCreate
             | ApiOperation::RealtimeLiveConnect
@@ -1389,7 +1413,11 @@ const ROUTE_SPECS: &[RouteSpec] = &[
         TransportKind::Http,
         Statefulness::ResourceRead,
         BillingClass::None,
-        RoutePath::SingleSegmentResource("/v1/videos/", "", &["edits", "extensions", "characters"]),
+        RoutePath::SingleSegmentResource(
+            "/v1/videos/",
+            "",
+            &["edits", "extensions", "characters", "generations"],
+        ),
     ),
     route(
         "DELETE",
@@ -1401,7 +1429,11 @@ const ROUTE_SPECS: &[RouteSpec] = &[
         TransportKind::Http,
         Statefulness::ResourceDelete,
         BillingClass::None,
-        RoutePath::SingleSegmentResource("/v1/videos/", "", &["edits", "extensions", "characters"]),
+        RoutePath::SingleSegmentResource(
+            "/v1/videos/",
+            "",
+            &["edits", "extensions", "characters", "generations"],
+        ),
     ),
     route(
         "GET",
@@ -2034,8 +2066,16 @@ pub(crate) fn known_route_allowed_methods(
     };
     let mut methods = Vec::new();
     for spec in ROUTE_SPECS.iter().filter(|spec| {
-        spec.surface == surface && spec.transport == transport && spec.path.matches(path)
+        spec.surface == surface && spec.transport == transport && spec.matches_path(path)
     }) {
+        // A colon may introduce an unregistered Gemini RPC. Its opaque POST
+        // path remains available even though GET can look up a model suffix.
+        if spec.surface == ApiSurface::Gemini
+            && spec.operation == ApiOperation::GetModel
+            && urlencoding::decode(path).is_ok_and(|path| path.contains(':'))
+        {
+            continue;
+        }
         if !methods.contains(&spec.method) {
             methods.push(spec.method);
         }
@@ -2106,7 +2146,7 @@ pub(crate) fn surface_manifest() -> serde_json::Value {
         },
         "official_families": contract["official_families"],
         "surfaces": surfaces,
-        "limits": { "max_opaque_request_bytes": 67108864 },
+        "limits": { "max_opaque_request_bytes": crate::MODEL_MESSAGE_MAX_BYTES },
         "management_api": {
             "exposed": false,
             "reason": "Organization, workspace, and project administration require independent management authentication and audit."
@@ -2268,9 +2308,95 @@ mod tests {
 
     #[test]
     fn model_details_are_control_operations_not_generation_protocols() {
-        let route = resolve_api_route("GET", "/v1/models/gpt-5.6", false).unwrap();
-        assert_eq!(route.operation, ApiOperation::GetModel);
-        assert_eq!(route.protocol, None);
+        for prefix in [
+            "/v1/models/",
+            "/anthropic/v1/models/",
+            "/gemini/v1beta/models/",
+        ] {
+            for model in [
+                "gpt-5.6",
+                "model:free",
+                "model%3Afree",
+                "model%3afree",
+                "model:thinking",
+            ] {
+                let path = format!("{prefix}{model}");
+                let route = resolve_api_route("GET", &path, false).unwrap();
+                assert_eq!(route.operation, ApiOperation::GetModel, "{path}");
+                assert_eq!(route.protocol, None, "{path}");
+                assert_eq!(
+                    route.ownership,
+                    OperationOwnership::AggregatedControl,
+                    "{path}"
+                );
+                assert_eq!(route.billing_class, BillingClass::None, "{path}");
+                if prefix == "/gemini/v1beta/models/" && model != "gpt-5.6" {
+                    assert!(
+                        known_route_allowed_methods(&path, false).is_none(),
+                        "{path}"
+                    );
+                    assert_eq!(
+                        resolve_api_route("POST", &path, false).unwrap().ownership,
+                        OperationOwnership::RoutedOpaque,
+                        "{path}"
+                    );
+                    continue;
+                }
+                let (_, methods) = known_route_allowed_methods(&path, false).unwrap();
+                let expected = if prefix == "/v1/models/" {
+                    vec!["GET", "DELETE"]
+                } else {
+                    vec!["GET"]
+                };
+                assert_eq!(methods, expected, "{path}");
+            }
+        }
+        // Gemini RPC names are ordinary model suffixes on other surfaces.
+        assert_eq!(
+            resolve_api_route("GET", "/v1/models/model:embedContent", false)
+                .unwrap()
+                .operation,
+            ApiOperation::GetModel
+        );
+    }
+
+    #[test]
+    fn gemini_model_actions_keep_registered_routes_and_allowed_methods() {
+        for spec in ROUTE_SPECS
+            .iter()
+            .filter(|spec| matches!(spec.path, RoutePath::GeminiAction(_)))
+        {
+            for model in ["model", "model:free"] {
+                let path = spec.path_template.replace("{model}", model);
+                let route = resolve_api_route(spec.method, &path, false).unwrap();
+                assert_eq!(route.operation, spec.operation, "{path}");
+                assert_eq!(route.path_template, spec.path_template, "{path}");
+                assert_eq!(route.ownership, spec.ownership, "{path}");
+                assert_eq!(route.protocol, spec.protocol, "{path}");
+                let (_, methods) = known_route_allowed_methods(&path, false).unwrap();
+                assert_eq!(methods, vec![spec.method], "{path}");
+                assert_eq!(
+                    resolve_api_route("GET", &path, false).unwrap().ownership,
+                    OperationOwnership::RoutedOpaque,
+                    "{path}"
+                );
+
+                // Escaping the action itself is not supported by the execution
+                // path. Keep it opaque, without mistaking it for model details.
+                let escaped = path.replace(':', "%3A");
+                assert!(known_route_allowed_methods(&escaped, false).is_none());
+                for method in ["GET", spec.method] {
+                    let route = resolve_api_route(method, &escaped, false).unwrap();
+                    assert_eq!(
+                        route.ownership,
+                        OperationOwnership::RoutedOpaque,
+                        "{escaped}"
+                    );
+                    assert_eq!(route.protocol, None, "{escaped}");
+                    assert_eq!(route.relative_path, escaped.trim_start_matches("/gemini"));
+                }
+            }
+        }
     }
 
     #[test]
@@ -2546,7 +2672,14 @@ mod tests {
                 "/v1/videos",
                 ApiOperation::VideosCreate,
                 "streaming_upload",
-                "native_backend_only",
+                "local_backend_only",
+            ),
+            (
+                "POST",
+                "/v1/videos/generations",
+                ApiOperation::VideosCreate,
+                "streaming_upload",
+                "local_backend_only",
             ),
             (
                 "GET",
@@ -2566,6 +2699,13 @@ mod tests {
             assert_eq!(spec.request_body_mode(), body_mode);
             assert_eq!(spec.execution_policy(), policy);
         }
+        let alias = resolve_api_route("POST", "/v1/videos/generations", false).unwrap();
+        assert_eq!(alias.relative_path, "/v1/videos/generations");
+        assert_eq!(alias.path_template, "/v1/videos");
+        assert_eq!(
+            known_route_allowed_methods("/v1/videos/generations", false),
+            Some((ApiSurface::OpenAi, vec!["POST"]))
+        );
         assert_eq!(
             resolve_api_route("GET", "/v1/videos/edits", false)
                 .expect("opaque reserved collection segment")

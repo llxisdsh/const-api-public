@@ -14,6 +14,130 @@ use tokio::{
 
 const CHILD: &str = "proxy::responses_ws_transport::tests::production_transport_child";
 
+#[tokio::test]
+async fn codex_large_turns_keep_compression_and_bounded_frames() {
+    const FRAME_BYTES: usize = 1024 * 1024;
+    // Incompressible-ish history also exceeds the peer's frame limit with
+    // deflate enabled. Split a UTF-8 character across the 1 MiB boundary.
+    let mut body = String::from(
+        r#"{"type":"response.create","model":"fixture","input":[{"type":"function_call_output","call_id":"call","output":""#,
+    );
+    let mut seed = 0x3197_ace5_8372_u64;
+    while body.len() < FRAME_BYTES - 1 {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        body.push(
+            b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[(seed % 62) as usize]
+                as char,
+        );
+    }
+    body.push('🦀');
+    let tail = body[128..FRAME_BYTES - 1].to_string();
+    body.push_str(&tail);
+    body.push_str(&tail);
+    body.push_str(
+        r#""},{"type":"compaction","encrypted_content":"opaque"},{"type":"compaction_trigger"}]}"#,
+    );
+    serde_json::from_str::<serde_json::Value>(&body).unwrap();
+
+    for compression in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected = body.clone();
+        let peer = tokio::spawn(async move {
+            let config = codex_config(8 * FRAME_BYTES, compression)
+                .max_frame_size(Some(FRAME_BYTES + 64 * 1024));
+            let mut socket = codex_ws::accept_async_with_config(
+                listener.accept().await.unwrap().0,
+                Some(config),
+            )
+            .await
+            .unwrap();
+            // Repeated turns exercise compression context takeover as well as
+            // resetting Text/Continue and FIN at each logical message boundary.
+            for _ in 0..2 {
+                let mut first = [0u8; 1];
+                socket.get_ref().peek(&mut first).await.unwrap();
+                assert_eq!(first[0] & 0x80, 0, "first fragment must not have FIN");
+                assert_eq!(first[0] & 0x0f, 1, "message starts with Text");
+                assert_eq!(
+                    first[0] & 0x40 != 0,
+                    compression,
+                    "negotiated compression must be used"
+                );
+                let received = socket.next().await.unwrap().expect("bounded Codex frames");
+                assert_eq!(received.into_text().unwrap(), expected);
+                assert_eq!(
+                    socket.next().await.unwrap().unwrap().into_text().unwrap(),
+                    "next"
+                );
+                socket
+                    .send(codex::Message::Text("ack".into()))
+                    .await
+                    .unwrap();
+            }
+        });
+        let mut socket = connect_codex_responses_websocket_request(
+            format!("ws://{address}/responses")
+                .into_client_request()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        for _ in 0..2 {
+            socket
+                .feed(registry::Message::Text(body.clone().into()))
+                .await
+                .unwrap();
+            socket
+                .send(registry::Message::Text("next".into()))
+                .await
+                .unwrap();
+            assert_eq!(
+                socket.next().await.unwrap().unwrap().into_text().unwrap(),
+                "ack"
+            );
+        }
+        peer.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn codex_close_does_not_complete_a_cancelled_fragmented_turn() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+        let mut socket = codex_ws::accept_async(listener.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        assert!(
+            socket.next().await.unwrap().unwrap().is_close(),
+            "cancelled turn must never reach the application"
+        );
+    });
+    let mut socket = connect_codex_responses_websocket_request(
+        format!("ws://{address}/responses")
+            .into_client_request()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    // Feed accepts the first non-final fragment, without flushing the remaining
+    // message. This is the state cleanup sees after a cancelled send.
+    socket
+        .feed(registry::Message::Text(
+            "x".repeat(3 * CODEX_RESPONSES_FRAGMENT_BYTES).into(),
+        ))
+        .await
+        .unwrap();
+    socket.close(None).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), peer)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
 fn child_command() -> Command {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command.args(["--ignored", "--exact", CHILD, "--nocapture"]);
@@ -851,8 +975,11 @@ async fn adapter_split_preserves_control_and_binary_frames(live: bool) {
 #[test]
 fn production_limits_and_proxy_error_redaction() {
     let config = codex_config(RESPONSES_WEBSOCKET_MAX_MESSAGE_BYTES, true);
-    assert_eq!(config.max_message_size, Some(64 * 1024 * 1024));
+    assert_eq!(config.max_message_size, Some(MODEL_MESSAGE_MAX_BYTES));
     assert_eq!(config.max_frame_size, config.max_message_size);
+    let live = codex_config(DUPLEX_WEBSOCKET_MAX_MESSAGE_BYTES, false);
+    assert_eq!(live.max_message_size, Some(MODEL_MESSAGE_MAX_BYTES));
+    assert_eq!(live.max_frame_size, live.max_message_size);
     let error = codex_error(codex::Error::Url(
         codex::error::UrlError::InvalidProxyConfig("http://fixture:secret@proxy.invalid".into()),
     ));

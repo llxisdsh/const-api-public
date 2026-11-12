@@ -102,10 +102,14 @@ describe("ModelCompatibilityEditor system baseline", () => {
       expect(Array.from(tier.querySelectorAll(".compatibility-model-row > code"), (row) => row.textContent))
         .toEqual(group.models);
     }
-    for (const model of ["gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gpt-5.4", "gpt-5.3-codex-spark", "claude-fable-5-1"]) {
+    for (const model of ["gemini-4-carbon", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gpt-5.4", "gpt-5.3-codex-spark", "claude-fable-5-2"]) {
       expect(screen.getByText(model).closest(".compatibility-model-row")).not.toBeNull();
     }
-    expect(screen.queryByText("codex-auto-review")).not.toBeInTheDocument();
+    const matchModels = modelGroups.flatMap((group) => group.match_models ?? []);
+    for (const model of ["claude-fable-5-1", "gemini-3.5-flash", "gemini-3.7-flash", "codex-auto-review"]) {
+      expect(matchModels).toContain(model);
+      expect(screen.queryByText(model)).not.toBeInTheDocument();
+    }
   });
 
   it("renders system models as fixed without move or remove controls", () => {

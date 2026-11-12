@@ -22,6 +22,7 @@ use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 pub(crate) mod availability;
+pub(crate) mod health_recovery;
 include!("supplier/register_update.rs");
 include!("supplier/channel_probe.rs");
 include!("supplier/lifecycle.rs");
@@ -31,6 +32,8 @@ include!("supplier/message_chunks.rs");
 include!("supplier/output_budget.rs");
 #[cfg(test)]
 include!("supplier/transport_regression_tests.rs");
+#[cfg(test)]
+include!("supplier/weak_network_tests.rs");
 include!("supplier/transport.rs");
 include!("supplier/platform_duplex.rs");
 include!("supplier/execution_evidence.rs");

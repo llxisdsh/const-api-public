@@ -103,6 +103,8 @@ describe("source drivers", () => {
       kiro_subscription: "https://kiro.dev/",
       cursor_subscription: "https://cursor.com/",
       opencode_console: "https://opencode.ai/console",
+      opendesign_api: "https://open-design.ai/help/cloud-api/",
+      opendesign_subscription: "https://open-design.ai/help/cloud-api/",
       openai_api: "https://developers.openai.com/",
       anthropic_api: "https://docs.anthropic.com/",
       gemini_api: "https://ai.google.dev/",
@@ -191,6 +193,7 @@ describe("source drivers", () => {
       "ollama_cloud",
       "abacus_routellm",
       "poe_api",
+      "opendesign_api",
     ]);
     expect(sourceDriversForLanSharing().map((driver) => driver.id)).toEqual(["lan_share"]);
     expect(sourceDriversForCustom().map((driver) => driver.id)).toEqual(["custom_endpoint"]);
@@ -341,6 +344,12 @@ describe("source drivers", () => {
           "iconKey": "meta",
           "id": "muse_code",
           "order": 55,
+        },
+        {
+          "category": "subscription",
+          "iconKey": "opendesign",
+          "id": "opendesign_subscription",
+          "order": 60,
         },
         {
           "category": "official_api",
@@ -578,6 +587,12 @@ describe("source drivers", () => {
         },
         {
           "category": "compatible_gateway",
+          "iconKey": "opendesign",
+          "id": "opendesign_api",
+          "order": 23,
+        },
+        {
+          "category": "compatible_gateway",
           "iconKey": "network",
           "id": "lan_share",
           "order": 30,
@@ -607,6 +622,7 @@ describe("source drivers", () => {
       ["kiro_subscription", ["anthropic_messages"]],
       ["opencode_console", ["openai_chat", "openai_responses", "anthropic_messages", "gemini_native"]],
       ["cursor_subscription", ["anthropic_messages"]],
+      ["opendesign_subscription", ["openai_chat"]],
     ]);
     expect(subscriptions.map((driver) => driver.executor)).toEqual([
       { type: "retained_subscription", provider: "openai" },
@@ -616,6 +632,7 @@ describe("source drivers", () => {
       { type: "retained_subscription", provider: "kiro" },
       { type: "http_surface" },
       { type: "retained_subscription", provider: "cursor" },
+      { type: "http_surface" },
     ]);
     expect(subscriptions.filter((driver) => driver.executor.type === "retained_subscription")
       .flatMap((driver) => driver.surfaceBindings.map((binding) => binding.baseUrl)))
@@ -718,12 +735,12 @@ describe("source drivers", () => {
     expect(sourceDriverById("gemini_api").surfaceBindings[0].preferredProtocol).toBe("gemini_native");
   });
 
-  test.each(["opencode_go", "opencode_zen", "kilo_gateway", "cline_api", "command_code", "kimi_code", "glm_coding_plan", "minimax_token_plan", "ollama_cloud", "muse_code", "copilot_subscription", "abacus_routellm", "poe_api"] as const)(
+  test.each(["opencode_go", "opencode_zen", "kilo_gateway", "cline_api", "command_code", "kimi_code", "glm_coding_plan", "minimax_token_plan", "ollama_cloud", "muse_code", "copilot_subscription", "abacus_routellm", "poe_api", "opendesign_api", "opendesign_subscription"] as const)(
     "%s fixes its connection while retaining editable credentials and supply settings",
     (id) => {
       const driver = sourceDriverById(id);
       expect(driver.fixedConnection).toBe(true);
-      expect(driver.kind).toBe("openai_compatible");
+      expect(driver.kind).toBe(id === "opendesign_subscription" ? "subscription_adapter" : "openai_compatible");
       const channel = sourceDriverInitialChannelV5(driver, { id, name: driver.title });
       channel.credential_ref = "new-key";
       channel.max_concurrency = 7;

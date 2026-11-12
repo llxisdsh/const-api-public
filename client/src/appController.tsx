@@ -779,6 +779,8 @@ export function sourceDriverCardPresentation(driver: SourceDriver): Pick<React.C
       return { icon: siVllm, fallback: Server, tone: "#7c3aed" };
     case "openrouter":
       return { icon: siOpenrouter, fallback: CloudUpload, tone: "#6566f1" };
+    case "opendesign":
+      return { icon: null, customIcon: "open-design", fallback: Bot, tone: "var(--text)" };
     case "opencode":
       return { icon: null, customIcon: "opencode", fallback: Code2, tone: "var(--text)" };
     case "cline":
@@ -2128,11 +2130,11 @@ export function useAppController({
         return;
       }
       void refreshReleaseSourceStatus();
+      // Refresh call records once, after local access startup completes.
       void ensureAutoStartup(result.cfg, result.st, result.supplierSt);
       if (!DEVELOPMENT_PROFILE) {
         void refreshAutostartStatus();
       }
-      void refreshCallRecords({ silent: true });
     }
 
   async function refreshReleaseSourceStatus() {
@@ -5434,7 +5436,13 @@ export function useAppController({
     }
 
   async function importSubscriptionJson(tokenJson?: string) {
-      const retryChannel = subscriptionImportRetryChannel;
+      // A newly read/authorized credential starts its own import. Only the
+      // explicit retry action may resume an earlier prepared account.
+      const retryChannel = tokenJson === undefined ? subscriptionImportRetryChannel : null;
+      if (tokenJson !== undefined) {
+        discardPendingSubscriptionImport();
+        setSubscriptionImportRetryChannel(null);
+      }
       const requestedTokenJson = tokenJson ?? subscriptionTokenJson;
       if (!retryChannel && !requestedTokenJson.trim()) {
         showToast(tr("subscriptionImport.pasteTokenJson"), "error");
@@ -5589,7 +5597,7 @@ export function useAppController({
     }
 
   function addSubscriptionPreset(driver: SourceDriver) {
-      if (driver.executor.type === "http_surface" && driver.subscriptionProvider !== "opencode") {
+      if (driver.executor.type === "http_surface" && !driver.subscriptionProvider) {
         void addPresetChannelWithConnection(driver);
         return;
       }

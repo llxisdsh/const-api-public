@@ -58,6 +58,13 @@
       "upstream_error": "Meta authorization failed. Try signing in again; no pay-as-you-go fallback was enabled."
     }
   },
+  "opendesign": {
+    "hint": "Import the local OpenDesign / Vela login, then validate and enable the channel (checks consume quota). Credentials are stored separately and pinned to the default workspace. App-only free benefits are not guaranteed.",
+    "importLocal": "Import local OpenDesign login",
+    "chooseFile": "Choose Vela login file",
+    "importing": "Reading login and workspace…",
+    "importFailed": "Could not import the local login. Check that OpenDesign is signed in and your system proxy is available."
+  },
   "opencode": {
     "login": "Sign in to OpenCode Console",
     "starting": "Creating device authorization…",
@@ -1187,7 +1194,7 @@
       "allStatuses": "All statuses",
       "model": "Model",
       "modelPlaceholder": "Model name",
-      "applyFilters": "Apply filters",
+      "searchModel": "Search model",
       "recordsUnavailable": "Billing records are temporarily unavailable",
       "loading": "Loading billing records",
       "empty": "No billing records",
@@ -1714,6 +1721,7 @@
       "grok": "Grok account subscription",
       "kiro": "Kiro account subscription",
       "cursor": "Cursor account subscription",
+      "opendesign": "OpenDesign Account Subscription",
       "opencode": "OpenCode Console subscription",
       "connect": "Connect {{provider}}"
     },
@@ -2832,6 +2840,14 @@
       "title": "Ollama Cloud",
       "description": "Use an Ollama Cloud API key, not the local Ollama runtime"
     },
+    "opendesign_subscription": {
+      "title": "OpenDesign Account Subscription",
+      "description": "Import your local OpenDesign / Vela login into managed credentials"
+    },
+    "opendesign_api": {
+      "title": "OpenDesign Cloud API",
+      "description": "Use a Cloud API key for Chat, Responses and Messages"
+    },
     "muse_code": {
       "title": "Meta Muse Code Subscription",
       "description": "Sign in to Meta for a dedicated subscription key; standard API, subscription billing unverified"
@@ -2891,6 +2907,15 @@
     "expand": "Expand notice: {{title}}"
   },
   "errors": {
+    "toolConfigStages": {
+      "read": "Reading configuration",
+      "parse": "Parsing configuration",
+      "backup": "Backing up configuration (target file unchanged)",
+      "write": "Writing temporary configuration",
+      "replace": "Replacing configuration file",
+      "verify": "Verifying written configuration",
+      "session_sync": "Syncing Codex sessions (configuration already written)"
+    },
     "traeFields": {
       "multimodal": "Image input",
       "thinking_enable": "Thinking mode",
@@ -2988,6 +3013,7 @@
       "tool_config_start_failed": "The program could not be started.",
       "tool_config_start_precheck_failed": "The program could not be verified before launch.",
       "tool_config_write_failed": "The configuration could not be written.",
+      "tool_config_file_failed": "{{stage}} failed ({{path}}): {{detail}}.",
       "tool_config_trae_http_failed": "The Trae model configuration service returned HTTP {{status}}. Configuration is incomplete; try again later.",
       "tool_config_trae_rejected": "The Trae model configuration service rejected the operation (error code {{vendor_code}}). Configuration is incomplete.",
       "tool_config_trae_verification_failed": "The Trae model connection or advanced configuration failed read-back verification. Existing models were not deleted; check the affected models in Trae and configure again.",

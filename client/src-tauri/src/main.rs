@@ -114,6 +114,7 @@ mod network_recovery;
 mod openai_transport;
 mod opencode;
 mod opencode_client;
+mod opendesign;
 mod window_memory;
 
 mod openrouter;
@@ -295,7 +296,12 @@ const SUPPLIER_TRANSPORT_STREAM_PROGRESS_FEATURE: &str = "stream_progress_v1";
 // Compress small stream frames too; retain the existing size-win check and
 // leave tiny control messages uncompressed. The negotiated wire format is unchanged.
 const SUPPLIER_TRANSPORT_COMPRESSION_MIN_BYTES: usize = 256;
+// A decoded private-tunnel frame, not an entire model request. Negotiated large
+// messages are split into 64 KiB JSON fragments BEFORE per-frame zstd/encryption.
 const SUPPLIER_TRANSPORT_COMPRESSION_MAX_RAW_LEN: usize = 64 << 20;
+// Complete logical model requests/responses; private transport frames keep their legacy 64 MiB
+// cap and negotiate chunked larger envelopes independently.
+const MODEL_MESSAGE_MAX_BYTES: usize = 256 << 20;
 const SUPPLIER_TRANSPORT_FRAME_HEADER_BYTES: usize = 12;
 const SUPPLIER_TRANSPORT_FRAME_MAGIC: [u8; 4] = [0, b'C', b'Z', b'2'];
 #[cfg(target_os = "macos")]
@@ -1140,6 +1146,7 @@ async fn run_desktop_host(
             muse_code_auth::poll_muse_code_auth_session,
             opencode::create_opencode_auth_session,
             opencode::poll_opencode_auth_session,
+            opendesign::import_opendesign_local_credential,
             copilot::create_copilot_auth_session,
             copilot::poll_copilot_auth_session,
             cursor::auth::create_cursor_auth_session,
@@ -1979,6 +1986,7 @@ fn proxy_routes(
         .and_then(proxy_websocket_request);
     let streaming_upload = warp::method()
         .and(warp::path::full())
+        .and(warp::header::optional::<String>("content-type"))
         .and_then(match_streaming_upload_request)
         .and(optional_raw_query())
         .and(warp::header::headers_cloned())
@@ -2336,23 +2344,31 @@ async fn detect_channel_upstream(channel: ChannelConfig) -> Result<ChannelDetect
 
 #[tauri::command]
 async fn refresh_channel_upstream(
+    state: State<'_, AppState>,
     channel: ChannelConfig,
 ) -> Result<ChannelDetectionResult, String> {
-    refresh_channel(channel)
-        .await
-        .map_err(|err| err.to_string())
+    supplier::health_recovery::check_channel(state.inner(), &channel, async {
+        refresh_channel(channel.clone())
+            .await
+            .map_err(|err| err.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
 async fn validate_channel_upstream(
+    state: State<'_, AppState>,
     channel: ChannelConfig,
 ) -> Result<SupplierChannelValidationResult, String> {
     let enabled = channel.enabled;
     let share_enabled = channel.share_enabled;
     let (mut channel, health) =
-        supplier::validate_supplier_channel(channel, SupplierCheckMode::FullInteractive)
-            .await
-            .map_err(|err| err.to_string())?;
+        supplier::health_recovery::check_channel(state.inner(), &channel, async {
+            supplier::validate_supplier_channel(channel.clone(), SupplierCheckMode::FullInteractive)
+                .await
+                .map_err(|err| err.to_string())
+        })
+        .await?;
     channel.enabled = enabled;
     channel.share_enabled = share_enabled;
     Ok(SupplierChannelValidationResult { channel, health })
@@ -2565,15 +2581,12 @@ async fn test_channel_upstream(
     prompt: String,
 ) -> Result<ChannelUpstreamTestResult, String> {
     let channel_id = channel.id.clone();
-    let failure_generation = supplier::local_model_failure_generation();
-    let result = supplier::test_channel_upstream_model_inner(channel, model, prompt).await?;
-    supplier::record_supplier_channel_upstream_observation(
-        state.inner(),
-        &channel_id,
-        &result,
-        failure_generation,
-    )
-    .await;
+    let result = supplier::health_recovery::check_channel(state.inner(), &channel, async {
+        supplier::test_channel_upstream_model_inner(channel.clone(), model, prompt).await
+    })
+    .await?;
+    supplier::record_supplier_channel_upstream_observation(state.inner(), &channel_id, &result)
+        .await;
     Ok(result)
 }
 

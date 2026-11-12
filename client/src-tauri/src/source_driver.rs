@@ -52,6 +52,10 @@ pub(crate) enum SourceDriverId {
     MinimaxTokenPlan,
     OllamaCloud,
     MuseCode,
+    #[serde(rename = "opendesign_api")]
+    OpenDesignApi,
+    #[serde(rename = "opendesign_subscription")]
+    OpenDesignSubscription,
     CopilotSubscription,
     AbacusRoutellm,
     PoeApi,
@@ -71,7 +75,7 @@ pub(crate) enum SourceDriverId {
     CursorSubscription,
 }
 
-pub(crate) const ALL_SOURCE_DRIVER_IDS: [SourceDriverId; 50] = [
+pub(crate) const ALL_SOURCE_DRIVER_IDS: [SourceDriverId; 52] = [
     SourceDriverId::OpenAiApi,
     SourceDriverId::AnthropicApi,
     SourceDriverId::GeminiApi,
@@ -107,6 +111,8 @@ pub(crate) const ALL_SOURCE_DRIVER_IDS: [SourceDriverId; 50] = [
     SourceDriverId::MinimaxTokenPlan,
     SourceDriverId::OllamaCloud,
     SourceDriverId::MuseCode,
+    SourceDriverId::OpenDesignApi,
+    SourceDriverId::OpenDesignSubscription,
     SourceDriverId::CopilotSubscription,
     SourceDriverId::AbacusRoutellm,
     SourceDriverId::PoeApi,
@@ -636,7 +642,10 @@ fn validate_executor_locator(driver: &SourceDriver) -> Result<()> {
     match (driver.execution_kind, &driver.executor) {
         (ExecutionKind::HttpSurface, ChannelExecutorLocator::HttpSurface)
             if driver.subscription_provider.is_none()
-                || driver.subscription_provider.as_deref() == Some("opencode") =>
+                || matches!(
+                    driver.subscription_provider.as_deref(),
+                    Some("opencode" | "opendesign")
+                ) =>
         {
             Ok(())
         }
@@ -792,6 +801,12 @@ fn operation_belongs_to_surface(surface: ApiSurface, operation: ApiOperation) ->
                 | ApiOperation::ResponsesCancel
                 | ApiOperation::ResponsesInputItems
                 | ApiOperation::ResponsesCompact
+                | ApiOperation::ImagesGenerations
+                | ApiOperation::ImagesEdits
+                | ApiOperation::VideosCreate
+                | ApiOperation::VideosGet
+                | ApiOperation::VideosEdit
+                | ApiOperation::VideosExtend
                 | ApiOperation::RealtimeCallsCreate
                 | ApiOperation::RealtimeLiveCallCreate
                 | ApiOperation::RealtimeLiveWebSocket

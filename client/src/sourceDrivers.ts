@@ -72,6 +72,7 @@ export type SourceDriverIconKey =
   | "vllm"
   | "openrouter"
   | "opencode"
+  | "opendesign"
   | "cline"
   | "omniroute"
   | "custom"
@@ -104,6 +105,8 @@ export type SourceDriverId =
   | "kiro_subscription"
   | "cursor_subscription"
   | "opencode_console"
+  | "opendesign_api"
+  | "opendesign_subscription"
   | "openai_api"
   | "anthropic_api"
   | "gemini_api"
@@ -187,7 +190,7 @@ export type SourceDriver = {
   readonly discovery: SourceDriverDiscovery;
   readonly protocolBindings: ReadonlyArray<{ readonly protocol: SourceDriverProtocol; readonly preferred: boolean }>;
   readonly surfaceBindings: readonly SourceDriverSurfaceBinding[];
-  readonly subscriptionProvider?: "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor" | "opencode";
+  readonly subscriptionProvider?: "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor" | "opencode" | "opendesign";
   readonly subscriptionContract?: SubscriptionDriverContract;
   readonly detection: DetectionPolicy;
   // Temporary renderer compatibility projections. V2 fields above remain authoritative.
@@ -226,7 +229,7 @@ export type SourceDriverInitialDefaults = {
   defaultTarget: SourceDriverTarget;
   discovery: SourceDriverDiscovery;
   models: string[];
-  subscription?: { platform: "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor" | "opencode" };
+  subscription?: { platform: "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor" | "opencode" | "opendesign" };
   // Temporary renderer compatibility projections derived from the V2 fields above.
   kind: string;
   baseUrl: string;
@@ -286,7 +289,7 @@ export type ChannelDetectionEvidenceV5 = {
 
 export type ChannelSubscriptionV5 = {
   claude_fast_enabled: boolean;
-  platform: "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor" | "opencode";
+  platform: "openai" | "claude" | "antigravity" | "grok" | "kiro" | "cursor" | "opencode" | "opendesign";
   account_label: string;
   max_concurrency: number;
   responses_ws_pool_enabled: boolean;
@@ -450,7 +453,7 @@ type RawSubscriptionOperationCapability = {
 };
 
 const DRIVER_IDS = new Set<SourceDriverId>([
-  "openai_subscription", "gemini_subscription", "claude_subscription", "grok_subscription", "kiro_subscription", "cursor_subscription", "opencode_console", "openai_api",
+  "openai_subscription", "gemini_subscription", "claude_subscription", "grok_subscription", "kiro_subscription", "cursor_subscription", "opencode_console", "opendesign_api", "opendesign_subscription", "openai_api",
   "anthropic_api", "gemini_api", "xai_api", "mistral_api", "deepseek_api",
   "dashscope_api", "moonshot_api", "zhipu_api", "minimax_api", "stepfun_api",
   "azure_openai", "bedrock_mantle", "groq_api", "together_api", "fireworks_api",
@@ -487,7 +490,7 @@ const SURFACES = new Set<SourceDriverSurface>(["open_ai", "anthropic", "gemini"]
 const ICONS = new Set<SourceDriverIconKey>([
   "grok", "kiro", "cursor", "copilot", "kilo", "commandcode", "meta", "abacus", "poe",
   "openai", "anthropic", "gemini", "azure", "bedrock", "ollama", "lmstudio",
-  "vllm", "openrouter", "opencode", "cline", "omniroute", "custom", "network", "claude", "xai", "mistral",
+  "vllm", "openrouter", "opencode", "opendesign", "cline", "omniroute", "custom", "network", "claude", "xai", "mistral",
   "deepseek", "dashscope", "moonshot", "zhipu", "minimax", "stepfun", "groq",
   "together", "fireworks", "perplexity", "huggingface", "nvidia",
   "siliconflow", "volcengine", "baidu", "tencent",
@@ -1153,6 +1156,12 @@ function validateSubscriptionCapability(
 
 function subscriptionOperationBelongsToSurface(surface: string, operation: string): boolean {
   if (operation === "responses_compact"
+    || operation === "images_generations"
+    || operation === "images_edits"
+    || operation === "videos_create"
+    || operation === "videos_get"
+    || operation === "videos_edit"
+    || operation === "videos_extend"
     || operation === "realtime_calls_create"
     || operation === "realtime_live_call_create") {
     return surface === "open_ai";
@@ -1257,7 +1266,7 @@ function validExecutor(driver: RawDriver, executionKind: SourceDriverExecutionKi
   if (executionKind === "http_surface") {
     return driver.executor?.type === "http_surface"
       && driver.executor.provider === undefined
-      && (driver.subscription_provider === undefined || driver.subscription_provider === "opencode");
+      && (driver.subscription_provider === undefined || ["opencode", "opendesign"].includes(driver.subscription_provider));
   }
   const provider = executionKind === "open_ai_subscription"
     ? "openai"

@@ -265,7 +265,7 @@ fn remember_subscription_refresh_result(key: String, token_material: serde_json:
     );
 }
 
-fn read_subscription_credential(path: &Path) -> Result<serde_json::Value> {
+pub(crate) fn read_subscription_credential(path: &Path) -> Result<serde_json::Value> {
     serde_json::from_slice(
         &fs::read(path)
             .with_context(|| format!("read credential file {}", path.to_string_lossy()))?,
@@ -800,8 +800,28 @@ async fn detect_channel_single(
                 observations.len()
             ));
             (model_ids(observations.clone()), observations)
+        } else if platform == "opendesign" && !channel.v2.credential_ref.trim().is_empty() {
+            let observations = crate::opendesign::catalog(&client, &channel).await?;
+            crate::supplier::health_recovery::record_metadata_success();
+            refreshed = false;
+            quota_windows = refresh_subscription_quota(
+                &channel,
+                subscription_catalog_policy,
+                crate::opendesign::quota(&channel),
+            )
+            .await?;
+            if let Some((ratio, status)) = quota_snapshot_from_windows(&quota_windows) {
+                remaining_ratio = ratio;
+                quota_status = status;
+            }
+            checks.push(format!(
+                "models: OpenDesign account catalog loaded ({} models)",
+                observations.len()
+            ));
+            (model_ids(observations.clone()), observations)
         } else if platform == "opencode" && !channel.v2.credential_ref.trim().is_empty() {
             let observations = fetch_opencode_console_catalog(&client, &channel).await?;
+            crate::supplier::health_recovery::record_metadata_success();
             refreshed = false;
             checks.push(format!(
                 "models: OpenCode Console catalog loaded ({} models)",
@@ -830,7 +850,7 @@ async fn detect_channel_single(
             warnings
                 .push("credential reference is empty; concrete executor is not ready".to_string());
         }
-        let native_protocol = if platform == "opencode" {
+        let native_protocol = if matches!(platform, "opencode" | "opendesign") {
             channel.v2.default_target.protocol.as_str()
         } else {
             match platform_or_default(platform) {
@@ -1330,12 +1350,24 @@ async fn fetch_surface_catalog(
     client: &Client,
     context: &SurfaceProbeContext,
 ) -> Result<Vec<crate::model_catalog::ModelObservation>> {
+    let models = fetch_surface_catalog_inner(client, context).await?;
+    crate::supplier::health_recovery::record_metadata_success();
+    Ok(models)
+}
+
+async fn fetch_surface_catalog_inner(
+    client: &Client,
+    context: &SurfaceProbeContext,
+) -> Result<Vec<crate::model_catalog::ModelObservation>> {
     let projection = probe_channel_from_context(context)?;
     if context.source_driver == crate::source_driver::SourceDriverId::Openrouter {
         return crate::openrouter::fetch_channel_catalog(client, &projection).await;
     }
     if context.source_driver == crate::source_driver::SourceDriverId::OpencodeConsole {
         return fetch_opencode_console_catalog(client, &projection).await;
+    }
+    if context.source_driver == crate::source_driver::SourceDriverId::OpenDesignSubscription {
+        return crate::opendesign::catalog(client, &projection).await;
     }
     let models = match context.binding.surface {
         crate::surface::ApiSurface::Anthropic => {
@@ -2212,11 +2244,32 @@ fn antigravity_model_observations(
             Some(model)
         })
         .collect::<Vec<_>>();
-    crate::model_catalog::model_observations_from_value(
+    let mut observations = crate::model_catalog::model_observations_from_value(
         ModelCatalogKind::OpenAI,
         &serde_json::json!({"data": data}),
         "antigravity_catalog",
-    )
+    );
+    // fetchAvailableModels may supply quota/identity without modality fields.
+    // Enrich only models this account actually advertised, and only known
+    // Gemini image generators using the existing generateContent transport.
+    // Veo/Omni video job APIs cannot be inferred from this endpoint.
+    let catalog = crate::tool_model_metadata::active_tool_catalog_models();
+    for model in &mut observations {
+        let Some(metadata) = catalog.iter().find(|entry| {
+            entry.id == model.id
+                && entry.id.starts_with("gemini-")
+                && entry.output_modalities.iter().any(|m| m == "image")
+        }) else {
+            continue;
+        };
+        if model.output_modalities.is_empty() {
+            model.output_modalities = metadata.output_modalities.clone();
+        }
+        if model.input_modalities.is_empty() {
+            model.input_modalities = metadata.input_modalities.clone();
+        }
+    }
+    observations
 }
 
 fn apply_subscription_driver_capabilities(
@@ -3624,6 +3677,9 @@ pub(crate) async fn fetch_openai_compatible_catalog(
     if channel.source_driver() == crate::source_driver::SourceDriverId::CopilotSubscription {
         return crate::copilot::catalog(client, channel).await;
     }
+    if channel.source_driver() == crate::source_driver::SourceDriverId::OpenDesignSubscription {
+        return crate::opendesign::catalog(client, channel).await;
+    }
     crate::coding_plan::validate_key(channel)?;
     let url = crate::coding_gateway::catalog_url(channel.source_driver(), base_url)?;
     let mut headers = HeaderMap::new();
@@ -3643,6 +3699,7 @@ pub(crate) async fn fetch_openai_compatible_catalog(
         crate::source_driver::SourceDriverId::CommandCode => ModelCatalogKind::CommandCode,
         crate::source_driver::SourceDriverId::AbacusRoutellm => ModelCatalogKind::Abacus,
         crate::source_driver::SourceDriverId::PoeApi => ModelCatalogKind::Poe,
+        crate::source_driver::SourceDriverId::OpenDesignApi => ModelCatalogKind::OpenDesign,
         _ => ModelCatalogKind::OpenAI,
     };
     let models = fetch_model_catalog(client, url, headers, kind).await?;
@@ -4110,7 +4167,9 @@ async fn fetch_openai_subscription_catalog_with_policy(
         .await;
         match fetched {
             Ok(mut models) => {
+                crate::supplier::health_recovery::record_metadata_success();
                 supplement_codex_manifest_modalities(&mut models);
+                supplement_codex_image_tool_model(&mut models, &credential);
                 let model_etag = models.iter().find_map(|model| model.etag.clone());
                 match cached.as_mut() {
                     Some(entry) => {
@@ -4160,9 +4219,111 @@ async fn fetch_openai_subscription_catalog_with_policy(
     ))
 }
 
+// Codex's image_gen tool uses a separate Images endpoint/model; its text model
+// manifest does not enumerate it. Keep this narrow source contract beside the
+// account catalog, rather than advertising every GPT-Image API model.
+fn supplement_codex_image_tool_model(
+    models: &mut Vec<crate::model_catalog::ModelObservation>,
+    credential: &serde_json::Value,
+) {
+    let plan = ["access_token", "id_token"].iter().find_map(|key| {
+        let token = credential.get(key)?.as_str()?;
+        let claims = decode_jwt_payload(token.split('.').nth(1)?).ok()?;
+        let claims: serde_json::Value = serde_json::from_slice(&claims).ok()?;
+        json_string(
+            &claims,
+            &["https://api.openai.com/auth", "chatgpt_plan_type"],
+        )
+    });
+    // This is a discovery hint, not an authorization grant. Missing/free plans
+    // do not gain a synthetic capability; the upstream still checks entitlement.
+    if plan
+        .as_deref()
+        .is_none_or(|plan| plan.trim().is_empty() || plan.eq_ignore_ascii_case("free"))
+        || models.iter().any(|model| model.id == "gpt-image-2")
+    {
+        return;
+    }
+    models.push(crate::model_catalog::ModelObservation {
+        id: "gpt-image-2".to_string(),
+        source: "codex_image_tool_contract".to_string(),
+        input_modalities: vec!["text".to_string(), "image".to_string()],
+        output_modalities: vec!["image".to_string()],
+        ..Default::default()
+    });
+}
+
 #[cfg(test)]
 mod openai_subscription_catalog_cache_tests {
     use super::*;
+
+    #[test]
+    fn antigravity_image_discovery_enriches_only_advertised_models() {
+        let models = antigravity_model_observations(&serde_json::json!({"models":{
+            "gemini-3-pro-image":{},
+            "gemini-2.5-flash-image":{"outputModalities":["text"]},
+            "future-model":{}
+        }}));
+        assert_eq!(models.len(), 3);
+        let image = models
+            .iter()
+            .find(|m| m.id == "gemini-3-pro-image")
+            .unwrap();
+        assert!(image.output_modalities.iter().any(|m| m == "image"));
+        assert_eq!(
+            models
+                .iter()
+                .find(|m| m.id == "gemini-2.5-flash-image")
+                .unwrap()
+                .output_modalities,
+            ["text"]
+        );
+        assert!(
+            models
+                .iter()
+                .find(|m| m.id == "future-model")
+                .unwrap()
+                .output_modalities
+                .is_empty()
+        );
+        assert!(
+            !models
+                .iter()
+                .any(|m| m.output_modalities.iter().any(|v| v == "video"))
+        );
+    }
+
+    #[test]
+    fn codex_image_discovery_requires_account_plan_and_does_not_guess_api_models() {
+        for plan in [None, Some("free"), Some("plus"), Some("pro")] {
+            let claims =
+                serde_json::json!({"https://api.openai.com/auth":{"chatgpt_plan_type":plan}});
+            let token = format!(
+                "header.{}.signature",
+                URL_SAFE_NO_PAD.encode(claims.to_string())
+            );
+            let credential = serde_json::json!({"access_token": token});
+            let mut models = Vec::new();
+            supplement_codex_image_tool_model(&mut models, &credential);
+            supplement_codex_image_tool_model(&mut models, &credential);
+            assert_eq!(
+                models.len(),
+                usize::from(matches!(plan, Some("plus" | "pro")))
+            );
+            if let Some(model) = models.first() {
+                assert_eq!(model.id, "gpt-image-2");
+                let profiles = model_modality_capability_profiles(
+                    &basic_protocol_capability("openai_responses", "declared"),
+                    &models,
+                    false,
+                );
+                assert!(profiles[0].image_output);
+                assert!(!profiles[0].video_output);
+                assert_eq!(profiles[0].catalog_text_output, Some(false));
+                assert_eq!(profiles[0].verification_state, "declared");
+            }
+        }
+    }
 
     #[test]
     fn websocket_metadata_updates_the_model_catalog_etag_hint() {
@@ -4521,7 +4682,9 @@ async fn fetch_claude_subscription_models_with_token(
         HeaderValue::from_static(CLAUDE_DIRECT_BROWSER_ACCESS),
     );
     let url = Url::parse("https://api.anthropic.com/v1/models")?;
-    fetch_model_catalog(client, url, headers, ModelCatalogKind::Anthropic).await
+    let models = fetch_model_catalog(client, url, headers, ModelCatalogKind::Anthropic).await?;
+    crate::supplier::health_recovery::record_metadata_success();
+    Ok(models)
 }
 
 pub(crate) async fn fetch_claude_subscription_quota_windows(
@@ -4837,10 +5000,20 @@ pub(crate) async fn fetch_grok_subscription_catalog(
         ModelCatalogKind::Grok,
     )
     .await?;
-    Ok(models
+    crate::supplier::health_recovery::record_metadata_success();
+    let mut models: Vec<_> = models
         .into_iter()
         .filter(|model| !model.id.to_ascii_lowercase().starts_with("grok-imagine"))
-        .collect())
+        .collect();
+    models.extend(
+        crate::supplier::fetch_grok_media_models(
+            client,
+            token,
+            crate::supplier::GROK_MEDIA_BASE_URL,
+        )
+        .await,
+    );
+    Ok(crate::model_catalog::stable_dedupe_models(models))
 }
 
 pub(crate) async fn fetch_grok_subscription_quota_windows(
@@ -5590,6 +5763,7 @@ async fn check_antigravity_subscription_with_endpoints_and_policy(
         .await
         {
             Ok((catalog, models, refreshed, _)) => {
+                crate::supplier::health_recovery::record_metadata_success();
                 let checked_at_unix = now_unix();
                 *catalog_cache = Some(AntigravitySubscriptionCatalogCacheEntry {
                     catalog: catalog.clone(),

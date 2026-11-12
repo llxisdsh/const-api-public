@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "source_revision": "fc1e47e580d9e3d2e8b46ad05a293a58ed0b8f1f",
-  "compatibility_version_id": "compat-v31-2026-11-04",
+  "source_revision": "6a98d0926117478a4ab937f1bad46a120cd4832a",
+  "compatibility_version_id": "compat-v32-2026-11-12",
   "compatibility_groups": [
     {
       "id": "apex",
@@ -14,15 +14,19 @@
       ],
       "models": [
         "claude-opus-5-5",
-        "claude-fable-5-1",
-        "gpt-6-astra"
+        "claude-fable-5-2",
+        "gpt-6-astra",
+        "gemini-4-carbon"
       ],
       "match_models": [
         "anthropic/claude-opus-5.5",
         "claude-opus-5.5",
+        "claude-fable-5.2",
+        "openai/gpt-6-astra",
+        "gemini/gemini-4-carbon",
+        "claude-fable-5-1",
         "anthropic/claude-fable-5.1",
-        "claude-fable-5.1",
-        "openai/gpt-6-astra"
+        "claude-fable-5.1"
       ]
     },
     {
@@ -124,7 +128,6 @@
       "models": [
         "gemini-3.8-flash",
         "gemini-3.1-pro-preview",
-        "gemini-3.7-flash",
         "gpt-5.3-codex"
       ],
       "match_models": [
@@ -133,8 +136,9 @@
         "gemini-3.1-pro-preview-customtools",
         "google/gemini-3.1-pro-preview-customtools",
         "google/gemini-3.1-pro-preview",
-        "google/gemini-3.7-flash",
-        "openai/gpt-5.3-codex"
+        "openai/gpt-5.3-codex",
+        "gemini-3.7-flash",
+        "google/gemini-3.7-flash"
       ]
     },
     {
@@ -149,7 +153,6 @@
         "gpt-5.2",
         "gpt-5.2-codex",
         "gemini-3.6-flash",
-        "gemini-3.5-flash",
         "gpt-5.4-mini"
       ],
       "match_models": [
@@ -157,8 +160,9 @@
         "openai/gpt-5.2",
         "openai/gpt-5.2-codex",
         "google/gemini-3.6-flash",
-        "google/gemini-3.5-flash",
-        "openai/gpt-5.4-mini"
+        "openai/gpt-5.4-mini",
+        "gemini-3.5-flash",
+        "google/gemini-3.5-flash"
       ]
     },
     {
@@ -241,13 +245,73 @@
       "vendor": "aion-labs"
     },
     {
+      "id": "babbage-002",
+      "display_name": "babbage-002",
+      "vendor": "openai"
+    },
+    {
+      "id": "base",
+      "display_name": "base",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "base-conversationalai",
+      "display_name": "base-conversationalai",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "base-finance",
+      "display_name": "base-finance",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "base-general",
+      "display_name": "base-general",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "base-meeting",
+      "display_name": "base-meeting",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "base-phonecall",
+      "display_name": "base-phonecall",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "base-video",
+      "display_name": "base-video",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "base-voicemail",
+      "display_name": "base-voicemail",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "best",
+      "display_name": "best",
+      "vendor": "assemblyai"
+    },
+    {
       "id": "bytedance-seed-1.8",
       "display_name": "ByteDance Seed 1.8",
       "vendor": "bytedance"
     },
     {
+      "id": "c4ai-aya-expanse-32b",
+      "display_name": "c4ai-aya-expanse-32b",
+      "vendor": "cohere"
+    },
+    {
       "id": "chat-latest",
       "display_name": "chat-latest",
+      "vendor": "openai"
+    },
+    {
+      "id": "chatgpt-image-latest",
+      "display_name": "chatgpt-image-latest",
       "vendor": "openai"
     },
     {
@@ -263,6 +327,11 @@
     {
       "id": "claude-fable-5-1",
       "display_name": "Claude Fable 5.1",
+      "vendor": "anthropic"
+    },
+    {
+      "id": "claude-fable-5-2",
+      "display_name": "Claude Fable 5.2",
       "vendor": "anthropic"
     },
     {
@@ -286,6 +355,11 @@
       "vendor": "anthropic"
     },
     {
+      "id": "claude-mythos-5-2",
+      "display_name": "Claude Mythos 5.2",
+      "vendor": "anthropic"
+    },
+    {
       "id": "claude-opus-4",
       "display_name": "claude-opus-4",
       "vendor": "anthropic"
@@ -296,13 +370,28 @@
       "vendor": "anthropic"
     },
     {
+      "id": "claude-opus-4-5-20251101",
+      "display_name": "claude-opus-4-5-20251101",
+      "vendor": "anthropic"
+    },
+    {
       "id": "claude-opus-4-6",
       "display_name": "Claude Opus 4.6",
       "vendor": "anthropic"
     },
     {
+      "id": "claude-opus-4-6-20260205",
+      "display_name": "claude-opus-4-6-20260205",
+      "vendor": "anthropic"
+    },
+    {
       "id": "claude-opus-4-7",
       "display_name": "Claude Opus 4.7",
+      "vendor": "anthropic"
+    },
+    {
+      "id": "claude-opus-4-7-20260416",
+      "display_name": "claude-opus-4-7-20260416",
       "vendor": "anthropic"
     },
     {
@@ -356,6 +445,16 @@
       "vendor": "mistral"
     },
     {
+      "id": "codestral-latest",
+      "display_name": "codestral-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "codestral-mamba-latest",
+      "display_name": "codestral-mamba-latest",
+      "vendor": "mistral"
+    },
+    {
       "id": "codex-auto-review",
       "display_name": "Codex Auto Review",
       "vendor": "openai"
@@ -366,8 +465,18 @@
       "vendor": "cohere"
     },
     {
+      "id": "command-a-03-2025",
+      "display_name": "command-a-03-2025",
+      "vendor": "cohere"
+    },
+    {
       "id": "command-a-plus",
       "display_name": "command-a-plus",
+      "vendor": "cohere"
+    },
+    {
+      "id": "command-nightly",
+      "display_name": "command-nightly",
       "vendor": "cohere"
     },
     {
@@ -391,9 +500,39 @@
       "vendor": "cursor"
     },
     {
+      "id": "conservative",
+      "display_name": "conservative",
+      "vendor": "stability"
+    },
+    {
+      "id": "creative",
+      "display_name": "creative",
+      "vendor": "stability"
+    },
+    {
       "id": "cydonia-24b-v4.1",
       "display_name": "cydonia-24b-v4.1",
       "vendor": "thedrummer"
+    },
+    {
+      "id": "davinci-002",
+      "display_name": "davinci-002",
+      "vendor": "openai"
+    },
+    {
+      "id": "deep-research-max-preview-04-2026",
+      "display_name": "deep-research-max-preview-04-2026",
+      "vendor": "google"
+    },
+    {
+      "id": "deep-research-preview-04-2026",
+      "display_name": "deep-research-preview-04-2026",
+      "vendor": "google"
+    },
+    {
+      "id": "deep-research-pro-preview-12-2025",
+      "display_name": "deep-research-pro-preview-12-2025",
+      "vendor": "google"
     },
     {
       "id": "deepseek-chat-v3-0324",
@@ -403,6 +542,11 @@
     {
       "id": "deepseek-chat-v3.1",
       "display_name": "deepseek-chat-v3.1",
+      "vendor": "deepseek"
+    },
+    {
+      "id": "deepseek-coder",
+      "display_name": "deepseek-coder",
       "vendor": "deepseek"
     },
     {
@@ -418,6 +562,11 @@
     {
       "id": "deepseek-r1-distill-llama-70b",
       "display_name": "deepseek-r1-distill-llama-70b",
+      "vendor": "deepseek"
+    },
+    {
+      "id": "deepseek-v3",
+      "display_name": "deepseek-v3",
       "vendor": "deepseek"
     },
     {
@@ -466,9 +615,29 @@
       "vendor": "mistral"
     },
     {
+      "id": "devstral-latest",
+      "display_name": "devstral-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "devstral-medium-latest",
+      "display_name": "devstral-medium-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "devstral-small-latest",
+      "display_name": "devstral-small-latest",
+      "vendor": "mistral"
+    },
+    {
       "id": "dolphin-mistral-24b-venice-edition",
       "display_name": "dolphin-mistral-24b-venice-edition",
       "vendor": "cognitivecomputations"
+    },
+    {
+      "id": "doubao-seed-2-1-lite-260915",
+      "display_name": "doubao-seed-2-1-lite-260915",
+      "vendor": "bytedance"
     },
     {
       "id": "doubao-seed-2-1-pro-260628",
@@ -476,9 +645,84 @@
       "vendor": "bytedance"
     },
     {
+      "id": "doubao-seed-2-1-pro-260915",
+      "display_name": "doubao-seed-2-1-pro-260915",
+      "vendor": "bytedance"
+    },
+    {
       "id": "doubao-seed-2-1-turbo-260628",
       "display_name": "doubao-seed-2-1-turbo-260628",
       "vendor": "bytedance"
+    },
+    {
+      "id": "eleven_flash_v2",
+      "display_name": "eleven_flash_v2",
+      "vendor": "elevenlabs"
+    },
+    {
+      "id": "eleven_flash_v2_5",
+      "display_name": "eleven_flash_v2_5",
+      "vendor": "elevenlabs"
+    },
+    {
+      "id": "eleven_multilingual_v2",
+      "display_name": "eleven_multilingual_v2",
+      "vendor": "elevenlabs"
+    },
+    {
+      "id": "eleven_turbo_v2",
+      "display_name": "eleven_turbo_v2",
+      "vendor": "elevenlabs"
+    },
+    {
+      "id": "eleven_turbo_v2_5",
+      "display_name": "eleven_turbo_v2_5",
+      "vendor": "elevenlabs"
+    },
+    {
+      "id": "eleven_v3",
+      "display_name": "eleven_v3",
+      "vendor": "elevenlabs"
+    },
+    {
+      "id": "eleven_v3_conversational",
+      "display_name": "eleven_v3_conversational",
+      "vendor": "elevenlabs"
+    },
+    {
+      "id": "eleven_v4",
+      "display_name": "eleven_v4",
+      "vendor": "elevenlabs"
+    },
+    {
+      "id": "eleven_v4_turbo",
+      "display_name": "eleven_v4_turbo",
+      "vendor": "elevenlabs"
+    },
+    {
+      "id": "embed-english-light-v3.0",
+      "display_name": "embed-english-light-v3.0",
+      "vendor": "cohere"
+    },
+    {
+      "id": "embed-english-v3.0",
+      "display_name": "embed-english-v3.0",
+      "vendor": "cohere"
+    },
+    {
+      "id": "embed-multilingual-light-v3.0",
+      "display_name": "embed-multilingual-light-v3.0",
+      "vendor": "cohere"
+    },
+    {
+      "id": "embed-multilingual-v3.0",
+      "display_name": "embed-multilingual-v3.0",
+      "vendor": "cohere"
+    },
+    {
+      "id": "embed-v4.0",
+      "display_name": "embed-v4.0",
+      "vendor": "cohere"
     },
     {
       "id": "embed-v5.0-fast",
@@ -496,6 +740,36 @@
       "vendor": "fireworks"
     },
     {
+      "id": "enhanced",
+      "display_name": "enhanced",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "enhanced-finance",
+      "display_name": "enhanced-finance",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "enhanced-general",
+      "display_name": "enhanced-general",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "enhanced-meeting",
+      "display_name": "enhanced-meeting",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "enhanced-phonecall",
+      "display_name": "enhanced-phonecall",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "erase",
+      "display_name": "erase",
+      "vendor": "stability"
+    },
+    {
       "id": "ernie-4.5-vl-424b-a47b",
       "display_name": "ernie-4.5-vl-424b-a47b",
       "vendor": "baidu"
@@ -504,6 +778,51 @@
       "id": "ernie-5.0",
       "display_name": "ERNIE 5.0",
       "vendor": "baidu"
+    },
+    {
+      "id": "fast",
+      "display_name": "fast",
+      "vendor": "stability"
+    },
+    {
+      "id": "flux-dev",
+      "display_name": "flux-dev",
+      "vendor": "black_forest_labs"
+    },
+    {
+      "id": "flux-kontext-max",
+      "display_name": "flux-kontext-max",
+      "vendor": "black_forest_labs"
+    },
+    {
+      "id": "flux-kontext-pro",
+      "display_name": "flux-kontext-pro",
+      "vendor": "black_forest_labs"
+    },
+    {
+      "id": "flux-pro",
+      "display_name": "flux-pro",
+      "vendor": "black_forest_labs"
+    },
+    {
+      "id": "flux-pro-1.0-expand",
+      "display_name": "flux-pro-1.0-expand",
+      "vendor": "black_forest_labs"
+    },
+    {
+      "id": "flux-pro-1.0-fill",
+      "display_name": "flux-pro-1.0-fill",
+      "vendor": "black_forest_labs"
+    },
+    {
+      "id": "flux-pro-1.1",
+      "display_name": "flux-pro-1.1",
+      "vendor": "black_forest_labs"
+    },
+    {
+      "id": "flux-pro-1.1-ultra",
+      "display_name": "flux-pro-1.1-ultra",
+      "vendor": "black_forest_labs"
     },
     {
       "id": "fugu-max",
@@ -521,13 +840,43 @@
       "vendor": "sakana"
     },
     {
+      "id": "gemini-2.5-computer-use-preview-10-2025",
+      "display_name": "gemini-2.5-computer-use-preview-10-2025",
+      "vendor": "google"
+    },
+    {
       "id": "gemini-2.5-flash",
       "display_name": "Gemini 2.5 Flash",
       "vendor": "google"
     },
     {
+      "id": "gemini-2.5-flash-image",
+      "display_name": "gemini-2.5-flash-image",
+      "vendor": "google"
+    },
+    {
       "id": "gemini-2.5-flash-lite",
       "display_name": "Gemini 2.5 Flash-Lite",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-2.5-flash-native-audio-latest",
+      "display_name": "gemini-2.5-flash-native-audio-latest",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-2.5-flash-native-audio-preview-09-2025",
+      "display_name": "gemini-2.5-flash-native-audio-preview-09-2025",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-2.5-flash-native-audio-preview-12-2025",
+      "display_name": "gemini-2.5-flash-native-audio-preview-12-2025",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-2.5-flash-preview-tts",
+      "display_name": "gemini-2.5-flash-preview-tts",
       "vendor": "google"
     },
     {
@@ -546,8 +895,23 @@
       "vendor": "google"
     },
     {
+      "id": "gemini-2.5-pro-preview-tts",
+      "display_name": "gemini-2.5-pro-preview-tts",
+      "vendor": "google"
+    },
+    {
       "id": "gemini-3-flash-preview",
       "display_name": "Gemini 3 Flash Preview",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-3-pro-image",
+      "display_name": "gemini-3-pro-image",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-3-pro-image-preview",
+      "display_name": "gemini-3-pro-image-preview",
       "vendor": "google"
     },
     {
@@ -556,8 +920,18 @@
       "vendor": "google"
     },
     {
+      "id": "gemini-3.1-flash-image-preview",
+      "display_name": "gemini-3.1-flash-image-preview",
+      "vendor": "google"
+    },
+    {
       "id": "gemini-3.1-flash-lite",
       "display_name": "Gemini 3.1 Flash-Lite",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-3.1-flash-lite-image",
+      "display_name": "gemini-3.1-flash-lite-image",
       "vendor": "google"
     },
     {
@@ -588,6 +962,21 @@
     {
       "id": "gemini-3.5-flash-lite",
       "display_name": "Gemini 3.5 Flash-Lite",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-3.5-live-translate-preview",
+      "display_name": "gemini-3.5-live-translate-preview",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-3.5-transcribe",
+      "display_name": "gemini-3.5-transcribe",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-3.5-transcribe-live",
+      "display_name": "gemini-3.5-transcribe-live",
       "vendor": "google"
     },
     {
@@ -631,13 +1020,58 @@
       "vendor": "google"
     },
     {
+      "id": "gemini-4-carbon",
+      "display_name": "Gemini 4 Carbon",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-flash-latest",
+      "display_name": "gemini-flash-latest",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-flash-lite-latest",
+      "display_name": "gemini-flash-lite-latest",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-gemma-2-27b-it",
+      "display_name": "gemini-gemma-2-27b-it",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-gemma-2-9b-it",
+      "display_name": "gemini-gemma-2-9b-it",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-live-2.5-flash-preview-native-audio-09-2025",
+      "display_name": "gemini-live-2.5-flash-preview-native-audio-09-2025",
+      "vendor": "google"
+    },
+    {
       "id": "gemini-nano-banana-2.1",
       "display_name": "gemini-nano-banana-2.1",
       "vendor": "google"
     },
     {
+      "id": "gemini-omni-1.1-flash",
+      "display_name": "gemini-omni-1.1-flash",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-omni-1.2-flash",
+      "display_name": "Gemini Omni 1.2 Flash",
+      "vendor": "google"
+    },
+    {
       "id": "gemini-omni-flash-preview",
       "display_name": "Gemini Omni Flash Preview",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-pro-latest",
+      "display_name": "gemini-pro-latest",
       "vendor": "google"
     },
     {
@@ -686,6 +1120,11 @@
       "vendor": "google"
     },
     {
+      "id": "glm-4-32b-0414-128k",
+      "display_name": "glm-4-32b-0414-128k",
+      "vendor": "zai"
+    },
+    {
       "id": "glm-4.5",
       "display_name": "glm-4.5",
       "vendor": "zai"
@@ -693,6 +1132,16 @@
     {
       "id": "glm-4.5-air",
       "display_name": "glm-4.5-air",
+      "vendor": "zai"
+    },
+    {
+      "id": "glm-4.5-airx",
+      "display_name": "glm-4.5-airx",
+      "vendor": "zai"
+    },
+    {
+      "id": "glm-4.5-x",
+      "display_name": "glm-4.5-x",
       "vendor": "zai"
     },
     {
@@ -728,6 +1177,11 @@
     {
       "id": "glm-5",
       "display_name": "GLM-5",
+      "vendor": "zai"
+    },
+    {
+      "id": "glm-5-code",
+      "display_name": "glm-5-code",
       "vendor": "zai"
     },
     {
@@ -791,6 +1245,11 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-3.5-turbo-instruct-0914",
+      "display_name": "gpt-3.5-turbo-instruct-0914",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-4",
       "display_name": "gpt-4",
       "vendor": "openai"
@@ -841,6 +1300,16 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-4o-audio-preview-2024-12-17",
+      "display_name": "gpt-4o-audio-preview-2024-12-17",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-4o-audio-preview-2025-06-03",
+      "display_name": "gpt-4o-audio-preview-2025-06-03",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-4o-mini",
       "display_name": "gpt-4o-mini",
       "vendor": "openai"
@@ -851,13 +1320,48 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-4o-mini-audio-preview-2024-12-17",
+      "display_name": "gpt-4o-mini-audio-preview-2024-12-17",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-4o-mini-transcribe",
       "display_name": "gpt-4o-mini-transcribe",
       "vendor": "openai"
     },
     {
+      "id": "gpt-4o-mini-transcribe-2025-03-20",
+      "display_name": "gpt-4o-mini-transcribe-2025-03-20",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-4o-mini-transcribe-2025-12-15",
+      "display_name": "gpt-4o-mini-transcribe-2025-12-15",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-4o-mini-tts",
+      "display_name": "gpt-4o-mini-tts",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-4o-mini-tts-2025-03-20",
+      "display_name": "gpt-4o-mini-tts-2025-03-20",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-4o-mini-tts-2025-12-15",
+      "display_name": "gpt-4o-mini-tts-2025-12-15",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-4o-transcribe",
       "display_name": "gpt-4o-transcribe",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-4o-transcribe-diarize",
+      "display_name": "gpt-4o-transcribe-diarize",
       "vendor": "openai"
     },
     {
@@ -1041,6 +1545,11 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-6-rosalind",
+      "display_name": "gpt-6-rosalind",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-6-sol",
       "display_name": "gpt-6-sol",
       "vendor": "openai"
@@ -1066,8 +1575,48 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-audio",
+      "display_name": "gpt-audio",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-audio-1.5",
+      "display_name": "gpt-audio-1.5",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-audio-2025-08-28",
+      "display_name": "gpt-audio-2025-08-28",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-audio-mini",
+      "display_name": "gpt-audio-mini",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-audio-mini-2025-10-06",
+      "display_name": "gpt-audio-mini-2025-10-06",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-audio-mini-2025-12-15",
+      "display_name": "gpt-audio-mini-2025-12-15",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-chat-latest",
       "display_name": "gpt-chat-latest",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-image-1.5",
+      "display_name": "gpt-image-1.5",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-image-1.5-2025-12-16",
+      "display_name": "gpt-image-1.5-2025-12-16",
       "vendor": "openai"
     },
     {
@@ -1146,8 +1695,18 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-realtime-whisper",
+      "display_name": "gpt-realtime-whisper",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-rosalind-discovery",
       "display_name": "gpt-rosalind-discovery",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-rosalind-research",
+      "display_name": "gpt-rosalind-research",
       "vendor": "openai"
     },
     {
@@ -1171,8 +1730,93 @@
       "vendor": "xai"
     },
     {
+      "id": "grok-4.20-0309",
+      "display_name": "grok-4.20-0309",
+      "vendor": "xai"
+    },
+    {
       "id": "grok-4.20-0309-non-reasoning",
       "display_name": "Grok 4.20 0309 Non-Reasoning",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-0309-reasoning",
+      "display_name": "grok-4.20-0309-reasoning",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-beta",
+      "display_name": "grok-4.20-beta",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-beta-0309",
+      "display_name": "grok-4.20-beta-0309",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-beta-0309-non-reasoning",
+      "display_name": "grok-4.20-beta-0309-non-reasoning",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-beta-0309-reasoning",
+      "display_name": "grok-4.20-beta-0309-reasoning",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-beta-latest",
+      "display_name": "grok-4.20-beta-latest",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-beta-latest-non-reasoning",
+      "display_name": "grok-4.20-beta-latest-non-reasoning",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-beta-latest-reasoning",
+      "display_name": "grok-4.20-beta-latest-reasoning",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-beta-non-reasoning",
+      "display_name": "grok-4.20-beta-non-reasoning",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-beta-reasoning",
+      "display_name": "grok-4.20-beta-reasoning",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-experimental-beta-0304",
+      "display_name": "grok-4.20-experimental-beta-0304",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-experimental-beta-0304-non-reasoning",
+      "display_name": "grok-4.20-experimental-beta-0304-non-reasoning",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-experimental-beta-0304-reasoning",
+      "display_name": "grok-4.20-experimental-beta-0304-reasoning",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-experimental-beta-latest",
+      "display_name": "grok-4.20-experimental-beta-latest",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-experimental-beta-non-reasoning-latest",
+      "display_name": "grok-4.20-experimental-beta-non-reasoning-latest",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-experimental-beta-reasoning-latest",
+      "display_name": "grok-4.20-experimental-beta-reasoning-latest",
       "vendor": "xai"
     },
     {
@@ -1186,13 +1830,78 @@
       "vendor": "xai"
     },
     {
+      "id": "grok-4.20-multi-agent-beta-0309",
+      "display_name": "grok-4.20-multi-agent-beta-0309",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-multi-agent-beta-latest",
+      "display_name": "grok-4.20-multi-agent-beta-latest",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-multi-agent-experimental-beta-0304",
+      "display_name": "grok-4.20-multi-agent-experimental-beta-0304",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-multi-agent-experimental-beta-latest",
+      "display_name": "grok-4.20-multi-agent-experimental-beta-latest",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-multi-agent-latest",
+      "display_name": "grok-4.20-multi-agent-latest",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-non-reasoning",
+      "display_name": "grok-4.20-non-reasoning",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-non-reasoning-gv2",
+      "display_name": "grok-4.20-non-reasoning-gv2",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-non-reasoning-latest",
+      "display_name": "grok-4.20-non-reasoning-latest",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-reasoning",
+      "display_name": "grok-4.20-reasoning",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-reasoning-gv2",
+      "display_name": "grok-4.20-reasoning-gv2",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.20-reasoning-latest",
+      "display_name": "grok-4.20-reasoning-latest",
+      "vendor": "xai"
+    },
+    {
       "id": "grok-4.3",
       "display_name": "Grok 4.3",
       "vendor": "xai"
     },
     {
+      "id": "grok-4.3-latest",
+      "display_name": "grok-4.3-latest",
+      "vendor": "xai"
+    },
+    {
       "id": "grok-4.5",
       "display_name": "Grok 4.5",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-4.5-latest",
+      "display_name": "grok-4.5-latest",
       "vendor": "xai"
     },
     {
@@ -1208,6 +1917,46 @@
     {
       "id": "grok-build-0.1",
       "display_name": "Grok Build 0.1",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-build-latest",
+      "display_name": "grok-build-latest",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-code-fast",
+      "display_name": "grok-code-fast",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-code-fast-1",
+      "display_name": "grok-code-fast-1",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-code-fast-1-0825",
+      "display_name": "grok-code-fast-1-0825",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-imagine-image",
+      "display_name": "grok-imagine-image",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-imagine-image-2026-03-02",
+      "display_name": "grok-imagine-image-2026-03-02",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-imagine-image-quality-20260403",
+      "display_name": "grok-imagine-image-quality-20260403",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-imagine-image-quality-latest",
+      "display_name": "grok-imagine-image-quality-latest",
       "vendor": "xai"
     },
     {
@@ -1276,9 +2025,24 @@
       "vendor": "tencent"
     },
     {
+      "id": "hy4",
+      "display_name": "hy4",
+      "vendor": "tencent"
+    },
+    {
       "id": "hy4-preview",
       "display_name": "hy4-preview",
       "vendor": "tencent"
+    },
+    {
+      "id": "imagen-3.0-fast-generate-001",
+      "display_name": "imagen-3.0-fast-generate-001",
+      "vendor": "google"
+    },
+    {
+      "id": "imagen-3.0-generate-001",
+      "display_name": "imagen-3.0-generate-001",
+      "vendor": "google"
     },
     {
       "id": "inkling",
@@ -1289,6 +2053,61 @@
       "id": "inkling-small",
       "display_name": "inkling-small",
       "vendor": "thinkingmachines"
+    },
+    {
+      "id": "inpaint",
+      "display_name": "inpaint",
+      "vendor": "stability"
+    },
+    {
+      "id": "j2-light",
+      "display_name": "j2-light",
+      "vendor": "ai21"
+    },
+    {
+      "id": "j2-mid",
+      "display_name": "j2-mid",
+      "vendor": "ai21"
+    },
+    {
+      "id": "j2-ultra",
+      "display_name": "j2-ultra",
+      "vendor": "ai21"
+    },
+    {
+      "id": "jamba-1.5",
+      "display_name": "jamba-1.5",
+      "vendor": "ai21"
+    },
+    {
+      "id": "jamba-1.5-large",
+      "display_name": "jamba-1.5-large",
+      "vendor": "ai21"
+    },
+    {
+      "id": "jamba-1.5-mini",
+      "display_name": "jamba-1.5-mini",
+      "vendor": "ai21"
+    },
+    {
+      "id": "jamba-large-1.6",
+      "display_name": "jamba-large-1.6",
+      "vendor": "ai21"
+    },
+    {
+      "id": "jamba-large-1.7",
+      "display_name": "jamba-large-1.7",
+      "vendor": "ai21"
+    },
+    {
+      "id": "jamba-mini-1.6",
+      "display_name": "jamba-mini-1.6",
+      "vendor": "ai21"
+    },
+    {
+      "id": "jamba-mini-1.7",
+      "display_name": "jamba-mini-1.7",
+      "vendor": "ai21"
     },
     {
       "id": "kat-coder-pro-v2",
@@ -1343,6 +2162,11 @@
     {
       "id": "kimi-k3.1-pro",
       "display_name": "kimi-k3.1-pro",
+      "vendor": "moonshot"
+    },
+    {
+      "id": "kimi-k3.1-pro-highspeed",
+      "display_name": "kimi-k3.1-pro-highspeed",
       "vendor": "moonshot"
     },
     {
@@ -1431,6 +2255,16 @@
       "vendor": "meituan"
     },
     {
+      "id": "magistral-medium-latest",
+      "display_name": "magistral-medium-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "magistral-small-latest",
+      "display_name": "magistral-small-latest",
+      "vendor": "mistral"
+    },
+    {
       "id": "magnum-v4-72b",
       "display_name": "magnum-v4-72b",
       "vendor": "anthracite-org"
@@ -1443,6 +2277,11 @@
     {
       "id": "mercury-2.5",
       "display_name": "mercury-2.5",
+      "vendor": "inception"
+    },
+    {
+      "id": "mercury-edit-2",
+      "display_name": "mercury-edit-2",
       "vendor": "inception"
     },
     {
@@ -1496,6 +2335,11 @@
       "vendor": "minimax"
     },
     {
+      "id": "minimax-m2.1-lightning",
+      "display_name": "minimax-m2.1-lightning",
+      "vendor": "minimax"
+    },
+    {
       "id": "minimax-m2.5",
       "display_name": "MiniMax M2.5",
       "vendor": "minimax"
@@ -1503,6 +2347,11 @@
     {
       "id": "minimax-m2.5-highspeed",
       "display_name": "MiniMax M2.5 Highspeed",
+      "vendor": "minimax"
+    },
+    {
+      "id": "minimax-m2.5-lightning",
+      "display_name": "minimax-m2.5-lightning",
       "vendor": "minimax"
     },
     {
@@ -1521,8 +2370,33 @@
       "vendor": "minimax"
     },
     {
+      "id": "minimax-m3.1-flash",
+      "display_name": "minimax-m3.1-flash",
+      "vendor": "minimax"
+    },
+    {
       "id": "ministral-14b-2512",
       "display_name": "ministral-14b-2512",
+      "vendor": "mistral"
+    },
+    {
+      "id": "ministral-14b-latest",
+      "display_name": "ministral-14b-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "ministral-3-14b-2512",
+      "display_name": "ministral-3-14b-2512",
+      "vendor": "mistral"
+    },
+    {
+      "id": "ministral-3-3b-2512",
+      "display_name": "ministral-3-3b-2512",
+      "vendor": "mistral"
+    },
+    {
+      "id": "ministral-3-8b-2512",
+      "display_name": "ministral-3-8b-2512",
       "vendor": "mistral"
     },
     {
@@ -1531,8 +2405,33 @@
       "vendor": "mistral"
     },
     {
+      "id": "ministral-3b-latest",
+      "display_name": "ministral-3b-latest",
+      "vendor": "mistral"
+    },
+    {
       "id": "ministral-8b-2512",
       "display_name": "ministral-8b-2512",
+      "vendor": "mistral"
+    },
+    {
+      "id": "ministral-8b-latest",
+      "display_name": "ministral-8b-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "mistral-code-agent-latest",
+      "display_name": "mistral-code-agent-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "mistral-code-fim-latest",
+      "display_name": "mistral-code-fim-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "mistral-code-latest",
+      "display_name": "mistral-code-latest",
       "vendor": "mistral"
     },
     {
@@ -1551,6 +2450,11 @@
       "vendor": "mistral"
     },
     {
+      "id": "mistral-large-3",
+      "display_name": "mistral-large-3",
+      "vendor": "mistral"
+    },
+    {
       "id": "mistral-large-4",
       "display_name": "Mistral Large 4",
       "vendor": "mistral"
@@ -1558,6 +2462,16 @@
     {
       "id": "mistral-large-latest",
       "display_name": "Mistral Large 3",
+      "vendor": "mistral"
+    },
+    {
+      "id": "mistral-medium",
+      "display_name": "mistral-medium",
+      "vendor": "mistral"
+    },
+    {
+      "id": "mistral-medium-2604",
+      "display_name": "mistral-medium-2604",
       "vendor": "mistral"
     },
     {
@@ -1576,6 +2490,11 @@
       "vendor": "mistral"
     },
     {
+      "id": "mistral-medium-3.5",
+      "display_name": "mistral-medium-3.5",
+      "vendor": "mistral"
+    },
+    {
       "id": "mistral-medium-latest",
       "display_name": "Mistral Medium 3.5",
       "vendor": "mistral"
@@ -1588,6 +2507,11 @@
     {
       "id": "mistral-saba",
       "display_name": "mistral-saba",
+      "vendor": "mistral"
+    },
+    {
+      "id": "mistral-small",
+      "display_name": "mistral-small",
       "vendor": "mistral"
     },
     {
@@ -1616,9 +2540,64 @@
       "vendor": "mistral"
     },
     {
+      "id": "mistral-tiny",
+      "display_name": "mistral-tiny",
+      "vendor": "mistral"
+    },
+    {
+      "id": "mistral-vibe-cli-fast",
+      "display_name": "mistral-vibe-cli-fast",
+      "vendor": "mistral"
+    },
+    {
+      "id": "mistral-vibe-cli-latest",
+      "display_name": "mistral-vibe-cli-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "mistral-vibe-cli-with-tools",
+      "display_name": "mistral-vibe-cli-with-tools",
+      "vendor": "mistral"
+    },
+    {
       "id": "mixtral-8x22b-instruct",
       "display_name": "mixtral-8x22b-instruct",
       "vendor": "mistral"
+    },
+    {
+      "id": "moonshot-v1-128k",
+      "display_name": "moonshot-v1-128k",
+      "vendor": "moonshot"
+    },
+    {
+      "id": "moonshot-v1-128k-vision-preview",
+      "display_name": "moonshot-v1-128k-vision-preview",
+      "vendor": "moonshot"
+    },
+    {
+      "id": "moonshot-v1-32k",
+      "display_name": "moonshot-v1-32k",
+      "vendor": "moonshot"
+    },
+    {
+      "id": "moonshot-v1-32k-vision-preview",
+      "display_name": "moonshot-v1-32k-vision-preview",
+      "vendor": "moonshot"
+    },
+    {
+      "id": "moonshot-v1-8k",
+      "display_name": "moonshot-v1-8k",
+      "vendor": "moonshot"
+    },
+    {
+      "id": "moonshot-v1-8k-vision-preview",
+      "display_name": "moonshot-v1-8k-vision-preview",
+      "vendor": "moonshot"
+    },
+    {
+      "id": "moonshot-v1-auto",
+      "display_name": "moonshot-v1-auto",
+      "vendor": "moonshot"
     },
     {
       "id": "morph-v3-fast",
@@ -1631,8 +2610,18 @@
       "vendor": "morph"
     },
     {
+      "id": "muse-ember-1.0",
+      "display_name": "muse-ember-1.0",
+      "vendor": "meta"
+    },
+    {
       "id": "muse-glimmer-30b",
       "display_name": "muse-glimmer-30b",
+      "vendor": "meta"
+    },
+    {
+      "id": "muse-image-1.0",
+      "display_name": "muse-image-1.0",
       "vendor": "meta"
     },
     {
@@ -1661,6 +2650,11 @@
       "vendor": "meta"
     },
     {
+      "id": "muse-voice-transcribe-1.0",
+      "display_name": "muse-voice-transcribe-1.0",
+      "vendor": "meta"
+    },
+    {
       "id": "muse-wonder-1.0",
       "display_name": "Muse Wonder",
       "vendor": "meta"
@@ -1674,6 +2668,16 @@
       "id": "mythomax-l2-13b",
       "display_name": "mythomax-l2-13b",
       "vendor": "gryphe"
+    },
+    {
+      "id": "nano",
+      "display_name": "nano",
+      "vendor": "assemblyai"
+    },
+    {
+      "id": "nano-banana-pro-preview",
+      "display_name": "nano-banana-pro-preview",
+      "vendor": "google"
     },
     {
       "id": "nemotron-3-nano-30b-a3b",
@@ -1711,14 +2715,94 @@
       "vendor": "nex-agi"
     },
     {
+      "id": "nova",
+      "display_name": "nova",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-2",
+      "display_name": "nova-2",
+      "vendor": "deepgram"
+    },
+    {
       "id": "nova-2-5-sonic",
       "display_name": "nova-2-5-sonic",
       "vendor": "amazon"
     },
     {
+      "id": "nova-2-atc",
+      "display_name": "nova-2-atc",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-2-automotive",
+      "display_name": "nova-2-automotive",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-2-conversationalai",
+      "display_name": "nova-2-conversationalai",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-2-drivethru",
+      "display_name": "nova-2-drivethru",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-2-finance",
+      "display_name": "nova-2-finance",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-2-general",
+      "display_name": "nova-2-general",
+      "vendor": "deepgram"
+    },
+    {
       "id": "nova-2-lite-v1",
       "display_name": "nova-2-lite-v1",
       "vendor": "amazon"
+    },
+    {
+      "id": "nova-2-meeting",
+      "display_name": "nova-2-meeting",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-2-phonecall",
+      "display_name": "nova-2-phonecall",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-2-video",
+      "display_name": "nova-2-video",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-2-voicemail",
+      "display_name": "nova-2-voicemail",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-3",
+      "display_name": "nova-3",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-3-general",
+      "display_name": "nova-3-general",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-3-medical",
+      "display_name": "nova-3-medical",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "nova-general",
+      "display_name": "nova-general",
+      "vendor": "deepgram"
     },
     {
       "id": "nova-lite-v1",
@@ -1729,6 +2813,11 @@
       "id": "nova-micro-v1",
       "display_name": "nova-micro-v1",
       "vendor": "amazon"
+    },
+    {
+      "id": "nova-phonecall",
+      "display_name": "nova-phonecall",
+      "vendor": "deepgram"
     },
     {
       "id": "nova-premier-v1",
@@ -1781,6 +2870,16 @@
       "vendor": "openai"
     },
     {
+      "id": "open-mistral-nemo",
+      "display_name": "open-mistral-nemo",
+      "vendor": "mistral"
+    },
+    {
+      "id": "outpaint",
+      "display_name": "outpaint",
+      "vendor": "stability"
+    },
+    {
       "id": "palmyra-x5",
       "display_name": "palmyra-x5",
       "vendor": "writer"
@@ -1806,6 +2905,11 @@
       "vendor": "microsoft"
     },
     {
+      "id": "pixtral-large-latest",
+      "display_name": "pixtral-large-latest",
+      "vendor": "mistral"
+    },
+    {
       "id": "qwen-2.5-72b-instruct",
       "display_name": "qwen-2.5-72b-instruct",
       "vendor": "qwen"
@@ -1826,6 +2930,46 @@
       "vendor": "cerebras"
     },
     {
+      "id": "qwen-audio-3.0-tts-flash",
+      "display_name": "qwen-audio-3.0-tts-flash",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-audio-3.0-tts-plus",
+      "display_name": "qwen-audio-3.0-tts-plus",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-audio-3.1-tts-flash",
+      "display_name": "qwen-audio-3.1-tts-flash",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-audio-3.1-tts-plus",
+      "display_name": "qwen-audio-3.1-tts-plus",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-coder",
+      "display_name": "qwen-coder",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-image-2.0",
+      "display_name": "qwen-image-2.0",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-image-2.0-pro",
+      "display_name": "qwen-image-2.0-pro",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-image-3.0",
+      "display_name": "qwen-image-3.0",
+      "vendor": "qwen"
+    },
+    {
       "id": "qwen-long-latest",
       "display_name": "Qwen Long",
       "vendor": "qwen"
@@ -1841,8 +2985,43 @@
       "vendor": "qwen"
     },
     {
+      "id": "qwen-plus-2025-01-25",
+      "display_name": "qwen-plus-2025-01-25",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-plus-2025-04-28",
+      "display_name": "qwen-plus-2025-04-28",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-plus-2025-07-14",
+      "display_name": "qwen-plus-2025-07-14",
+      "vendor": "qwen"
+    },
+    {
       "id": "qwen-plus-2025-07-28",
       "display_name": "qwen-plus-2025-07-28",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-turbo",
+      "display_name": "qwen-turbo",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-turbo-2024-11-01",
+      "display_name": "qwen-turbo-2024-11-01",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-turbo-2025-04-28",
+      "display_name": "qwen-turbo-2025-04-28",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen-turbo-latest",
+      "display_name": "qwen-turbo-latest",
       "vendor": "qwen"
     },
     {
@@ -1941,6 +3120,11 @@
       "vendor": "qwen"
     },
     {
+      "id": "qwen3-tts-flash",
+      "display_name": "qwen3-tts-flash",
+      "vendor": "qwen"
+    },
+    {
       "id": "qwen3-vl-235b-a22b-instruct",
       "display_name": "qwen3-vl-235b-a22b-instruct",
       "vendor": "qwen"
@@ -1963,6 +3147,11 @@
     {
       "id": "qwen3-vl-32b-instruct",
       "display_name": "qwen3-vl-32b-instruct",
+      "vendor": "qwen"
+    },
+    {
+      "id": "qwen3-vl-32b-thinking",
+      "display_name": "qwen3-vl-32b-thinking",
       "vendor": "qwen"
     },
     {
@@ -2096,6 +3285,16 @@
       "vendor": "qwen"
     },
     {
+      "id": "recraftv2",
+      "display_name": "recraftv2",
+      "vendor": "recraft"
+    },
+    {
+      "id": "recraftv3",
+      "display_name": "recraftv3",
+      "vendor": "recraft"
+    },
+    {
       "id": "reka-edge",
       "display_name": "reka-edge",
       "vendor": "rekaai"
@@ -2121,6 +3320,16 @@
       "vendor": "undi95"
     },
     {
+      "id": "remove-background",
+      "display_name": "remove-background",
+      "vendor": "stability"
+    },
+    {
+      "id": "replace-background-and-relight",
+      "display_name": "replace-background-and-relight",
+      "vendor": "stability"
+    },
+    {
       "id": "sakana-namazu",
       "display_name": "sakana-namazu",
       "vendor": "sakana"
@@ -2134,6 +3343,66 @@
       "id": "schematron-v2-turbo",
       "display_name": "schematron-v2-turbo",
       "vendor": "inference-net"
+    },
+    {
+      "id": "scribe_v1",
+      "display_name": "scribe_v1",
+      "vendor": "elevenlabs"
+    },
+    {
+      "id": "scribe_v1_experimental",
+      "display_name": "scribe_v1_experimental",
+      "vendor": "elevenlabs"
+    },
+    {
+      "id": "scribe_v2",
+      "display_name": "scribe_v2",
+      "vendor": "elevenlabs"
+    },
+    {
+      "id": "sd3",
+      "display_name": "sd3",
+      "vendor": "stability"
+    },
+    {
+      "id": "sd3-large",
+      "display_name": "sd3-large",
+      "vendor": "stability"
+    },
+    {
+      "id": "sd3-large-turbo",
+      "display_name": "sd3-large-turbo",
+      "vendor": "stability"
+    },
+    {
+      "id": "sd3-medium",
+      "display_name": "sd3-medium",
+      "vendor": "stability"
+    },
+    {
+      "id": "sd3.5-large",
+      "display_name": "sd3.5-large",
+      "vendor": "stability"
+    },
+    {
+      "id": "sd3.5-large-turbo",
+      "display_name": "sd3.5-large-turbo",
+      "vendor": "stability"
+    },
+    {
+      "id": "sd3.5-medium",
+      "display_name": "sd3.5-medium",
+      "vendor": "stability"
+    },
+    {
+      "id": "search-and-recolor",
+      "display_name": "search-and-recolor",
+      "vendor": "stability"
+    },
+    {
+      "id": "search-and-replace",
+      "display_name": "search-and-replace",
+      "vendor": "stability"
     },
     {
       "id": "seed-1.6",
@@ -2166,6 +3435,11 @@
       "vendor": "bytedance-seed"
     },
     {
+      "id": "sketch",
+      "display_name": "sketch",
+      "vendor": "stability"
+    },
+    {
       "id": "skyfall-36b-v2",
       "display_name": "skyfall-36b-v2",
       "vendor": "thedrummer"
@@ -2196,6 +3470,11 @@
       "vendor": "perplexity"
     },
     {
+      "id": "sonar-medium-chat",
+      "display_name": "sonar-medium-chat",
+      "vendor": "perplexity"
+    },
+    {
       "id": "sonar-pro",
       "display_name": "sonar-pro",
       "vendor": "perplexity"
@@ -2206,9 +3485,64 @@
       "vendor": "perplexity"
     },
     {
+      "id": "sonar-reasoning",
+      "display_name": "sonar-reasoning",
+      "vendor": "perplexity"
+    },
+    {
       "id": "sonar-reasoning-pro",
       "display_name": "sonar-reasoning-pro",
       "vendor": "perplexity"
+    },
+    {
+      "id": "sonar-small-chat",
+      "display_name": "sonar-small-chat",
+      "vendor": "perplexity"
+    },
+    {
+      "id": "sora-2",
+      "display_name": "sora-2",
+      "vendor": "openai"
+    },
+    {
+      "id": "sora-2-pro",
+      "display_name": "sora-2-pro",
+      "vendor": "openai"
+    },
+    {
+      "id": "sora-2-pro-high-res",
+      "display_name": "sora-2-pro-high-res",
+      "vendor": "openai"
+    },
+    {
+      "id": "speech-02-hd",
+      "display_name": "speech-02-hd",
+      "vendor": "minimax"
+    },
+    {
+      "id": "speech-02-turbo",
+      "display_name": "speech-02-turbo",
+      "vendor": "minimax"
+    },
+    {
+      "id": "speech-2.6-hd",
+      "display_name": "speech-2.6-hd",
+      "vendor": "minimax"
+    },
+    {
+      "id": "speech-2.6-turbo",
+      "display_name": "speech-2.6-turbo",
+      "vendor": "minimax"
+    },
+    {
+      "id": "stable-image-core",
+      "display_name": "stable-image-core",
+      "vendor": "stability"
+    },
+    {
+      "id": "stable-image-ultra",
+      "display_name": "stable-image-ultra",
+      "vendor": "stability"
     },
     {
       "id": "step-3.5-flash",
@@ -2219,6 +3553,61 @@
       "id": "step-3.7-flash",
       "display_name": "step-3.7-flash",
       "vendor": "stepfun"
+    },
+    {
+      "id": "structure",
+      "display_name": "structure",
+      "vendor": "stability"
+    },
+    {
+      "id": "stt-async-v4",
+      "display_name": "stt-async-v4",
+      "vendor": "soniox"
+    },
+    {
+      "id": "stt-async-v5",
+      "display_name": "stt-async-v5",
+      "vendor": "soniox"
+    },
+    {
+      "id": "stt-rt-preview",
+      "display_name": "stt-rt-preview",
+      "vendor": "soniox"
+    },
+    {
+      "id": "stt-rt-preview-v2",
+      "display_name": "stt-rt-preview-v2",
+      "vendor": "soniox"
+    },
+    {
+      "id": "stt-rt-v3",
+      "display_name": "stt-rt-v3",
+      "vendor": "soniox"
+    },
+    {
+      "id": "stt-rt-v3-preview",
+      "display_name": "stt-rt-v3-preview",
+      "vendor": "soniox"
+    },
+    {
+      "id": "stt-rt-v4",
+      "display_name": "stt-rt-v4",
+      "vendor": "soniox"
+    },
+    {
+      "id": "stt-rt-v5",
+      "display_name": "stt-rt-v5",
+      "vendor": "soniox"
+    },
+    {
+      "id": "style",
+      "display_name": "style",
+      "vendor": "stability"
+    },
+    {
+      "id": "style-transfer",
+      "display_name": "style-transfer",
+      "vendor": "stability"
     },
     {
       "id": "ternary-bonsai-2-27b",
@@ -2241,9 +3630,34 @@
       "vendor": "openai"
     },
     {
+      "id": "text-embedding-ada-002-v2",
+      "display_name": "text-embedding-ada-002-v2",
+      "vendor": "openai"
+    },
+    {
       "id": "trinity-large-thinking",
       "display_name": "trinity-large-thinking",
       "vendor": "arcee-ai"
+    },
+    {
+      "id": "tts-1",
+      "display_name": "tts-1",
+      "vendor": "openai"
+    },
+    {
+      "id": "tts-1-1106",
+      "display_name": "tts-1-1106",
+      "vendor": "openai"
+    },
+    {
+      "id": "tts-1-hd",
+      "display_name": "tts-1-hd",
+      "vendor": "openai"
+    },
+    {
+      "id": "tts-1-hd-1106",
+      "display_name": "tts-1-hd-1106",
+      "vendor": "openai"
     },
     {
       "id": "ui-tars-1.5-7b",
@@ -2256,8 +3670,48 @@
       "vendor": "thedrummer"
     },
     {
+      "id": "veo-3.1-fast-generate-001",
+      "display_name": "veo-3.1-fast-generate-001",
+      "vendor": "google"
+    },
+    {
+      "id": "veo-3.1-generate-001",
+      "display_name": "veo-3.1-generate-001",
+      "vendor": "google"
+    },
+    {
+      "id": "veo-3.1-lite-generate-preview",
+      "display_name": "veo-3.1-lite-generate-preview",
+      "vendor": "google"
+    },
+    {
       "id": "voxtral-mini-2602",
       "display_name": "Voxtral Mini Transcribe 2602",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-mini-latest",
+      "display_name": "voxtral-mini-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-mini-realtime-2602",
+      "display_name": "voxtral-mini-realtime-2602",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-mini-realtime-latest",
+      "display_name": "voxtral-mini-realtime-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-mini-transcribe-3",
+      "display_name": "voxtral-mini-transcribe-3",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-mini-transcribe-3-0",
+      "display_name": "voxtral-mini-transcribe-3-0",
       "vendor": "mistral"
     },
     {
@@ -2266,9 +3720,174 @@
       "vendor": "mistral"
     },
     {
+      "id": "voxtral-mini-transcribe-realtime-3",
+      "display_name": "voxtral-mini-transcribe-realtime-3",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-mini-transcribe-realtime-3-0",
+      "display_name": "voxtral-mini-transcribe-realtime-3-0",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-mini-transcribe-realtime-latest",
+      "display_name": "voxtral-mini-transcribe-realtime-latest",
+      "vendor": "mistral"
+    },
+    {
       "id": "voxtral-mini-tts-2603",
       "display_name": "Voxtral Mini TTS 2603",
       "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-mini-tts-3",
+      "display_name": "voxtral-mini-tts-3",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-mini-tts-3-0",
+      "display_name": "voxtral-mini-tts-3-0",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-mini-tts-latest",
+      "display_name": "voxtral-mini-tts-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-small-2507",
+      "display_name": "voxtral-small-2507",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-small-latest",
+      "display_name": "voxtral-small-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-small-transcribe-3",
+      "display_name": "voxtral-small-transcribe-3",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-small-transcribe-3-0",
+      "display_name": "voxtral-small-transcribe-3-0",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voyage-2",
+      "display_name": "voyage-2",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-3",
+      "display_name": "voyage-3",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-3-large",
+      "display_name": "voyage-3-large",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-3-lite",
+      "display_name": "voyage-3-lite",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-3.5",
+      "display_name": "voyage-3.5",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-3.5-lite",
+      "display_name": "voyage-3.5-lite",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-4",
+      "display_name": "voyage-4",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-4-large",
+      "display_name": "voyage-4-large",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-4-lite",
+      "display_name": "voyage-4-lite",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-code-2",
+      "display_name": "voyage-code-2",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-code-3",
+      "display_name": "voyage-code-3",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-code-4",
+      "display_name": "voyage-code-4",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-context-3",
+      "display_name": "voyage-context-3",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-context-4",
+      "display_name": "voyage-context-4",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-finance-2",
+      "display_name": "voyage-finance-2",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-large-2",
+      "display_name": "voyage-large-2",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-large-2-instruct",
+      "display_name": "voyage-large-2-instruct",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-law-2",
+      "display_name": "voyage-law-2",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-lite-01",
+      "display_name": "voyage-lite-01",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-lite-02-instruct",
+      "display_name": "voyage-lite-02-instruct",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-multilingual-2",
+      "display_name": "voyage-multilingual-2",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-multimodal-3",
+      "display_name": "voyage-multimodal-3",
+      "vendor": "voyage"
+    },
+    {
+      "id": "voyage-multimodal-3.5",
+      "display_name": "voyage-multimodal-3.5",
+      "vendor": "voyage"
     },
     {
       "id": "weaver",
@@ -2276,9 +3895,39 @@
       "vendor": "mancer"
     },
     {
+      "id": "whisper",
+      "display_name": "whisper",
+      "vendor": "deepgram"
+    },
+    {
       "id": "whisper-1",
       "display_name": "whisper-1",
       "vendor": "openai"
+    },
+    {
+      "id": "whisper-base",
+      "display_name": "whisper-base",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "whisper-large",
+      "display_name": "whisper-large",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "whisper-medium",
+      "display_name": "whisper-medium",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "whisper-small",
+      "display_name": "whisper-small",
+      "vendor": "deepgram"
+    },
+    {
+      "id": "whisper-tiny",
+      "display_name": "whisper-tiny",
+      "vendor": "deepgram"
     },
     {
       "id": "wizardlm-2-8x22b",
@@ -2369,6 +4018,32 @@
       ],
       "source_key": "openrouter/aion-labs/aion-rp-llama-3.1-8b"
     },
+    "babbage-002": {
+      "display_name": "babbage-002",
+      "context_tokens": 16384,
+      "input_tokens": 16384,
+      "output_tokens": 4096,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "babbage-002"
+    },
+    "c4ai-aya-expanse-32b": {
+      "display_name": "c4ai-aya-expanse-32b",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 4000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "c4ai-aya-expanse-32b"
+    },
     "chat-latest": {
       "display_name": "chat-latest",
       "context_tokens": 400000,
@@ -2388,6 +4063,16 @@
       ],
       "tool_call": true,
       "source_key": "chat-latest"
+    },
+    "chatgpt-image-latest": {
+      "display_name": "chatgpt-image-latest",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "chatgpt-image-latest"
     },
     "claude-3-haiku": {
       "display_name": "claude-3-haiku",
@@ -2454,6 +4139,31 @@
       ],
       "tool_call": true,
       "source_key": "provider-registry/claude/claude-fable-5-1"
+    },
+    "claude-fable-5-2": {
+      "display_name": "Claude Fable 5.2",
+      "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "tool_call": true,
+      "source_key": "claude-fable-5-2"
     },
     "claude-haiku-4-5": {
       "display_name": "Claude Haiku 4.5",
@@ -2549,6 +4259,31 @@
       "tool_call": true,
       "source_key": "claude-mythos-5-1"
     },
+    "claude-mythos-5-2": {
+      "display_name": "Claude Mythos 5.2",
+      "context_tokens": 1000000,
+      "max_context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "tool_call": true,
+      "source_key": "claude-mythos-5-2"
+    },
     "claude-opus-4": {
       "display_name": "claude-opus-4",
       "context_tokens": 200000,
@@ -2583,6 +4318,24 @@
       "tool_call": true,
       "source_key": "claude-opus-4-5"
     },
+    "claude-opus-4-5-20251101": {
+      "display_name": "Claude 4.5 Opus",
+      "context_tokens": 200000,
+      "max_context_tokens": 200000,
+      "input_tokens": 200000,
+      "output_tokens": 64000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "provider-registry/claude/claude-opus-4-5-20251101"
+    },
     "claude-opus-4-6": {
       "display_name": "Claude 4.6 Opus",
       "family": "claude-opus",
@@ -2607,6 +4360,29 @@
       ],
       "tool_call": true,
       "source_key": "provider-registry/claude/claude-opus-4-6"
+    },
+    "claude-opus-4-6-20260205": {
+      "display_name": "claude-opus-4-6-20260205",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "tool_call": true,
+      "source_key": "claude-opus-4-6-20260205"
     },
     "claude-opus-4-7": {
       "display_name": "Claude Opus 4.7",
@@ -2633,6 +4409,30 @@
       ],
       "tool_call": true,
       "source_key": "provider-registry/claude/claude-opus-4-7"
+    },
+    "claude-opus-4-7-20260416": {
+      "display_name": "claude-opus-4-7-20260416",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "tool_call": true,
+      "source_key": "claude-opus-4-7-20260416"
     },
     "claude-opus-4-8": {
       "display_name": "Claude Opus 4.8",
@@ -2852,6 +4652,33 @@
       "tool_call": true,
       "source_key": "mistral/codestral-2508"
     },
+    "codestral-latest": {
+      "display_name": "codestral-latest",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/codestral-latest"
+    },
+    "codestral-mamba-latest": {
+      "display_name": "codestral-mamba-latest",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/codestral-mamba-latest"
+    },
     "codex-auto-review": {
       "display_name": "Codex Auto Review",
       "family": "gpt-codex",
@@ -2888,6 +4715,20 @@
       ],
       "source_key": "openrouter/cohere/command-a"
     },
+    "command-a-03-2025": {
+      "display_name": "command-a-03-2025",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 8000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "command-a-03-2025"
+    },
     "command-a-plus": {
       "display_name": "command-a-plus",
       "context_tokens": 192000,
@@ -2902,6 +4743,19 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "openrouter/cohere/command-a-plus"
+    },
+    "command-nightly": {
+      "display_name": "command-nightly",
+      "context_tokens": 4096,
+      "input_tokens": 4096,
+      "output_tokens": 4096,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "command-nightly"
     },
     "command-r-08-2024": {
       "display_name": "command-r-08-2024",
@@ -2957,6 +4811,26 @@
       ],
       "tool_call": true
     },
+    "conservative": {
+      "display_name": "conservative",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/conservative"
+    },
+    "creative": {
+      "display_name": "creative",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/creative"
+    },
     "cydonia-24b-v4.1": {
       "display_name": "cydonia-24b-v4.1",
       "context_tokens": 131072,
@@ -2968,6 +4842,62 @@
         "text"
       ],
       "source_key": "openrouter/thedrummer/cydonia-24b-v4.1"
+    },
+    "davinci-002": {
+      "display_name": "davinci-002",
+      "context_tokens": 16384,
+      "input_tokens": 16384,
+      "output_tokens": 4096,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "davinci-002"
+    },
+    "deep-research-max-preview-04-2026": {
+      "display_name": "deep-research-max-preview-04-2026",
+      "context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "gemini/deep-research-max-preview-04-2026"
+    },
+    "deep-research-preview-04-2026": {
+      "display_name": "deep-research-preview-04-2026",
+      "context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "gemini/deep-research-preview-04-2026"
+    },
+    "deep-research-pro-preview-12-2025": {
+      "display_name": "deep-research-pro-preview-12-2025",
+      "context_tokens": 65536,
+      "input_tokens": 65536,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image",
+        "text"
+      ],
+      "source_key": "deep-research-pro-preview-12-2025"
     },
     "deepseek-chat-v3-0324": {
       "display_name": "deepseek-chat-v3-0324",
@@ -2995,6 +4925,20 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "openrouter/deepseek/deepseek-chat-v3.1"
+    },
+    "deepseek-coder": {
+      "display_name": "deepseek-coder",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 4096,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "deepseek/deepseek-coder"
     },
     "deepseek-r1": {
       "display_name": "deepseek-r1",
@@ -3037,6 +4981,20 @@
       ],
       "reasoning": true,
       "source_key": "openrouter/deepseek/deepseek-r1-distill-llama-70b"
+    },
+    "deepseek-v3": {
+      "display_name": "deepseek-v3",
+      "context_tokens": 65536,
+      "input_tokens": 65536,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "deepseek/deepseek-v3"
     },
     "deepseek-v3.1-terminus": {
       "display_name": "deepseek-v3.1-terminus",
@@ -3186,6 +5144,63 @@
       "tool_call": true,
       "source_key": "openrouter/mistralai/devstral-2512"
     },
+    "devstral-latest": {
+      "display_name": "devstral-latest",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/devstral-latest"
+    },
+    "devstral-medium-latest": {
+      "display_name": "devstral-medium-latest",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/devstral-medium-latest"
+    },
+    "devstral-small-latest": {
+      "display_name": "devstral-small-latest",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/devstral-small-latest"
+    },
     "dolphin-mistral-24b-venice-edition": {
       "display_name": "dolphin-mistral-24b-venice-edition",
       "context_tokens": 128000,
@@ -3197,6 +5212,23 @@
         "text"
       ],
       "source_key": "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition"
+    },
+    "doubao-seed-2-1-lite-260915": {
+      "display_name": "doubao-seed-2-1-lite-260915",
+      "context_tokens": 1024000,
+      "input_tokens": 1024000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "volcengine/doubao-seed-2-1-lite-260915"
     },
     "doubao-seed-2-1-pro-260628": {
       "display_name": "doubao-seed-2-1-pro-260628",
@@ -3214,6 +5246,22 @@
       "tool_call": true,
       "source_key": "volcengine/doubao-seed-2-1-pro-260628"
     },
+    "doubao-seed-2-1-pro-260915": {
+      "display_name": "doubao-seed-2-1-pro-260915",
+      "context_tokens": 1024000,
+      "input_tokens": 1024000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "volcengine/doubao-seed-2-1-pro-260915"
+    },
     "doubao-seed-2-1-turbo-260628": {
       "display_name": "doubao-seed-2-1-turbo-260628",
       "context_tokens": 256000,
@@ -3229,6 +5277,157 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "volcengine/doubao-seed-2-1-turbo-260628"
+    },
+    "eleven_flash_v2": {
+      "display_name": "eleven_flash_v2",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "elevenlabs/eleven_flash_v2"
+    },
+    "eleven_flash_v2_5": {
+      "display_name": "eleven_flash_v2_5",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "elevenlabs/eleven_flash_v2_5"
+    },
+    "eleven_multilingual_v2": {
+      "display_name": "eleven_multilingual_v2",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "elevenlabs/eleven_multilingual_v2"
+    },
+    "eleven_turbo_v2": {
+      "display_name": "eleven_turbo_v2",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "elevenlabs/eleven_turbo_v2"
+    },
+    "eleven_turbo_v2_5": {
+      "display_name": "eleven_turbo_v2_5",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "elevenlabs/eleven_turbo_v2_5"
+    },
+    "eleven_v3": {
+      "display_name": "eleven_v3",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "elevenlabs/eleven_v3"
+    },
+    "eleven_v3_conversational": {
+      "display_name": "eleven_v3_conversational",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "elevenlabs/eleven_v3_conversational"
+    },
+    "eleven_v4": {
+      "display_name": "eleven_v4",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "elevenlabs/eleven_v4"
+    },
+    "eleven_v4_turbo": {
+      "display_name": "eleven_v4_turbo",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "elevenlabs/eleven_v4_turbo"
+    },
+    "embed-english-light-v3.0": {
+      "display_name": "embed-english-light-v3.0",
+      "context_tokens": 512,
+      "input_tokens": 512,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "embed-english-light-v3.0"
+    },
+    "embed-english-v3.0": {
+      "display_name": "embed-english-v3.0",
+      "context_tokens": 512,
+      "input_tokens": 512,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "embed-english-v3.0"
+    },
+    "embed-multilingual-light-v3.0": {
+      "display_name": "embed-multilingual-light-v3.0",
+      "context_tokens": 512,
+      "input_tokens": 512,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "embed-multilingual-light-v3.0"
+    },
+    "embed-multilingual-v3.0": {
+      "display_name": "embed-multilingual-v3.0",
+      "context_tokens": 512,
+      "input_tokens": 512,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "embed-multilingual-v3.0"
+    },
+    "embed-v4.0": {
+      "display_name": "embed-v4.0",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "cohere/embed-v4.0"
     },
     "embed-v5.0-fast": {
       "display_name": "embed-v5.0-fast",
@@ -3271,6 +5470,16 @@
       "tool_call": true,
       "source_key": "openrouter/fireworks/ember-1"
     },
+    "erase": {
+      "display_name": "erase",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/erase"
+    },
     "ernie-4.5-vl-424b-a47b": {
       "display_name": "ernie-4.5-vl-424b-a47b",
       "context_tokens": 123000,
@@ -3284,6 +5493,96 @@
       ],
       "reasoning": true,
       "source_key": "openrouter/baidu/ernie-4.5-vl-424b-a47b"
+    },
+    "fast": {
+      "display_name": "fast",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/fast"
+    },
+    "flux-dev": {
+      "display_name": "flux-dev",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "black_forest_labs/flux-dev"
+    },
+    "flux-kontext-max": {
+      "display_name": "flux-kontext-max",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "black_forest_labs/flux-kontext-max"
+    },
+    "flux-kontext-pro": {
+      "display_name": "flux-kontext-pro",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "black_forest_labs/flux-kontext-pro"
+    },
+    "flux-pro": {
+      "display_name": "flux-pro",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "black_forest_labs/flux-pro"
+    },
+    "flux-pro-1.0-expand": {
+      "display_name": "flux-pro-1.0-expand",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "black_forest_labs/flux-pro-1.0-expand"
+    },
+    "flux-pro-1.0-fill": {
+      "display_name": "flux-pro-1.0-fill",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "black_forest_labs/flux-pro-1.0-fill"
+    },
+    "flux-pro-1.1": {
+      "display_name": "flux-pro-1.1",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "black_forest_labs/flux-pro-1.1"
+    },
+    "flux-pro-1.1-ultra": {
+      "display_name": "flux-pro-1.1-ultra",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "black_forest_labs/flux-pro-1.1-ultra"
     },
     "fugu-max": {
       "display_name": "fugu-max",
@@ -3332,6 +5631,21 @@
       "tool_call": true,
       "source_key": "openrouter/sakana/fugu-ultra-v2"
     },
+    "gemini-2.5-computer-use-preview-10-2025": {
+      "display_name": "gemini-2.5-computer-use-preview-10-2025",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 64000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gemini-2.5-computer-use-preview-10-2025"
+    },
     "gemini-2.5-flash": {
       "display_name": "Gemini 2.5 Flash",
       "family": "gemini-flash",
@@ -3352,6 +5666,25 @@
       "tool_call": true,
       "source_key": "provider-registry/aistudio/gemini-2.5-flash"
     },
+    "gemini-2.5-flash-image": {
+      "display_name": "Gemini 2.5 Flash Image",
+      "context_tokens": 32768,
+      "input_tokens": 32768,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "image",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "provider-registry/aistudio/gemini-2.5-flash-image"
+    },
     "gemini-2.5-flash-lite": {
       "display_name": "Gemini 2.5 Flash Lite",
       "family": "gemini-flash",
@@ -3371,6 +5704,66 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "provider-registry/aistudio/gemini-2.5-flash-lite"
+    },
+    "gemini-2.5-flash-native-audio-latest": {
+      "display_name": "gemini-2.5-flash-native-audio-latest",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "source_key": "gemini-2.5-flash-native-audio-latest"
+    },
+    "gemini-2.5-flash-native-audio-preview-09-2025": {
+      "display_name": "gemini-2.5-flash-native-audio-preview-09-2025",
+      "context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "source_key": "gemini-2.5-flash-native-audio-preview-09-2025"
+    },
+    "gemini-2.5-flash-native-audio-preview-12-2025": {
+      "display_name": "gemini-2.5-flash-native-audio-preview-12-2025",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gemini-2.5-flash-native-audio-preview-12-2025"
+    },
+    "gemini-2.5-flash-preview-tts": {
+      "display_name": "gemini-2.5-flash-preview-tts",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "gemini-2.5-flash-preview-tts"
     },
     "gemini-2.5-pro": {
       "display_name": "Gemini 2.5 Pro",
@@ -3427,6 +5820,21 @@
       "tool_call": true,
       "source_key": "openrouter/google/gemini-2.5-pro-preview-05-06"
     },
+    "gemini-2.5-pro-preview-tts": {
+      "display_name": "gemini-2.5-pro-preview-tts",
+      "context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 65535,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "tool_call": true,
+      "source_key": "gemini-2.5-pro-preview-tts"
+    },
     "gemini-3-flash-preview": {
       "display_name": "Gemini 3 Flash Preview",
       "family": "gemini-flash",
@@ -3453,6 +5861,46 @@
       "tool_call": true,
       "source_key": "provider-registry/aistudio/gemini-3-flash-preview"
     },
+    "gemini-3-pro-image": {
+      "display_name": "Gemini 3 Pro Image",
+      "context_tokens": 65536,
+      "input_tokens": 65536,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image",
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "high"
+      ],
+      "source_key": "provider-registry/vertex/gemini-3-pro-image"
+    },
+    "gemini-3-pro-image-preview": {
+      "display_name": "Gemini 3 Pro Image Preview",
+      "context_tokens": 65536,
+      "input_tokens": 65536,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image",
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "high"
+      ],
+      "source_key": "provider-registry/gemini/gemini-3-pro-image-preview"
+    },
     "gemini-3.1-flash-image": {
       "display_name": "Gemini 3.1 Flash Image",
       "family": "gemini-3.1",
@@ -3473,6 +5921,26 @@
         "high"
       ],
       "source_key": "provider-registry/antigravity/gemini-3.1-flash-image"
+    },
+    "gemini-3.1-flash-image-preview": {
+      "display_name": "Gemini 3.1 Flash Image Preview",
+      "context_tokens": 65536,
+      "input_tokens": 65536,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image",
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "minimal",
+        "high"
+      ],
+      "source_key": "provider-registry/gemini/gemini-3.1-flash-image-preview"
     },
     "gemini-3.1-flash-lite": {
       "display_name": "Gemini 3.1 Flash Lite",
@@ -3500,6 +5968,23 @@
       ],
       "tool_call": true,
       "source_key": "provider-registry/antigravity/gemini-3.1-flash-lite"
+    },
+    "gemini-3.1-flash-lite-image": {
+      "display_name": "gemini-3.1-flash-lite-image",
+      "context_tokens": 65536,
+      "input_tokens": 65536,
+      "output_tokens": 4096,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "image",
+        "text"
+      ],
+      "source_key": "gemini-3.1-flash-lite-image"
     },
     "gemini-3.1-flash-lite-preview": {
       "display_name": "Gemini 3.1 Flash Lite Preview",
@@ -3637,6 +6122,47 @@
       ],
       "tool_call": true,
       "source_key": "provider-registry/aistudio/gemini-3.5-flash-lite"
+    },
+    "gemini-3.5-live-translate-preview": {
+      "display_name": "gemini-3.5-live-translate-preview",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "source_key": "gemini/gemini-3.5-live-translate-preview"
+    },
+    "gemini-3.5-transcribe": {
+      "display_name": "gemini-3.5-transcribe",
+      "context_tokens": 98304,
+      "input_tokens": 98304,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "gemini/gemini-3.5-transcribe"
+    },
+    "gemini-3.5-transcribe-live": {
+      "display_name": "gemini-3.5-transcribe-live",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "gemini/gemini-3.5-transcribe-live"
     },
     "gemini-3.6-flash": {
       "display_name": "Gemini 3.6 Flash",
@@ -3784,7 +6310,7 @@
       "context_tokens": 1048576,
       "max_context_tokens": 1048576,
       "input_tokens": 1048576,
-      "output_tokens": 1048576,
+      "output_tokens": 65536,
       "input_modalities": [
         "audio",
         "image",
@@ -3804,6 +6330,118 @@
       "tool_call": true,
       "source_key": "provider-registry/gemini/gemini-4-argon"
     },
+    "gemini-4-carbon": {
+      "display_name": "Gemini 4 Carbon",
+      "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "gemini/gemini-4-carbon"
+    },
+    "gemini-flash-latest": {
+      "display_name": "Gemini Flash Latest",
+      "context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "provider-registry/aistudio/gemini-flash-latest"
+    },
+    "gemini-flash-lite-latest": {
+      "display_name": "Gemini Flash-Lite Latest",
+      "context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "provider-registry/aistudio/gemini-flash-lite-latest"
+    },
+    "gemini-gemma-2-27b-it": {
+      "display_name": "gemini-gemma-2-27b-it",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gemini/gemini-gemma-2-27b-it"
+    },
+    "gemini-gemma-2-9b-it": {
+      "display_name": "gemini-gemma-2-9b-it",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gemini/gemini-gemma-2-9b-it"
+    },
+    "gemini-live-2.5-flash-preview-native-audio-09-2025": {
+      "display_name": "gemini-live-2.5-flash-preview-native-audio-09-2025",
+      "context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 65535,
+      "input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gemini-live-2.5-flash-preview-native-audio-09-2025"
+    },
     "gemini-nano-banana-2.1": {
       "display_name": "gemini-nano-banana-2.1",
       "context_tokens": 131072,
@@ -3821,6 +6459,42 @@
       ],
       "reasoning": true,
       "source_key": "gemini-nano-banana-2.1"
+    },
+    "gemini-omni-1.1-flash": {
+      "display_name": "gemini-omni-1.1-flash",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "audio",
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text",
+        "video"
+      ],
+      "reasoning": true,
+      "source_key": "gemini/gemini-omni-1.1-flash"
+    },
+    "gemini-omni-1.2-flash": {
+      "display_name": "Gemini Omni 1.2 Flash",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "audio",
+        "text",
+        "video"
+      ],
+      "reasoning": true,
+      "source_key": "gemini/gemini-omni-1.2-flash"
     },
     "gemini-omni-flash-preview": {
       "display_name": "Gemini Omni Flash Preview",
@@ -3840,6 +6514,25 @@
       ],
       "reasoning": true,
       "source_key": "gemini-omni-flash-preview"
+    },
+    "gemini-pro-latest": {
+      "display_name": "Gemini Pro Latest",
+      "context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "provider-registry/aistudio/gemini-pro-latest"
     },
     "gemini-robotics-er-1.6-preview": {
       "display_name": "Gemini Robotics ER 1.6 Preview",
@@ -3987,6 +6680,20 @@
       "tool_call": true,
       "source_key": "gemini/gemma-4-31b-it"
     },
+    "glm-4-32b-0414-128k": {
+      "display_name": "glm-4-32b-0414-128k",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "zai/glm-4-32b-0414-128k"
+    },
     "glm-4.5": {
       "display_name": "glm-4.5",
       "context_tokens": 131072,
@@ -4016,6 +6723,34 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "zai/glm-4.5-air"
+    },
+    "glm-4.5-airx": {
+      "display_name": "glm-4.5-airx",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "zai/glm-4.5-airx"
+    },
+    "glm-4.5-x": {
+      "display_name": "glm-4.5-x",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "zai/glm-4.5-x"
     },
     "glm-4.5v": {
       "display_name": "glm-4.5v",
@@ -4110,6 +6845,21 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "zai/glm-5"
+    },
+    "glm-5-code": {
+      "display_name": "glm-5-code",
+      "context_tokens": 200000,
+      "input_tokens": 200000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "zai/glm-5-code"
     },
     "glm-5-turbo": {
       "display_name": "GLM-5 Turbo",
@@ -4298,6 +7048,19 @@
       ],
       "source_key": "gpt-3.5-turbo-instruct"
     },
+    "gpt-3.5-turbo-instruct-0914": {
+      "display_name": "gpt-3.5-turbo-instruct-0914",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "output_tokens": 4097,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "gpt-3.5-turbo-instruct-0914"
+    },
     "gpt-4": {
       "display_name": "gpt-4",
       "context_tokens": 8191,
@@ -4454,6 +7217,38 @@
       "tool_call": true,
       "source_key": "gpt-4o-2024-11-20"
     },
+    "gpt-4o-audio-preview-2024-12-17": {
+      "display_name": "gpt-4o-audio-preview-2024-12-17",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-4o-audio-preview-2024-12-17"
+    },
+    "gpt-4o-audio-preview-2025-06-03": {
+      "display_name": "gpt-4o-audio-preview-2025-06-03",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-4o-audio-preview-2025-06-03"
+    },
     "gpt-4o-mini": {
       "display_name": "gpt-4o-mini",
       "context_tokens": 128000,
@@ -4486,6 +7281,22 @@
       "tool_call": true,
       "source_key": "gpt-4o-mini-2024-07-18"
     },
+    "gpt-4o-mini-audio-preview-2024-12-17": {
+      "display_name": "gpt-4o-mini-audio-preview-2024-12-17",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-4o-mini-audio-preview-2024-12-17"
+    },
     "gpt-4o-mini-transcribe": {
       "display_name": "gpt-4o-mini-transcribe",
       "context_tokens": 16000,
@@ -4499,6 +7310,65 @@
       ],
       "source_key": "gpt-4o-mini-transcribe"
     },
+    "gpt-4o-mini-transcribe-2025-03-20": {
+      "display_name": "gpt-4o-mini-transcribe-2025-03-20",
+      "context_tokens": 16000,
+      "input_tokens": 16000,
+      "output_tokens": 2000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "gpt-4o-mini-transcribe-2025-03-20"
+    },
+    "gpt-4o-mini-transcribe-2025-12-15": {
+      "display_name": "gpt-4o-mini-transcribe-2025-12-15",
+      "context_tokens": 16000,
+      "input_tokens": 16000,
+      "output_tokens": 2000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "gpt-4o-mini-transcribe-2025-12-15"
+    },
+    "gpt-4o-mini-tts": {
+      "display_name": "gpt-4o-mini-tts",
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "gpt-4o-mini-tts"
+    },
+    "gpt-4o-mini-tts-2025-03-20": {
+      "display_name": "gpt-4o-mini-tts-2025-03-20",
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "gpt-4o-mini-tts-2025-03-20"
+    },
+    "gpt-4o-mini-tts-2025-12-15": {
+      "display_name": "gpt-4o-mini-tts-2025-12-15",
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "gpt-4o-mini-tts-2025-12-15"
+    },
     "gpt-4o-transcribe": {
       "display_name": "gpt-4o-transcribe",
       "context_tokens": 16000,
@@ -4511,6 +7381,19 @@
         "text"
       ],
       "source_key": "gpt-4o-transcribe"
+    },
+    "gpt-4o-transcribe-diarize": {
+      "display_name": "gpt-4o-transcribe-diarize",
+      "context_tokens": 16000,
+      "input_tokens": 16000,
+      "output_tokens": 2000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "gpt-4o-transcribe-diarize"
     },
     "gpt-5": {
       "display_name": "gpt-5",
@@ -5289,6 +8172,30 @@
       "tool_call": true,
       "source_key": "openrouter/openai/gpt-6-luna-pro"
     },
+    "gpt-6-rosalind": {
+      "display_name": "gpt-6-rosalind",
+      "context_tokens": 922000,
+      "input_tokens": 922000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-6-rosalind"
+    },
     "gpt-6-sol": {
       "display_name": "GPT-6-Sol",
       "context_tokens": 272000,
@@ -5399,6 +8306,102 @@
       "tool_call": true,
       "source_key": "codex-client/gpt-6.1-terra"
     },
+    "gpt-audio": {
+      "display_name": "gpt-audio",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-audio"
+    },
+    "gpt-audio-1.5": {
+      "display_name": "gpt-audio-1.5",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-audio-1.5"
+    },
+    "gpt-audio-2025-08-28": {
+      "display_name": "gpt-audio-2025-08-28",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-audio-2025-08-28"
+    },
+    "gpt-audio-mini": {
+      "display_name": "gpt-audio-mini",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-audio-mini"
+    },
+    "gpt-audio-mini-2025-10-06": {
+      "display_name": "gpt-audio-mini-2025-10-06",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-audio-mini-2025-10-06"
+    },
+    "gpt-audio-mini-2025-12-15": {
+      "display_name": "gpt-audio-mini-2025-12-15",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-audio-mini-2025-12-15"
+    },
     "gpt-chat-latest": {
       "display_name": "gpt-chat-latest",
       "context_tokens": 400000,
@@ -5413,6 +8416,30 @@
       ],
       "tool_call": true,
       "source_key": "openrouter/openai/gpt-chat-latest"
+    },
+    "gpt-image-1.5": {
+      "display_name": "gpt-image-1.5",
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "gpt-image-1.5"
+    },
+    "gpt-image-1.5-2025-12-16": {
+      "display_name": "gpt-image-1.5-2025-12-16",
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "gpt-image-1.5-2025-12-16"
     },
     "gpt-image-2": {
       "display_name": "GPT Image 2",
@@ -5629,6 +8656,16 @@
       ],
       "source_key": "gpt-realtime-translate"
     },
+    "gpt-realtime-whisper": {
+      "display_name": "gpt-realtime-whisper",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "gpt-realtime-whisper"
+    },
     "gpt-transcribe": {
       "display_name": "GPT Transcribe",
       "family": "gpt-audio",
@@ -5684,6 +8721,22 @@
       "tool_call": true,
       "source_key": "xai/grok-4.20"
     },
+    "grok-4.20-0309": {
+      "display_name": "grok-4.20-0309",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-0309"
+    },
     "grok-4.20-0309-non-reasoning": {
       "display_name": "Grok 4.20 0309 Non Reasoning",
       "family": "grok-4",
@@ -5700,6 +8753,258 @@
       ],
       "tool_call": true,
       "source_key": "provider-registry/xai/grok-4.20-0309-non-reasoning"
+    },
+    "grok-4.20-0309-reasoning": {
+      "display_name": "Grok 4.20 0309 Reasoning",
+      "context_tokens": 2000000,
+      "max_context_tokens": 2000000,
+      "input_tokens": 1000000,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "provider-registry/xai/grok-4.20-0309-reasoning"
+    },
+    "grok-4.20-beta": {
+      "display_name": "grok-4.20-beta",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-beta"
+    },
+    "grok-4.20-beta-0309": {
+      "display_name": "grok-4.20-beta-0309",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-beta-0309"
+    },
+    "grok-4.20-beta-0309-non-reasoning": {
+      "display_name": "grok-4.20-beta-0309-non-reasoning",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-beta-0309-non-reasoning"
+    },
+    "grok-4.20-beta-0309-reasoning": {
+      "display_name": "grok-4.20-beta-0309-reasoning",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-beta-0309-reasoning"
+    },
+    "grok-4.20-beta-latest": {
+      "display_name": "grok-4.20-beta-latest",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-beta-latest"
+    },
+    "grok-4.20-beta-latest-non-reasoning": {
+      "display_name": "grok-4.20-beta-latest-non-reasoning",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-beta-latest-non-reasoning"
+    },
+    "grok-4.20-beta-latest-reasoning": {
+      "display_name": "grok-4.20-beta-latest-reasoning",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-beta-latest-reasoning"
+    },
+    "grok-4.20-beta-non-reasoning": {
+      "display_name": "grok-4.20-beta-non-reasoning",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-beta-non-reasoning"
+    },
+    "grok-4.20-beta-reasoning": {
+      "display_name": "grok-4.20-beta-reasoning",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-beta-reasoning"
+    },
+    "grok-4.20-experimental-beta-0304": {
+      "display_name": "grok-4.20-experimental-beta-0304",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-experimental-beta-0304"
+    },
+    "grok-4.20-experimental-beta-0304-non-reasoning": {
+      "display_name": "grok-4.20-experimental-beta-0304-non-reasoning",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-experimental-beta-0304-non-reasoning"
+    },
+    "grok-4.20-experimental-beta-0304-reasoning": {
+      "display_name": "grok-4.20-experimental-beta-0304-reasoning",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-experimental-beta-0304-reasoning"
+    },
+    "grok-4.20-experimental-beta-latest": {
+      "display_name": "grok-4.20-experimental-beta-latest",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-experimental-beta-latest"
+    },
+    "grok-4.20-experimental-beta-non-reasoning-latest": {
+      "display_name": "grok-4.20-experimental-beta-non-reasoning-latest",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-experimental-beta-non-reasoning-latest"
+    },
+    "grok-4.20-experimental-beta-reasoning-latest": {
+      "display_name": "grok-4.20-experimental-beta-reasoning-latest",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-experimental-beta-reasoning-latest"
     },
     "grok-4.20-multi-agent": {
       "display_name": "grok-4.20-multi-agent",
@@ -5740,6 +9045,175 @@
       "tool_call": true,
       "source_key": "provider-registry/xai/grok-4.20-multi-agent-0309"
     },
+    "grok-4.20-multi-agent-beta-0309": {
+      "display_name": "grok-4.20-multi-agent-beta-0309",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-multi-agent-beta-0309"
+    },
+    "grok-4.20-multi-agent-beta-latest": {
+      "display_name": "grok-4.20-multi-agent-beta-latest",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "source_key": "xai/grok-4.20-multi-agent-beta-latest"
+    },
+    "grok-4.20-multi-agent-experimental-beta-0304": {
+      "display_name": "grok-4.20-multi-agent-experimental-beta-0304",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "source_key": "xai/grok-4.20-multi-agent-experimental-beta-0304"
+    },
+    "grok-4.20-multi-agent-experimental-beta-latest": {
+      "display_name": "grok-4.20-multi-agent-experimental-beta-latest",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "source_key": "xai/grok-4.20-multi-agent-experimental-beta-latest"
+    },
+    "grok-4.20-multi-agent-latest": {
+      "display_name": "grok-4.20-multi-agent-latest",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "source_key": "xai/grok-4.20-multi-agent-latest"
+    },
+    "grok-4.20-non-reasoning": {
+      "display_name": "grok-4.20-non-reasoning",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-non-reasoning"
+    },
+    "grok-4.20-non-reasoning-gv2": {
+      "display_name": "grok-4.20-non-reasoning-gv2",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-non-reasoning-gv2"
+    },
+    "grok-4.20-non-reasoning-latest": {
+      "display_name": "grok-4.20-non-reasoning-latest",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-non-reasoning-latest"
+    },
+    "grok-4.20-reasoning": {
+      "display_name": "grok-4.20-reasoning",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-reasoning"
+    },
+    "grok-4.20-reasoning-gv2": {
+      "display_name": "grok-4.20-reasoning-gv2",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-reasoning-gv2"
+    },
+    "grok-4.20-reasoning-latest": {
+      "display_name": "grok-4.20-reasoning-latest",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.20-reasoning-latest"
+    },
     "grok-4.3": {
       "display_name": "Grok 4.3",
       "family": "grok-4",
@@ -5764,6 +9238,22 @@
       "tool_call": true,
       "source_key": "provider-registry/xai/grok-4.3"
     },
+    "grok-4.3-latest": {
+      "display_name": "grok-4.3-latest",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.3-latest"
+    },
     "grok-4.5": {
       "display_name": "Grok 4.5",
       "family": "grok-4",
@@ -5786,6 +9276,22 @@
       ],
       "tool_call": true,
       "source_key": "provider-registry/xai/grok-4.5"
+    },
+    "grok-4.5-latest": {
+      "display_name": "grok-4.5-latest",
+      "context_tokens": 500000,
+      "input_tokens": 500000,
+      "output_tokens": 500000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-4.5-latest"
     },
     "grok-4.6": {
       "display_name": "Grok 4.6",
@@ -5851,6 +9357,114 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "provider-registry/xai/grok-build-0.1"
+    },
+    "grok-build-latest": {
+      "display_name": "grok-build-latest",
+      "context_tokens": 500000,
+      "input_tokens": 500000,
+      "output_tokens": 500000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-build-latest"
+    },
+    "grok-code-fast": {
+      "display_name": "grok-code-fast",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-code-fast"
+    },
+    "grok-code-fast-1": {
+      "display_name": "grok-code-fast-1",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-code-fast-1"
+    },
+    "grok-code-fast-1-0825": {
+      "display_name": "grok-code-fast-1-0825",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "xai/grok-code-fast-1-0825"
+    },
+    "grok-imagine-image": {
+      "display_name": "grok-imagine-image",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "provider-registry/xai/grok-imagine-image"
+    },
+    "grok-imagine-image-2026-03-02": {
+      "display_name": "grok-imagine-image-2026-03-02",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "xai/grok-imagine-image-2026-03-02"
+    },
+    "grok-imagine-image-quality-20260403": {
+      "display_name": "grok-imagine-image-quality-20260403",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "xai/grok-imagine-image-quality-20260403"
+    },
+    "grok-imagine-image-quality-latest": {
+      "display_name": "grok-imagine-image-quality-latest",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "xai/grok-imagine-image-quality-latest"
     },
     "grok-imagine-video-1.5-lite": {
       "display_name": "Grok Imagine Video 1.5 Lite",
@@ -6000,9 +9614,26 @@
       "tool_call": true,
       "source_key": "openrouter/tencent/hy3-preview"
     },
+    "hy4": {
+      "display_name": "hy4",
+      "context_tokens": 960000,
+      "input_tokens": 960000,
+      "output_tokens": 64000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "tencent/hy4"
+    },
     "hy4-preview": {
       "display_name": "hy4-preview",
       "context_tokens": 1048576,
+      "input_tokens": 960000,
       "output_tokens": 64000,
       "input_modalities": [
         "text"
@@ -6012,7 +9643,27 @@
       ],
       "reasoning": true,
       "tool_call": true,
-      "source_key": "openrouter/tencent/hy4-preview"
+      "source_key": "tencent/hy4-preview"
+    },
+    "imagen-3.0-fast-generate-001": {
+      "display_name": "Imagen 3.0 Fast Generate",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "provider-registry/vertex/imagen-3.0-fast-generate-001"
+    },
+    "imagen-3.0-generate-001": {
+      "display_name": "imagen-3.0-generate-001",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "gemini/imagen-3.0-generate-001"
     },
     "inkling": {
       "display_name": "inkling",
@@ -6045,6 +9696,146 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "openrouter/thinkingmachines/inkling-small"
+    },
+    "inpaint": {
+      "display_name": "inpaint",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/inpaint"
+    },
+    "j2-light": {
+      "display_name": "j2-light",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "j2-light"
+    },
+    "j2-mid": {
+      "display_name": "j2-mid",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "j2-mid"
+    },
+    "j2-ultra": {
+      "display_name": "j2-ultra",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "j2-ultra"
+    },
+    "jamba-1.5": {
+      "display_name": "jamba-1.5",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jamba-1.5"
+    },
+    "jamba-1.5-large": {
+      "display_name": "jamba-1.5-large",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jamba-1.5-large"
+    },
+    "jamba-1.5-mini": {
+      "display_name": "jamba-1.5-mini",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jamba-1.5-mini"
+    },
+    "jamba-large-1.6": {
+      "display_name": "jamba-large-1.6",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jamba-large-1.6"
+    },
+    "jamba-large-1.7": {
+      "display_name": "jamba-large-1.7",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jamba-large-1.7"
+    },
+    "jamba-mini-1.6": {
+      "display_name": "jamba-mini-1.6",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jamba-mini-1.6"
+    },
+    "jamba-mini-1.7": {
+      "display_name": "jamba-mini-1.7",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jamba-mini-1.7"
     },
     "kat-coder-pro-v2": {
       "display_name": "kat-coder-pro-v2",
@@ -6251,6 +10042,28 @@
       ],
       "tool_call": true,
       "source_key": "provider-registry/kimi/kimi-k3.1-pro"
+    },
+    "kimi-k3.1-pro-highspeed": {
+      "display_name": "Kimi K3.1 Pro Highspeed",
+      "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "tool_call": true,
+      "source_key": "provider-registry/kimi/kimi-k3.1-pro-highspeed"
     },
     "l3-lunaris-8b": {
       "display_name": "l3-lunaris-8b",
@@ -6479,6 +10292,38 @@
       "tool_call": true,
       "source_key": "openrouter/meituan/longcat-2.0"
     },
+    "magistral-medium-latest": {
+      "display_name": "magistral-medium-latest",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "mistral/magistral-medium-latest"
+    },
+    "magistral-small-latest": {
+      "display_name": "magistral-small-latest",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "mistral/magistral-small-latest"
+    },
     "magnum-v4-72b": {
       "display_name": "magnum-v4-72b",
       "context_tokens": 32768,
@@ -6520,6 +10365,19 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "inception/mercury-2.5"
+    },
+    "mercury-edit-2": {
+      "display_name": "mercury-edit-2",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "text-completion-inception/mercury-edit-2"
     },
     "mimo-v2.5": {
       "display_name": "MiMo V2.5",
@@ -6675,6 +10533,21 @@
       "tool_call": true,
       "source_key": "minimax/MiniMax-M2.1"
     },
+    "minimax-m2.1-lightning": {
+      "display_name": "minimax-m2.1-lightning",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "minimax/MiniMax-M2.1-lightning"
+    },
     "minimax-m2.5": {
       "display_name": "MiniMax M2.5",
       "family": "minimax-m2",
@@ -6690,6 +10563,21 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "minimax/MiniMax-M2.5"
+    },
+    "minimax-m2.5-lightning": {
+      "display_name": "minimax-m2.5-lightning",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "minimax/MiniMax-M2.5-lightning"
     },
     "minimax-m2.7": {
       "display_name": "MiniMax M2.7",
@@ -6723,6 +10611,28 @@
       "tool_call": true,
       "source_key": "minimax/MiniMax-M3"
     },
+    "minimax-m3.1-flash": {
+      "display_name": "minimax-m3.1-flash",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "tool_call": true,
+      "source_key": "minimax/MiniMax-M3.1-Flash"
+    },
     "ministral-14b-2512": {
       "display_name": "ministral-14b-2512",
       "context_tokens": 262144,
@@ -6737,6 +10647,66 @@
       ],
       "tool_call": true,
       "source_key": "mistral/ministral-14b-2512"
+    },
+    "ministral-14b-latest": {
+      "display_name": "ministral-14b-latest",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/ministral-14b-latest"
+    },
+    "ministral-3-14b-2512": {
+      "display_name": "ministral-3-14b-2512",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/ministral-3-14b-2512"
+    },
+    "ministral-3-3b-2512": {
+      "display_name": "ministral-3-3b-2512",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 131072,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/ministral-3-3b-2512"
+    },
+    "ministral-3-8b-2512": {
+      "display_name": "ministral-3-8b-2512",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/ministral-3-8b-2512"
     },
     "ministral-3b-2512": {
       "display_name": "ministral-3b-2512",
@@ -6753,6 +10723,21 @@
       "tool_call": true,
       "source_key": "mistral/ministral-3b-2512"
     },
+    "ministral-3b-latest": {
+      "display_name": "ministral-3b-latest",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 131072,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/ministral-3b-latest"
+    },
     "ministral-8b-2512": {
       "display_name": "ministral-8b-2512",
       "context_tokens": 262144,
@@ -6767,6 +10752,68 @@
       ],
       "tool_call": true,
       "source_key": "mistral/ministral-8b-2512"
+    },
+    "ministral-8b-latest": {
+      "display_name": "ministral-8b-latest",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/ministral-8b-latest"
+    },
+    "mistral-code-agent-latest": {
+      "display_name": "mistral-code-agent-latest",
+      "context_tokens": 256000,
+      "input_tokens": 256000,
+      "output_tokens": 256000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/mistral-code-agent-latest"
+    },
+    "mistral-code-fim-latest": {
+      "display_name": "mistral-code-fim-latest",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/mistral-code-fim-latest"
+    },
+    "mistral-code-latest": {
+      "display_name": "mistral-code-latest",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/mistral-code-latest"
     },
     "mistral-large": {
       "display_name": "mistral-large",
@@ -6812,6 +10859,21 @@
       "tool_call": true,
       "source_key": "mistral/mistral-large-2512"
     },
+    "mistral-large-3": {
+      "display_name": "mistral-large-3",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/mistral-large-3"
+    },
     "mistral-large-4": {
       "display_name": "Mistral Large 4",
       "context_tokens": 1048576,
@@ -6847,6 +10909,46 @@
       ],
       "tool_call": true,
       "source_key": "mistral/mistral-large-latest"
+    },
+    "mistral-medium": {
+      "display_name": "mistral-medium",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/mistral-medium"
+    },
+    "mistral-medium-2604": {
+      "display_name": "mistral-medium-2604",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/mistral-medium-2604"
     },
     "mistral-medium-3": {
       "display_name": "mistral-medium-3",
@@ -6905,6 +11007,26 @@
       "tool_call": true,
       "source_key": "openrouter/mistralai/mistral-medium-3.1"
     },
+    "mistral-medium-3.5": {
+      "display_name": "mistral-medium-3.5",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/mistral-medium-3.5"
+    },
     "mistral-medium-latest": {
       "display_name": "Mistral Medium 3.5",
       "family": "mistral-medium",
@@ -6952,6 +11074,25 @@
       ],
       "tool_call": true,
       "source_key": "openrouter/mistralai/mistral-saba"
+    },
+    "mistral-small": {
+      "display_name": "mistral-small",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "output_tokens": 8191,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/mistral-small"
     },
     "mistral-small-24b-instruct-2501": {
       "display_name": "mistral-small-24b-instruct-2501",
@@ -7035,6 +11176,79 @@
       "tool_call": true,
       "source_key": "mistral/mistral-small-latest"
     },
+    "mistral-tiny": {
+      "display_name": "mistral-tiny",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "output_tokens": 8191,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/mistral-tiny"
+    },
+    "mistral-vibe-cli-fast": {
+      "display_name": "mistral-vibe-cli-fast",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/mistral-vibe-cli-fast"
+    },
+    "mistral-vibe-cli-latest": {
+      "display_name": "mistral-vibe-cli-latest",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/mistral-vibe-cli-latest"
+    },
+    "mistral-vibe-cli-with-tools": {
+      "display_name": "mistral-vibe-cli-with-tools",
+      "context_tokens": 262144,
+      "input_tokens": 262144,
+      "output_tokens": 262144,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/mistral-vibe-cli-with-tools"
+    },
     "mixtral-8x22b-instruct": {
       "display_name": "mixtral-8x22b-instruct",
       "context_tokens": 65536,
@@ -7048,6 +11262,107 @@
       ],
       "tool_call": true,
       "source_key": "openrouter/mistralai/mixtral-8x22b-instruct"
+    },
+    "moonshot-v1-128k": {
+      "display_name": "moonshot-v1-128k",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 131072,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "moonshot/moonshot-v1-128k"
+    },
+    "moonshot-v1-128k-vision-preview": {
+      "display_name": "moonshot-v1-128k-vision-preview",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 131072,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "moonshot/moonshot-v1-128k-vision-preview"
+    },
+    "moonshot-v1-32k": {
+      "display_name": "moonshot-v1-32k",
+      "context_tokens": 32768,
+      "input_tokens": 32768,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "moonshot/moonshot-v1-32k"
+    },
+    "moonshot-v1-32k-vision-preview": {
+      "display_name": "moonshot-v1-32k-vision-preview",
+      "context_tokens": 32768,
+      "input_tokens": 32768,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "moonshot/moonshot-v1-32k-vision-preview"
+    },
+    "moonshot-v1-8k": {
+      "display_name": "moonshot-v1-8k",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "moonshot/moonshot-v1-8k"
+    },
+    "moonshot-v1-8k-vision-preview": {
+      "display_name": "moonshot-v1-8k-vision-preview",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "moonshot/moonshot-v1-8k-vision-preview"
+    },
+    "moonshot-v1-auto": {
+      "display_name": "moonshot-v1-auto",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 131072,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "moonshot/moonshot-v1-auto"
     },
     "morph-v3-fast": {
       "display_name": "morph-v3-fast",
@@ -7075,6 +11390,33 @@
       ],
       "source_key": "morph/morph-v3-large"
     },
+    "muse-ember-1.0": {
+      "display_name": "muse-ember-1.0",
+      "context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 524288,
+      "input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "tool_call": true,
+      "source_key": "meta/muse-ember-1.0"
+    },
     "muse-glimmer-30b": {
       "display_name": "muse-glimmer-30b",
       "context_tokens": 131072,
@@ -7089,6 +11431,17 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "openrouter/meta/muse-glimmer-30b"
+    },
+    "muse-image-1.0": {
+      "display_name": "muse-image-1.0",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "meta/muse-image-1.0"
     },
     "muse-spark-1.1": {
       "display_name": "Muse Spark 1.1",
@@ -7225,6 +11578,16 @@
       "tool_call": true,
       "source_key": "provider-registry/meta/muse-spark-1.3-contributor"
     },
+    "muse-voice-transcribe-1.0": {
+      "display_name": "muse-voice-transcribe-1.0",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "meta/muse-voice-transcribe-1.0"
+    },
     "muse-wonder-1.0": {
       "display_name": "Muse Wonder 1.0",
       "family": "muse-wonder",
@@ -7290,6 +11653,21 @@
         "text"
       ],
       "source_key": "openrouter/gryphe/mythomax-l2-13b"
+    },
+    "nano-banana-pro-preview": {
+      "display_name": "nano-banana-pro-preview",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image",
+        "text"
+      ],
+      "source_key": "gemini/nano-banana-pro-preview"
     },
     "nemotron-3-nano-30b-a3b": {
       "display_name": "nemotron-3-nano-30b-a3b",
@@ -7609,6 +11987,29 @@
       "tool_call": true,
       "source_key": "openrouter/openai/o4-mini-high"
     },
+    "open-mistral-nemo": {
+      "display_name": "open-mistral-nemo",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/open-mistral-nemo"
+    },
+    "outpaint": {
+      "display_name": "outpaint",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/outpaint"
+    },
     "palmyra-x5": {
       "display_name": "palmyra-x5",
       "context_tokens": 1040000,
@@ -7679,6 +12080,21 @@
       ],
       "source_key": "openrouter/microsoft/phi-4"
     },
+    "pixtral-large-latest": {
+      "display_name": "pixtral-large-latest",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/pixtral-large-latest"
+    },
     "qwen-2.5-72b-instruct": {
       "display_name": "qwen-2.5-72b-instruct",
       "context_tokens": 32768,
@@ -7733,6 +12149,91 @@
       "tool_call": true,
       "source_key": "cerebras/qwen-3.8-27b"
     },
+    "qwen-audio-3.0-tts-flash": {
+      "display_name": "qwen-audio-3.0-tts-flash",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "dashscope/qwen-audio-3.0-tts-flash"
+    },
+    "qwen-audio-3.0-tts-plus": {
+      "display_name": "qwen-audio-3.0-tts-plus",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "dashscope/qwen-audio-3.0-tts-plus"
+    },
+    "qwen-audio-3.1-tts-flash": {
+      "display_name": "qwen-audio-3.1-tts-flash",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "dashscope/qwen-audio-3.1-tts-flash"
+    },
+    "qwen-audio-3.1-tts-plus": {
+      "display_name": "qwen-audio-3.1-tts-plus",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "dashscope/qwen-audio-3.1-tts-plus"
+    },
+    "qwen-coder": {
+      "display_name": "qwen-coder",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "dashscope/qwen-coder"
+    },
+    "qwen-image-2.0": {
+      "display_name": "qwen-image-2.0",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "dashscope/qwen-image-2.0"
+    },
+    "qwen-image-2.0-pro": {
+      "display_name": "qwen-image-2.0-pro",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "dashscope/qwen-image-2.0-pro"
+    },
+    "qwen-image-3.0": {
+      "display_name": "qwen-image-3.0",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "dashscope/qwen-image-3.0"
+    },
     "qwen-plus": {
       "display_name": "qwen-plus",
       "context_tokens": 1000000,
@@ -7746,6 +12247,51 @@
       "tool_call": true,
       "source_key": "openrouter/qwen/qwen-plus"
     },
+    "qwen-plus-2025-01-25": {
+      "display_name": "qwen-plus-2025-01-25",
+      "context_tokens": 129024,
+      "input_tokens": 129024,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "dashscope/qwen-plus-2025-01-25"
+    },
+    "qwen-plus-2025-04-28": {
+      "display_name": "qwen-plus-2025-04-28",
+      "context_tokens": 129024,
+      "input_tokens": 129024,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "dashscope/qwen-plus-2025-04-28"
+    },
+    "qwen-plus-2025-07-14": {
+      "display_name": "qwen-plus-2025-07-14",
+      "context_tokens": 129024,
+      "input_tokens": 129024,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "dashscope/qwen-plus-2025-07-14"
+    },
     "qwen-plus-2025-07-28": {
       "display_name": "qwen-plus-2025-07-28",
       "context_tokens": 1000000,
@@ -7758,6 +12304,66 @@
       ],
       "tool_call": true,
       "source_key": "openrouter/qwen/qwen-plus-2025-07-28"
+    },
+    "qwen-turbo": {
+      "display_name": "qwen-turbo",
+      "context_tokens": 129024,
+      "input_tokens": 129024,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "dashscope/qwen-turbo"
+    },
+    "qwen-turbo-2024-11-01": {
+      "display_name": "qwen-turbo-2024-11-01",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "dashscope/qwen-turbo-2024-11-01"
+    },
+    "qwen-turbo-2025-04-28": {
+      "display_name": "qwen-turbo-2025-04-28",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "dashscope/qwen-turbo-2025-04-28"
+    },
+    "qwen-turbo-latest": {
+      "display_name": "qwen-turbo-latest",
+      "context_tokens": 1000000,
+      "input_tokens": 1000000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "dashscope/qwen-turbo-latest"
     },
     "qwen2.5-vl-72b-instruct": {
       "display_name": "qwen2.5-vl-72b-instruct",
@@ -8017,6 +12623,16 @@
       "tool_call": true,
       "source_key": "openrouter/qwen/qwen3-next-80b-a3b-thinking"
     },
+    "qwen3-tts-flash": {
+      "display_name": "qwen3-tts-flash",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "dashscope/qwen3-tts-flash"
+    },
     "qwen3-vl-235b-a22b-instruct": {
       "display_name": "qwen3-vl-235b-a22b-instruct",
       "context_tokens": 131072,
@@ -8088,6 +12704,22 @@
       ],
       "tool_call": true,
       "source_key": "openrouter/qwen/qwen3-vl-32b-instruct"
+    },
+    "qwen3-vl-32b-thinking": {
+      "display_name": "qwen3-vl-32b-thinking",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "dashscope/qwen3-vl-32b-thinking"
     },
     "qwen3-vl-8b-instruct": {
       "display_name": "qwen3-vl-8b-instruct",
@@ -8489,6 +13121,26 @@
       "tool_call": true,
       "source_key": "dashscope/qwen3.8-omni-flash"
     },
+    "recraftv2": {
+      "display_name": "recraftv2",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "recraft/recraftv2"
+    },
+    "recraftv3": {
+      "display_name": "recraftv3",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "recraft/recraftv3"
+    },
     "reka-edge": {
       "display_name": "reka-edge",
       "context_tokens": 16384,
@@ -8554,6 +13206,26 @@
       ],
       "source_key": "openrouter/undi95/remm-slerp-l2-13b"
     },
+    "remove-background": {
+      "display_name": "remove-background",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/remove-background"
+    },
+    "replace-background-and-relight": {
+      "display_name": "replace-background-and-relight",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/replace-background-and-relight"
+    },
     "sakana-namazu": {
       "display_name": "sakana-namazu",
       "context_tokens": 262144,
@@ -8593,6 +13265,96 @@
         "text"
       ],
       "source_key": "openrouter/inference-net/schematron-v2-turbo"
+    },
+    "sd3": {
+      "display_name": "sd3",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/sd3"
+    },
+    "sd3-large": {
+      "display_name": "sd3-large",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/sd3-large"
+    },
+    "sd3-large-turbo": {
+      "display_name": "sd3-large-turbo",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/sd3-large-turbo"
+    },
+    "sd3-medium": {
+      "display_name": "sd3-medium",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/sd3-medium"
+    },
+    "sd3.5-large": {
+      "display_name": "sd3.5-large",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/sd3.5-large"
+    },
+    "sd3.5-large-turbo": {
+      "display_name": "sd3.5-large-turbo",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/sd3.5-large-turbo"
+    },
+    "sd3.5-medium": {
+      "display_name": "sd3.5-medium",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/sd3.5-medium"
+    },
+    "search-and-recolor": {
+      "display_name": "search-and-recolor",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/search-and-recolor"
+    },
+    "search-and-replace": {
+      "display_name": "search-and-replace",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/search-and-replace"
     },
     "seed-1.6": {
       "display_name": "seed-1.6",
@@ -8690,6 +13452,16 @@
       "tool_call": true,
       "source_key": "openrouter/bytedance-seed/seed-2.0-mini"
     },
+    "sketch": {
+      "display_name": "sketch",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/sketch"
+    },
     "skyfall-36b-v2": {
       "display_name": "skyfall-36b-v2",
       "context_tokens": 32768,
@@ -8772,6 +13544,19 @@
       "reasoning": true,
       "source_key": "perplexity/sonar-deep-research"
     },
+    "sonar-medium-chat": {
+      "display_name": "sonar-medium-chat",
+      "context_tokens": 16384,
+      "input_tokens": 16384,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "perplexity/sonar-medium-chat"
+    },
     "sonar-pro": {
       "display_name": "sonar-pro",
       "context_tokens": 200000,
@@ -8800,6 +13585,20 @@
       "reasoning": true,
       "source_key": "openrouter/perplexity/sonar-pro-search"
     },
+    "sonar-reasoning": {
+      "display_name": "sonar-reasoning",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "source_key": "perplexity/sonar-reasoning"
+    },
     "sonar-reasoning-pro": {
       "display_name": "sonar-reasoning-pro",
       "context_tokens": 128000,
@@ -8814,6 +13613,112 @@
       ],
       "reasoning": true,
       "source_key": "perplexity/sonar-reasoning-pro"
+    },
+    "sonar-small-chat": {
+      "display_name": "sonar-small-chat",
+      "context_tokens": 16384,
+      "input_tokens": 16384,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "perplexity/sonar-small-chat"
+    },
+    "sora-2": {
+      "display_name": "sora-2",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "sora-2"
+    },
+    "sora-2-pro": {
+      "display_name": "sora-2-pro",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "sora-2-pro"
+    },
+    "sora-2-pro-high-res": {
+      "display_name": "sora-2-pro-high-res",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "sora-2-pro-high-res"
+    },
+    "speech-02-hd": {
+      "display_name": "speech-02-hd",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "minimax/speech-02-hd"
+    },
+    "speech-02-turbo": {
+      "display_name": "speech-02-turbo",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "minimax/speech-02-turbo"
+    },
+    "speech-2.6-hd": {
+      "display_name": "speech-2.6-hd",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "minimax/speech-2.6-hd"
+    },
+    "speech-2.6-turbo": {
+      "display_name": "speech-2.6-turbo",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "minimax/speech-2.6-turbo"
+    },
+    "stable-image-core": {
+      "display_name": "stable-image-core",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/stable-image-core"
+    },
+    "stable-image-ultra": {
+      "display_name": "stable-image-ultra",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/stable-image-ultra"
     },
     "step-3.5-flash": {
       "display_name": "step-3.5-flash",
@@ -8844,6 +13749,124 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "openrouter/stepfun/step-3.7-flash"
+    },
+    "structure": {
+      "display_name": "structure",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/structure"
+    },
+    "stt-async-v4": {
+      "display_name": "stt-async-v4",
+      "context_tokens": 8000,
+      "input_tokens": 8000,
+      "output_tokens": 8000,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "soniox/stt-async-v4"
+    },
+    "stt-async-v5": {
+      "display_name": "stt-async-v5",
+      "context_tokens": 8000,
+      "input_tokens": 8000,
+      "output_tokens": 8000,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "soniox/stt-async-v5"
+    },
+    "stt-rt-preview": {
+      "display_name": "stt-rt-preview",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "soniox/stt-rt-preview"
+    },
+    "stt-rt-preview-v2": {
+      "display_name": "stt-rt-preview-v2",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "soniox/stt-rt-preview-v2"
+    },
+    "stt-rt-v3": {
+      "display_name": "stt-rt-v3",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "soniox/stt-rt-v3"
+    },
+    "stt-rt-v3-preview": {
+      "display_name": "stt-rt-v3-preview",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "soniox/stt-rt-v3-preview"
+    },
+    "stt-rt-v4": {
+      "display_name": "stt-rt-v4",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "soniox/stt-rt-v4"
+    },
+    "stt-rt-v5": {
+      "display_name": "stt-rt-v5",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "soniox/stt-rt-v5"
+    },
+    "style": {
+      "display_name": "style",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/style"
+    },
+    "style-transfer": {
+      "display_name": "style-transfer",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "stability/style-transfer"
     },
     "ternary-bonsai-2-27b": {
       "display_name": "ternary-bonsai-2-27b",
@@ -8902,6 +13925,18 @@
       ],
       "source_key": "text-embedding-ada-002"
     },
+    "text-embedding-ada-002-v2": {
+      "display_name": "text-embedding-ada-002-v2",
+      "context_tokens": 8191,
+      "input_tokens": 8191,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "text-embedding-ada-002-v2"
+    },
     "trinity-large-thinking": {
       "display_name": "trinity-large-thinking",
       "context_tokens": 262144,
@@ -8915,6 +13950,46 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "openrouter/arcee-ai/trinity-large-thinking"
+    },
+    "tts-1": {
+      "display_name": "tts-1",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "tts-1"
+    },
+    "tts-1-1106": {
+      "display_name": "tts-1-1106",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "tts-1-1106"
+    },
+    "tts-1-hd": {
+      "display_name": "tts-1-hd",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "tts-1-hd"
+    },
+    "tts-1-hd-1106": {
+      "display_name": "tts-1-hd-1106",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "tts-1-hd-1106"
     },
     "ui-tars-1.5-7b": {
       "display_name": "ui-tars-1.5-7b",
@@ -8942,6 +14017,42 @@
       "tool_call": true,
       "source_key": "openrouter/thedrummer/unslopnemo-12b"
     },
+    "veo-3.1-fast-generate-001": {
+      "display_name": "veo-3.1-fast-generate-001",
+      "context_tokens": 1024,
+      "input_tokens": 1024,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "gemini/veo-3.1-fast-generate-001"
+    },
+    "veo-3.1-generate-001": {
+      "display_name": "veo-3.1-generate-001",
+      "context_tokens": 1024,
+      "input_tokens": 1024,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "gemini/veo-3.1-generate-001"
+    },
+    "veo-3.1-lite-generate-preview": {
+      "display_name": "veo-3.1-lite-generate-preview",
+      "context_tokens": 1024,
+      "input_tokens": 1024,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "gemini/veo-3.1-lite-generate-preview"
+    },
     "voxtral-mini-2602": {
       "display_name": "Voxtral Mini Transcribe 2602",
       "family": "voxtral",
@@ -8952,6 +14063,56 @@
         "text"
       ],
       "source_key": "mistral/voxtral-mini-2602"
+    },
+    "voxtral-mini-latest": {
+      "display_name": "voxtral-mini-latest",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/voxtral-mini-latest"
+    },
+    "voxtral-mini-realtime-2602": {
+      "display_name": "voxtral-mini-realtime-2602",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/voxtral-mini-realtime-2602"
+    },
+    "voxtral-mini-realtime-latest": {
+      "display_name": "voxtral-mini-realtime-latest",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/voxtral-mini-realtime-latest"
+    },
+    "voxtral-mini-transcribe-3": {
+      "display_name": "voxtral-mini-transcribe-3",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/voxtral-mini-transcribe-3"
+    },
+    "voxtral-mini-transcribe-3-0": {
+      "display_name": "voxtral-mini-transcribe-3-0",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/voxtral-mini-transcribe-3-0"
     },
     "voxtral-mini-transcribe-realtime-2602": {
       "display_name": "Voxtral Mini Transcribe Realtime 2602",
@@ -8964,6 +14125,36 @@
       ],
       "source_key": "mistral/voxtral-mini-transcribe-realtime-2602"
     },
+    "voxtral-mini-transcribe-realtime-3": {
+      "display_name": "voxtral-mini-transcribe-realtime-3",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/voxtral-mini-transcribe-realtime-3"
+    },
+    "voxtral-mini-transcribe-realtime-3-0": {
+      "display_name": "voxtral-mini-transcribe-realtime-3-0",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/voxtral-mini-transcribe-realtime-3-0"
+    },
+    "voxtral-mini-transcribe-realtime-latest": {
+      "display_name": "voxtral-mini-transcribe-realtime-latest",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/voxtral-mini-transcribe-realtime-latest"
+    },
     "voxtral-mini-tts-2603": {
       "display_name": "Voxtral Mini TTS 2603",
       "family": "voxtral",
@@ -8974,6 +14165,362 @@
         "audio"
       ],
       "source_key": "mistral/voxtral-mini-tts-2603"
+    },
+    "voxtral-mini-tts-3": {
+      "display_name": "voxtral-mini-tts-3",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "mistral/voxtral-mini-tts-3"
+    },
+    "voxtral-mini-tts-3-0": {
+      "display_name": "voxtral-mini-tts-3-0",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "mistral/voxtral-mini-tts-3-0"
+    },
+    "voxtral-mini-tts-latest": {
+      "display_name": "voxtral-mini-tts-latest",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "source_key": "mistral/voxtral-mini-tts-latest"
+    },
+    "voxtral-small-2507": {
+      "display_name": "voxtral-small-2507",
+      "context_tokens": 32768,
+      "input_tokens": 32768,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/voxtral-small-2507"
+    },
+    "voxtral-small-latest": {
+      "display_name": "voxtral-small-latest",
+      "context_tokens": 32768,
+      "input_tokens": 32768,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "mistral/voxtral-small-latest"
+    },
+    "voxtral-small-transcribe-3": {
+      "display_name": "voxtral-small-transcribe-3",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/voxtral-small-transcribe-3"
+    },
+    "voxtral-small-transcribe-3-0": {
+      "display_name": "voxtral-small-transcribe-3-0",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/voxtral-small-transcribe-3-0"
+    },
+    "voyage-2": {
+      "display_name": "voyage-2",
+      "context_tokens": 4000,
+      "input_tokens": 4000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-2"
+    },
+    "voyage-3": {
+      "display_name": "voyage-3",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-3"
+    },
+    "voyage-3-large": {
+      "display_name": "voyage-3-large",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-3-large"
+    },
+    "voyage-3-lite": {
+      "display_name": "voyage-3-lite",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-3-lite"
+    },
+    "voyage-3.5": {
+      "display_name": "voyage-3.5",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-3.5"
+    },
+    "voyage-3.5-lite": {
+      "display_name": "voyage-3.5-lite",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-3.5-lite"
+    },
+    "voyage-4": {
+      "display_name": "voyage-4",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-4"
+    },
+    "voyage-4-large": {
+      "display_name": "voyage-4-large",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-4-large"
+    },
+    "voyage-4-lite": {
+      "display_name": "voyage-4-lite",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-4-lite"
+    },
+    "voyage-code-2": {
+      "display_name": "voyage-code-2",
+      "context_tokens": 16000,
+      "input_tokens": 16000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-code-2"
+    },
+    "voyage-code-3": {
+      "display_name": "voyage-code-3",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-code-3"
+    },
+    "voyage-code-4": {
+      "display_name": "voyage-code-4",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-code-4"
+    },
+    "voyage-context-3": {
+      "display_name": "voyage-context-3",
+      "context_tokens": 120000,
+      "input_tokens": 120000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-context-3"
+    },
+    "voyage-context-4": {
+      "display_name": "voyage-context-4",
+      "context_tokens": 120000,
+      "input_tokens": 120000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-context-4"
+    },
+    "voyage-finance-2": {
+      "display_name": "voyage-finance-2",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-finance-2"
+    },
+    "voyage-large-2": {
+      "display_name": "voyage-large-2",
+      "context_tokens": 16000,
+      "input_tokens": 16000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-large-2"
+    },
+    "voyage-large-2-instruct": {
+      "display_name": "voyage-large-2-instruct",
+      "context_tokens": 16000,
+      "input_tokens": 16000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-large-2-instruct"
+    },
+    "voyage-law-2": {
+      "display_name": "voyage-law-2",
+      "context_tokens": 16000,
+      "input_tokens": 16000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-law-2"
+    },
+    "voyage-lite-01": {
+      "display_name": "voyage-lite-01",
+      "context_tokens": 4000,
+      "input_tokens": 4000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-lite-01"
+    },
+    "voyage-lite-02-instruct": {
+      "display_name": "voyage-lite-02-instruct",
+      "context_tokens": 4000,
+      "input_tokens": 4000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-lite-02-instruct"
+    },
+    "voyage-multilingual-2": {
+      "display_name": "voyage-multilingual-2",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-multilingual-2"
+    },
+    "voyage-multimodal-3": {
+      "display_name": "voyage-multimodal-3",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-multimodal-3"
+    },
+    "voyage-multimodal-3.5": {
+      "display_name": "voyage-multimodal-3.5",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "voyage/voyage-multimodal-3.5"
     },
     "weaver": {
       "display_name": "weaver",
@@ -9031,7 +14578,17 @@
     "anthropic/claude-sonnet-5": "claude-sonnet-5",
     "anthropic/claude-sonnet-5.5": "claude-sonnet-5-5",
     "arcee-ai/trinity-large-thinking": "trinity-large-thinking",
+    "assemblyai/best": "best",
+    "assemblyai/nano": "nano",
     "baidu/ernie-4.5-vl-424b-a47b": "ernie-4.5-vl-424b-a47b",
+    "black_forest_labs/flux-dev": "flux-dev",
+    "black_forest_labs/flux-kontext-max": "flux-kontext-max",
+    "black_forest_labs/flux-kontext-pro": "flux-kontext-pro",
+    "black_forest_labs/flux-pro": "flux-pro",
+    "black_forest_labs/flux-pro-1.0-expand": "flux-pro-1.0-expand",
+    "black_forest_labs/flux-pro-1.0-fill": "flux-pro-1.0-fill",
+    "black_forest_labs/flux-pro-1.1": "flux-pro-1.1",
+    "black_forest_labs/flux-pro-1.1-ultra": "flux-pro-1.1-ultra",
     "bytedance-seed/seed-1.6": "seed-1.6",
     "bytedance-seed/seed-1.6-flash": "seed-1.6-flash",
     "bytedance-seed/seed-2-1-turbo": "seed-2-1-turbo",
@@ -9041,10 +14598,12 @@
     "bytedance/ui-tars-1.5-7b": "ui-tars-1.5-7b",
     "cerebras/qwen-3.8-27b": "qwen-3.8-27b",
     "claude-fable-5.1": "claude-fable-5-1",
+    "claude-fable-5.2": "claude-fable-5-2",
     "claude-haiku-4-5-20251001": "claude-haiku-4-5",
     "claude-haiku-4.5": "claude-haiku-4-5",
     "claude-haiku-5.5": "claude-haiku-5-5",
     "claude-mythos-5.1": "claude-mythos-5-1",
+    "claude-mythos-5.2": "claude-mythos-5-2",
     "claude-opus-4.5": "claude-opus-4-5",
     "claude-opus-4.6": "claude-opus-4-6",
     "claude-opus-4.7": "claude-opus-4-7",
@@ -9059,9 +14618,63 @@
     "cohere/command-r-08-2024": "command-r-08-2024",
     "cohere/command-r-plus-08-2024": "command-r-plus-08-2024",
     "cohere/command-r7b-12-2024": "command-r7b-12-2024",
+    "cohere/embed-v4.0": "embed-v4.0",
     "cohere/embed-v5.0-fast": "embed-v5.0-fast",
     "cohere/embed-v5.0-pro": "embed-v5.0-pro",
+    "dashscope/qwen-audio-3.0-tts-flash": "qwen-audio-3.0-tts-flash",
+    "dashscope/qwen-audio-3.0-tts-plus": "qwen-audio-3.0-tts-plus",
+    "dashscope/qwen-audio-3.1-tts-flash": "qwen-audio-3.1-tts-flash",
+    "dashscope/qwen-audio-3.1-tts-plus": "qwen-audio-3.1-tts-plus",
+    "dashscope/qwen-coder": "qwen-coder",
+    "dashscope/qwen-image-2.0": "qwen-image-2.0",
+    "dashscope/qwen-image-2.0-pro": "qwen-image-2.0-pro",
+    "dashscope/qwen-image-3.0": "qwen-image-3.0",
+    "dashscope/qwen-plus-2025-01-25": "qwen-plus-2025-01-25",
+    "dashscope/qwen-plus-2025-04-28": "qwen-plus-2025-04-28",
+    "dashscope/qwen-plus-2025-07-14": "qwen-plus-2025-07-14",
+    "dashscope/qwen-turbo": "qwen-turbo",
+    "dashscope/qwen-turbo-2024-11-01": "qwen-turbo-2024-11-01",
+    "dashscope/qwen-turbo-2025-04-28": "qwen-turbo-2025-04-28",
+    "dashscope/qwen-turbo-latest": "qwen-turbo-latest",
+    "dashscope/qwen3-tts-flash": "qwen3-tts-flash",
+    "dashscope/qwen3-vl-32b-thinking": "qwen3-vl-32b-thinking",
     "dashscope/qwen3.8-omni-flash": "qwen3.8-omni-flash",
+    "deepgram/base": "base",
+    "deepgram/base-conversationalai": "base-conversationalai",
+    "deepgram/base-finance": "base-finance",
+    "deepgram/base-general": "base-general",
+    "deepgram/base-meeting": "base-meeting",
+    "deepgram/base-phonecall": "base-phonecall",
+    "deepgram/base-video": "base-video",
+    "deepgram/base-voicemail": "base-voicemail",
+    "deepgram/enhanced": "enhanced",
+    "deepgram/enhanced-finance": "enhanced-finance",
+    "deepgram/enhanced-general": "enhanced-general",
+    "deepgram/enhanced-meeting": "enhanced-meeting",
+    "deepgram/enhanced-phonecall": "enhanced-phonecall",
+    "deepgram/nova": "nova",
+    "deepgram/nova-2": "nova-2",
+    "deepgram/nova-2-atc": "nova-2-atc",
+    "deepgram/nova-2-automotive": "nova-2-automotive",
+    "deepgram/nova-2-conversationalai": "nova-2-conversationalai",
+    "deepgram/nova-2-drivethru": "nova-2-drivethru",
+    "deepgram/nova-2-finance": "nova-2-finance",
+    "deepgram/nova-2-general": "nova-2-general",
+    "deepgram/nova-2-meeting": "nova-2-meeting",
+    "deepgram/nova-2-phonecall": "nova-2-phonecall",
+    "deepgram/nova-2-video": "nova-2-video",
+    "deepgram/nova-2-voicemail": "nova-2-voicemail",
+    "deepgram/nova-3": "nova-3",
+    "deepgram/nova-3-general": "nova-3-general",
+    "deepgram/nova-3-medical": "nova-3-medical",
+    "deepgram/nova-general": "nova-general",
+    "deepgram/nova-phonecall": "nova-phonecall",
+    "deepgram/whisper": "whisper",
+    "deepgram/whisper-base": "whisper-base",
+    "deepgram/whisper-large": "whisper-large",
+    "deepgram/whisper-medium": "whisper-medium",
+    "deepgram/whisper-small": "whisper-small",
+    "deepgram/whisper-tiny": "whisper-tiny",
     "deepseek-ai/deepseek-v4.1-flash-1017": "deepseek-v4.1-flash",
     "deepseek-flash": "deepseek-v4.1-flash",
     "deepseek-v4-flash-0731": "deepseek-v4-flash",
@@ -9069,10 +14682,12 @@
     "deepseek-v4.1-flash-1017": "deepseek-v4.1-flash",
     "deepseek/deepseek-chat-v3-0324": "deepseek-chat-v3-0324",
     "deepseek/deepseek-chat-v3.1": "deepseek-chat-v3.1",
+    "deepseek/deepseek-coder": "deepseek-coder",
     "deepseek/deepseek-flash": "deepseek-v4.1-flash",
     "deepseek/deepseek-r1": "deepseek-r1",
     "deepseek/deepseek-r1-0528": "deepseek-r1-0528",
     "deepseek/deepseek-r1-distill-llama-70b": "deepseek-r1-distill-llama-70b",
+    "deepseek/deepseek-v3": "deepseek-v3",
     "deepseek/deepseek-v3.1-terminus": "deepseek-v3.1-terminus",
     "deepseek/deepseek-v3.2": "deepseek-v3.2",
     "deepseek/deepseek-v3.2-exp": "deepseek-v3.2-exp",
@@ -9083,16 +14698,53 @@
     "deepseek/deepseek-v4-pro-0813": "deepseek-v4-pro-0813",
     "deepseek/deepseek-v4.1-flash": "deepseek-v4.1-flash",
     "deepseek/deepseek-v4.1-flash-1017": "deepseek-v4.1-flash",
+    "elevenlabs/eleven_flash_v2": "eleven_flash_v2",
+    "elevenlabs/eleven_flash_v2_5": "eleven_flash_v2_5",
+    "elevenlabs/eleven_multilingual_v2": "eleven_multilingual_v2",
+    "elevenlabs/eleven_turbo_v2": "eleven_turbo_v2",
+    "elevenlabs/eleven_turbo_v2_5": "eleven_turbo_v2_5",
+    "elevenlabs/eleven_v3": "eleven_v3",
+    "elevenlabs/eleven_v3_conversational": "eleven_v3_conversational",
+    "elevenlabs/eleven_v4": "eleven_v4",
+    "elevenlabs/eleven_v4_turbo": "eleven_v4_turbo",
+    "elevenlabs/scribe_v1": "scribe_v1",
+    "elevenlabs/scribe_v1_experimental": "scribe_v1_experimental",
+    "elevenlabs/scribe_v2": "scribe_v2",
     "gemini-3-flash": "gemini-3-flash-preview",
     "gemini-3.1-pro": "gemini-3.1-pro-preview",
     "gemini-3.1-pro-preview-customtools": "gemini-3.1-pro-preview",
+    "gemini/deep-research-max-preview-04-2026": "deep-research-max-preview-04-2026",
+    "gemini/deep-research-preview-04-2026": "deep-research-preview-04-2026",
+    "gemini/deep-research-pro-preview-12-2025": "deep-research-pro-preview-12-2025",
+    "gemini/gemini-2.5-computer-use-preview-10-2025": "gemini-2.5-computer-use-preview-10-2025",
+    "gemini/gemini-2.5-flash-image": "gemini-2.5-flash-image",
+    "gemini/gemini-2.5-pro-preview-tts": "gemini-2.5-pro-preview-tts",
+    "gemini/gemini-3-pro-image": "gemini-3-pro-image",
+    "gemini/gemini-3-pro-image-preview": "gemini-3-pro-image-preview",
     "gemini/gemini-3.1-flash-image": "gemini-3.1-flash-image",
+    "gemini/gemini-3.1-flash-image-preview": "gemini-3.1-flash-image-preview",
+    "gemini/gemini-3.1-flash-lite-image": "gemini-3.1-flash-lite-image",
+    "gemini/gemini-3.5-live-translate-preview": "gemini-3.5-live-translate-preview",
+    "gemini/gemini-3.5-transcribe": "gemini-3.5-transcribe",
+    "gemini/gemini-3.5-transcribe-live": "gemini-3.5-transcribe-live",
     "gemini/gemini-3.8-flash-lite-tts": "gemini-3.8-flash-lite-tts",
     "gemini/gemini-3.8-flash-tts": "gemini-3.8-flash-tts",
     "gemini/gemini-3.8-live": "gemini-3.8-live",
     "gemini/gemini-3.8-live-extended-thinking": "gemini-3.8-live-extended-thinking",
     "gemini/gemini-4-argon": "gemini-4-argon",
+    "gemini/gemini-4-carbon": "gemini-4-carbon",
+    "gemini/gemini-gemma-2-27b-it": "gemini-gemma-2-27b-it",
+    "gemini/gemini-gemma-2-9b-it": "gemini-gemma-2-9b-it",
+    "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025": "gemini-live-2.5-flash-preview-native-audio-09-2025",
     "gemini/gemini-nano-banana-2.1": "gemini-nano-banana-2.1",
+    "gemini/gemini-omni-1.1-flash": "gemini-omni-1.1-flash",
+    "gemini/gemini-omni-1.2-flash": "gemini-omni-1.2-flash",
+    "gemini/imagen-3.0-fast-generate-001": "imagen-3.0-fast-generate-001",
+    "gemini/imagen-3.0-generate-001": "imagen-3.0-generate-001",
+    "gemini/nano-banana-pro-preview": "nano-banana-pro-preview",
+    "gemini/veo-3.1-fast-generate-001": "veo-3.1-fast-generate-001",
+    "gemini/veo-3.1-generate-001": "veo-3.1-generate-001",
+    "gemini/veo-3.1-lite-generate-preview": "veo-3.1-lite-generate-preview",
     "gemma4:31b": "gemma-4-31b-it",
     "google/gemini-2.5-flash": "gemini-2.5-flash",
     "google/gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
@@ -9144,12 +14796,15 @@
     "meta-llama/llama-4-maverick": "llama-4-maverick",
     "meta-llama/llama-4-scout": "llama-4-scout",
     "meta-llama/llama-guard-4-12b": "llama-guard-4-12b",
+    "meta/muse-ember-1.0": "muse-ember-1.0",
     "meta/muse-glimmer-30b": "muse-glimmer-30b",
+    "meta/muse-image-1.0": "muse-image-1.0",
     "meta/muse-spark-1.1": "muse-spark-1.1",
     "meta/muse-spark-1.2": "muse-spark-1.2",
     "meta/muse-spark-1.2-contributor": "muse-spark-1.2-contributor",
     "meta/muse-spark-1.3": "muse-spark-1.3",
     "meta/muse-spark-1.3-contributor": "muse-spark-1.3-contributor",
+    "meta/muse-voice-transcribe-1.0": "muse-voice-transcribe-1.0",
     "meta/muse-wonder": "muse-wonder-1.0",
     "meta/muse-wonder-1.0": "muse-wonder-1.0",
     "microsoft/phi-4": "phi-4",
@@ -9159,11 +14814,60 @@
     "minimax/minimax-m2": "minimax-m2",
     "minimax/minimax-m2-her": "minimax-m2-her",
     "minimax/minimax-m2.1": "minimax-m2.1",
+    "minimax/minimax-m2.1-lightning": "minimax-m2.1-lightning",
     "minimax/minimax-m2.5": "minimax-m2.5",
+    "minimax/minimax-m2.5-lightning": "minimax-m2.5-lightning",
     "minimax/minimax-m2.7": "minimax-m2.7",
     "minimax/minimax-m3": "minimax-m3",
+    "minimax/minimax-m3.1-flash": "minimax-m3.1-flash",
+    "minimax/speech-02-hd": "speech-02-hd",
+    "minimax/speech-02-turbo": "speech-02-turbo",
+    "minimax/speech-2.6-hd": "speech-2.6-hd",
+    "minimax/speech-2.6-turbo": "speech-2.6-turbo",
     "mistral-large-4-0": "mistral-large-4",
+    "mistral/codestral-latest": "codestral-latest",
+    "mistral/codestral-mamba-latest": "codestral-mamba-latest",
+    "mistral/devstral-latest": "devstral-latest",
+    "mistral/devstral-medium-latest": "devstral-medium-latest",
+    "mistral/devstral-small-latest": "devstral-small-latest",
+    "mistral/magistral-medium-latest": "magistral-medium-latest",
+    "mistral/magistral-small-latest": "magistral-small-latest",
+    "mistral/ministral-14b-latest": "ministral-14b-latest",
+    "mistral/ministral-3-14b-2512": "ministral-3-14b-2512",
+    "mistral/ministral-3-3b-2512": "ministral-3-3b-2512",
+    "mistral/ministral-3-8b-2512": "ministral-3-8b-2512",
+    "mistral/ministral-3b-latest": "ministral-3b-latest",
+    "mistral/ministral-8b-latest": "ministral-8b-latest",
+    "mistral/mistral-code-agent-latest": "mistral-code-agent-latest",
+    "mistral/mistral-code-fim-latest": "mistral-code-fim-latest",
+    "mistral/mistral-code-latest": "mistral-code-latest",
+    "mistral/mistral-large-3": "mistral-large-3",
     "mistral/mistral-large-4": "mistral-large-4",
+    "mistral/mistral-medium": "mistral-medium",
+    "mistral/mistral-medium-2604": "mistral-medium-2604",
+    "mistral/mistral-medium-3.5": "mistral-medium-3.5",
+    "mistral/mistral-small": "mistral-small",
+    "mistral/mistral-tiny": "mistral-tiny",
+    "mistral/mistral-vibe-cli-fast": "mistral-vibe-cli-fast",
+    "mistral/mistral-vibe-cli-latest": "mistral-vibe-cli-latest",
+    "mistral/mistral-vibe-cli-with-tools": "mistral-vibe-cli-with-tools",
+    "mistral/open-mistral-nemo": "open-mistral-nemo",
+    "mistral/pixtral-large-latest": "pixtral-large-latest",
+    "mistral/voxtral-mini-latest": "voxtral-mini-latest",
+    "mistral/voxtral-mini-realtime-2602": "voxtral-mini-realtime-2602",
+    "mistral/voxtral-mini-realtime-latest": "voxtral-mini-realtime-latest",
+    "mistral/voxtral-mini-transcribe-3": "voxtral-mini-transcribe-3",
+    "mistral/voxtral-mini-transcribe-3-0": "voxtral-mini-transcribe-3-0",
+    "mistral/voxtral-mini-transcribe-realtime-3": "voxtral-mini-transcribe-realtime-3",
+    "mistral/voxtral-mini-transcribe-realtime-3-0": "voxtral-mini-transcribe-realtime-3-0",
+    "mistral/voxtral-mini-transcribe-realtime-latest": "voxtral-mini-transcribe-realtime-latest",
+    "mistral/voxtral-mini-tts-3": "voxtral-mini-tts-3",
+    "mistral/voxtral-mini-tts-3-0": "voxtral-mini-tts-3-0",
+    "mistral/voxtral-mini-tts-latest": "voxtral-mini-tts-latest",
+    "mistral/voxtral-small-2507": "voxtral-small-2507",
+    "mistral/voxtral-small-latest": "voxtral-small-latest",
+    "mistral/voxtral-small-transcribe-3": "voxtral-small-transcribe-3",
+    "mistral/voxtral-small-transcribe-3-0": "voxtral-small-transcribe-3-0",
     "mistralai/codestral-2508": "codestral-2508",
     "mistralai/devstral-2512": "devstral-2512",
     "mistralai/ministral-14b-2512": "ministral-14b-2512",
@@ -9184,6 +14888,14 @@
     "mistralai/mixtral-8x22b-instruct": "mixtral-8x22b-instruct",
     "mistralai/voxtral-mini-tts-2603": "voxtral-mini-tts-2603",
     "moonshot/kimi-k3.1-pro": "kimi-k3.1-pro",
+    "moonshot/kimi-k3.1-pro-highspeed": "kimi-k3.1-pro-highspeed",
+    "moonshot/moonshot-v1-128k": "moonshot-v1-128k",
+    "moonshot/moonshot-v1-128k-vision-preview": "moonshot-v1-128k-vision-preview",
+    "moonshot/moonshot-v1-32k": "moonshot-v1-32k",
+    "moonshot/moonshot-v1-32k-vision-preview": "moonshot-v1-32k-vision-preview",
+    "moonshot/moonshot-v1-8k": "moonshot-v1-8k",
+    "moonshot/moonshot-v1-8k-vision-preview": "moonshot-v1-8k-vision-preview",
+    "moonshot/moonshot-v1-auto": "moonshot-v1-auto",
     "moonshotai/kimi-k2": "kimi-k2",
     "moonshotai/kimi-k2-0905": "kimi-k2-0905",
     "moonshotai/kimi-k2-thinking": "kimi-k2-thinking",
@@ -9276,6 +14988,9 @@
     "openai/o3-pro": "o3-pro",
     "openai/o4-mini": "o4-mini",
     "openai/o4-mini-high": "o4-mini-high",
+    "openai/sora-2": "sora-2",
+    "openai/sora-2-pro": "sora-2-pro",
+    "openai/sora-2-pro-high-res": "sora-2-pro-high-res",
     "openai/text-embedding-3-large": "text-embedding-3-large",
     "openai/text-embedding-3-small": "text-embedding-3-small",
     "openai/text-embedding-ada-002": "text-embedding-ada-002",
@@ -9299,9 +15014,12 @@
     "perceptron/perceptron-mk1": "perceptron-mk1",
     "perplexity/sonar": "sonar",
     "perplexity/sonar-deep-research": "sonar-deep-research",
+    "perplexity/sonar-medium-chat": "sonar-medium-chat",
     "perplexity/sonar-pro": "sonar-pro",
     "perplexity/sonar-pro-search": "sonar-pro-search",
+    "perplexity/sonar-reasoning": "sonar-reasoning",
     "perplexity/sonar-reasoning-pro": "sonar-reasoning-pro",
+    "perplexity/sonar-small-chat": "sonar-small-chat",
     "poolside/laguna-s-2.1": "laguna-s-2.1",
     "poolside/laguna-xs-2.1": "laguna-xs-2.1",
     "prism-ml/ternary-bonsai-2-27b": "ternary-bonsai-2-27b",
@@ -9357,6 +15075,8 @@
     "qwen/qwen3.8-flash": "qwen3.8-flash",
     "qwen/qwen3.8-max-0902": "qwen3.8-max-0902",
     "qwen3.5:397b": "qwen3.5-397b-a17b",
+    "recraft/recraftv2": "recraftv2",
+    "recraft/recraftv3": "recraftv3",
     "rekaai/reka-edge": "reka-edge",
     "rekaai/reka-flash-3": "reka-flash-3",
     "relace/relace-apply-3": "relace-apply-3",
@@ -9368,6 +15088,37 @@
     "sao10k/l3-lunaris-8b": "l3-lunaris-8b",
     "sao10k/l3.1-euryale-70b": "l3.1-euryale-70b",
     "sao10k/l3.3-euryale-70b": "l3.3-euryale-70b",
+    "soniox/stt-async-v4": "stt-async-v4",
+    "soniox/stt-async-v5": "stt-async-v5",
+    "soniox/stt-rt-preview": "stt-rt-preview",
+    "soniox/stt-rt-preview-v2": "stt-rt-preview-v2",
+    "soniox/stt-rt-v3": "stt-rt-v3",
+    "soniox/stt-rt-v3-preview": "stt-rt-v3-preview",
+    "soniox/stt-rt-v4": "stt-rt-v4",
+    "soniox/stt-rt-v5": "stt-rt-v5",
+    "stability/conservative": "conservative",
+    "stability/creative": "creative",
+    "stability/erase": "erase",
+    "stability/fast": "fast",
+    "stability/inpaint": "inpaint",
+    "stability/outpaint": "outpaint",
+    "stability/remove-background": "remove-background",
+    "stability/replace-background-and-relight": "replace-background-and-relight",
+    "stability/sd3": "sd3",
+    "stability/sd3-large": "sd3-large",
+    "stability/sd3-large-turbo": "sd3-large-turbo",
+    "stability/sd3-medium": "sd3-medium",
+    "stability/sd3.5-large": "sd3.5-large",
+    "stability/sd3.5-large-turbo": "sd3.5-large-turbo",
+    "stability/sd3.5-medium": "sd3.5-medium",
+    "stability/search-and-recolor": "search-and-recolor",
+    "stability/search-and-replace": "search-and-replace",
+    "stability/sketch": "sketch",
+    "stability/stable-image-core": "stable-image-core",
+    "stability/stable-image-ultra": "stable-image-ultra",
+    "stability/structure": "structure",
+    "stability/style": "style",
+    "stability/style-transfer": "style-transfer",
     "stepfun/step-3.5-flash": "step-3.5-flash",
     "stepfun/step-3.7-flash": "step-3.7-flash",
     "tencent/hunyuan-a13b-instruct": "hunyuan-a13b-instruct",
@@ -9376,7 +15127,9 @@
     "tencent/hy-mt2-7b": "hy-mt2-7b",
     "tencent/hy3": "hy3",
     "tencent/hy3-preview": "hy3-preview",
+    "tencent/hy4": "hy4",
     "tencent/hy4-preview": "hy4-preview",
+    "text-completion-inception/mercury-edit-2": "mercury-edit-2",
     "thedrummer/cydonia-24b-v4.1": "cydonia-24b-v4.1",
     "thedrummer/skyfall-36b-v2": "skyfall-36b-v2",
     "thedrummer/unslopnemo-12b": "unslopnemo-12b",
@@ -9386,8 +15139,33 @@
     "undi95/remm-slerp-l2-13b": "remm-slerp-l2-13b",
     "upstage/solar-pro-3": "solar-pro-3",
     "upstage/solar-pro4": "solar-pro4",
+    "volcengine/doubao-seed-2-1-lite-260915": "doubao-seed-2-1-lite-260915",
     "volcengine/doubao-seed-2-1-pro-260628": "doubao-seed-2-1-pro-260628",
+    "volcengine/doubao-seed-2-1-pro-260915": "doubao-seed-2-1-pro-260915",
     "volcengine/doubao-seed-2-1-turbo-260628": "doubao-seed-2-1-turbo-260628",
+    "voyage/voyage-2": "voyage-2",
+    "voyage/voyage-3": "voyage-3",
+    "voyage/voyage-3-large": "voyage-3-large",
+    "voyage/voyage-3-lite": "voyage-3-lite",
+    "voyage/voyage-3.5": "voyage-3.5",
+    "voyage/voyage-3.5-lite": "voyage-3.5-lite",
+    "voyage/voyage-4": "voyage-4",
+    "voyage/voyage-4-large": "voyage-4-large",
+    "voyage/voyage-4-lite": "voyage-4-lite",
+    "voyage/voyage-code-2": "voyage-code-2",
+    "voyage/voyage-code-3": "voyage-code-3",
+    "voyage/voyage-code-4": "voyage-code-4",
+    "voyage/voyage-context-3": "voyage-context-3",
+    "voyage/voyage-context-4": "voyage-context-4",
+    "voyage/voyage-finance-2": "voyage-finance-2",
+    "voyage/voyage-large-2": "voyage-large-2",
+    "voyage/voyage-large-2-instruct": "voyage-large-2-instruct",
+    "voyage/voyage-law-2": "voyage-law-2",
+    "voyage/voyage-lite-01": "voyage-lite-01",
+    "voyage/voyage-lite-02-instruct": "voyage-lite-02-instruct",
+    "voyage/voyage-multilingual-2": "voyage-multilingual-2",
+    "voyage/voyage-multimodal-3": "voyage-multimodal-3",
+    "voyage/voyage-multimodal-3.5": "voyage-multimodal-3.5",
     "writer/palmyra-x5": "palmyra-x5",
     "x-ai/grok-4.20": "grok-4.20",
     "x-ai/grok-4.20-multi-agent": "grok-4.20-multi-agent",
@@ -9396,7 +15174,45 @@
     "x-ai/grok-4.6": "grok-4.6",
     "x-ai/grok-4.7": "grok-4.7",
     "x-ai/grok-build-0.1": "grok-build-0.1",
+    "xai/grok-4.20-0309": "grok-4.20-0309",
+    "xai/grok-4.20-0309-reasoning": "grok-4.20-0309-reasoning",
+    "xai/grok-4.20-beta": "grok-4.20-beta",
+    "xai/grok-4.20-beta-0309": "grok-4.20-beta-0309",
+    "xai/grok-4.20-beta-0309-non-reasoning": "grok-4.20-beta-0309-non-reasoning",
+    "xai/grok-4.20-beta-0309-reasoning": "grok-4.20-beta-0309-reasoning",
+    "xai/grok-4.20-beta-latest": "grok-4.20-beta-latest",
+    "xai/grok-4.20-beta-latest-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
+    "xai/grok-4.20-beta-latest-reasoning": "grok-4.20-beta-latest-reasoning",
+    "xai/grok-4.20-beta-non-reasoning": "grok-4.20-beta-non-reasoning",
+    "xai/grok-4.20-beta-reasoning": "grok-4.20-beta-reasoning",
+    "xai/grok-4.20-experimental-beta-0304": "grok-4.20-experimental-beta-0304",
+    "xai/grok-4.20-experimental-beta-0304-non-reasoning": "grok-4.20-experimental-beta-0304-non-reasoning",
+    "xai/grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-experimental-beta-0304-reasoning",
+    "xai/grok-4.20-experimental-beta-latest": "grok-4.20-experimental-beta-latest",
+    "xai/grok-4.20-experimental-beta-non-reasoning-latest": "grok-4.20-experimental-beta-non-reasoning-latest",
+    "xai/grok-4.20-experimental-beta-reasoning-latest": "grok-4.20-experimental-beta-reasoning-latest",
+    "xai/grok-4.20-multi-agent-beta-0309": "grok-4.20-multi-agent-beta-0309",
+    "xai/grok-4.20-multi-agent-beta-latest": "grok-4.20-multi-agent-beta-latest",
+    "xai/grok-4.20-multi-agent-experimental-beta-0304": "grok-4.20-multi-agent-experimental-beta-0304",
+    "xai/grok-4.20-multi-agent-experimental-beta-latest": "grok-4.20-multi-agent-experimental-beta-latest",
+    "xai/grok-4.20-multi-agent-latest": "grok-4.20-multi-agent-latest",
+    "xai/grok-4.20-non-reasoning": "grok-4.20-non-reasoning",
+    "xai/grok-4.20-non-reasoning-gv2": "grok-4.20-non-reasoning-gv2",
+    "xai/grok-4.20-non-reasoning-latest": "grok-4.20-non-reasoning-latest",
+    "xai/grok-4.20-reasoning": "grok-4.20-reasoning",
+    "xai/grok-4.20-reasoning-gv2": "grok-4.20-reasoning-gv2",
+    "xai/grok-4.20-reasoning-latest": "grok-4.20-reasoning-latest",
+    "xai/grok-4.3-latest": "grok-4.3-latest",
+    "xai/grok-4.5-latest": "grok-4.5-latest",
     "xai/grok-4.7": "grok-4.7",
+    "xai/grok-build-latest": "grok-build-latest",
+    "xai/grok-code-fast": "grok-code-fast",
+    "xai/grok-code-fast-1": "grok-code-fast-1",
+    "xai/grok-code-fast-1-0825": "grok-code-fast-1-0825",
+    "xai/grok-imagine-image": "grok-imagine-image",
+    "xai/grok-imagine-image-2026-03-02": "grok-imagine-image-2026-03-02",
+    "xai/grok-imagine-image-quality-20260403": "grok-imagine-image-quality-20260403",
+    "xai/grok-imagine-image-quality-latest": "grok-imagine-image-quality-latest",
     "xai/grok-imagine-video-1.5-lite": "grok-imagine-video-1.5-lite",
     "xai/grok-voice-transcribe-1.0": "grok-voice-transcribe-1.0",
     "xai/grok-voice-transcribe-2.0": "grok-voice-transcribe-2.0",
@@ -9421,6 +15237,10 @@
     "z-ai/glm-5.3": "glm-5.3",
     "z-ai/glm-5.3-flash": "glm-5.3-flash",
     "z-ai/glm-5.3-flashx": "glm-5.3-flashx",
-    "z-ai/glm-5v-turbo": "glm-5v-turbo"
+    "z-ai/glm-5v-turbo": "glm-5v-turbo",
+    "zai/glm-4-32b-0414-128k": "glm-4-32b-0414-128k",
+    "zai/glm-4.5-airx": "glm-4.5-airx",
+    "zai/glm-4.5-x": "glm-4.5-x",
+    "zai/glm-5-code": "glm-5-code"
   }
 }

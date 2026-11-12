@@ -926,7 +926,13 @@ pre {
 
 @media (max-width: 1260px) {
   .supplier-channel-table {
-    --supplier-channel-columns: 10px minmax(0, 1fr) 58px minmax(54px, 66px) minmax(58px, 72px) minmax(42px, 52px) minmax(56px, 68px) minmax(64px, 82px) 18px;
+    --supplier-channel-columns: 10px minmax(0, 1fr) 52px 52px 56px 52px 62px 64px 24px;
+  }
+
+  .supplier-channel-header,
+  .supplier-channel-table .supplier-channel-row {
+    gap: 8px;
+    padding-inline: 12px;
   }
 }
 
@@ -1044,17 +1050,8 @@ pre {
     display: grid;
   }
 
-  .supplier-channel-table {
-    --supplier-channel-columns: 10px minmax(0, 1fr) 52px minmax(50px, 60px) minmax(54px, 66px) minmax(40px, 48px) minmax(52px, 62px) 18px;
-  }
-
-  .supplier-channel-header .active-requests,
-  .supplier-channel-row .channel-stat.active-requests {
-    display: none;
-  }
-
   .supplier-channel-header,
-  .supplier-channel-row {
+  .supplier-channel-table .supplier-channel-row {
     gap: 8px;
     padding-inline: 12px;
   }
@@ -1241,34 +1238,16 @@ pre {
     padding: 20px 16px 32px;
   }
 
-  .supplier-channel-table {
-    --supplier-channel-columns: 10px minmax(0, 1fr) 48px 52px 58px 44px 18px;
-  }
-
-  .supplier-channel-header .latency,
-  .supplier-channel-row .channel-stat.latency {
-    display: none;
-  }
-
   .supplier-channel-header,
-  .supplier-channel-row {
+  .supplier-channel-table .supplier-channel-row {
     gap: 6px;
     padding-inline: 10px;
   }
 }
 
 @media (max-width: 680px) {
-  .supplier-channel-table {
-    --supplier-channel-columns: 10px minmax(0, 1fr) 44px 50px 58px 18px;
-  }
-
-  .supplier-channel-header .models,
-  .supplier-channel-row .channel-stat.models {
-    display: none;
-  }
-
   .supplier-channel-header,
-  .supplier-channel-row {
+  .supplier-channel-table .supplier-channel-row {
     gap: 4px;
     padding-inline: 8px;
   }

@@ -125,12 +125,12 @@ fn start_log_cleanup_worker(directory: PathBuf) -> std::io::Result<()> {
 }
 
 #[derive(Default)]
-struct NetworkLogWindow {
+struct RepeatedLogWindow {
     last_report: Option<Instant>,
     count: u64,
 }
 
-impl NetworkLogWindow {
+impl RepeatedLogWindow {
     fn record(&mut self, now: Instant) -> Option<u64> {
         self.count = self.count.saturating_add(1);
         if self
@@ -147,11 +147,12 @@ impl NetworkLogWindow {
 #[derive(Default)]
 struct ClientLogFilter {
     // Fixed categories, never one entry per URL/account/request. These known
-    // high-volume failures retain their first sample and a per-minute count.
-    network_windows: Mutex<[NetworkLogWindow; 2]>,
+    // high-volume failures/advisories retain their first sample and, on the
+    // next occurrence after a minute, a count of log records in that category.
+    repeated_windows: Mutex<[RepeatedLogWindow; 3]>,
 }
 
-fn repeated_network_log_category(record: &Record<'_>) -> Option<usize> {
+fn repeated_log_category(record: &Record<'_>) -> Option<usize> {
     if record.level() > log::Level::Warn {
         return None;
     }
@@ -172,6 +173,18 @@ fn repeated_network_log_category(record: &Record<'_>) -> Option<usize> {
             // suppress it entirely. Only aggregate identical failure classes.
             return Some(1);
         }
+    }
+    if record.level() == log::Level::Warn
+        && record.target() == "const_api_client::proxy"
+        && record
+            .args()
+            .to_string()
+            .starts_with("[const-api][protocol] conversion warning code=reasoning_history_omitted ")
+    {
+        // Only this known advisory is aggregated across requests/models. Every
+        // structured conversion issue still reaches the request diagnostics;
+        // unknown warnings and conversion failures must never enter this bucket.
+        return Some(2);
     }
     None
 }
@@ -196,9 +209,9 @@ impl LogLineFilter for ClientLogFilter {
         if is_benign_incomplete_local_http_message(record) {
             return Ok(());
         }
-        if let Some(category) = repeated_network_log_category(record) {
+        if let Some(category) = repeated_log_category(record) {
             let count = self
-                .network_windows
+                .repeated_windows
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)[category]
                 .record(Instant::now());
@@ -409,7 +422,7 @@ mod tests {
     #[test]
     fn repeated_network_errors_are_counted_without_hiding_other_failures() {
         let now = Instant::now();
-        let mut window = NetworkLogWindow::default();
+        let mut window = RepeatedLogWindow::default();
         assert_eq!(window.record(now), Some(1));
         for _ in 0..10_000 {
             assert_eq!(window.record(now + Duration::from_secs(30)), None);
@@ -423,10 +436,10 @@ mod tests {
                 "[const-api][account-network] operation=summary class=connect"
             ))
             .build();
-        assert_eq!(repeated_network_log_category(&account), Some(0));
+        assert_eq!(repeated_log_category(&account), Some(0));
         let reset = Record::builder().level(log::Level::Error).target("warp::server::run")
             .args(format_args!("server connection error: hyper::Error(BodyWrite, Os {{ code: 10054, kind: ConnectionReset }})")).build();
-        assert_eq!(repeated_network_log_category(&reset), Some(1));
+        assert_eq!(repeated_log_category(&reset), Some(1));
         assert!(!is_benign_incomplete_local_http_message(&reset));
         for message in [
             "server connection error: address in use",
@@ -434,7 +447,7 @@ mod tests {
             "protocol conversion failed",
         ] {
             assert_eq!(
-                repeated_network_log_category(
+                repeated_log_category(
                     &Record::builder()
                         .level(log::Level::Error)
                         .target("warp::server::run")
@@ -444,6 +457,73 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn reasoning_history_logs_keep_a_sample_and_never_hide_conversion_failures() {
+        #[derive(Default)]
+        struct Writer(Mutex<Vec<String>>);
+        impl LogLineWriter for Writer {
+            fn write(&self, _: &mut DeferredNow, record: &Record<'_>) -> std::io::Result<()> {
+                self.0.lock().unwrap().push(record.args().to_string());
+                Ok(())
+            }
+        }
+        let filter = ClientLogFilter::default();
+        let writer = Writer::default();
+        let advisory = Record::builder()
+            .target("const_api_client::proxy")
+            .level(log::Level::Warn)
+            .args(format_args!(
+                "[const-api][protocol] conversion warning code=reasoning_history_omitted source=openai_chat target=openai_responses model=gpt-test occurrences=42"
+            ))
+            .build();
+        for _ in 0..1000 {
+            filter
+                .write(&mut DeferredNow::new(), &advisory, &writer)
+                .unwrap();
+        }
+        assert_eq!(writer.0.lock().unwrap().len(), 1);
+        assert!(writer.0.lock().unwrap()[0].ends_with("occurrences_since_last_report=1"));
+        filter.repeated_windows.lock().unwrap()[2].last_report =
+            Some(Instant::now() - Duration::from_secs(61));
+        filter
+            .write(&mut DeferredNow::new(), &advisory, &writer)
+            .unwrap();
+        assert!(writer.0.lock().unwrap()[1].ends_with("occurrences_since_last_report=1000"));
+
+        for message in [
+            "[const-api][protocol] conversion warning code=reasoning_history_omitted_unknown source=openai_chat",
+            "[const-api][protocol] conversion warning code=unsupported_feature_omitted source=openai_chat",
+            "[const-api][protocol] conversion failed code=reasoning_history_omitted source=openai_chat",
+        ] {
+            for _ in 0..2 {
+                filter
+                    .write(
+                        &mut DeferredNow::new(),
+                        &Record::builder()
+                            .target("const_api_client::proxy")
+                            .level(log::Level::Warn)
+                            .args(format_args!("{message}"))
+                            .build(),
+                        &writer,
+                    )
+                    .unwrap();
+            }
+        }
+        assert_eq!(writer.0.lock().unwrap().len(), 8);
+        let error = Record::builder()
+            .target(advisory.target())
+            .level(log::Level::Error)
+            .args(*advisory.args())
+            .build();
+        assert_eq!(repeated_log_category(&error), None);
+        let other_module = Record::builder()
+            .target("const_api_client::supplier")
+            .level(advisory.level())
+            .args(*advisory.args())
+            .build();
+        assert_eq!(repeated_log_category(&other_module), None);
     }
 
     #[test]

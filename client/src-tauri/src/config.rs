@@ -1411,6 +1411,7 @@ pub(crate) fn normalize_channel(
             | crate::source_driver::SourceDriverId::KiroSubscription
             | crate::source_driver::SourceDriverId::CursorSubscription
             | crate::source_driver::SourceDriverId::OpencodeConsole
+            | crate::source_driver::SourceDriverId::OpenDesignSubscription
     );
     if subscription_driver {
         if source_driver == crate::source_driver::SourceDriverId::OpenAiSubscription {
@@ -1562,6 +1563,7 @@ pub(crate) fn infer_source_driver_at_load_boundary(
             "kiro" => SourceDriverId::KiroSubscription,
             "cursor" => SourceDriverId::CursorSubscription,
             "opencode" | "opencode_console" => SourceDriverId::OpencodeConsole,
+            "opendesign" | "opendesign_subscription" => SourceDriverId::OpenDesignSubscription,
             _ => SourceDriverId::ClaudeSubscription,
         };
     }

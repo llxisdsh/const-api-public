@@ -511,6 +511,9 @@ fn subscription_wire_response_payload_from_parts(
 ) -> serde_json::Map<String, serde_json::Value> {
     let mut wire_headers = headers
         .into_iter()
+        // Match the streaming boundary: subscription cookies belong to the
+        // supplier account, never to the downstream caller's session.
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("set-cookie"))
         .filter(|(name, _)| {
             !body_rebuilt
                 || (!name.eq_ignore_ascii_case("content-length")
@@ -1137,6 +1140,8 @@ pub(crate) fn openai_subscription_body_with_cache_identity(
 }
 
 include!("subscription/openai.rs");
+include!("subscription/openai_images.rs");
+include!("subscription/grok_media.rs");
 
 pub(crate) fn looks_like_sse_body(raw: &str) -> bool {
     let text = raw.trim_start();
@@ -1763,7 +1768,7 @@ mod buffered_response_tests {
     }
 
     #[test]
-    fn subscription_buffered_response_is_v2_wire_with_ordered_headers_only() {
+    fn subscription_buffered_response_preserves_ordered_headers_but_not_account_cookies() {
         let payload = subscription_wire_response_payload_with_owned_headers(
             200,
             "application/json",
@@ -1783,14 +1788,7 @@ mod buffered_response_tests {
         let headers = wire.header_map().expect("response headers");
         assert_eq!(wire.status, Some(200));
         assert_eq!(wire.body.decode().unwrap(), br#"{"ok":true}"#);
-        assert_eq!(
-            headers
-                .get_all("set-cookie")
-                .iter()
-                .map(|value| value.to_str().unwrap())
-                .collect::<Vec<_>>(),
-            ["a=1", "b=2"]
-        );
+        assert!(!headers.contains_key("set-cookie"));
         assert_eq!(
             headers
                 .get_all("x-repeated")
@@ -2360,6 +2358,7 @@ mod buffered_response_tests {
 
     #[test]
     fn non_claude_tools_keep_long_context_beta_without_borrowing_their_identity() {
+        const LEGACY_CONTEXT_BETA: &str = "context-1m-2025-08-07";
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             "user-agent",
@@ -2368,7 +2367,7 @@ mod buffered_response_tests {
         headers.append("anthropic-beta", "compact-2026-01-12".parse().unwrap());
         headers.append(
             "anthropic-beta",
-            crate::channel_executor::ANTHROPIC_1M_BETA.parse().unwrap(),
+            LEGACY_CONTEXT_BETA.parse().unwrap(),
         );
         let request = claude_subscription_request_with_headers(
             &Client::new(),
@@ -2380,11 +2379,7 @@ mod buffered_response_tests {
         .build()
         .unwrap();
         let beta = request.headers()["anthropic-beta"].to_str().unwrap();
-        assert_eq!(
-            beta.matches(crate::channel_executor::ANTHROPIC_1M_BETA)
-                .count(),
-            1
-        );
+        assert_eq!(beta.matches(LEGACY_CONTEXT_BETA).count(), 1);
         assert!(beta.contains("oauth-2025-04-20"));
         assert_ne!(request.headers()["user-agent"], "another-tool");
     }

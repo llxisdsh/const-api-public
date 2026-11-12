@@ -43,6 +43,70 @@ fn lifecycle_config() -> ClientConfig {
 }
 
 #[tokio::test]
+async fn websocket_lifecycle_oversized_message_is_explicit() {
+    use tokio::io::AsyncWriteExt;
+    for warmup in [false, true] {
+        let (state, address, _) = lifecycle_proxy(lifecycle_config()).await;
+        let mut socket = lifecycle_socket(address).await;
+        if warmup {
+            socket
+                .send(tokio_tungstenite::tungstenite::Message::Ping(
+                    b"first-control".to_vec().into(),
+                ))
+                .await
+                .unwrap();
+            socket
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    r#"{"type":"response.create","model":"fixture","input":[],"generate":false}"#
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    let message = socket.next().await.unwrap().unwrap();
+                    if message.is_pong() {
+                        continue;
+                    }
+                    let event: serde_json::Value =
+                        serde_json::from_str(message.to_text().unwrap()).unwrap();
+                    assert_ne!(
+                        event["type"], "error",
+                        "control frames must not fail a valid first turn"
+                    );
+                    if event["type"] == "response.completed" {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        }
+        // The frame header is enough to trigger the real receiver's capacity
+        // check. Do not allocate an oversized test body or start any upstream request.
+        let mut header = vec![0x81, 0xff];
+        header.extend_from_slice(&((RESPONSES_WEBSOCKET_MAX_MESSAGE_BYTES + 1) as u64).to_be_bytes());
+        header.extend_from_slice(&[1, 2, 3, 4]);
+        let tokio_tungstenite::MaybeTlsStream::Plain(stream) = socket.get_mut() else {
+            panic!("loopback fixture must be plain WebSocket");
+        };
+        stream.write_all(&header).await.unwrap();
+        let received = tokio::time::timeout(Duration::from_secs(3), socket.next()).await;
+        crate::stop_proxy_inner(&state).await.unwrap();
+        let message = received.unwrap().expect("explicit size rejection").unwrap();
+        let event: serde_json::Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+        assert_eq!(event["status"], 413);
+        assert_eq!(event["error"]["code"], "payload_too_large");
+        assert!(
+            event["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(&RESPONSES_WEBSOCKET_MAX_MESSAGE_BYTES.to_string())
+        );
+    }
+}
+
+#[tokio::test]
 async fn websocket_lifecycle_status_reads_active_requests_instead_of_health_snapshot() {
     let mut config = lifecycle_config();
     let channel = openai_api_channel(
@@ -125,7 +189,13 @@ fn websocket_lifecycle_subscription_counts_turns_and_releases_on_completion_or_c
             request.finalize(status, (status == 499).then_some("request"), None, &channel);
             assert_eq!(current(), 0, "a terminal turn must release its slot");
         }
-        let records = crate::supplier::query_subscription_usage_records(10, None).unwrap();
+        // Other parallel fixtures also finalize calls into the test store.
+        // Inspect this channel's records, not the global recent-record count.
+        let records = crate::supplier::query_subscription_usage_records(500, None)
+            .unwrap()
+            .into_iter()
+            .filter(|record| record["channel_id"].as_str() == Some(channel.id.as_str()))
+            .collect::<Vec<_>>();
         assert_eq!(records.len(), 3);
         for record in records {
             assert_eq!(record["upstream_transport"], "websocket");

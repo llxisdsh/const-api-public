@@ -193,7 +193,11 @@ impl AntigravitySseConverter {
         }
     }
 
-    pub(crate) fn push(&mut self, chunk: &str) -> String {
+    pub(crate) fn push(
+        &mut self,
+        chunk: &str,
+        observe: &mut impl FnMut(&serde_json::Value),
+    ) -> String {
         if self.done {
             return String::new();
         }
@@ -204,20 +208,20 @@ impl AntigravitySseConverter {
         {
             let event = self.buffer[..index].to_string();
             self.buffer = self.buffer[index + separator_len..].to_string();
-            output.push_str(&self.convert_event(&event));
+            output.push_str(&self.convert_event(&event, observe));
         }
         output
     }
 
-    pub(crate) fn finish(&mut self) -> String {
+    pub(crate) fn finish(&mut self, observe: &mut impl FnMut(&serde_json::Value)) -> String {
         if self.done || self.buffer.trim().is_empty() {
             return String::new();
         }
         let event = std::mem::take(&mut self.buffer);
-        self.convert_event(&event)
+        self.convert_event(&event, observe)
     }
 
-    fn convert_event(&mut self, event: &str) -> String {
+    fn convert_event(&mut self, event: &str, observe: &mut impl FnMut(&serde_json::Value)) -> String {
         let data = event
             .lines()
             .filter_map(|line| {
@@ -235,6 +239,9 @@ impl AntigravitySseConverter {
             return String::new();
         };
         let mut response = value.get("response").cloned().unwrap_or(value);
+        // Image data and usage may share a large SSE event. Reuse this parse
+        // rather than retain a second copy in the bounded usage-line reader.
+        observe(&response);
         if let Some(canonical_model) = self.canonical_model.as_deref() {
             crate::antigravity_models::canonicalize_native_response_value(
                 &mut response,

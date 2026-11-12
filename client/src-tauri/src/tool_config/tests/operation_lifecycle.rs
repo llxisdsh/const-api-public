@@ -1,4 +1,92 @@
     #[test]
+    fn codex_close_preserves_config_before_shutdown_even_if_write_fails() {
+        with_temp_home(|home| {
+            let config = home.join(".codex/config.toml");
+            let auth = home.join(".codex/auth.json");
+            fs::create_dir_all(config.parent().unwrap()).unwrap();
+            fs::write(&config, "model = 'original'\n").unwrap();
+            fs::write(&auth, "{\"tokens\":{\"access_token\":\"fixture\"}}\n").unwrap();
+            set_test_tool_runtime("codex", true);
+            let token = required_confirmation_token(test_atomic_operation(
+                "codex", ToolConfigAction::Apply, None, "backup-before-close", None, false,
+                || panic!("confirmation must not write"),
+                || unreachable!(),
+            ).unwrap());
+            assert!(!backup_root().join("codex").exists());
+
+            let config_at_close = config.clone();
+            set_test_before_authorized_close_hook(move || {
+                let backups = fs::read_dir(backup_root().join("codex")).unwrap()
+                    .map(|entry| fs::read(entry.unwrap().path()).unwrap()).collect::<Vec<_>>();
+                assert!(backups.contains(&b"model = 'original'\n".to_vec()));
+                assert!(backups.contains(&b"{\"tokens\":{\"access_token\":\"fixture\"}}\n".to_vec()));
+                // Simulate an external write during termination. The pre-close
+                // copy must survive even if configuration cannot subsequently run.
+                fs::write(config_at_close, "   ").unwrap();
+            });
+            let error = test_atomic_operation(
+                "codex", ToolConfigAction::Apply, None, "backup-before-close", Some(&token), false,
+                || Err(anyhow!("simulated configuration failure")),
+                || unreachable!(),
+            ).unwrap_err();
+            assert!(error.to_string().contains("TOOL_CONFIG_WRITE_FAILED"));
+            assert_eq!(test_tool_runtime_snapshot("codex").unwrap().close_calls, 1);
+            assert_eq!(fs::read_to_string(config).unwrap(), "   ");
+            assert_eq!(fs::read_dir(backup_root().join("codex")).unwrap().count(), 2);
+        });
+    }
+
+    #[test]
+    fn codex_backup_failure_prevents_close_and_configuration_write() {
+        with_temp_home(|home| {
+            let config = home.join(".codex/config.toml");
+            fs::create_dir_all(config.parent().unwrap()).unwrap();
+            fs::write(&config, "model = 'original'\n").unwrap();
+            fs::create_dir_all(backup_root()).unwrap();
+            fs::write(backup_root().join("codex"), "not a directory").unwrap();
+            set_test_tool_runtime("codex", true);
+            let token = required_confirmation_token(test_atomic_operation(
+                "codex", ToolConfigAction::Apply, None, "backup-fails", None, false,
+                || unreachable!(), || unreachable!(),
+            ).unwrap());
+            let error = test_atomic_operation(
+                "codex", ToolConfigAction::Apply, None, "backup-fails", Some(&token), false,
+                || panic!("failed backup must not write"), || unreachable!(),
+            ).unwrap_err();
+            let diagnostic: serde_json::Value = serde_json::from_str(&error.to_string()).unwrap();
+            assert_eq!(diagnostic["code"], "tool_config_file_failed");
+            assert_eq!(diagnostic["params"]["stage"], "backup");
+            let runtime = test_tool_runtime_snapshot("codex").unwrap();
+            assert!(runtime.running);
+            assert_eq!(runtime.close_calls, 0);
+            assert_eq!(fs::read_to_string(config).unwrap(), "model = 'original'\n");
+        });
+    }
+
+    #[test]
+    fn codex_close_reports_backups_and_deduplicates_unchanged_files() {
+        with_temp_home(|home| {
+            let config = home.join(".codex/config.toml");
+            fs::create_dir_all(config.parent().unwrap()).unwrap();
+            fs::write(&config, "model = 'original'\n").unwrap();
+            for expected_count in [1, 0] {
+                set_test_tool_runtime("codex", true);
+                let token = required_confirmation_token(test_atomic_operation(
+                    "codex", ToolConfigAction::Apply, None, "backup-report", None, false,
+                    || unreachable!(), || unreachable!(),
+                ).unwrap());
+                let outcome = test_atomic_operation(
+                    "codex", ToolConfigAction::Apply, None, "backup-report", Some(&token), false,
+                    || Ok(ToolApplyBuilder::default().finish("codex")), || unreachable!(),
+                ).unwrap();
+                let ToolConfigWriteOutcome::Completed(result) = outcome else { panic!("expected completion") };
+                assert_eq!(result.backups.len(), expected_count);
+            }
+            assert_eq!(fs::read_dir(backup_root().join("codex")).unwrap().count(), 1);
+        });
+    }
+
+    #[test]
     fn stopped_tool_writes_through_the_atomic_entry_without_a_token() {
         with_temp_home(|home| {
             set_test_tool_runtime("gemini", false);

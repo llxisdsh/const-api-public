@@ -33,6 +33,7 @@ pub(crate) struct ModelObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ModelCatalogKind {
     OpenAI,
+    OpenDesign,
     CommandCode,
     Copilot,
     Abacus,
@@ -176,12 +177,16 @@ pub(crate) fn model_observations_from_value(
     let mut out = Vec::new();
     match kind {
         ModelCatalogKind::OpenAI
+        | ModelCatalogKind::OpenDesign
         | ModelCatalogKind::CommandCode
         | ModelCatalogKind::Anthropic
         | ModelCatalogKind::Abacus
         | ModelCatalogKind::Poe => {
             if let Some(items) = value.get("data").and_then(|value| value.as_array()) {
                 for item in items {
+                    if kind == ModelCatalogKind::OpenDesign && item["enabled"] == false {
+                        continue;
+                    }
                     if kind == ModelCatalogKind::Abacus
                         && item["model_type"]
                             .as_str()
@@ -197,6 +202,27 @@ pub(crate) fn model_observations_from_value(
                         continue;
                     }
                     push_model_observation(&mut out, item, None, source, false);
+                    if kind == ModelCatalogKind::OpenDesign {
+                        if let Some(model) = out
+                            .last_mut()
+                            .filter(|m| item["id"].as_str() == Some(m.id.as_str()))
+                        {
+                            let metadata = &item["metadata"];
+                            // Vela 0.1.8 maps context_budget to OpenCode's context
+                            // window (including output), not an input-only limit.
+                            let maximum = positive_token_limit(metadata, &["context_limit"]);
+                            model.context_tokens =
+                                positive_token_limit(metadata, &["context_budget"])
+                                    .map(|budget| maximum.map_or(budget, |limit| budget.min(limit)))
+                                    .or(maximum)
+                                    .or(model.context_tokens);
+                            model.max_context_tokens = maximum.or(model.max_context_tokens);
+                            model.output_tokens =
+                                positive_token_limit(metadata, &["output_budget"])
+                                    .or(model.output_tokens);
+                            model.probe_cost_nanos = None;
+                        }
+                    }
                     if matches!(
                         kind,
                         ModelCatalogKind::CommandCode
@@ -797,7 +823,10 @@ fn next_page_cursor(
                 ))
             }
         }
-        ModelCatalogKind::OpenAI | ModelCatalogKind::CommandCode | ModelCatalogKind::Abacus => {
+        ModelCatalogKind::OpenAI
+        | ModelCatalogKind::OpenDesign
+        | ModelCatalogKind::CommandCode
+        | ModelCatalogKind::Abacus => {
             let has_more = value
                 .get("has_more")
                 .and_then(|value| value.as_bool())

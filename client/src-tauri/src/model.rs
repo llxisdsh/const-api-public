@@ -813,6 +813,7 @@ impl From<ChannelConfig> for ChannelConfigV2 {
                 | crate::source_driver::SourceDriverId::KiroSubscription
                 | crate::source_driver::SourceDriverId::CursorSubscription
                 | crate::source_driver::SourceDriverId::OpencodeConsole
+                | crate::source_driver::SourceDriverId::OpenDesignSubscription
         );
         value.models = crate::config::dedupe_models(value.models);
         let default_model =
@@ -1168,6 +1169,8 @@ pub(crate) struct PricingFallbackInfo {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SupplierNodeRouteStatus {
+    #[serde(default)]
+    pub(crate) recovery_token: String,
     pub(crate) node_id: String,
     pub(crate) channel_id: String,
     pub(crate) supplier_unit_id: String,

@@ -35,6 +35,7 @@
             AntigravitySseConverter::with_canonical_model("gemini-3.6-flash");
         let gemini_native = gemini.push(
             "data: {\"response\":{\"modelVersion\":\"gemini-3.6-flash-medium\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"gemini\",\"futurePart\":{\"depth\":2}}]}}],\"futureTop\":{\"keep\":true}}}\r\n\r\n",
+            &mut |_| {},
         );
         assert!(gemini_native.contains("\"modelVersion\":\"gemini-3.6-flash\""));
         assert!(!gemini_native.contains("gemini-3.6-flash-medium"));

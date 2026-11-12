@@ -381,6 +381,7 @@ function quotaSourceLabel(source?: string) {
     case "kimi_coding_usage":
     case "glm_coding_usage":
     case "minimax_token_usage":
+    case "opendesign_billing":
       return tr("quota.sources.official");
     case "":
       return tr("quota.sources.upstream");

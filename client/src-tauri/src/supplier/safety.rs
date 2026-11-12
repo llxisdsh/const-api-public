@@ -504,6 +504,34 @@ pub(crate) fn save_subscription_safety_state(mut state: SubscriptionSafetyState)
     schedule_subscription_safety_write()
 }
 
+// Mutate the latest cached state under its existing lock. An earlier metadata
+// check cannot replace a failure recorded while its request was in flight.
+pub(crate) fn recover_subscription_check(
+    previous: &SubscriptionSafetyState,
+    reachable: bool,
+    windows: &[QuotaWindow],
+) -> Result<()> {
+    let cache = SUBSCRIPTION_SAFETY_STATE_CACHE.get_or_init(|| StdMutex::new(None));
+    let mut cache = cache.lock().map_err(|_| anyhow!("subscription safety state cache lock poisoned"))?;
+    let Some((_, states)) = cache.as_mut() else { return Ok(()); };
+    let Some(current) = states.get_mut(&previous.channel_id) else { return Ok(()); };
+    let fault = |state: &SubscriptionSafetyState| (
+        state.last_error_at_unix, state.last_error_kind.clone(), state.consecutive_401,
+        state.consecutive_403, state.consecutive_429, state.consecutive_5xx,
+    );
+    if fault(current) != fault(previous) { return Ok(()); }
+    if reachable && current.state == "cooldown"
+        && matches!(current.last_error_kind.as_str(), "network_error" | "timeout") {
+        current.state = "active".into();
+        current.last_error_kind.clear();
+        current.cooldown_until_unix = 0;
+        current.consecutive_5xx = 0;
+    }
+    apply_official_quota_windows_to_state_inner(current, windows, true);
+    drop(cache);
+    schedule_subscription_safety_write()
+}
+
 pub(crate) fn load_subscription_safety_states() -> Result<HashMap<String, SubscriptionSafetyState>>
 {
     let path = subscription_safety_state_path();
@@ -927,6 +955,14 @@ pub(crate) fn apply_official_quota_windows_to_state(
     state: &mut SubscriptionSafetyState,
     windows: &[QuotaWindow],
 ) {
+    apply_official_quota_windows_to_state_inner(state, windows, false);
+}
+
+fn apply_official_quota_windows_to_state_inner(
+    state: &mut SubscriptionSafetyState,
+    windows: &[QuotaWindow],
+    checked_after_failure: bool,
+) {
     let windows: Vec<QuotaWindow> = windows
         .iter()
         .filter(|window| !window.source.trim().is_empty() && !window.window.trim().is_empty())
@@ -961,7 +997,15 @@ pub(crate) fn apply_official_quota_windows_to_state(
             representative.checked_at_unix + 30 * 60
         };
         state.remaining_ratio = 0.0;
-    } else if state.state == "quota_exhausted" && summary.status != "unknown" {
+    } else if state.state == "quota_exhausted" && summary.status != "unknown"
+        // Only a newly observed account window can recover an account fault.
+        // A partial model response must not reuse an older positive global window.
+        && windows.iter().any(|window| {
+            window.model.as_deref().is_none_or(|model| model.trim().is_empty())
+                && quota_window_limits_supply(window)
+                && official_quota_window_is_fresh(window, now_unix())
+                && (checked_after_failure || window.checked_at_unix > state.last_error_at_unix)
+        }) {
         state.state = "active".to_string();
         if state.last_error_kind == "quota_exhausted" {
             state.last_error_kind.clear();

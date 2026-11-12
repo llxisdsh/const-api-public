@@ -11,6 +11,27 @@ fn catalog_test_model(id: &str) -> ToolModelInfo {
 }
 
 #[test]
+fn codex_conversation_catalog_keeps_vision_but_excludes_media_generators() {
+    let mut vision = catalog_test_model("vision-chat");
+    vision.input_modalities.push("image".into());
+    let mut image = catalog_test_model("gpt-image-2");
+    image.output_modalities = vec!["image".into()];
+    let mut video = catalog_test_model("video-generator");
+    video.output_modalities = vec!["video".into(), "text".into()];
+    video.tool_call = false;
+    let catalog = build_codex_model_catalog(&[vision, image, video], &serde_json::json!({}))
+        .expect("conversation catalog");
+    let models = catalog["models"].as_array().unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0]["slug"], "vision-chat");
+    assert!(models[0]["input_modalities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m == "image"));
+}
+
+#[test]
 fn tool_model_discovery_priority_reaches_array_based_tool_writers() {
     let models = vec![catalog_test_model("aaa"), ToolModelInfo {
         display_priority: 400, ..catalog_test_model("gpt-future")

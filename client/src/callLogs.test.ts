@@ -12,13 +12,27 @@ import {
   callSyncIsIncremental,
   callRecordCacheRate,
   callRecordOutputUsage,
+  callRecordID,
   callStatsTotals,
+  mergeCallRecords,
   formatCacheRate,
   formatCallMoney,
   formatCallTime,
 } from "./callLogs";
 
 describe("call log cursor compatibility", () => {
+  test("local row IDs preserve simultaneous calls and only replace the matching refreshed row", () => {
+    const common = { ts: 1794473110, ts_ms: 1794473110000, channel_id: "channel-1", path: "/v1/messages" };
+    const first = { ...common, id: "local-call-1", status: 200 };
+    const second = { ...common, id: "local-call-2", status: 500 };
+    const refreshed = { ...second, status: 200 };
+    expect(callRecordID(first)).not.toBe(callRecordID(second));
+    const records = mergeCallRecords([first, second], [refreshed]);
+    expect(records).toHaveLength(2);
+    expect(records.find((record) => record.id === first.id)).toBe(first);
+    expect(records.find((record) => record.id === second.id)).toBe(refreshed);
+  });
+
   test("full resync resets the legacy timestamp while incremental polls retain it", () => {
     expect(callLogCursorForRefresh(2000, 1000, false)).toBe(1000);
     expect(callLogCursorForRefresh(2000, 0, false)).toBe(0);

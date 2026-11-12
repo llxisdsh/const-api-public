@@ -68,15 +68,23 @@ impl std::error::Error for UpstreamTransportError {
     }
 }
 
-pub(crate) async fn with_probe_budget<F: Future>(limit: usize, future: F) -> (F::Output, usize) {
-    let remaining = Arc::new(std::sync::atomic::AtomicUsize::new(limit));
-    let mut budgets = PROBE_BUDGET.try_with(Clone::clone).unwrap_or_default();
-    budgets.push(remaining.clone());
-    let output = PROBE_BUDGET.scope(budgets, future).await;
-    (
-        output,
-        limit.saturating_sub(remaining.load(std::sync::atomic::Ordering::Relaxed)),
-    )
+pub(crate) fn with_probe_budget<F: Future>(
+    limit: usize,
+    future: F,
+) -> impl Future<Output = (F::Output, usize)> {
+    // Keep composed protocol probes off the stack before adding a task-local
+    // wrapper. Read the parent budget when polled, as before.
+    let future = Box::pin(future);
+    async move {
+        let remaining = Arc::new(std::sync::atomic::AtomicUsize::new(limit));
+        let mut budgets = PROBE_BUDGET.try_with(Clone::clone).unwrap_or_default();
+        budgets.push(remaining.clone());
+        let output = PROBE_BUDGET.scope(budgets, future).await;
+        (
+            output,
+            limit.saturating_sub(remaining.load(std::sync::atomic::Ordering::Relaxed)),
+        )
+    }
 }
 
 pub(crate) fn probe_budget_active() -> bool {
@@ -207,14 +215,20 @@ pub(crate) async fn send(request: RequestBuilder) -> Result<Response, UpstreamTr
         .await
 }
 
-pub(crate) async fn observe_http_version<F>(future: F) -> (F::Output, Option<Version>)
+pub(crate) fn observe_http_version<F>(
+    future: F,
+) -> impl Future<Output = (F::Output, Option<Version>)>
 where
     F: Future,
 {
-    let observed = Arc::new(StdMutex::new(None));
-    let output = HTTP_VERSION_OBSERVER.scope(observed.clone(), future).await;
-    let version = observed.lock().ok().and_then(|value| *value);
-    (output, version)
+    // Subscription probes pass the whole executor future through this observer.
+    let future = Box::pin(future);
+    async move {
+        let observed = Arc::new(StdMutex::new(None));
+        let output = HTTP_VERSION_OBSERVER.scope(observed.clone(), future).await;
+        let version = observed.lock().ok().and_then(|value| *value);
+        (output, version)
+    }
 }
 
 pub(crate) fn http_version_transport(version: Version) -> &'static str {

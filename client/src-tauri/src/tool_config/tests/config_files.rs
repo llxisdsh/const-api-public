@@ -3155,6 +3155,46 @@
     }
 
     #[test]
+    fn tool_config_file_diagnostics_do_not_expose_invalid_config_contents() {
+        with_temp_home(|home| {
+            let config = home.join(".codex/config.toml");
+            fs::create_dir_all(config.parent().unwrap()).unwrap();
+            let invalid = "experimental_bearer_token = 'fixture-secret' invalid\n";
+            fs::write(&config, invalid).unwrap();
+            let error = apply_codex_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").unwrap_err();
+            let text = format!("{error:#}");
+            assert!(!text.contains("fixture-secret"));
+            let diagnostic: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(diagnostic["params"]["stage"], "parse");
+            assert!(diagnostic["params"]["detail"].as_str().unwrap().contains("TOML"));
+            assert_eq!(fs::read_to_string(config).unwrap(), invalid);
+            assert!(!backup_root().join("codex").exists());
+
+            let auth = home.join(".codex/auth.json");
+            fs::write(&auth, "{\"access_token\":\"fixture-secret\" invalid}").unwrap();
+            let error = read_json_or_default(&auth, serde_json::json!({})).unwrap_err();
+            let text = format!("{error:#}");
+            assert!(!text.contains("fixture-secret"));
+            let diagnostic: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(diagnostic["params"]["stage"], "parse");
+            assert!(diagnostic["params"]["detail"].as_str().unwrap().contains("JSON"));
+        });
+    }
+
+    #[test]
+    fn tool_config_file_diagnostics_keep_io_metadata_without_custom_error_text() {
+        let error = tool_config_file_error("write", Path::new("config.toml"),
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "fixture-secret").into());
+        let text = error.to_string();
+        assert!(!text.contains("fixture-secret"));
+        let diagnostic: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(diagnostic["params"]["detail"], "PermissionDenied");
+        let domain = tool_config_file_error("write", Path::new("config.toml"),
+            anyhow!("TOOL_CONFIG_MODELS_UNAVAILABLE: Codex"));
+        assert_eq!(domain.to_string(), "TOOL_CONFIG_MODELS_UNAVAILABLE: Codex");
+    }
+
+    #[test]
     fn identical_backup_content_is_not_recorded_twice() {
         with_temp_home(|home| {
             let path = home.join("config.toml");

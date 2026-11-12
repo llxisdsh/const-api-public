@@ -84,7 +84,11 @@ impl SupplierRequestTasks {
                 format!("supplier request {panic_request_id}"),
                 scope_supplier_output_budget(crate::update_activity::scope_supplier_request_outputs(
                     activity_request_id,
-                    execute_supplier_request_and_report(&client, &supplier, message, &outbound),
+                    // As with duplex requests, box the executor before the
+                    // output-accounting and panic wrappers multiply its size.
+                    Box::pin(execute_supplier_request_and_report(
+                        &client, &supplier, message, &outbound,
+                    )),
                 )),
             )
             .await;
@@ -880,6 +884,242 @@ mod request_task_tests {
         supplier
     }
 
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn platform_subscription_images_preserve_media_and_report_usage() {
+        let _guard = RETAINED_SUBSCRIPTION_E2E_LOCK
+            .get_or_init(|| StdMutex::new(()))
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for (provider, streaming) in [
+            ("openai", false),
+            ("antigravity", false),
+            ("antigravity", true),
+        ] {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let address = listener.local_addr().unwrap();
+            let model = if provider == "openai" {
+                "gpt-image-2"
+            } else {
+                "gemini-3-pro-image"
+            };
+            // The streaming image and its usage share an event larger than
+            // the generic usage-line reader's 1 MiB budget.
+            let image = if streaming {
+                "AAAA".repeat(512 * 1024)
+            } else {
+                "AA==".into()
+            };
+            let response_body = if provider == "openai" {
+                serde_json::json!({"created":1,"data":[{"b64_json":"AA==","generation_id":"image-1"}],
+                    "usage":{"input_tokens":15,"output_tokens":20,"input_tokens_details":{"image_tokens":5},
+                    "output_tokens_details":{"image_tokens":20}},"future_image_field":{"keep":true}})
+            } else {
+                serde_json::json!({"response":{"candidates":[{"content":{"role":"model","parts":[
+                    {"inlineData":{"mimeType":"image/png","data":image},"thoughtSignature":"opaque-signature"}]} ,"finishReason":"STOP"}],
+                    "usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":20,
+                        "promptTokensDetails":[{"modality":"IMAGE","tokenCount":5},{"modality":"TEXT","tokenCount":10}],
+                        "candidatesTokensDetails":[{"modality":"IMAGE","tokenCount":20}]},
+                    "future_image_field":{"keep":true}}})
+            };
+            let expected = response_body
+                .get("response")
+                .unwrap_or(&response_body)
+                .clone();
+            let upstream = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_http_request(&mut socket).await;
+                let body = if streaming {
+                    format!("data: {response_body}\n\ndata: [DONE]\n\n")
+                } else {
+                    response_body.to_string()
+                };
+                let content_type = if streaming {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                };
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nSet-Cookie: private=1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                socket.write_all(headers.as_bytes()).await.unwrap();
+                for chunk in body.as_bytes().chunks(64 * 1024) {
+                    socket.write_all(chunk).await.unwrap();
+                }
+                request
+            });
+            let credentials = tempfile::tempdir().unwrap();
+            let credential = credentials.path().join("account.json");
+            fs::write(
+                &credential,
+                serde_json::json!({"access_token":"fixture-token","project_id":"fixture-project",
+                "account_id":"supplier-account","expired":now_unix()+3600})
+                .to_string(),
+            )
+            .unwrap();
+            let mut config =
+                retained_subscription_supplier(provider, credential.to_string_lossy().to_string());
+            config.kind = "subscription_adapter".into();
+            config.models = vec![model.into()];
+            config.upstream_model = model.into();
+            let (path, surface, operation, protocol, body) = if provider == "openai" {
+                (
+                    "/v1/images/generations".to_string(),
+                    ApiSurface::OpenAi,
+                    ApiOperation::ImagesGenerations,
+                    None,
+                    serde_json::json!({"model":model,"prompt":"one dot","size":"1024x1024","future_image_option":true}),
+                )
+            } else {
+                let action = if streaming {
+                    "streamGenerateContent"
+                } else {
+                    "generateContent"
+                };
+                let operation = if streaming {
+                    ApiOperation::StreamGenerateContent
+                } else {
+                    ApiOperation::GenerateContent
+                };
+                (
+                    format!("/v1beta/models/{model}:{action}"),
+                    ApiSurface::Gemini,
+                    operation,
+                    Some("gemini_native".into()),
+                    serde_json::json!({"contents":[{"role":"user","parts":[{"text":"one dot"}]}],
+                        "generationConfig":{"responseModalities":["IMAGE"],"imageConfig":{"imageSize":"1K"}}}),
+                )
+            };
+            let wire = SurfaceEnvelope {
+                surface: Some(surface),
+                operation: Some(operation),
+                protocol,
+                method: "POST".into(),
+                path,
+                body: WireBody::from_bytes(body.to_string().as_bytes()),
+                stream: Some(streaming),
+                selected_upstream_model: Some(model.into()),
+                ..Default::default()
+            };
+            let request = SupplierMessage {
+                output_credit: None,
+                id: format!("{provider}-image-{streaming}"),
+                kind: "http_request".into(),
+                payload: crate::surface_wire::wire_payload(wire).unwrap(),
+            };
+            set_retained_subscription_upstream_override(
+                provider,
+                Some(&format!("http://{address}/responses")),
+            );
+            let (outbound, mut inbound) = mpsc::channel(4);
+            let tasks = SupplierRequestTasks::default();
+            handle_supplier_inbound_text_with_tasks(
+                &Client::new().into(),
+                &SupplierAgentConfig::single(config),
+                &outbound,
+                &outbound,
+                Some(&tasks),
+                &serde_json::to_string(&request).unwrap(),
+            )
+            .await;
+            let mut output = Vec::new();
+            let mut saw_start = false;
+            let usage = loop {
+                let response = tokio::time::timeout(Duration::from_secs(10), inbound.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let response_wire = SurfaceEnvelope::from_payload(&response.payload).unwrap();
+                match response.kind.as_str() {
+                    "http_response" | "stream_start" => {
+                        assert_eq!(
+                            response_wire.status,
+                            Some(200),
+                            "{provider}: {:?}",
+                            response.payload
+                        );
+                        assert!(
+                            !response_wire
+                                .header_map()
+                                .unwrap()
+                                .contains_key("set-cookie"),
+                            "{provider}"
+                        );
+                        assert!(!saw_start);
+                        saw_start = true;
+                        if response.kind == "http_response" {
+                            assert!(!streaming);
+                            output.extend_from_slice(&response_wire.body.decode().unwrap());
+                            break response.payload["upstream_usage"].clone();
+                        }
+                        assert!(streaming);
+                    }
+                    "stream_chunk" => {
+                        assert!(saw_start && streaming);
+                        output.extend_from_slice(&response_wire.body.decode().unwrap());
+                    }
+                    "stream_end" => {
+                        assert!(saw_start && streaming);
+                        break response.payload["upstream_usage"].clone();
+                    }
+                    other => panic!("unexpected image response: {other}"),
+                }
+            };
+            wait_for_task_count(&tasks, 0).await;
+            set_retained_subscription_upstream_override(provider, None);
+            let output = String::from_utf8(output).unwrap();
+            let actual: serde_json::Value = if streaming {
+                output
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("data: "))
+                    .find_map(|data| serde_json::from_str(data).ok())
+                    .expect("native image event")
+            } else {
+                serde_json::from_str(&output).unwrap()
+            };
+            assert_eq!(actual["future_image_field"], expected["future_image_field"]);
+            if provider == "openai" {
+                assert_eq!(actual["data"], expected["data"]);
+            } else {
+                assert!(
+                    actual["candidates"] == expected["candidates"],
+                    "native image data/signature changed"
+                );
+            }
+            assert_eq!(usage["input_tokens"], 15);
+            assert_eq!(usage["output_tokens"], 20);
+            for (kind, quantity) in [("image_input_tokens", 5), ("image_output_tokens", 20)] {
+                assert!(
+                    usage["usage_meters"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|m| m["meter_kind"] == kind && m["quantity"] == quantity),
+                    "{provider}: {usage}"
+                );
+            }
+            let sent = upstream.await.unwrap();
+            let split = sent.windows(4).position(|p| p == b"\r\n\r\n").unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&sent[split + 4..]).unwrap();
+            if provider == "openai" {
+                assert!(sent.starts_with(b"POST /images/generations "));
+                assert_eq!(payload, body);
+            } else {
+                assert_eq!(
+                    payload["request"]["generationConfig"]["imageConfig"],
+                    body["generationConfig"]["imageConfig"]
+                );
+                assert_eq!(
+                    payload["request"]["generationConfig"]["responseModalities"],
+                    body["generationConfig"]["responseModalities"]
+                );
+            }
+        }
+    }
+
     fn retained_subscription_supplier(provider: &str, credential_ref: String) -> SupplierConfig {
         let mut supplier = default_supplier_config();
         supplier.enabled = true;
@@ -1059,15 +1299,7 @@ mod request_task_tests {
                 response_body,
                 "provider={provider}"
             );
-            assert_eq!(
-                headers
-                    .get_all("set-cookie")
-                    .iter()
-                    .map(|value| value.to_str().unwrap())
-                    .collect::<Vec<_>>(),
-                ["a=1", "b=2"],
-                "provider={provider}"
-            );
+            assert!(!headers.contains_key("set-cookie"), "provider={provider}");
             assert_eq!(
                 headers
                     .get_all("x-repeated")
@@ -1089,7 +1321,7 @@ mod request_task_tests {
         upstream.await.expect("subscription upstream");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn requests_remain_concurrent_and_cancel_removes_pending_task() {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -1185,7 +1417,7 @@ mod request_task_tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancel_after_first_chunk_aborts_remaining_stream() {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await

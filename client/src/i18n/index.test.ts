@@ -13,6 +13,42 @@ beforeAll(async () => {
 });
 
 describe("localizedError", () => {
+  it("retains safe file diagnostics inside the tool configuration wrapper", async () => {
+    for (const language of ["zh-CN", "en-US"] as const) {
+      await changeAppLanguage(language);
+      for (const [stage, detail, label] of [
+        ["parse", "TOML (byte 25)", language === "zh-CN" ? "解析配置" : "Parsing configuration"],
+        ["backup", "PermissionDenied (OS 5)", language === "zh-CN" ? "备份配置" : "Backing up configuration"],
+        ["session_sync", "SQLite DatabaseBusy (5)", language === "zh-CN" ? "配置已写入" : "configuration already written"],
+      ]) {
+        const diagnostic = JSON.stringify({
+          code: "tool_config_file_failed",
+          params: { stage, path: "/test/.codex/config.toml", detail },
+        });
+        const result = localizedError(`TOOL_CONFIG_WRITE_FAILED: write Codex configuration: ${diagnostic}`);
+        expect(result).toContain(label);
+        expect(result).toContain("/test/.codex/config.toml");
+        expect(result).toContain(detail);
+        expect(result).not.toContain("TOOL_CONFIG_WRITE_FAILED");
+      }
+    }
+  });
+
+  it("keeps the primary file diagnostic when rollback adds another JSON error", async () => {
+    await changeAppLanguage("zh-CN");
+    const path = 'C:\\test\\{profile}\\config.toml';
+    const first = JSON.stringify({ code: "tool_config_file_failed", params: {
+      stage: "replace", path, detail: "PermissionDenied (OS 5)",
+    } });
+    const rollback = JSON.stringify({ code: "tool_config_file_failed", params: {
+      stage: "write", path: "auth.json", detail: "PermissionDenied (OS 5)",
+    } });
+    const result = localizedError(`TOOL_CONFIG_WRITE_FAILED: ${first}; rollback also failed: ${rollback}`);
+    expect(result).toContain("替换配置文件失败");
+    expect(result).toContain(path);
+    expect(result).not.toContain("auth.json");
+  });
+
   it("labels desktop and command-line programs in both locator languages", () => {
     expect(i18n.t("access.locator.editions.desktop", { lng: "zh-CN" })).toBe("桌面版");
     expect(i18n.t("access.locator.editions.cli", { lng: "zh-CN" })).toBe("命令行版（CLI）");

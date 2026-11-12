@@ -106,6 +106,7 @@
 }
 
 .supplier-channel-table {
+  grid-template-columns: minmax(600px, 1fr);
   --supplier-channel-columns: 10px minmax(0, 1fr) var(--supplier-channel-priority-width) minmax(70px, 86px) minmax(74px, 92px) minmax(54px, 64px) minmax(64px, 82px) minmax(86px, 112px) 18px;
   --supplier-channel-priority-width: 76px;
 }
@@ -138,9 +139,7 @@
 
 .supplier-channel-header span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .supplier-channel-header .priority {

@@ -703,12 +703,12 @@
 .account-center-trend-tooltip {
   position: absolute;
   z-index: 1;
-  top: 8px;
+  transform: translateY(calc(-100% - 10px));
   display: grid;
   gap: 3px;
   box-sizing: border-box;
   width: 220px;
-  max-width: calc(100% - 16px);
+  max-width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--surface-floating-border);
   border-radius: 8px;
@@ -717,6 +717,19 @@
   color: var(--text);
   font-size: 12px;
   pointer-events: none;
+}
+
+.account-center-trend-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: clamp(6px, var(--tooltip-pointer-left), calc(100% - 6px));
+  width: 8px;
+  height: 8px;
+  border-right: 1px solid var(--surface-floating-border);
+  border-bottom: 1px solid var(--surface-floating-border);
+  background: var(--surface-floating);
+  transform: translate(-50%, -50%) rotate(45deg);
 }
 
 .account-center-trend-tooltip small {

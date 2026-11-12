@@ -411,7 +411,6 @@ pre {
 
 .supplier-channel-header {
   min-height: 36px;
-  padding-inline: 14px;
   border-bottom: 1px solid var(--art-rule);
   background: var(--panel-muted);
   color: var(--subtle);

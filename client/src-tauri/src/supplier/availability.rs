@@ -179,6 +179,8 @@ struct Store {
     // Successful probe timing is display data, never admission evidence.
     probe_observations: BTreeMap<String, ProbeObservation>,
     #[serde(skip)]
+    health_observations: BTreeMap<String, (String, super::health_recovery::HealthObservation)>,
+    #[serde(skip)]
     checking: HashSet<String>,
 }
 
@@ -339,6 +341,37 @@ pub(crate) fn channel_metrics(channel: &ChannelConfig) -> crate::model::Supplier
         metrics.upstream_http_version = observation.upstream_http_version.clone();
     }
     metrics
+}
+
+pub(super) fn record_health_observation(
+    channel: &ChannelConfig,
+    observation: super::health_recovery::HealthObservation,
+) {
+    let mut state = store()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Same bound as the existing per-channel observation cache; nothing is persisted.
+    if state.health_observations.len() >= 256
+        && !state.health_observations.contains_key(&channel.id)
+    {
+        state.health_observations.pop_first();
+    }
+    state
+        .health_observations
+        .insert(channel.id.clone(), (fingerprint(channel), observation));
+}
+
+pub(super) fn health_observation(
+    channel: &ChannelConfig,
+) -> Option<super::health_recovery::HealthObservation> {
+    store()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .health_observations
+        .get(&channel.id)
+        .filter(|(identity, _)| identity == &fingerprint(channel))
+        .map(|(_, observation)| observation.clone())
+        .filter(|observation| !observation.token.is_empty())
 }
 
 // This is deliberately independent of access tokens, display names, prices and model sorting.

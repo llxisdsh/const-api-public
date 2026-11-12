@@ -1264,9 +1264,15 @@ where
         value.mode == ToolConfigConfirmationMode::CloseAndContinue
             && value.process_snapshot.running()
     });
+    let mut pre_close_backups = Vec::new();
     let closed_before_write = if let Some(capability) = close_capability {
         update_tool_config_operation_progress(operation, "closing_process", None, None);
         ensure_tool_config_operation_active(operation, "process close")?;
+        if tool == "codex" {
+            // A failed backup must leave the authorized process running. Do not
+            // back up on status checks or while merely asking for confirmation.
+            pre_close_backups = backup_codex_config_before_close()?;
+        }
         match close_authorized_tool_processes(tool, &capability.process_snapshot, operation) {
             Ok(true) => true,
             Ok(false) => {
@@ -1316,6 +1322,7 @@ where
             tool_runtime_display_name(tool)
         )
     })?;
+    result.backups.splice(0..0, pre_close_backups);
     if !result.files.is_empty() || result.file_statuses.iter().any(|status| status.changed) {
         result.details.insert(
             "configuration_changed".to_string(),

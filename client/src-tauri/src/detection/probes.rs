@@ -692,6 +692,8 @@ pub(crate) fn channel_provider_hint(channel: &ChannelConfig) -> String {
         | SourceDriverId::MinimaxTokenPlan
         | SourceDriverId::OllamaCloud
         | SourceDriverId::MuseCode
+        | SourceDriverId::OpenDesignApi
+        | SourceDriverId::OpenDesignSubscription
         | SourceDriverId::CopilotSubscription
         | SourceDriverId::AbacusRoutellm
         | SourceDriverId::PoeApi
@@ -848,6 +850,7 @@ pub(crate) fn subscription_supported_protocols(platform: &str) -> Vec<String> {
         "grok" => vec!["openai_responses".to_string()],
         "antigravity" => vec!["gemini_native".to_string()],
         "claude" | "anthropic" | "kiro" | "cursor" => vec!["anthropic_messages".to_string()],
+        "opendesign" => vec!["openai_chat".to_string()],
         "opencode" => vec![
             "openai_chat".to_string(),
             "openai_responses".to_string(),

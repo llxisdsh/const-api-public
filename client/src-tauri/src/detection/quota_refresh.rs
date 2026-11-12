@@ -38,7 +38,12 @@ impl QuotaCacheState {
                     .and_then(|error| error.retry_after)
                     .unwrap_or(QUOTA_RETRY_INTERVAL)
                     .max(QUOTA_RETRY_INTERVAL);
-                self.retry_not_before = now.checked_add(delay);
+                // A manual refresh may retry a failed network query, but must
+                // still respect an explicit provider Retry-After and the 10s gate.
+                self.retry_not_before = error
+                    .downcast_ref::<QuotaFetchError>()
+                    .and_then(|error| error.retry_after)
+                    .and_then(|delay| now.checked_add(delay));
                 delay
             }
         };
@@ -98,6 +103,9 @@ where
         }
     }
     let result = fetch.await;
+    if let Ok(windows) = &result {
+        crate::supplier::health_recovery::record_quota_success(windows);
+    }
     let mut state = cache.state.lock().unwrap_or_else(|p| p.into_inner());
     state.complete(&result, Instant::now());
     if let Err(error) = result {
@@ -438,6 +446,29 @@ mod tests {
         assert!(state.refresh_due(
             SubscriptionCatalogPolicy::Fresh,
             now + Duration::from_secs(900)
+        ));
+    }
+
+    #[test]
+    fn manual_refresh_retries_network_failure_without_changing_background_interval() {
+        let now = Instant::now();
+        let mut state = QuotaCacheState::default();
+        state.complete(&Err(anyhow!("network unavailable")), now);
+        assert!(!state.refresh_due(
+            SubscriptionCatalogPolicy::Fresh,
+            now + Duration::from_secs(9)
+        ));
+        assert!(state.refresh_due(
+            SubscriptionCatalogPolicy::Fresh,
+            now + Duration::from_secs(10)
+        ));
+        assert!(!state.refresh_due(
+            SubscriptionCatalogPolicy::Cached,
+            now + Duration::from_secs(59)
+        ));
+        assert!(state.refresh_due(
+            SubscriptionCatalogPolicy::Cached,
+            now + Duration::from_secs(60)
         ));
     }
 

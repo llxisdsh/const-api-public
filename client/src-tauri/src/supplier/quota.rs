@@ -747,6 +747,7 @@ pub(crate) fn summary_quota_source(source: &str) -> String {
         | "kimi_coding_usage"
         | "glm_coding_usage"
         | "minimax_token_usage"
+        | "opendesign_billing"
         | "gemini_retrieve_user_quota"
         | "antigravity_retrieve_user_quota"
         | "antigravity_fetch_available_models" => "official_header".to_string(),
@@ -955,6 +956,8 @@ pub(crate) struct LocalModelQuotaRouteState {
     pub(crate) runtime_failure_sequence: u64,
     pub(crate) runtime_soft_failure: bool,
     pub(crate) runtime_overload: bool,
+    pub(crate) runtime_network_failure: bool,
+    pub(crate) runtime_quota_failure: bool,
     // A timestamp lease prevents a cancelled half-open request from leaving
     // this route blocked forever. Normal completion releases it immediately.
     pub(crate) runtime_probe_until_unix: i64,
@@ -1004,6 +1007,8 @@ impl LocalModelQuotaRouteState {
         // may be used as a last resort. Never bypass an existing hard limit.
         self.runtime_soft_failure = soft && retry_after_seconds <= 0 && hard_until <= now;
         self.runtime_overload = false;
+        self.runtime_network_failure = false;
+        self.runtime_quota_failure = false;
         let shift = self.runtime_failure_count.saturating_sub(1).min(3);
         let cooldown = (60_i64 << shift).min(5 * 60).max(retry_after_seconds);
         self.runtime_cooldown_until_unix = now.saturating_add(cooldown).max(hard_until);
