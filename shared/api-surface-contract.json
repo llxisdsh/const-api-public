@@ -233,10 +233,10 @@
       "contexts": {
         "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "streaming_media_and_native_resource_mock_e2e"},
         "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
-        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "media_pricing_rejection"}
+        "platform_supply": {"coverage": "partial", "conversion": "c0", "maturity": "l4", "evidence": "media_job_and_audio_metering_mock_e2e"}
       },
       "official_source": "https://platform.openai.com/docs/api-reference/audio",
-      "verified_on": "2026-08-29"
+      "verified_on": "2026-11-17"
     },
     {
       "id": "openai.videos",
@@ -248,11 +248,11 @@
       "typed_operation_ids": ["openai.videos_create", "openai.videos_list", "openai.videos_get", "openai.videos_delete", "openai.videos_content", "openai.videos_remix", "openai.videos_edit", "openai.videos_extend"],
       "contexts": {
         "api_credential": {"coverage": "complete", "conversion": "c0", "maturity": "l4", "evidence": "resource_media_mock_e2e"},
-        "subscription_driver": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "driver_not_declared"},
-        "platform_supply": {"coverage": "none", "conversion": "c3", "maturity": "l0", "evidence": "media_pricing_rejection"}
+        "subscription_driver": {"coverage": "partial", "conversion": "c0", "maturity": "l4", "evidence": "grok_native_media_mock_e2e"},
+        "platform_supply": {"coverage": "partial", "conversion": "c0", "maturity": "l4", "evidence": "media_job_and_audio_metering_mock_e2e"}
       },
       "official_source": "https://platform.openai.com/docs/api-reference/videos",
-      "verified_on": "2026-08-29"
+      "verified_on": "2026-11-17"
     },
     {
       "id": "openai.realtime",
@@ -1426,8 +1426,8 @@
       "ownership": "routed_known",
       "statefulness": "stateless",
       "billing_class": "metered",
-      "execution_policy": "local_backend_only",
-      "required_context_declarations": ["api_credential", "subscription_driver"],
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
       "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
     },
     {
@@ -1458,8 +1458,8 @@
       "ownership": "routed_known",
       "statefulness": "stateless",
       "billing_class": "metered",
-      "execution_policy": "native_backend_only",
-      "required_context_declarations": ["api_credential"],
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
       "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
     },
     {
@@ -1474,8 +1474,8 @@
       "ownership": "routed_known",
       "statefulness": "stateless",
       "billing_class": "metered",
-      "execution_policy": "native_backend_only",
-      "required_context_declarations": ["api_credential"],
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
       "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
     },
     {
@@ -1490,8 +1490,8 @@
       "ownership": "routed_known",
       "statefulness": "stateless",
       "billing_class": "metered",
-      "execution_policy": "native_backend_only",
-      "required_context_declarations": ["api_credential"],
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
       "required_conversion_evidence": ["request", "response", "error", "cancel"]
     },
     {
@@ -1506,8 +1506,8 @@
       "ownership": "routed_known",
       "statefulness": "resource_create",
       "billing_class": "metered",
-      "execution_policy": "local_backend_only",
-      "required_context_declarations": ["api_credential", "subscription_driver"],
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
       "required_conversion_evidence": ["request", "response", "error", "cancel"]
     },
     {
@@ -1538,8 +1538,8 @@
       "ownership": "routed_known",
       "statefulness": "resource_read",
       "billing_class": "none",
-      "execution_policy": "local_backend_only",
-      "required_context_declarations": ["api_credential", "subscription_driver"],
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
       "required_conversion_evidence": ["request", "response", "error", "cancel"]
     },
     {
@@ -1570,8 +1570,8 @@
       "ownership": "routed_known",
       "statefulness": "resource_read",
       "billing_class": "none",
-      "execution_policy": "native_backend_only",
-      "required_context_declarations": ["api_credential"],
+      "execution_policy": "capability_routed",
+      "required_context_declarations": ["api_credential", "subscription_driver", "platform_supply"],
       "required_conversion_evidence": ["request", "response", "stream", "error", "cancel"]
     },
     {

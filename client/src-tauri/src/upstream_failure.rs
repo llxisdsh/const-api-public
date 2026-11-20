@@ -9,17 +9,20 @@ pub(crate) const MAX_OBSERVATION_BYTES: usize = 256 * 1024;
 /// error status. A session budget is not an account quota; changing suppliers or
 /// honoring a Retry-After hint cannot repair this request. See Codex's
 /// codex-api/src/error.rs::parse_terminal_provider_error.
-pub(crate) fn is_responses_input_or_budget_error(code: &str) -> bool {
-    matches!(
-        code,
+pub(crate) fn responses_terminal_request_status(code: &str) -> Option<u16> {
+    match code {
         "budget_reached"
-            | "audio_too_large"
-            | "audio_too_short"
-            | "invalid_audio"
-            | "invalid_audio_data"
-            | "invalid_audio_format"
-            | "missing_audio_sample_rate"
-    )
+        | "audio_too_large"
+        | "audio_too_short"
+        | "invalid_audio"
+        | "invalid_audio_data"
+        | "invalid_audio_format"
+        | "missing_audio_sample_rate"
+        | "invalid_access_program"
+        | "unsupported_access_program" => Some(400),
+        "access_program_not_enabled" | "inference_hook_denied" => Some(403),
+        _ => None,
+    }
 }
 
 /// Parameter-only diagnostics for rejected requests. Do not log the body or
@@ -140,13 +143,25 @@ impl Failure {
             "rate_limited" | "model_capacity" | "model_quota" | "model_entitlement"
             | "account_quota" => 429,
             "auth_error" => 401,
+            "content_policy"
+                if self.code.as_ref().and_then(Value::as_str)
+                    == Some("content_policy_violation") =>
+            {
+                400
+            }
             "permission_denied"
             | "provider_auth_error"
             | "provider_eligibility_restricted"
             | "location_unsupported"
             | "content_policy"
             | "cyber_policy" => 403,
-            "request_invalid" | "continuation_invalid" | "model_unavailable" => 400,
+            "request_invalid" => self
+                .code
+                .as_ref()
+                .and_then(Value::as_str)
+                .and_then(responses_terminal_request_status)
+                .unwrap_or(400),
+            "continuation_invalid" | "model_unavailable" => 400,
             _ => 502,
         }
     }
@@ -184,6 +199,36 @@ impl Failure {
                 | "risk_challenge"
                 | "legal_restricted"
         )
+    }
+
+    /// An HTTP rejection before generation can move to another candidate without
+    /// spending the budget reserved for uncertain/transient execution attempts.
+    /// A 200 stream error, timeout or unknown failure is not such evidence.
+    pub(crate) fn rejects_execution(&self) -> bool {
+        self.version == 1
+            && (400..600).contains(&self.status)
+            && self.safe_to_retry()
+            && self.rule_id != "http.unavailable.v1"
+            && (self.cause != "provider_overload"
+                || matches!(
+                    self.rule_id.as_str(),
+                    "availability.overload_rejection.v1" | "availability.policy_capacity.v1"
+                ))
+            && matches!(
+                self.cause.as_str(),
+                "account_quota"
+                    | "model_quota"
+                    | "model_entitlement"
+                    | "model_unavailable"
+                    | "auth_error"
+                    | "provider_auth_error"
+                    | "provider_eligibility_restricted"
+                    | "location_unsupported"
+                    | "permission_denied"
+                    | "rate_limited"
+                    | "model_capacity"
+                    | "provider_overload"
+            )
     }
 
     pub(crate) fn attach(&self, payload: &mut Map<String, Value>) {
@@ -460,7 +505,7 @@ pub(crate) fn observe_value(status: u16, value: &Value, model: Option<&str>) -> 
     };
     let (cause, scope, rule) = match kind {
         "__invalid_credential__" => ("auth_error", "channel", "auth.credential.v1"),
-        code if is_responses_input_or_budget_error(code) => (
+        code if responses_terminal_request_status(code).is_some() => (
             "request_invalid",
             "request",
             "request.responses_terminal.v1",
@@ -484,6 +529,18 @@ pub(crate) fn observe_value(status: u16, value: &Value, model: Option<&str>) -> 
         | "organization_usage_limit_exceeded"
         | "usage_limit_reached"
         | "payment_required" => ("account_quota", "channel", "quota.account.v1"),
+        // OpenCode's typed 429s are plan/eligibility rejections, not RPM limits.
+        // Free access also checks the client transport; the official client may
+        // still work. Never infer that paid models or the whole account are empty.
+        "freeusagelimiterror" if message_lower.contains("free models work in opencode") => (
+            "model_entitlement",
+            "model",
+            "opencode.free_client_required.v1",
+        ),
+        "freeusagelimiterror" | "gousagelimiterror" | "budgetlimiterror" => {
+            ("model_quota", "model", "opencode.model_limit.v1")
+        }
+        "creditlimitexceeded" => ("account_quota", "channel", "opencode.account_credit.v1"),
         "model_capacity_exhausted" => ("model_capacity", "model", "capacity.model.v1"),
         "usage_not_included" => ("model_entitlement", "model", "quota.entitlement.v1"),
         "model_not_found"
@@ -507,8 +564,12 @@ pub(crate) fn observe_value(status: u16, value: &Value, model: Option<&str>) -> 
         "provider_overloaded"
         | "overloaded_error"
         | "server_is_overloaded"
-        | "server_overloaded"
-        | "server_error"
+        | "server_overloaded" => (
+            "provider_overload",
+            "request",
+            "availability.overload_rejection.v1",
+        ),
+        "server_error"
         | "server"
         | "internal"
         | "upstream_unavailable"
@@ -837,20 +898,24 @@ mod tests {
 
     #[test]
     fn responses_terminal_request_errors_do_not_retry_or_penalize_the_channel() {
-        for code in [
-            "budget_reached",
-            "audio_too_large",
-            "audio_too_short",
-            "invalid_audio",
-            "invalid_audio_data",
-            "invalid_audio_format",
-            "missing_audio_sample_rate",
+        for (code, expected_status) in [
+            ("budget_reached", 400),
+            ("audio_too_large", 400),
+            ("audio_too_short", 400),
+            ("invalid_audio", 400),
+            ("invalid_audio_data", 400),
+            ("invalid_audio_format", 400),
+            ("missing_audio_sample_rate", 400),
+            ("invalid_access_program", 400),
+            ("unsupported_access_program", 400),
+            ("access_program_not_enabled", 403),
+            ("inference_hook_denied", 403),
         ] {
             let error = serde_json::json!({
                 "type": "server_error", "code": code, "headers": {"Retry-After": "300"}
             });
             for (status, body) in [
-                (400, serde_json::json!({"error": error})),
+                (expected_status, serde_json::json!({"error": error})),
                 (200, serde_json::json!({"type": "error", "error": error})),
                 (
                     200,
@@ -864,7 +929,7 @@ mod tests {
                 let observed = observe_value(status, &body, Some("model-a")).unwrap();
                 assert_eq!(observed.cause, "request_invalid", "{code}: {status}");
                 assert_eq!(observed.scope, "request");
-                assert_eq!(observed.effective_status(), 400);
+                assert_eq!(observed.effective_status(), expected_status);
                 assert!(!observed.safe_to_retry());
                 assert!(!observed.group_failure());
                 assert_eq!(observed.code, Some(serde_json::json!(code)));
@@ -967,6 +1032,96 @@ mod tests {
         assert_eq!(error.scope, "channel");
         assert_eq!(error.rule_id, "auth.credential.v1");
         assert_eq!(error.legacy_kind(), "auth_error");
+    }
+
+    #[test]
+    fn opencode_free_client_gate_is_model_entitlement_with_original_retry_hint() {
+        let body = r#"{"error":{"type":"FreeUsageLimitError","message":"Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to OpenCode Go to keep going."}}"#;
+        let error = observe(
+            429,
+            body,
+            &[("Retry-After", "53378")],
+            Some("minimax-m3.1-flash-free"),
+        )
+        .unwrap();
+        assert_eq!(error.cause, "model_entitlement");
+        assert_eq!(error.scope, "model");
+        assert_eq!(error.rule_id, "opencode.free_client_required.v1");
+        assert_eq!(error.retry_after_seconds, Some(53378));
+        assert!(error.rejects_execution());
+        let mut payload = Map::new();
+        error.attach(&mut payload);
+        assert_eq!(payload["failure_model"], "minimax-m3.1-flash-free");
+        assert_eq!(payload["failure_scope"], "model");
+        assert_eq!(payload["safe_to_retry_same_channel"], false);
+        assert_eq!(payload["safe_to_retry_other_channel"], true);
+        assert_eq!(observe(429, body, &[], None).unwrap().scope, "request");
+
+        // Successful content is never interpreted as an upstream error.
+        assert!(
+            observe_value(
+                200,
+                &serde_json::json!({"choices":[{"message":{"content":body}}]}),
+                Some("model-a")
+            )
+            .is_none()
+        );
+        for (kind, cause, scope) in [
+            ("FreeUsageLimitError", "model_quota", "model"),
+            ("GoUsageLimitError", "model_quota", "model"),
+            ("BudgetLimitError", "model_quota", "model"),
+            ("CreditLimitExceeded", "account_quota", "channel"),
+        ] {
+            let error = observe_value(
+                429,
+                &serde_json::json!({"error":{"type":kind,"message":"Usage limit reached"}}),
+                Some("model-a"),
+            )
+            .unwrap();
+            assert_eq!((error.cause.as_str(), error.scope.as_str()), (cause, scope));
+        }
+    }
+
+    #[test]
+    fn only_explicit_overload_rejections_skip_the_execution_attempt_budget() {
+        for kind in [
+            "server_error",
+            "internal",
+            "api_error",
+            "provider_unavailable",
+        ] {
+            let failure = observe_value(
+                503,
+                &serde_json::json!({"error":{"type":kind}}),
+                Some("model-a"),
+            )
+            .unwrap();
+            assert_eq!(failure.cause, "provider_overload");
+            assert!(failure.safe_to_retry());
+            assert!(
+                !failure.rejects_execution(),
+                "{kind} does not prove non-execution"
+            );
+        }
+        for kind in [
+            "overloaded_error",
+            "server_is_overloaded",
+            "policy_capacity_unavailable",
+        ] {
+            for status in [200, 503] {
+                let failure = observe_value(
+                    status,
+                    &serde_json::json!({"error":{"type":kind}}),
+                    Some("model-a"),
+                )
+                .unwrap();
+                assert_eq!(
+                    failure.rejects_execution(),
+                    status == 503,
+                    "{kind}: stream errors must not skip the budget"
+                );
+            }
+        }
     }
 
     #[test]

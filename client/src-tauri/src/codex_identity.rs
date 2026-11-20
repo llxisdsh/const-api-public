@@ -10,20 +10,21 @@ pub(crate) use installation::installation_id;
 /// It changes together with the adapter; discovering a newer package version
 /// at runtime is not evidence that this binary implements its wire contract.
 /// The models endpoint also gates its catalog on this version's `client_version`.
-pub(crate) const BUNDLED_CODEX_CLIENT_VERSION: &str = "0.167.0";
+pub(crate) const BUNDLED_CODEX_CLIENT_VERSION: &str = "0.171.0";
 /// The subscription adapter presents one official interactive Codex client.
 /// The User-Agent prefix, `originator`, and `version` header must always name
 /// the same client family. This is a compatibility invariant, not evidence
 /// about upstream capacity or risk-control decisions.
 pub(crate) const CODEX_ORIGINATOR: &str = "Codex Desktop";
-// Published Windows Store package OpenAI.Codex 26.1103.3517.0, verified 2026-11-06
+// Published Windows Store package OpenAI.Codex 26.1117.3838.0, verified 2026-11-20
 // (Store signature, not a development package). owl-app.ini supplies AppVersion;
 // the packaged codex.exe embeds this Core version. Its `alpha` suffix does NOT
 // mean an unpublished Desktop build. Keep this pair independent of CLI releases
 // and never advance it from upstream main/prerelease tags alone.
 // Evidence and Core SHA256: docs/subscription-adapters.md.
-const DESKTOP_CORE_VERSION: &str = "0.167.0-alpha.3.2";
-const DESKTOP_APP_VERSION: &str = "26.1103.31037";
+const DESKTOP_CORE_VERSION: &str = "0.171.0-alpha.13";
+const DESKTOP_APP_VERSION: &str = "26.1117.31558";
+pub(crate) const LIVE_MODEL: &str = "gpt-live-1.1-codex";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) enum CodexProfile {

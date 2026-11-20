@@ -113,7 +113,7 @@ fn upstream_request_for_api_format_with_capability_profile(
         } else {
             Vec::new()
         };
-        let upstream_body = if removed_reasoning.is_empty() {
+        let mut upstream_body = if removed_reasoning.is_empty() {
             // Same-protocol requests are a transparent pipe. Keep unknown fields,
             // ordering, and whitespace byte-stable when the only owned change is
             // the selected model value.
@@ -123,6 +123,22 @@ fn upstream_request_for_api_format_with_capability_profile(
             // semantic change that requires rebuilding the JSON document.
             rewrite_supplier_body_model(&serde_json::to_string(&value)?, upstream_model)
         };
+        if target == crate::protocol::kind::ProtocolKind::GeminiNative
+            && path.ends_with(":countTokens")
+        {
+            // The count endpoint can embed a full generation request. Its model
+            // must follow the selected wire model too; preserve all other bytes,
+            // especially the cachedContent resource and stable prompt prefix.
+            for field in ["generateContentRequest", "generate_content_request"] {
+                if let Some(nested) = crate::supplier::top_level_json_raw_token(upstream_body.as_bytes(), field) {
+                    let model = format!("models/{}", upstream_model.trim().trim_start_matches("models/"));
+                    let rewritten = rewrite_supplier_body_model(nested, &model);
+                    upstream_body = crate::supplier::rewrite_top_level_json_field(
+                        &upstream_body, field, &rewritten, false,
+                    )?;
+                }
+            }
+        }
         if let Some(sample_path) = removed_reasoning.first() {
             log::warn!(
                 "[const-api][protocol] conversion warning code=reasoning_history_omitted source={} target={} model={} occurrences={} sample_path={} summary=Unsigned Chat reasoning history was omitted; visible assistant content and tool calls were preserved.",

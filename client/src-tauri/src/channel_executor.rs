@@ -6,8 +6,8 @@ use crate::detection::gemini_openai_base;
 use crate::model::ChannelConfig;
 use crate::proxy::{json_body_with_stream, upstream_request_for_api_format_with_profiles_report};
 use crate::supplier::{
-    anthropic_body_with_automatic_cache, bedrock_anthropic_base, join_upstream_url,
-    openai_body_with_cache_identity, requested_model_from_body_or_path,
+    IMAGE_RESPONSE_FORMAT_HEADER, anthropic_body_with_automatic_cache, bedrock_anthropic_base,
+    join_upstream_url, openai_body_with_cache_identity, requested_model_from_body_or_path,
     rewrite_supplier_body_model, supplier_target_stream_requested,
     supplier_upstream_model_for_request, supplier_upstream_path, top_level_json_bool,
 };
@@ -330,7 +330,7 @@ pub(crate) fn subscription_provider_for_execution_kind(
 pub(crate) async fn execute_channel_request(
     client: &Client,
     channel: &ChannelConfig,
-    request: ChannelRequest,
+    mut request: ChannelRequest,
 ) -> Result<ChannelExecution> {
     let route = resolve_api_route(
         request.method.as_str(),
@@ -344,6 +344,24 @@ pub(crate) async fn execute_channel_request(
         )
     })?;
     let opaque = route.operation == ApiOperation::Opaque;
+    if !crate::openrouter::supports_operation(channel.source_driver(), route.operation) {
+        return Err(surface_operation_not_supported_error(
+            "OpenRouter does not support OpenAI image variations",
+        ));
+    }
+    let image_operation = matches!(
+        route.operation,
+        ApiOperation::ImagesGenerations | ApiOperation::ImagesEdits
+    );
+    if image_operation {
+        Box::pin(crate::media_request::prepare_supplier_image_request(
+            channel.source_driver(),
+            route.operation,
+            &mut request,
+        ))
+        .await
+        .map_err(|error| execution_error(ChannelExecutionErrorCode::ConversionFailed, error))?;
+    }
     if channel.source_driver() == crate::source_driver::SourceDriverId::GrokSubscription
         && crate::supplier::grok_media_operation(&route).is_some()
     {
@@ -391,14 +409,19 @@ pub(crate) async fn execute_channel_request(
             message,
         )
     })?;
+    let target_protocol_is_selected = selected_target_protocol.is_some();
     validate_channel_v2(channel).map_err(|error| {
         execution_error(
             ChannelExecutionErrorCode::SurfaceOperationNotSupported,
             error,
         )
     })?;
-    let body_text = std::str::from_utf8(&request.body).ok();
-    let requested_model = body_text
+    let routing_body =
+        crate::media_request::media_routing_body(route.operation, &request.headers, &request.body)
+            .await
+            .map_err(|error| execution_error(ChannelExecutionErrorCode::ConversionFailed, error))?;
+    let requested_model = std::str::from_utf8(&routing_body)
+        .ok()
         .and_then(|body| requested_model_from_body_or_path(body, &request.path))
         .or_else(|| requested_model_from_path(&request.path));
     let supplier = supplier_from_channel(channel);
@@ -411,6 +434,43 @@ pub(crate) async fn execute_channel_request(
         .unwrap_or_else(|| {
             supplier_upstream_model_for_request(&supplier, requested_model.as_deref())
         });
+    if image_operation
+        && channel.source_driver() == crate::source_driver::SourceDriverId::OpencodeConsole
+    {
+        use crate::coding_gateway::ConsoleImageApi;
+        match crate::coding_gateway::console_image_api(channel, &upstream_model) {
+            Some(ConsoleImageApi::Gemini) => {
+                return Err(surface_operation_not_supported_error(
+                    "this OpenCode image model uses Gemini generateContent",
+                ));
+            }
+            _ if crate::image_models::ChannelImages::new(channel)
+                .supports(&upstream_model, route.operation)
+                == Some(false) =>
+            {
+                return Err(surface_operation_not_supported_error(
+                    "the OpenCode model directory does not support this Images operation for the selected model",
+                ));
+            }
+            // Older ID-only catalogs retain their explicit native call path.
+            Some(ConsoleImageApi::Openai) | None => {}
+            Some(ConsoleImageApi::Xai) => {
+                // Only switch paths on the configured origin. Never send the
+                // account's bearer credential to a URL supplied by a model row.
+                let mut base = Url::parse(&target.base_url)?;
+                base.set_path("/inference/xai/v1");
+                target.base_url = base.into();
+                Box::pin(crate::media_request::prepare_supplier_image_request(
+                    crate::source_driver::SourceDriverId::XaiApi,
+                    route.operation,
+                    &mut request,
+                ))
+                .await
+                .map_err(|e| execution_error(ChannelExecutionErrorCode::ConversionFailed, e))?;
+            }
+        }
+    }
+    let body_text = std::str::from_utf8(&request.body).ok();
     if !opaque
         && channel.source_driver() == crate::source_driver::SourceDriverId::AnthropicApi
         && target.surface == crate::surface::ApiSurface::Anthropic
@@ -423,15 +483,30 @@ pub(crate) async fn execute_channel_request(
             channel,
             &upstream_model,
             target,
-            selected_target_protocol.is_some(),
+            target_protocol_is_selected,
             crate::protocol::openai_compatibility::ToolRequest::from_body(&request.body),
         )?;
     }
     let inbound_stream_requested = request.stream_requested.unwrap_or_else(|| {
-        top_level_json_bool(&request.body, "stream")
-            .unwrap_or_else(|| request.path.contains(":streamGenerateContent"))
+        (route.operation == crate::surface::ApiOperation::AudioSpeech
+            && crate::supplier::top_level_json_string(&routing_body, "stream_format").as_deref()
+                == Some("sse"))
+            || top_level_json_bool(&routing_body, "stream")
+                .unwrap_or_else(|| request.path.contains(":streamGenerateContent"))
     });
 
+    let openrouter_images = image_operation
+        && channel.source_driver() == crate::source_driver::SourceDriverId::Openrouter;
+    if openrouter_images
+        && (inbound_stream_requested
+            || crate::image_models::ChannelImages::new(channel)
+                .supports(&upstream_model, route.operation)
+                != Some(true))
+    {
+        return Err(surface_operation_not_supported_error(
+            "OpenRouter requires a buffered image operation declared for this model in the account image directory",
+        ));
+    }
     let target_protocol = target.protocol.as_str().to_string();
     let inbound_protocol = route.protocol.map(|protocol| protocol.as_str().to_string());
     let upstream_stream_requested = if let Some(inbound_protocol) = &inbound_protocol {
@@ -471,6 +546,23 @@ pub(crate) async fn execute_channel_request(
                 "token-count operations require a UTF-8 JSON request body",
             )
         })?;
+        if route.surface == crate::surface::ApiSurface::Gemini {
+            let fields = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(body)
+                .map_err(|_| {
+                execution_error(
+                    ChannelExecutionErrorCode::ConversionFailed,
+                    "token-count operations require a JSON object",
+                )
+            })?;
+            if crate::protocol::adapters::gemini_cached_content_names(&fields, true)
+                .next()
+                .is_some()
+            {
+                return Err(surface_operation_not_supported_error(
+                    "cachedContent contains upstream-only context; token counting requires the cache owner's native countTokens operation and cannot be estimated locally",
+                ));
+            }
+        }
         let estimated = crate::supplier::estimate_subscription_tokens(body).max(1);
         let response_body = match route.surface {
             crate::surface::ApiSurface::Anthropic => serde_json::json!({
@@ -576,7 +668,17 @@ pub(crate) async fn execute_channel_request(
     }
     let mut tool_mapping = crate::protocol::conversion::ToolWireMap::default();
     let (mut upstream_path, mut upstream_body, native_passthrough, improvement_faults) =
-        if resource_native_operation {
+        if openrouter_images {
+            let body = Box::pin(crate::openrouter::images::request_body(
+                route.operation,
+                &request.headers,
+                request.body.clone(),
+                &crate::openrouter::upstream_model(channel, &upstream_model),
+            ))
+            .await
+            .map_err(|e| execution_error(ChannelExecutionErrorCode::ConversionFailed, e))?;
+            ("/v1/images".into(), body, true, Vec::new())
+        } else if resource_native_operation {
             (
                 route.relative_path.clone(),
                 request.body.clone(),
@@ -687,7 +789,7 @@ pub(crate) async fn execute_channel_request(
     {
         upstream_path.truncate(upstream_path.len() - "?alt=sse".len());
     }
-    if !opaque
+    let opencode_free_inference = !opaque
         && channel.source_driver() == crate::source_driver::SourceDriverId::OpencodeConsole
         && matches!(
             route.operation,
@@ -697,9 +799,9 @@ pub(crate) async fn execute_channel_request(
                 | ApiOperation::GenerateContent
                 | ApiOperation::StreamGenerateContent
         )
-        && crate::opencode_client::is_free_model(channel, &upstream_model)
-    {
-        // Console free models require streaming and bash/read declarations.
+        && crate::opencode_client::is_free_model(channel, &upstream_model);
+    if opencode_free_inference {
+        // Console free models require environment, streaming and bash/read declarations.
         // The adapter preserves caller tools and disables compatibility-only
         // tools for ordinary chat; the executor buffers forced streams for JSON.
         if let Some(body) = crate::opencode_client::apply_free_tier_body_contract(
@@ -799,7 +901,16 @@ pub(crate) async fn execute_channel_request(
             );
         }
     }
-    if !opaque && !native_passthrough {
+    let siliconflow_images = channel.source_driver()
+        == crate::source_driver::SourceDriverId::SiliconflowApi
+        && route.operation == ApiOperation::ImagesGenerations;
+    if openrouter_images {
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+    }
+    if (!opaque && !native_passthrough) || siliconflow_images || openrouter_images {
         headers.insert(
             reqwest::header::ACCEPT_ENCODING,
             reqwest::header::HeaderValue::from_static("identity"),
@@ -815,7 +926,7 @@ pub(crate) async fn execute_channel_request(
         })?;
     }
 
-    if !opaque {
+    if !opaque && !openrouter_images {
         if let Ok(text) = std::str::from_utf8(&upstream_body) {
             if let std::borrow::Cow::Owned(body) =
                 crate::openrouter::request_body(Some(channel), text)
@@ -839,26 +950,50 @@ pub(crate) async fn execute_channel_request(
         });
     }
     let capacity_guard = enter_channel_capacity(channel, route.operation)?;
-    let request = client
-        .request(request.method, url)
-        .headers(headers)
-        .body(upstream_body.clone());
-    // Token-endpoint network/5xx failures are not invalid credentials.
-    let (request, copilot_generation) =
-        crate::copilot::prepare_request_with_generation(channel, request).await?;
-    let mut response = crate::upstream_transport::send(request)
-        .await
-        .map_err(|error| {
-            let code = if error.is_ambiguous() {
-                ChannelExecutionErrorCode::AmbiguousTransport
-            } else if error.is_timeout() {
-                ChannelExecutionErrorCode::UpstreamTimeout
-            } else {
-                ChannelExecutionErrorCode::UpstreamRejected
-            };
-            execution_error_with_source(code, error)
-        })?;
+    let use_opencode_free_transport =
+        opencode_free_inference && target_host.as_deref() == Some("opencode.ai");
+    let map_transport_error = |error: crate::upstream_transport::UpstreamTransportError| {
+        let code = if error.is_ambiguous() {
+            ChannelExecutionErrorCode::AmbiguousTransport
+        } else if error.is_timeout() {
+            ChannelExecutionErrorCode::UpstreamTimeout
+        } else {
+            ChannelExecutionErrorCode::UpstreamRejected
+        };
+        execution_error_with_source(code, error)
+    };
+    let (mut response, copilot_generation) = if use_opencode_free_transport {
+        (
+            Box::pin(crate::opencode_client::transport::send(
+                request.method,
+                Url::parse(&url).expect("target URL was validated"),
+                headers,
+                upstream_body.clone(),
+                channel.v2.use_system_proxy,
+            ))
+            .await
+            .map_err(map_transport_error)?,
+            None,
+        )
+    } else {
+        let request = client
+            .request(request.method, url)
+            .headers(headers)
+            .body(upstream_body.clone());
+        // Token-endpoint network/5xx failures are not invalid credentials.
+        let (request, copilot_generation) =
+            crate::copilot::prepare_request_with_generation(channel, request).await?;
+        let response = crate::upstream_transport::send_for_channel(request, channel)
+            .await
+            .map_err(map_transport_error)?;
+        (response, copilot_generation)
+    };
     strip_http_response_headers(response.headers_mut());
+    if siliconflow_images || openrouter_images {
+        response = Box::pin(normalize_image_response(response, channel.source_driver()))
+            .await
+            .map_err(response_conversion_error)?;
+    }
     crate::upstream_failure::log_reasoning_rejection(
         &channel.id,
         target.protocol.as_str(),
@@ -879,6 +1014,98 @@ pub(crate) async fn execute_channel_request(
         improvement_faults,
         tool_mapping,
     })
+}
+
+async fn normalize_image_response(
+    mut response: Response,
+    driver: crate::source_driver::SourceDriverId,
+) -> Result<Response> {
+    use reqwest::ResponseBuilderExt;
+    use serde::de::IgnoredAny;
+
+    #[derive(serde::Deserialize)]
+    struct Generation {
+        images: Vec<serde_json::Value>,
+        data: Option<IgnoredAny>,
+        error: Option<IgnoredAny>,
+        created: Option<IgnoredAny>,
+    }
+
+    if !response.status().is_success()
+        || !crate::supplier::response_content_type(&response)
+            .split(';')
+            .next()
+            .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("application/json"))
+    {
+        return Ok(response);
+    }
+    let mut reply = http::Response::builder()
+        .status(response.status())
+        .version(response.version())
+        .url(response.url().clone())
+        .body(())?;
+    *reply.headers_mut() = std::mem::take(response.headers_mut());
+    reply
+        .extensions_mut()
+        .extend(std::mem::take(response.extensions_mut()));
+    let bytes = crate::media_request::bounded_response(response).await?;
+    let body = if driver == crate::source_driver::SourceDriverId::Openrouter {
+        // This API can express the USD cost as virtual tokens. The ordinary
+        // Images meter counts successful data[] outputs when token usage is absent.
+        let raw = std::str::from_utf8(&bytes)?;
+        if crate::supplier::top_level_json_raw_token(&bytes, "usage").is_none() {
+            return Ok(reply.map(|_| bytes).into());
+        }
+        crate::supplier::remove_top_level_json_field(raw, "usage")?
+    } else if let Ok(generation) = serde_json::from_slice::<Generation>(&bytes)
+        && generation.data.is_none()
+        && generation.error.is_none()
+    {
+        // Retain the provider's images, timings, seed and extension fields. The
+        // standard data list contains only successful URL outputs and is metered once.
+        let data: Vec<_> = generation
+            .images
+            .iter()
+            .filter(|image| image["error"].is_null())
+            .filter_map(|image| image["url"].as_str())
+            .filter(|url| !url.trim().is_empty())
+            .map(|url| serde_json::json!({"url": url}))
+            .collect();
+        let mut body = crate::supplier::rewrite_top_level_json_field(
+            std::str::from_utf8(&bytes)?,
+            "data",
+            &serde_json::to_string(&data)?,
+            true,
+        )?;
+        if generation.created.is_none() {
+            body = crate::supplier::rewrite_top_level_json_field(
+                &body,
+                "created",
+                &crate::supplier::now_unix().to_string(),
+                true,
+            )?;
+        }
+        body
+    } else {
+        return Ok(reply.map(|_| bytes).into());
+    };
+    anyhow::ensure!(
+        body.len() <= crate::MODEL_MESSAGE_MAX_BYTES,
+        "response exceeds the gateway message limit"
+    );
+    let headers = reply.headers_mut();
+    for name in [
+        "content-encoding",
+        "etag",
+        "content-md5",
+        "digest",
+        "content-digest",
+        "repr-digest",
+    ] {
+        headers.remove(name);
+    }
+    headers.insert(reqwest::header::CONTENT_LENGTH, body.len().into());
+    Ok(reply.map(|_| body).into())
 }
 
 pub(crate) fn openai_body_with_safety_identifier(body: &[u8], identifier: &str) -> Vec<u8> {
@@ -939,8 +1166,7 @@ pub(crate) async fn execute_native_streaming_channel_request(
             "request path is outside the configured API surfaces",
         )
     })?;
-    let typed_native_upload = crate::surface::api_operation_uses_streaming_upload(route.operation)
-        && crate::surface::api_operation_requires_native_api_credential(route.operation);
+    let typed_native_upload = crate::surface::api_operation_uses_streaming_upload(route.operation);
     let opaque_native_upload = route.operation == ApiOperation::Opaque
         && crate::surface::native_opaque_streaming_upload_family(path).is_some();
     if !typed_native_upload && !opaque_native_upload {
@@ -1008,7 +1234,7 @@ pub(crate) async fn execute_native_streaming_channel_request(
 
     let capacity_guard = enter_channel_capacity(channel, route.operation)?;
     let request = client.request(method, url).headers(headers).body(body);
-    let mut response = crate::upstream_transport::send(request)
+    let mut response = crate::upstream_transport::send_for_channel(request, channel)
         .await
         .map_err(|error| {
             let code = if error.is_ambiguous() {
@@ -1348,6 +1574,10 @@ fn strip_http_request_headers_for_channel(headers: &mut HeaderMap, channel: &Cha
         .remove(crate::lan_share::LAN_SHARE_INTERNAL_PATH_HEADER)
         .filter(|_| crate::source_driver::channel_is_lan_share(channel));
     strip_http_request_headers(headers);
+    // An intermediate CONST hop still needs the caller's format preference.
+    if !crate::source_driver::channel_is_lan_share(channel) {
+        headers.remove(IMAGE_RESPONSE_FORMAT_HEADER);
+    }
     if let Some(path) = lan_share_path {
         headers.insert(crate::lan_share::LAN_SHARE_PATH_HEADER, path);
     }
@@ -2729,44 +2959,277 @@ mod tests {
 
     #[tokio::test]
     async fn typed_public_openai_images_keep_native_wire_shape_and_bearer_auth() {
-        let (base_url, receiver, server) = capture_server().await;
+        for (path, content_type, body, streaming) in [
+            (
+                "/v1/images/generations",
+                "application/json",
+                Bytes::from_static(br#"{ "model" : "gpt-image-2", "prompt" : "tiny test card", "future_image_option" : {"keep":true} }"#),
+                false,
+            ),
+            (
+                "/v1/images/edits",
+                "multipart/form-data; boundary=image-test",
+                Bytes::from_static(b"--image-test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-2\r\n--image-test\r\nContent-Disposition: form-data; name=\"stream\"\r\n\r\ntrue\r\n--image-test\r\nContent-Disposition: form-data; name=\"image\"; filename=\"test.png\"\r\nContent-Type: image/png\r\n\r\n\0\xffimage\r\n--image-test--\r\n"),
+                true,
+            ),
+        ] {
+            let (base_url, receiver, server) = capture_server().await;
+            let mut channel = channel_for_surface(&base_url, ApiSurface::OpenAi, "verified");
+            channel.set_source_driver(crate::source_driver::SourceDriverId::OpenAiApi);
+            channel.surface_bindings = crate::source_driver_surface_bindings(
+                crate::source_driver::SourceDriverId::OpenAiApi,
+                &base_url,
+            );
+            channel.surface_bindings[0].verification.state = "verified".to_string();
+            channel.upstream_api_key = "public-image-api-key".to_string();
+
+            let mut image_request = request(Method::POST, path, "", body.clone());
+            // Exercise local model extraction rather than the shared fixture's
+            // forced platform route to "selected-target-model".
+            image_request.selected_upstream_model = None;
+            image_request.headers.insert(
+                reqwest::header::CONTENT_TYPE,
+                reqwest::header::HeaderValue::from_static(content_type),
+            );
+            image_request.headers.insert(
+                IMAGE_RESPONSE_FORMAT_HEADER,
+                reqwest::header::HeaderValue::from_static("b64_json"),
+            );
+
+            let execution = execute_channel_request(&Client::new(), &channel, image_request)
+                .await
+                .expect("public OpenAI image API request");
+            let captured = receiver.await.expect("captured public image API request");
+            server.await.expect("capture server");
+
+            assert!(!execution.opaque);
+            assert!(execution.native_passthrough);
+            assert_eq!(execution.inbound_stream_requested, streaming);
+            assert_eq!(execution.upstream_model, "gpt-image-2");
+            assert_eq!(captured.method, "POST");
+            assert_eq!(captured.target, path);
+            assert_eq!(
+                captured_header(&captured, "authorization"),
+                Some("Bearer public-image-api-key")
+            );
+            assert_eq!(captured_header(&captured, "content-type"), Some(content_type));
+            assert_eq!(captured_header(&captured, IMAGE_RESPONSE_FORMAT_HEADER), None);
+            assert_eq!(captured.body, body.as_ref());
+        }
+    }
+
+    #[tokio::test]
+    async fn image_response_format_preserves_native_json_and_uses_only_documented_dialects() {
+        use crate::source_driver::SourceDriverId::*;
+        const GENERATE: &str =
+            r#"{ "model":"fixture", "prompt":"fixture", "future":9007199254740993"#;
+        const EDIT: &str = r#"{ "model":"fixture", "prompt":"fixture", "image":{"url":"https://media.invalid/a","other":3}"#;
+        // One real 1x1 JPEG. A portable WebP preference can legitimately receive JPEG.
+        const JPEG: &str = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAABv/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AHv/Z";
+        for (driver, path, preference, suffix, expected_suffix) in [
+            (XaiApi, "edits", false, "}", "}"),
+            (
+                XaiApi,
+                "edits",
+                true,
+                r#", "response_format" : "url" }"#,
+                r#", "response_format" : "url" }"#,
+            ),
+            (
+                XaiApi,
+                "generations",
+                true,
+                r#", "deferred":true }"#,
+                r#", "deferred":true }"#,
+            ),
+            (
+                XaiApi,
+                "generations",
+                true,
+                " }",
+                r#","response_format":"b64_json" }"#,
+            ),
+            (
+                VolcengineArkApi,
+                "generations",
+                true,
+                " }",
+                r#","response_format":"b64_json" }"#,
+            ),
+            (
+                TogetherApi,
+                "generations",
+                true,
+                " }",
+                r#","response_format":"base64" }"#,
+            ),
+            (
+                TogetherApi,
+                "generations",
+                false,
+                r#", "response_format" : "b64_json" }"#,
+                r#", "response_format" : "base64" }"#,
+            ),
+            (
+                TogetherApi,
+                "generations",
+                true,
+                r#", "response_format" : "url" }"#,
+                r#", "response_format" : "url" }"#,
+            ),
+            (CustomEndpoint, "generations", true, "}", "}"),
+            (
+                XaiApi,
+                "generations",
+                false,
+                r#", "output_format":"webp" }"#,
+                r#", "output_format":"webp" }"#,
+            ),
+            (
+                XaiApi,
+                "generations",
+                true,
+                r#", "output_format":"jpeg" }"#,
+                r#","response_format":"b64_json" }"#,
+            ),
+            (
+                XaiApi,
+                "generations",
+                true,
+                r#", "output_format":"webp", "response_format":null }"#,
+                r#", "response_format":"b64_json" }"#,
+            ),
+            (
+                TogetherApi,
+                "generations",
+                true,
+                r#", "output_format":"jpeg" }"#,
+                r#", "output_format":"jpeg","response_format":"base64" }"#,
+            ),
+            (
+                TogetherApi,
+                "generations",
+                true,
+                r#", "output_format":"webp" }"#,
+                r#","response_format":"base64" }"#,
+            ),
+            (
+                SiliconflowApi,
+                "generations",
+                true,
+                r#", "output_format":"jpeg" }"#,
+                " }",
+            ),
+        ] {
+            let prefix = if path == "edits" { EDIT } else { GENERATE };
+            let response_body = if driver == SiliconflowApi {
+                r#"{"images":[{"url":"https://media.invalid/result.jpg"}],"timings":{"inference":2},"created":1700000000}"#.to_owned()
+            } else if expected_suffix.contains("b64_json") || expected_suffix.contains("base64") {
+                format!(
+                    r#"{{"data":[{{"b64_json":"{JPEG}","mime_type":"image/jpeg"}}],"future":1}}"#
+                )
+            } else {
+                r#"{"data":[{"url":"https://media.invalid/result.jpg"}],"future":1}"#.to_owned()
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                response_body.len()
+            );
+            let (base_url, receiver, server) =
+                capture_server_with_response(response.into_bytes()).await;
+            let mut channel = channel_for_surface(&base_url, ApiSurface::OpenAi, "verified");
+            if driver != CustomEndpoint {
+                channel.set_source_driver(driver);
+                channel.surface_bindings = crate::source_driver_surface_bindings(driver, &base_url);
+                channel.surface_bindings[0].verification.state = "verified".into();
+            }
+            let mut req = request(
+                Method::POST,
+                &format!("/v1/images/{path}"),
+                "",
+                Bytes::from(format!("{prefix}{suffix}")),
+            );
+            req.selected_upstream_model = None;
+            if preference {
+                req.headers
+                    .insert(IMAGE_RESPONSE_FORMAT_HEADER, "b64_json".parse().unwrap());
+            }
+            let execution = execute_channel_request(&Client::new(), &channel, req)
+                .await
+                .unwrap();
+            let captured = receiver.await.unwrap();
+            server.await.unwrap();
+            assert!(execution.native_passthrough);
+            let expected_response = if driver == SiliconflowApi {
+                r#"{"images":[{"url":"https://media.invalid/result.jpg"}],"timings":{"inference":2},"created":1700000000,"data":[{"url":"https://media.invalid/result.jpg"}]}"#
+            } else {
+                &response_body
+            };
+            assert_eq!(
+                execution.response.bytes().await.unwrap().as_ref(),
+                expected_response.as_bytes()
+            );
+            assert_eq!(
+                captured.body,
+                format!("{prefix}{expected_suffix}").as_bytes(),
+                "{driver:?}"
+            );
+            assert_eq!(
+                captured_header(&captured, IMAGE_RESPONSE_FORMAT_HEADER),
+                None
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn xai_image_edits_reject_unsupported_multipart_before_dispatch() {
+        let (base_url, mut receiver, server) = capture_server().await;
         let mut channel = channel_for_surface(&base_url, ApiSurface::OpenAi, "verified");
-        channel.set_source_driver(crate::source_driver::SourceDriverId::OpenAiApi);
-        channel.surface_bindings = crate::source_driver_surface_bindings(
-            crate::source_driver::SourceDriverId::OpenAiApi,
-            &base_url,
-        );
-        channel.surface_bindings[0].verification.state = "verified".to_string();
-        channel.upstream_api_key = "public-image-api-key".to_string();
-
-        let body = Bytes::from_static(
-            br#"{ "model" : "gpt-image-2", "prompt" : "tiny test card", "future_image_option" : {"keep":true} }"#,
-        );
-        let mut image_request = request(Method::POST, "/v1/images/generations", "", body.clone());
-        image_request.headers.insert(
-            reqwest::header::CONTENT_TYPE,
-            reqwest::header::HeaderValue::from_static("application/json"),
-        );
-
-        let execution = execute_channel_request(&Client::new(), &channel, image_request)
-            .await
-            .expect("public OpenAI image API request");
-        let captured = receiver.await.expect("captured public image API request");
-        server.await.expect("capture server");
-
-        assert!(!execution.opaque);
-        assert!(execution.native_passthrough);
-        assert_eq!(captured.method, "POST");
-        assert_eq!(captured.target, "/v1/images/generations");
-        assert_eq!(
-            captured_header(&captured, "authorization"),
-            Some("Bearer public-image-api-key")
-        );
-        assert_eq!(
-            captured_header(&captured, "content-type"),
-            Some("application/json")
-        );
-        assert_eq!(captured.body, body.as_ref());
+        channel.set_source_driver(crate::source_driver::SourceDriverId::XaiApi);
+        let text = |name: &str, value: &str| {
+            format!("--edit\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n")
+        };
+        let file = |name: &str, mime: &str, value: &str| {
+            format!(
+                "--edit\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"fixture\"\r\nContent-Type: {mime}\r\n\r\n{value}\r\n"
+            )
+        };
+        let image = file("image", "image/jpeg", "fixture");
+        for fields in [
+            String::new(),
+            image.clone() + &image,
+            image.clone() + &file("mask", "image/png", "mask"),
+            image.clone() + &text("mask[file_id]", "file-private"),
+            text("image", "https://private.invalid/ref"),
+            text("images", r#"[{"file_id":"file-private"}]"#),
+            file("image", "image/gif", "fixture"),
+            file("image", "image/png", ""),
+            image.clone() + &text("stream", "true"),
+            image.clone() + &text("response_format", "url") + &text("response_format", "b64_json"),
+        ] {
+            let body = text("model", "fixture")
+                + &text("prompt", "private prompt")
+                + &fields
+                + "--edit--\r\n";
+            let mut req = request(Method::POST, "/v1/images/edits", "", Bytes::from(body));
+            req.headers.insert(
+                "content-type",
+                "multipart/form-data; boundary=edit".parse().unwrap(),
+            );
+            let error = execute_channel_request(&Client::new(), &channel, req)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                channel_execution_error_code(&error),
+                Some("conversion_failed")
+            );
+            assert!(!error.to_string().contains("private"));
+        }
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        server.abort();
     }
 
     #[tokio::test]
@@ -3450,6 +3913,209 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn openrouter_images_without_an_exact_declaration_are_rejected_before_execution() {
+        let (base_url, mut receiver, server) = capture_server().await;
+        let mut channel = channel_for_surface(&base_url, ApiSurface::OpenAi, "verified");
+        channel.set_source_driver(crate::source_driver::SourceDriverId::Openrouter);
+        for path in [
+            "/v1/images/generations",
+            "/v1/images/edits",
+            "/v1/images/variations",
+        ] {
+            let result = execute_channel_request(
+                &Client::new(),
+                &channel,
+                request(
+                    Method::POST,
+                    path,
+                    "",
+                    Bytes::from_static(br#"{"model":"vendor/image","prompt":"test"}"#),
+                ),
+            )
+            .await;
+            let Err(error) = result else {
+                panic!("incompatible image endpoint executed")
+            };
+            assert_eq!(
+                channel_execution_error_code(&error),
+                Some("surface_operation_not_supported")
+            );
+        }
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        server.abort();
+        for driver in crate::source_driver::ALL_SOURCE_DRIVER_IDS {
+            if driver != crate::source_driver::SourceDriverId::Openrouter {
+                assert!(crate::openrouter::supports_operation(
+                    driver,
+                    ApiOperation::ImagesGenerations
+                ));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn console_images_reject_explicitly_unsupported_operations_before_dispatch() {
+        let (base, mut receiver, server) = capture_server().await;
+        let mut channel = channel_for_surface(&base, ApiSurface::OpenAi, "verified");
+        channel.set_source_driver(crate::source_driver::SourceDriverId::OpencodeConsole);
+        // A new dialect, or a reference-only model on a known endpoint.
+        for api in [None, Some(crate::coding_gateway::ConsoleImageApi::Openai)] {
+            channel.capability_profiles = vec![crate::model::ChannelCapabilityProfile {
+                model_pattern: "canvas".into(),
+                verification_state: "declared".into(),
+                catalog_metadata: true,
+                opencode_image_api: api,
+                catalog_image_operations: Some(crate::image_models::ImageOperations {
+                    generate: false,
+                    edit: api.is_some(),
+                }),
+                ..Default::default()
+            }];
+            let mut req = request(
+                Method::POST,
+                "/v1/images/generations",
+                "",
+                Bytes::from_static(br#"{"model":"canvas","prompt":"sea"}"#),
+            );
+            req.selected_upstream_model = Some("canvas".into());
+            let Err(error) = execute_channel_request(&Client::new(), &channel, req).await else {
+                panic!("explicitly unsupported operation was dispatched");
+            };
+            assert_eq!(
+                channel_execution_error_code(&error),
+                Some("surface_operation_not_supported")
+            );
+        }
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn console_image_edit_uses_the_declared_xai_path_and_json_on_the_configured_origin() {
+        let (base, captured, server) = capture_server().await;
+        let mut channel = channel_for_surface(
+            &format!("{base}/inference/openai/v1"),
+            ApiSurface::OpenAi,
+            "verified",
+        );
+        channel.set_source_driver(crate::source_driver::SourceDriverId::OpencodeConsole);
+        let dir = tempfile::tempdir().unwrap();
+        let credential = dir.path().join("console.json");
+        std::fs::write(
+            &credential,
+            serde_json::json!({"access_token":"fixture","expires_at":crate::now_unix()+3600})
+                .to_string(),
+        )
+        .unwrap();
+        channel.subscription.credential_ref = credential.display().to_string();
+        channel
+            .capability_profiles
+            .push(crate::model::ChannelCapabilityProfile {
+                model_pattern: "canvas".into(),
+                verification_state: "declared".into(),
+                catalog_metadata: true,
+                opencode_image_api: Some(crate::coding_gateway::ConsoleImageApi::Xai),
+                ..Default::default()
+            });
+        let mut req = request(Method::POST, "/v1/images/edits", "", Bytes::from_static(
+            b"--ref\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ncanvas\r\n--ref\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nsea\r\n--ref\r\nContent-Disposition: form-data; name=\"image\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\ni\r\n--ref--\r\n"));
+        req.selected_upstream_model = Some("canvas".into());
+        req.headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("multipart/form-data; boundary=ref"),
+        );
+        execute_channel_request(&Client::new(), &channel, req)
+            .await
+            .unwrap();
+        let sent = captured.await.unwrap();
+        server.await.unwrap();
+        assert_eq!(sent.target, "/inference/xai/v1/images/edits");
+        let wire: serde_json::Value = serde_json::from_slice(&sent.body).unwrap();
+        assert_eq!(wire["model"], "canvas");
+        assert_eq!(wire["prompt"], "sea");
+        assert!(
+            sent.body
+                .windows(b"data:image/png;base64,aQ==".len())
+                .any(|w| w == b"data:image/png;base64,aQ==")
+        );
+    }
+
+    #[tokio::test]
+    async fn openrouter_images_generate_and_edit_through_the_native_endpoint() {
+        use crate::image_models::ImageOperations;
+        for edit in [false, true] {
+            let reply = r#"{"data":[{"b64_json":"aQ=="}],"usage":{"prompt_tokens":0,"completion_tokens":4175,"cost":0.04}}"#;
+            let (base, captured, server) = capture_server_with_response(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).into_bytes()).await;
+            let mut channel =
+                channel_for_surface(&format!("{base}/api/v1"), ApiSurface::OpenAi, "verified");
+            channel.set_source_driver(crate::source_driver::SourceDriverId::Openrouter);
+            channel
+                .capability_profiles
+                .push(crate::model::ChannelCapabilityProfile {
+                    model_pattern: "vendor/canvas".into(),
+                    verification_state: "declared".into(),
+                    capability_layer: "model_wire".into(),
+                    catalog_image_operations: Some(ImageOperations {
+                        generate: true,
+                        edit: true,
+                    }),
+                    ..Default::default()
+                });
+            let (path, body, content_type) = if edit {
+                (
+                    "/v1/images/edits",
+                    "--ref\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nvendor/canvas\r\n--ref\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nsea\r\n--ref\r\nContent-Disposition: form-data; name=\"image\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\ni\r\n--ref--\r\n",
+                    "multipart/form-data; boundary=ref",
+                )
+            } else {
+                (
+                    "/v1/images/generations",
+                    r#"{"prompt":"sea","model":"canvas","size":"1024x1024","response_format":"b64_json"}"#,
+                    "application/json",
+                )
+            };
+            let mut req = request(Method::POST, path, "", Bytes::from_static(body.as_bytes()));
+            req.selected_upstream_model = Some("vendor/canvas".into());
+            req.headers.insert(
+                reqwest::header::CONTENT_TYPE,
+                reqwest::header::HeaderValue::from_static(content_type),
+            );
+            let result = execute_channel_request(&Client::new(), &channel, req)
+                .await
+                .unwrap();
+            let response: serde_json::Value = result.response.json().await.unwrap();
+            let sent = captured.await.unwrap();
+            server.await.unwrap();
+            assert_eq!(sent.target, "/api/v1/images");
+            let wire: serde_json::Value = serde_json::from_slice(&sent.body).unwrap();
+            assert_eq!(wire["model"], "vendor/canvas");
+            assert_eq!(wire["prompt"], "sea");
+            if edit {
+                assert_eq!(
+                    wire["input_references"],
+                    serde_json::json!([{"type":"image_url","image_url":{"url":"data:image/png;base64,aQ=="}}])
+                );
+                assert!(wire.get("images").is_none());
+            } else {
+                assert_eq!(wire["size"], "1024x1024");
+                assert_eq!(wire["response_format"], "b64_json");
+            }
+            assert_eq!(response["data"][0]["b64_json"], "aQ==");
+            assert!(
+                response.get("usage").is_none(),
+                "cost-equivalent tokens must not be billed as real usage"
+            );
+        }
+    }
+
     #[test]
     fn opaque_target_rejects_unsafe_provider_relative_forms() {
         let mut channel =
@@ -3782,8 +4448,7 @@ mod tests {
                     request(Method::POST, path, "", Bytes::copy_from_slice(body)),
                 )
                 .await
-                .err()
-                .expect("embedding requires its native surface");
+                .expect_err("embedding requires its native surface");
                 assert_eq!(
                     channel_execution_error_code(&error),
                     Some("surface_operation_not_supported"),
@@ -3828,6 +4493,7 @@ mod tests {
     async fn native_gemini_count_tokens_keeps_the_count_tokens_operation() {
         let (base_url, receiver, server) = capture_server().await;
         let channel = channel_for_surface(&base_url, ApiSurface::Gemini, "verified");
+        let original = r#"{ "generateContentRequest" : { "model" : "models/public-model", "cachedContent" : "cachedContents/cache_owned", "contents" : [{"role":"user","parts":[{"text":"count me"}]}], "future" : 1.2300e+09 }, "extension" : [1,2,3] }"#;
 
         let execution = execute_channel_request(
             &Client::new(),
@@ -3836,9 +4502,7 @@ mod tests {
                 Method::POST,
                 "/gemini/v1beta/models/public-model:countTokens",
                 "",
-                Bytes::from_static(
-                    br#"{"contents":[{"role":"user","parts":[{"text":"count me"}]}]}"#,
-                ),
+                Bytes::from_static(original.as_bytes()),
             ),
         )
         .await
@@ -3852,6 +4516,56 @@ mod tests {
             captured.target,
             "/v1beta/models/selected-target-model:countTokens"
         );
+        let body: serde_json::Value = serde_json::from_slice(&captured.body).unwrap();
+        assert_eq!(
+            body["generateContentRequest"]["cachedContent"],
+            "cachedContents/cache_owned"
+        );
+        assert_eq!(
+            body["generateContentRequest"]["model"],
+            "models/selected-target-model"
+        );
+        assert_eq!(
+            captured.body.as_slice(),
+            original
+                .replace("models/public-model", "models/selected-target-model")
+                .as_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_content_count_is_never_estimated_from_only_visible_text() {
+        let (base_url, receiver, server) = capture_server().await;
+        let channel = channel_for_surface(&base_url, ApiSurface::OpenAi, "verified");
+        for body in [
+            br#"{"cachedContent":"cachedContents/owned","contents":[]}"#.as_slice(),
+            br#"{"generateContentRequest":{"cachedContent":"cachedContents/owned","contents":[]}}"#,
+            br#"{"generate_content_request":{"cached_content":"cachedContents/owned"}}"#,
+        ] {
+            let error = execute_channel_request(
+                &Client::new(),
+                &channel,
+                request(
+                    Method::POST,
+                    "/gemini/v1beta/models/gemini-public:countTokens",
+                    "",
+                    Bytes::copy_from_slice(body),
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                channel_execution_error_code(&error),
+                Some("surface_operation_not_supported")
+            );
+            assert!(error.to_string().contains("cachedContent"));
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), receiver)
+                .await
+                .is_err()
+        );
+        server.abort();
     }
 
     #[tokio::test]
@@ -4455,19 +5169,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stable_execution_error_codes_classify_real_upstream_timeout() {
+    async fn post_response_timeout_is_ambiguous_and_keeps_timeout_diagnostics() {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("timeout listener");
         let address = listener.local_addr().expect("timeout address");
+        let (received_tx, received_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
-            let (_stream, _) = listener.accept().await.expect("timeout accept");
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let (mut stream, _) = listener.accept().await.expect("timeout accept");
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(stream.read_u8().await.expect("request header"));
+                assert!(head.len() < 16_384);
+            }
+            let head = String::from_utf8(head).unwrap();
+            let length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .expect("request length");
+            assert!(length > 0 && length < 16_384);
+            let mut body = vec![0; length];
+            stream
+                .read_exact(&mut body)
+                .await
+                .expect("complete request body");
+            received_tx.send(()).unwrap();
+            // The complete POST arrived, but its response never does.
+            std::future::pending::<()>().await;
+            drop(stream);
         });
         let channel =
             channel_for_surface(&format!("http://{address}"), ApiSurface::OpenAi, "verified");
         let client = Client::builder()
-            .timeout(std::time::Duration::from_millis(20))
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(1))
             .build()
             .expect("timeout client");
         let error = execute_channel_request(
@@ -4483,10 +5222,16 @@ mod tests {
         .await
         .expect_err("stalled upstream must time out");
         server.abort();
+        received_rx
+            .await
+            .expect("upstream received the complete POST");
 
         assert_eq!(
             channel_execution_error_code(&error),
-            Some("upstream_timeout")
+            Some("ambiguous_transport")
         );
+        let evidence = crate::supplier::execution_evidence_for_error(&error);
+        assert_eq!(evidence.recommendation.retry, "none");
+        assert_eq!(evidence.diagnostics.unwrap().error_class, "request_timeout");
     }
 }

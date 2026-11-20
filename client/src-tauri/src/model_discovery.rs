@@ -7,6 +7,131 @@ pub(crate) const CATALOG_HEADER: &str = "x-const-model-catalog";
 pub(crate) const POLICY_FIELD: &str = "const_api_model_presentation";
 pub(crate) const POLICY_SOURCE_FIELD: &str = "const_api_model_presentation_source";
 
+/// Capture operations on each side of the local/platform merge. Two routes
+/// for the same model can support different operations.
+pub(crate) fn mark_directory_source(entry: &mut Value, source: &str) {
+    if !entry.is_object() {
+        return;
+    }
+    let metadata = &mut entry["const_api"];
+    if !metadata.is_object() {
+        *metadata = serde_json::json!({});
+    }
+    let images = metadata
+        .get("image_operations")
+        .and_then(crate::image_models::ImageOperations::from_json)
+        .unwrap_or_default();
+    let media = metadata["media_operations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|op| {
+            matches!(
+                *op,
+                crate::media_models::VIDEO | crate::media_models::SPEECH
+            )
+        });
+    let native = metadata["native_media_operations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|op| crate::media_models::is_native_operation(op));
+    let operations: Vec<Value> = images
+        .names()
+        .map(Value::from)
+        .chain(media.map(Value::from))
+        .chain(native.map(Value::from))
+        .collect();
+    metadata["operations_by_source"] = serde_json::json!({(source): operations});
+}
+
+fn has_both_sources(metadata: &Value) -> bool {
+    let sources = &metadata["operations_by_source"];
+    sources.get("local").is_some() && sources.get("platform").is_some()
+}
+
+/// A catalog describes the model; operation lists describe executable routes.
+/// Keep both for tools that need to discover native or not-yet-adapted media.
+pub(crate) fn media_outputs(metadata: &Value) -> impl Iterator<Item = &'static str> + '_ {
+    let catalog = metadata["catalog_output_modalities"]
+        .as_array()
+        .filter(|items| !items.is_empty());
+    let combined = has_both_sources(metadata);
+    ["image", "video", "audio"].into_iter().filter(move |kind| {
+        if let Some(items) = catalog {
+            let listed = items
+                .iter()
+                .any(|v| v == kind || (*kind == "audio" && (v == "speech" || v == "music")));
+            if listed || !combined {
+                return listed;
+            }
+        }
+        let flag = match *kind {
+            "image" => "image_output",
+            "video" => "video_output",
+            _ => "audio_output",
+        };
+        let state = metadata["capability_states"][flag].as_bool();
+        let advertised = metadata[flag] == true;
+        // A compact state from one side cannot veto the other side's native declaration.
+        state.unwrap_or(advertised) || (combined && advertised)
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn get_available_model_directory(
+    state: tauri::State<'_, crate::model::AppState>,
+    local_only: Option<bool>,
+) -> Result<Vec<Value>, String> {
+    // The market index already carries the platform's compact task projection.
+    // Read local readiness directly; a UI refresh must not fetch /v1/models again.
+    if local_only == Some(true) {
+        if !state.proxy.lock().await.running {
+            return Ok(Vec::new());
+        }
+        let config = state.proxy_config.snapshot().map_err(|e| e.to_string())?;
+        let ready = crate::proxy::ready_local_channel_ids(&state.local_channel_readiness);
+        let models = crate::proxy::local_model_entries(&config, &ready);
+        let mut rows: Vec<_> = models
+            .into_iter()
+            .filter_map(|entry| {
+                let id = crate::config::public_model_name(entry["id"].as_str()?);
+                let priority = ModelPresentation::packaged().rank(&id).0;
+                let row = directory_row(&id, &entry["const_api"]);
+                Some((std::cmp::Reverse(priority), id, row))
+            })
+            .collect();
+        rows.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        return Ok(rows.into_iter().map(|(_, _, row)| row).collect());
+    }
+    let access =
+        crate::image_cli::LocalAccess::read_from(&state.config_path).map_err(|e| e.to_string())?;
+    let payload = crate::image_cli::model_catalog(&access)
+        .await
+        .map_err(|e| e.to_string())?;
+    let entries =
+        crate::image_models::visible_catalog_entries(&payload).ok_or("invalid model directory")?;
+    Ok(entries
+        .map(|(id, entry)| directory_row(id, &entry["const_api"]))
+        .collect())
+}
+
+fn directory_row(id: &str, meta: &Value) -> Value {
+    let image_input = meta["image_input"] == true || meta["vision"] == true;
+    let image_state = meta["capability_states"]["image_input"]
+        .as_bool()
+        .or_else(|| meta["capability_states"]["vision"].as_bool());
+    serde_json::json!({
+        "id": id, "local": meta.pointer("/operations_by_source/local"),
+        "platform": meta.pointer("/operations_by_source/platform"),
+        "imageInput": image_state.unwrap_or(image_input) || (has_both_sources(meta) && image_input),
+        "contextTokens": meta.get("context_tokens"),
+        "outputs": media_outputs(meta).collect::<Vec<_>>(),
+    })
+}
+
 #[tauri::command]
 pub(crate) async fn get_model_presentation(
     state: tauri::State<'_, crate::model::AppState>,
@@ -331,6 +456,34 @@ mod tests {
         let once = compact.clone();
         compact_entry(&mut compact["data"][0]);
         assert_eq!(once, compact, "compaction must be idempotent");
+    }
+
+    #[test]
+    fn directory_uses_model_modalities_before_channel_flags() {
+        let mut metadata = json!({
+            "catalog_output_modalities": ["text", "music"],
+            "image_output": true, "video_output": true, "vision": true,
+            "capability_states": {"image_input": false, "image_output": false, "audio_output": true}
+        });
+        assert_eq!(
+            directory_row("model", &metadata)["outputs"],
+            json!(["audio"])
+        );
+        assert_eq!(directory_row("model", &metadata)["imageInput"], false);
+        metadata
+            .as_object_mut()
+            .unwrap()
+            .remove("catalog_output_modalities");
+        assert_eq!(
+            media_outputs(&metadata).collect::<Vec<_>>(),
+            ["video", "audio"]
+        );
+        metadata["operations_by_source"] = json!({"local": [], "platform": []});
+        assert_eq!(directory_row("model", &metadata)["imageInput"], true);
+        assert_eq!(
+            media_outputs(&metadata).collect::<Vec<_>>(),
+            ["image", "video", "audio"]
+        );
     }
 
     #[test]

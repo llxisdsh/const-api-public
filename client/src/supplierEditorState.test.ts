@@ -312,8 +312,8 @@ describe("supplier editor state", () => {
     })).toMatchObject({
       configLabel: "配置：未保存",
       localLabel: "检测：待验证",
-      platformLabel: "供应：未开启",
-      actionLabel: "检测并开启供应",
+      platformLabel: "未共享到市场",
+      actionLabel: "检测并启用",
     });
   });
 });

@@ -1,3 +1,4 @@
+import mediaSkillTools from "../tool-media-skill-tools.json";
 import { modelDisplayName } from "./modelPresentation";
 import { withLocalPriorities } from "./channelOrdering";
 import type {
@@ -47,6 +48,7 @@ import {
   applyChannelDetectionV2,
   normalizeChannelV5,
   reloadChannelV5,
+  sourceDriverAllowsMarketSharing,
   sourceDriverById,
   sourceDriverInitialChannelV5,
   type ChannelConfigV5,
@@ -67,7 +69,6 @@ export const emptyConfig: ClientConfig = {
     preferred_connect_ip: "",
   },
   proxy_auto_start: true,
-  automatic_updates: true,
   prevent_sleep_while_supplying: true,
   supplier_auto_start: false,
   api_key: "",
@@ -77,6 +78,9 @@ export const emptyConfig: ClientConfig = {
   registry_version: 0,
   development_endpoint: DEFAULT_DEVELOPMENT_ENDPOINT,
   allow_model_equivalence: true,
+  protect_outgoing_secrets: true,
+  configure_image_skill: true,
+  media_skill_tools: Object.entries(mediaSkillTools).filter(([, selected]) => selected).map(([tool]) => tool),
   prefer_local_supply: true,
   tool_model_injection: { all_models: true, extra_models: [] },
   allow_unverified_platform_routes: true,
@@ -521,6 +525,7 @@ export function aboutServerLabel(status: ProxyStatus, config: ClientConfig) {
 }
 
 export function aboutUpdateHint(state: UpdateState, lastCheckedAt?: string) {
+  if (state.status === "available") return "";
   if (state.status === "ready" && state.version) return tr("about.finishAfterRestart");
   if (state.status === "idle") {
     return state.checkedAt || lastCheckedAt ? "" : tr("about.clickCheck");
@@ -592,7 +597,7 @@ export function supplierChannelDiagnostic(
     };
   }
   const transport = supplierChannelTransportForChannel(status, channel.id);
-  if (channel.share_enabled && channelIsPlatformShareable(channel) && transport?.last_transport_error
+  if (channelIsPlatformPooled(channel) && transport?.last_transport_error
       && !(isEstablishedSupplierTransport(transport.active_transport) && transport.platform_registered)) {
     return {
       id: `supplier-transport-${channel.id}`,
@@ -648,6 +653,8 @@ export function supplierNetworkState(status: SupplierStatus) {
 
 export function updateStatusLabel(state: UpdateState) {
   switch (state.status) {
+    case "available":
+      return tr("about.releaseAvailable", { version: state.version });
     case "checking":
       return tr("labels.update.checking");
     case "downloading":
@@ -1346,12 +1353,12 @@ export function channelIsPooled(channel: ChannelConfig) {
   return channel.enabled;
 }
 
-export function channelIsPlatformShareable(_channel: ChannelConfig) {
-  return false;
+export function channelIsPlatformShareable(channel: ChannelConfig) {
+  return sourceDriverAllowsMarketSharing(channel.source_driver);
 }
 
 export function channelIsPlatformPooled(channel: ChannelConfig) {
-  return channel.enabled && channelIsPlatformShareable(channel);
+  return channel.enabled && channel.share_enabled && channelIsPlatformShareable(channel);
 }
 
 export function channelHasVerifiedProtocol(channel: ChannelConfig) {
@@ -1871,7 +1878,7 @@ export function channelStateTone(
   if (startingChannelId === channel.id || pendingChannelIds.includes(channel.id)) return "pending";
   const channelTransport = supplierChannelTransportForChannel(supplierStatus, channel.id);
   const transportOnline = isEstablishedSupplierTransport(channelTransport?.active_transport);
-  const platformOnline = transportOnline && channelTransport?.platform_registered === true;
+  const platformOnline = channelIsPlatformPooled(channel) && transportOnline && channelTransport?.platform_registered === true;
   const safetyState = normalizedSafetyState(health, channel);
   const routeStatus = supplierRouteStatusForChannel(supplierStatus, channel.id);
   const routeTone = supplierRouteStatusTone(routeStatus);
@@ -1898,7 +1905,7 @@ export function channelOnlineLabel(
   if (supplierStatus.starting && !health) return tr("labels.channel.checking");
   const channelTransport = supplierChannelTransportForChannel(supplierStatus, channel.id);
   const transportOnline = isEstablishedSupplierTransport(channelTransport?.active_transport);
-  const platformOnline = transportOnline && channelTransport?.platform_registered === true;
+  const platformOnline = channelIsPlatformPooled(channel) && transportOnline && channelTransport?.platform_registered === true;
   const safetyState = normalizedSafetyState(health, channel);
   const routeStatus = supplierRouteStatusForChannel(supplierStatus, channel.id);
   const routeLabel = supplierRouteStatusInlineLabel(routeStatus);
@@ -2146,7 +2153,7 @@ export function channelV5FromRenderer(channel: ChannelConfig): ChannelConfigV5 {
     created_at_unix_ms: channel.created_at_unix_ms,
     source_driver: driver.id,
     enabled: channel.enabled,
-    share_enabled: channel.enabled && channelIsPlatformShareable(channel),
+    share_enabled: channel.share_enabled && channelIsPlatformShareable(channel),
     credential_ref: channel.credential_ref,
     executor: structuredClone(driver.executor),
     surfaces: structuredClone(channel.surfaces ?? channel.surface_bindings ?? []),
@@ -2226,7 +2233,6 @@ export function channelFromSupplier(id: string, supplier: SupplierConfig): Chann
     user_agent_profile: supplier.user_agent_profile ?? "",
     use_system_proxy: supplier.use_system_proxy ?? false,
     enabled: supplier.enabled,
-    share_enabled: supplier.enabled,
     surfaces: configuredSurfaces,
     models: [...(supplier.models ?? [])],
     price_ratio: normalizedPriceRatio(supplier.price_ratio),
@@ -2245,7 +2251,7 @@ export function supplierFromChannel(channel: ChannelConfig): SupplierConfig {
     source_driver: channel.source_driver,
     user_agent_profile: channel.user_agent_profile ?? "",
     use_system_proxy: channel.use_system_proxy ?? false,
-    enabled: channel.enabled && channelIsPlatformShareable(channel),
+    enabled: channelIsPlatformPooled(channel),
     kind: channel.kind,
     api_format: channel.api_format,
     node_id: channel.node_id,

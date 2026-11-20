@@ -78,6 +78,7 @@ pub(crate) async fn account_market_prices(
     _: Option<usize>,
     _: Option<usize>,
     _: Option<String>,
+    _: Option<Vec<String>>,
 ) -> Result<serde_json::Value, String> {
     Err("The hosted model market is unavailable in the local edition".into())
 }

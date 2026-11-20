@@ -176,7 +176,7 @@ pub(crate) fn rewrite_top_level_json_field(
 
     serde_json::from_str::<Box<RawValue>>(replacement_json)
         .context("replacement must be valid JSON")?;
-    serde_json::from_str::<Box<RawValue>>(body).context("body must be valid JSON")?;
+    serde_json::from_str::<&RawValue>(body).context("body must be valid JSON")?;
 
     let scan = scan_top_level_object(body)?;
     let mut spans = scan
@@ -222,6 +222,39 @@ pub(crate) fn rewrite_top_level_json_field(
     Ok(output)
 }
 
+// Remove a wire option without reserializing other values (including numbers
+// outside serde_json::Value's exact range or large inline images).
+pub(crate) fn remove_top_level_json_field(body: &str, name: &str) -> Result<String> {
+    serde_json::from_str::<&serde_json::value::RawValue>(body)
+        .context("body must be valid JSON")?;
+    let scan = scan_top_level_object(body)?;
+    let mut output = String::with_capacity(body.len());
+    let mut cursor = 0;
+    let mut kept_field = false;
+    for (index, field) in scan.fields.iter().enumerate() {
+        if field.name != name {
+            kept_field = true;
+            continue;
+        }
+        // Leading removals consume the following comma. Later removals
+        // consume the preceding comma, including consecutive duplicates.
+        let (start, end) = if kept_field {
+            (scan.fields[index - 1].value_end, field.value_end)
+        } else {
+            (
+                field.key_start,
+                scan.fields
+                    .get(index + 1)
+                    .map_or(field.value_end, |next| next.key_start),
+            )
+        };
+        output.push_str(&body[cursor..start]);
+        cursor = end;
+    }
+    output.push_str(&body[cursor..]);
+    Ok(output)
+}
+
 struct TopLevelObjectScan {
     fields: Vec<TopLevelField>,
     close_brace: usize,
@@ -229,6 +262,7 @@ struct TopLevelObjectScan {
 
 struct TopLevelField {
     name: String,
+    key_start: usize,
     value_start: usize,
     value_end: usize,
 }
@@ -261,6 +295,7 @@ fn scan_top_level_object(body: &str) -> Result<TopLevelObjectScan> {
         let value_end = scan_json_value(bytes, value_start)?;
         fields.push(TopLevelField {
             name,
+            key_start,
             value_start,
             value_end,
         });
@@ -1934,6 +1969,31 @@ mod top_level_json_tests {
             "Request completed without displayable text (input 14, output 6 tokens)"
         );
         assert!(!protocol_safe_response_content(raw).contains("\"output\""));
+    }
+
+    #[test]
+    fn removing_portable_image_codec_preserves_remaining_wire_values() {
+        for (input, expected) in [
+            (r#"{ "output_format":0 }"#, "{  }"),
+            (
+                r#"{"output_format":1, "output_format":2, "a":90071992547409930001}"#,
+                r#"{"a":90071992547409930001}"#,
+            ),
+            (
+                r#"{ "a":1 ,"output_format":2,"output_format":3, "b":{"output_format":"keep"} }"#,
+                r#"{ "a":1, "b":{"output_format":"keep"} }"#,
+            ),
+            (
+                r#"{"a":1, "output_format":1,"output_format":2 }"#,
+                r#"{"a":1 }"#,
+            ),
+            (r#"{ "a":1 }"#, r#"{ "a":1 }"#),
+        ] {
+            assert_eq!(
+                remove_top_level_json_field(input, "output_format").unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]

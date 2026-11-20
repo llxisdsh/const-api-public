@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -13,8 +13,12 @@ import { useEscapeDismiss } from "./useEscapeDismiss";
 import { MARKET_PRICE_CACHE_TTL_MS, createMarketPriceCache } from "./marketPriceCache";
 
 const invoke = vi.hoisted(() => vi.fn());
+const directory = vi.hoisted(() => vi.fn());
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (command: string, args: unknown) =>
+    command === "get_available_model_directory" ? directory(args) : invoke(command, args),
+}));
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -73,16 +77,86 @@ const snapshot: MarketPriceSnapshot = {
 };
 
 describe("MarketPricesModal", () => {
+  test("scopes the source, context and price to the selected capability of a shared model", async () => {
+    const user = userEvent.setup();
+    const id = snapshot.models[0].model;
+    invoke.mockResolvedValue({ data: {
+      ...snapshot, model_index: [id], models: [snapshot.models[0]],
+      model_directory: [{ id, imageInput: true, contextTokens: 128000 }],
+    } });
+    directory.mockResolvedValue([{
+      id, local: ["openai.images_edits"], platform: null, imageInput: false, outputs: ["image"], contextTokens: 64000,
+    }]);
+    render(<MarketPricesModal platformAvailable onClose={vi.fn()} />);
+    const filter = screen.getByRole("combobox", { name: "筛选模型用途" });
+    const modelRow = async () => within((await screen.findByRole("heading", { name: id })).closest("article")!);
+    expect((await modelRow()).getByLabelText("所属")).toHaveTextContent("本机 / 平台");
+    await user.selectOptions(filter, "imageInput");
+    const platformRow = await modelRow();
+    expect(platformRow.getByLabelText("所属")).toHaveTextContent(/^平台$/);
+    expect(platformRow.getByText("支持图片输入 · 128K 上下文")).toBeInTheDocument();
+    await user.selectOptions(filter, "edit");
+    const localRow = await modelRow();
+    expect(localRow.getByLabelText("所属")).toHaveTextContent(/^本机$/);
+    expect(localRow.getByText("改图 · 64K 上下文")).toBeInTheDocument();
+    expect(localRow.getByLabelText("输入")).toHaveTextContent("—");
+    expect(localRow.getByRole("button", { name: /计费明细/ })).toBeDisabled();
+  });
+
+  test("filters the entire live directory by operation and keeps local and platform evidence separate", async () => {
+    const user = userEvent.setup();
+    const generate = "openai.images_generations", edit = "openai.images_edits";
+    const listed = Array.from({ length: 11 }, (_, i) => ({ id: `text-${i}` }));
+    invoke.mockResolvedValue({ data: { ...snapshot, model_index: listed.map((m) => m.id), models: [],
+      model_directory: [...listed, { id: "qwen-image" }, { id: "platform-canvas", operations: [generate] },
+        { id: "voice", operations: ["openai.audio_speech"] }, { id: "audio-chat", outputs: ["audio"] }] } });
+    directory.mockResolvedValue([
+      { id: "qwen-image", local: [generate, edit], platform: null, outputs: ["image"] },
+      { id: "titan-embed-image", local: [], platform: null, imageInput: true, outputs: [] },
+      { id: "video", local: ["openai.videos_create"], platform: null },
+      { id: "native-canvas", local: ["gemini.generate_content.image"], platform: null, outputs: ["image"] },
+      { id: "soundtrack", local: ["openai.chat_completions.music"], platform: null, outputs: ["audio"] },
+    ]);
+    render(<MarketPricesModal platformAvailable onClose={vi.fn()} />);
+    const filter = await screen.findByRole("combobox", { name: "筛选模型用途" });
+    await user.selectOptions(filter, "generate");
+    const qwen = (await screen.findByRole("heading", { name: "qwen-image" })).closest("article")!;
+    expect(within(qwen).getByLabelText("所属")).toHaveTextContent(/^本机$/);
+    expect(within(qwen).getByText("生图 · 改图")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "platform-canvas" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "native-canvas" })).toBeInTheDocument();
+    expect(screen.queryByText("titan-embed-image")).not.toBeInTheDocument();
+    for (const [op, model] of [["edit","qwen-image"],["video","video"],["speech","voice"],["music","soundtrack"],["imageInput","titan-embed-image"]]) {
+      await user.selectOptions(filter, op);
+      await waitFor(() => expect(screen.getAllByRole("heading", { level: 3 }).map((c) => c.textContent)).toEqual([model]));
+    }
+    await user.selectOptions(filter, "audioOutput");
+    expect(await screen.findByRole("heading", { name: "audio-chat" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "soundtrack" })).toBeInTheDocument();
+    expect(screen.queryByText("titan-embed-image")).not.toBeInTheDocument();
+    expect(directory).toHaveBeenCalledExactlyOnceWith({ localOnly: true });
+  });
+
+  test("previews qualified image rates using their actual billing unit", async () => {
+    invoke.mockResolvedValue({data:{...snapshot, models:[{...snapshot.models[0], reference_components:[
+      {meter_kind:"image_output_unit",qualifier:"1k",unit:"per_image",price_usd:0.03},
+      {meter_kind:"image_output_unit",qualifier:"4k",unit:"per_image",price_usd:0.08},
+    ]}]}});
+    render(<MarketPricesModal platformAvailable cnyPerUSD={7} onClose={vi.fn()} />);
+    expect(await screen.findByText("目录 ¥0.21–¥0.56 · 图像输出 · 每张图像")).toBeInTheDocument();
+  });
+
   test("shows context capacity once without a separate variant rules section", async () => {
     invoke.mockResolvedValue({data:{...snapshot, models:[{...snapshot.models[0], model:"claude-sonnet-4-6", context_tokens:1000000}], variant_rules:[{id:"const-1m-v2",suffix:"[1m]",mode:"multiplier",enabled:true,multiplier:1}]}});
     render(<MarketPricesModal platformAvailable onClose={vi.fn()} />);
     await screen.findByRole("heading", {name:"claude-sonnet-4-6"});
-    expect(screen.getByText("2 项计费 · 1M 上下文")).toBeInTheDocument();
+    expect(screen.getByText("1M 上下文")).toBeInTheDocument();
     expect(screen.queryByTestId("market-variant-rules")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", {name:/\[1m\]/})).not.toBeInTheDocument();
   });
   beforeEach(() => {
     invoke.mockReset();
+    directory.mockReset().mockResolvedValue([]);
     invoke.mockResolvedValue({ data: snapshot });
   });
 
@@ -199,7 +273,7 @@ describe("MarketPricesModal", () => {
     expect(screen.getByText("gpt-market-mini")).toBeInTheDocument();
 
     expect(invoke).toHaveBeenNthCalledWith(1, "fetch_market_prices", {
-      view: "catalog",
+      view: "catalog_index",
       query: null,
       channelId: null,
       sort: "model",
@@ -387,6 +461,61 @@ describe("MarketPricesModal", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
+  test("paints unseen page IDs before quotes, then reopens page one and permits paging during a slow revalidation", async () => {
+    let now = 1_000;
+    const cache = createMarketPriceCache(() => now);
+    const models = Array.from({ length: 24 }, (_, i) => ({ ...snapshot.models[0], model: `model-${String(i).padStart(2, "0")}` }));
+    const index = { ...snapshot, model_index: models.map((m) => m.model),
+      model_directory: models.map((m) => ({ id: m.model, imageInput: true })), models: models.slice(0, 10) };
+    let sendQuotes!: () => void, sendIndex!: () => void;
+    invoke.mockImplementation(async (_command, args) => {
+      if (args.view === "catalog_index") {
+        if (args.ifRevision) await new Promise<void>((resolve) => { sendIndex = resolve; });
+        return { data: index, revision: "catalog" };
+      }
+      expect(args.view).toBe("selection");
+      if (!args.ifRevision) await new Promise<void>((resolve) => { sendQuotes = resolve; });
+      return { data: { ...snapshot, models: models.filter((m) => args.modelIds.includes(m.model)) }, revision: "page" };
+    });
+    const modal = <MarketPricesModal platformAvailable cache={cache} cacheScope="owner" onClose={vi.fn()} />;
+    const first = render(modal);
+    const user = userEvent.setup();
+    const row = (id: string) => screen.getByRole("heading", { name: id }).closest("article")!;
+    await screen.findByRole("heading", { name: "model-00" });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(row("model-10")).toHaveAttribute("aria-busy", "true");
+    expect(within(row("model-10")).getByLabelText("输入")).toHaveTextContent("…");
+    expect(within(row("model-10")).queryByText("不可用")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "上一页" })).toBeEnabled();
+    expect(invoke).toHaveBeenCalledTimes(2);
+    await act(async () => sendQuotes());
+    expect(within(row("model-10")).getByText("0.83×")).toBeInTheDocument();
+    first.unmount(); // Last shown was page two.
+
+    now += MARKET_PRICE_CACHE_TTL_MS;
+    render(modal);
+    expect(within(row("model-00")).getByText("0.83×")).toBeInTheDocument();
+    await waitFor(() => expect(sendIndex).toBeTypeOf("function"));
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(within(row("model-10")).getByText("0.83×")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(row("model-20")).toHaveAttribute("aria-busy", "true");
+    await user.click(screen.getByRole("button", { name: "上一页" }));
+    expect(invoke).toHaveBeenCalledTimes(3); // Only the shared index revalidation is in flight.
+    await act(async () => sendIndex());
+    await waitFor(() => expect(screen.getByRole("button", { name: "刷新" })).toBeEnabled());
+    expect(screen.getByLabelText("第 2 / 3 页 · 24 项")).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(invoke.mock.lastCall?.[1]).toMatchObject({ view: "selection", ifRevision: "page",
+      modelIds: models.slice(10, 20).map((m) => m.model) });
+
+    await user.click(screen.getByRole("button", { name: "上一页" }));
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(within(row("model-10")).getByText("0.83×")).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledTimes(4);
+  });
+
   test("keeps cached prices and expanded rows during an unchanged background update", async () => {
     let now = 0;
     const cache = createMarketPriceCache(() => now);
@@ -499,7 +628,7 @@ describe("MarketPricesModal", () => {
     await user.click(sortButtons[1]);
 
     await waitFor(() => expect(invoke).toHaveBeenNthCalledWith(2, "fetch_market_prices", {
-      view: "catalog",
+      view: "catalog_index",
       query: null,
       channelId: null,
       sort: "input",
@@ -514,7 +643,7 @@ describe("MarketPricesModal", () => {
     await user.click(sortButtons[2]);
 
     await waitFor(() => expect(invoke).toHaveBeenNthCalledWith(3, "fetch_market_prices", {
-      view: "catalog",
+      view: "catalog_index",
       query: null,
       channelId: null,
       sort: "output",
@@ -550,14 +679,16 @@ describe("MarketPricesModal", () => {
     expect(invoke).toHaveBeenCalledTimes(3);
   });
 
-  test("explains standalone mode without requesting the platform", () => {
-    const { container } = render(
+  test("shows local models and context without requesting platform prices when signed out", async () => {
+    directory.mockResolvedValue([{ id: "private-canvas", local: ["openai.images_generations"], platform: null, outputs: [], contextTokens: 32000 }]);
+    render(
       <MarketPricesModal platformAvailable={false} onClose={vi.fn()} />,
     );
-
-    expect(container.querySelector(".market-inline-notice")).toBeInTheDocument();
-    expect(container.querySelector(".market-empty")).toBeInTheDocument();
-    expect(container.querySelector(".market-prices-modal")).not.toHaveClass("compact");
+    const row = (await screen.findByRole("heading", { name: "private-canvas" })).closest("article")!;
+    expect(within(row).getByText("生图 · 32K 上下文")).toBeInTheDocument();
+    expect(within(row).getByLabelText("所属")).toHaveTextContent(/^本机$/);
+    expect(within(row).getByLabelText("输入")).toHaveTextContent("—");
+    expect(directory).toHaveBeenCalledExactlyOnceWith({ localOnly: true });
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -569,9 +700,9 @@ describe("MarketPricesModal", () => {
       ...snapshot, models: null, my_offers: [], model_total: 0, offer_group_total: 0,
     }, revision: "empty" });
     const { container } = render(<MarketPricesModal platformAvailable onClose={vi.fn()} />);
-    expect(await screen.findByText("当前没有可报价的模型")).toBeInTheDocument();
+    expect(await screen.findByText("当前没有可用模型")).toBeInTheDocument();
     expect(container.querySelector(".market-inline-notice")).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /市场价格\s*0$/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /可用模型\s*0$/ })).toBeInTheDocument();
     now += 30_001;
     invoke.mockResolvedValueOnce({ data: snapshot, revision: "supply-returned" });
     await user.click(screen.getByRole("button", { name: "刷新" }));

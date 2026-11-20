@@ -368,10 +368,7 @@ impl RuntimeSupervisor {
             }
         }
 
-        let has_enabled_channel = cfg.channels.iter().any(|channel| {
-            channel.enabled && crate::source_driver::channel_is_platform_shareable(channel)
-        });
-        if cfg.supplier_auto_start && has_enabled_channel {
+        if cfg.supplier_auto_start {
             let supplier_state = self.state.clone();
             let supplier_task = spawn_logged("supplier_auto_start", async move {
                 if let Err(error) =
@@ -488,9 +485,8 @@ impl RuntimeSupervisor {
                     .clone()
                     .map(|channel| channel.id.clone())
                     .collect::<Vec<_>>(),
-                // LAN channels are local, never platform suppliers.
                 enabled
-                    .filter(|channel| crate::source_driver::channel_is_platform_shareable(channel))
+                    .filter(|channel| crate::source_driver::channel_shares_to_market(channel))
                     .count(),
             )
         };
@@ -755,7 +751,7 @@ mod tests {
         let mut config = default_config();
         let channel = &mut config.channels[0];
         channel.enabled = true;
-        channel.share_enabled = false;
+        channel.share_enabled = true;
         channel.server_ws_url = "ws://127.0.0.1:9/supplier/ws".to_string();
         channel.server_quic_url.clear();
         channel.upstream_base_url = format!("http://{upstream_addr}/v1");

@@ -90,7 +90,7 @@ fn gateway_response_needs_network_check(
     status: reqwest::StatusCode,
     version: reqwest::Version,
 ) -> bool {
-    version != reqwest::Version::HTTP_3 && matches!(status.as_u16(), 502 | 503 | 504)
+    version != reqwest::Version::HTTP_3 && matches!(status.as_u16(), 502..=504)
 }
 
 pub(crate) fn connection_failed() {
@@ -283,11 +283,24 @@ pub(crate) async fn connect_channel_websocket(
     >,
     tokio_tungstenite::tungstenite::handshake::client::Response,
 )> {
-    // TLS to an HTTPS proxy uses ordinary native trust. Upstream TLS remains
-    // the registry connector's native TLS; Codex-only CA/fingerprint policy
-    // is deliberately not inherited by other channel types.
+    let tls = websocket_tls_config();
+    let stream = crate::openai_transport::dialer::connect(request.uri(), true, tls.clone()).await?;
+    Ok(tokio_tungstenite::client_async_tls_with_config(
+        request,
+        stream,
+        Some(config),
+        Some(tokio_tungstenite::Connector::Rustls(tls)),
+    )
+    .await?)
+}
+
+/// Ordinary WSS and HTTPS proxies use system roots and an explicit provider.
+/// Both ring (QUIC) and aws-lc are linked, so a feature-inferred Rustls provider
+/// is ambiguous. Never install a process-wide default or inherit Codex-only CA
+/// overrides, cookies or handshake policy here.
+pub(crate) fn websocket_tls_config() -> Arc<rustls::ClientConfig> {
     static TLS: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
-    let tls = TLS.get_or_init(|| {
+    TLS.get_or_init(|| {
         let mut roots = rustls::RootCertStore::empty();
         roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
         Arc::new(
@@ -299,12 +312,8 @@ pub(crate) async fn connect_channel_websocket(
             .with_root_certificates(roots)
             .with_no_client_auth(),
         )
-    });
-    let stream = crate::openai_transport::dialer::connect(request.uri(), true, tls.clone()).await?;
-    Ok(
-        tokio_tungstenite::client_async_tls_with_config(request, stream, Some(config), None)
-            .await?,
-    )
+    })
+    .clone()
 }
 
 /// Use the same direct policy as platform HTTP for the supplier control tunnel.
@@ -392,6 +401,51 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize};
     use warp::Filter;
+
+    #[tokio::test]
+    async fn ordinary_websocket_keeps_certificate_verification() {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let certificate = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![certificate.cert.der().clone()],
+            rustls::pki_types::PrivatePkcs8KeyDer::from(certificate.signing_key.serialize_der())
+                .into(),
+        )
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let request = format!(
+            "wss://localhost:{}/v1/responses",
+            listener.local_addr().unwrap().port()
+        )
+        .into_client_request()
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            assert!(
+                tokio_rustls::TlsAcceptor::from(Arc::new(tls))
+                    .accept(stream)
+                    .await
+                    .is_err()
+            );
+        });
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            crate::proxy::connect_responses_websocket_request(request),
+        )
+        .await
+        .unwrap();
+        let error = result
+            .err()
+            .expect("an untrusted WSS certificate must fail");
+        assert!(format!("{error:#}").contains("UnknownIssuer"), "{error:#}");
+        server.await.unwrap();
+    }
 
     #[test]
     fn public_sources_use_domestic_direct_and_overseas_proxy_recommendations() {
@@ -872,7 +926,7 @@ mod tests {
             let status = reqwest::StatusCode::from_u16(status).unwrap();
             assert_eq!(
                 gateway_response_needs_network_check(status, reqwest::Version::HTTP_2),
-                matches!(status.as_u16(), 502 | 503 | 504),
+                matches!(status.as_u16(), 502..=504),
             );
             assert!(!gateway_response_needs_network_check(
                 status,
@@ -905,7 +959,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "isolated child of gateway_failure_preserves_pools_until_confirmed_network_change"]
     async fn gateway_recovery_child() {
-        use crate::upstream_transport::AdaptiveRequestBuilderExt;
+        use crate::upstream_transport::UpstreamRequestBuilderExt;
         let calls = Arc::new(AtomicUsize::new(0));
         let origin_calls = calls.clone();
         let origin = warp::any().map(move || {
@@ -949,7 +1003,7 @@ mod tests {
         let proxy_generation = system_proxy_generation();
         enabled.store(false, Ordering::Relaxed);
         let url = format!("http://{origin_address}/responses");
-        let response = snapshot.post(&url).send_adaptive().await.unwrap();
+        let response = snapshot.post(&url).send_upstream().await.unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
         assert_eq!(calls.load(Ordering::Relaxed), 0, "POST was not replayed");
         assert_eq!(proxy_calls.load(Ordering::Relaxed), 1);

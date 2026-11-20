@@ -39,8 +39,18 @@ pub(crate) async fn fetch_grok_media_models(
             &url,
         );
         for model in &mut models {
+            if kind == "video" {
+                model.media_operations.video = true;
+            }
             // The dedicated catalog establishes the output modality even when
             // an older response omits modality fields. Explicit fields win.
+            if kind == "image" && model.image_operations.is_none() {
+                model.image_operations = Some(crate::image_models::ImageOperations {
+                    generate: true,
+                    edit: model.input_modalities.iter().any(|m| m == "image")
+                        || model.id.starts_with("grok-imagine-image"),
+                });
+            }
             if model.output_modalities.is_empty() {
                 model.output_modalities = vec![kind.to_string()];
             }
@@ -69,6 +79,59 @@ pub(crate) async fn fetch_grok_media_models(
     models
 }
 
+pub(crate) async fn xai_multipart_image_edit(
+    content_type: &str,
+    body: bytes::Bytes,
+    selected_model: Option<&str>,
+    prefer_inline: bool,
+) -> Result<bytes::Bytes> {
+    use serde_json::{Value, json};
+
+    let (mut fields, images) = parse_image_edit_multipart(content_type, body).await?;
+    anyhow::ensure!(
+        !fields.contains_key("mask"),
+        "xAI multipart image edits do not support masks"
+    );
+    let mut images = images.into_iter();
+    let (Some(ImageEditInput::Upload { mime, bytes }), None) = (images.next(), images.next())
+    else {
+        anyhow::bail!("xAI multipart image edits require exactly one uploaded image");
+    };
+    let mime = mime.split(';').next().unwrap_or_default();
+    anyhow::ensure!(
+        matches!(mime, "image/jpeg" | "image/png" | "image/webp") && !bytes.is_empty(),
+        "xAI image edits require a nonempty JPEG, PNG or WebP upload"
+    );
+    anyhow::ensure!(
+        fields.get("stream") != Some(&Value::Bool(true)),
+        "xAI multipart image edits require a buffered response"
+    );
+    fields.remove("stream");
+    if let Some(deferred) = fields.get_mut("deferred") {
+        *deferred = match deferred.as_str() {
+            Some("true") => Value::Bool(true),
+            Some("false") => Value::Bool(false),
+            _ => anyhow::bail!("xAI deferred must be true or false"),
+        };
+    }
+    if prefer_inline {
+        fields.remove("output_format");
+        if fields.get("deferred") != Some(&Value::Bool(true)) {
+            fields
+                .entry("response_format")
+                .or_insert_with(|| json!("b64_json"));
+        }
+    }
+    if let Some(model) = selected_model.filter(|model| !model.is_empty()) {
+        fields.insert("model".into(), json!(model));
+    }
+    fields.insert(
+        "image".into(),
+        json!({"type":"image_url", "url":image_edit_data_url(mime, &bytes)}),
+    );
+    Ok(bytes::Bytes::from(serde_json::to_vec(&fields)?))
+}
+
 pub(crate) async fn execute_grok_media_request(
     client: &Client,
     channel: &ChannelConfig,
@@ -78,36 +141,35 @@ pub(crate) async fn execute_grok_media_request(
         .ok_or_else(|| anyhow!("unsupported Grok media route"))?;
     let operation =
         grok_media_operation(&route).ok_or_else(|| anyhow!("unsupported Grok media operation"))?;
-    let stream = request.stream_requested.unwrap_or(false)
-        || serde_json::from_slice::<serde_json::Value>(&request.body)
-            .ok()
-            .and_then(|v| v.get("stream").and_then(serde_json::Value::as_bool))
-            == Some(true);
-    crate::channel_executor::admit_retained_subscription_operation(channel, &route, stream)?;
+    let mut stream = request.stream_requested.unwrap_or(false);
     let mut body = request.body;
     let model = if body.is_empty() {
         String::new()
     } else {
-        // xAI's edits and video endpoints use JSON references, not Codex's
-        // multipart dialect. Preserve native fields rather than silently drop
-        // references when a caller uses the wrong dialect.
+        // Inspect only metadata. An edited image can carry a large inline URL.
         let raw = std::str::from_utf8(&body)?;
-        let value: serde_json::Value = serde_json::from_str(raw)
-            .context("Grok media requires a JSON body with native image/video references")?;
-        if !value.is_object() {
-            return Err(anyhow!("Grok media request must be a JSON object"));
-        }
+        let fields: HashMap<String, &serde_json::value::RawValue> = serde_json::from_str(raw)
+            .map_err(|_| anyhow!("Grok media request must be a JSON object"))?;
+        stream |= fields
+            .get("stream")
+            .is_some_and(|value| value.get() == "true");
+        let requested_model = fields
+            .get("model")
+            .and_then(|value| serde_json::from_str::<String>(value.get()).ok());
         let model = request
             .selected_upstream_model
             .as_deref()
-            .or_else(|| value.get("model").and_then(serde_json::Value::as_str))
+            .or(requested_model.as_deref())
             .unwrap_or_default()
             .to_string();
-        if request.selected_upstream_model.is_some() {
+        if request.selected_upstream_model.is_some()
+            && requested_model.as_deref() != Some(model.as_str())
+        {
             body = bytes::Bytes::from(rewrite_supplier_body_model(raw, &model));
         }
         model
     };
+    crate::channel_executor::admit_retained_subscription_operation(channel, &route, stream)?;
     let config = supplier_from_channel(channel);
     let guard = subscription_safety_enter_with_capacity(
         &config,
@@ -155,6 +217,12 @@ pub(crate) async fn execute_grok_media_request(
         .await?;
         response = send(token).await?;
     }
+    if matches!(
+        route.operation,
+        crate::surface::ApiOperation::ImagesGenerations | crate::surface::ApiOperation::ImagesEdits
+    ) {
+        crate::channel_executor::strip_http_response_headers(response.headers_mut());
+    }
     response.headers_mut().remove(reqwest::header::SET_COOKIE);
     Ok(crate::channel_executor::ChannelExecution {
         response: guard.hold_response(response),
@@ -167,33 +235,6 @@ pub(crate) async fn execute_grok_media_request(
         improvement_faults: Vec::new(),
         tool_mapping: Default::default(),
     })
-}
-
-fn grok_image_response_usage(body: &[u8]) -> Option<SupplierUpstreamUsage> {
-    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
-    if value.get("error").is_some() {
-        return None;
-    }
-    let images = value.get("data")?.as_array()?;
-    let count = images
-        .iter()
-        .filter(|image| {
-            ["url", "b64_json"].iter().any(|key| {
-                image
-                    .get(key)
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|s| !s.is_empty())
-            })
-        })
-        .count() as u64;
-    if count == 0 {
-        return None;
-    }
-    let mut usage = SupplierUpstreamUsage::from_json("openai_responses", &value);
-    // Bill actual returned images, never the requested n. This is provider
-    // output evidence; it does not pretend the provider reported token counts.
-    usage.replace_meter("image_output_unit", "per_image", count, 1, false);
-    Some(usage)
 }
 
 #[cfg(test)]
@@ -234,7 +275,7 @@ mod grok_media_tests {
 
     async fn respond(socket: &mut tokio::net::TcpStream, status: u16, body: &str) {
         let headers = format!(
-            "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nSet-Cookie: supplier-private=1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nSet-Cookie: route=fixture\r\nAuthorization: Bearer fixture-response\r\nX-RateLimit-Remaining-Requests: 12\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
         );
         socket.write_all(headers.as_bytes()).await.unwrap();
@@ -260,6 +301,201 @@ mod grok_media_tests {
         config.subscription.credential_ref = config.credential_ref.clone();
         config.subscription.audit_enabled = false;
         channel_from_supplier(config.channel_id.clone(), &config)
+    }
+
+    #[tokio::test]
+    async fn xai_image_edits_use_inline_uploads_for_local_and_platform_requests() {
+        use crate::source_driver::SourceDriverId::{GrokSubscription, XaiApi};
+        use crate::surface_wire::{SurfaceEnvelope, WireBody};
+        const MODEL: &str = "grok-imagine-image";
+        const CONTENT_TYPE: &str = "multipart/form-data; boundary=xai-edit";
+        const PATH: &str = "/v1/images/edits";
+        const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgCDgAAAFkARER5KnrAAAAAElFTkSuQmCC";
+        let inline = format!(
+            r#"{{ "data":[{{"b64_json":"{PNG}","mime_type":"image/png"}}], "future":1, "usage":{{"input_tokens":7}} }}"#
+        );
+        const URL: &str = r#"{ "data":[{"url":"https://images.invalid/one"}], "future":1, "usage":{"input_tokens":7} }"#;
+        let _lock = MEDIA_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let credential = directory.path().join("grok.json");
+        fs::write(
+            &credential,
+            serde_json::json!({"access_token":"fixture-key","expired":now_unix()+3600}).to_string(),
+        )
+        .unwrap();
+        let _reset = MediaOverride;
+
+        for driver in [GrokSubscription, XaiApi] {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let base = format!("http://{}/v1", listener.local_addr().unwrap());
+            let channel = if driver == GrokSubscription {
+                set_retained_subscription_upstream_override("grok_media", Some(&base));
+                channel(&credential)
+            } else {
+                let mut api =
+                    channel_from_supplier("xai-image-fixture".into(), &default_supplier_config());
+                api.set_source_driver(XaiApi);
+                api.enabled = true;
+                api.models = vec![MODEL.into()];
+                api.upstream_model = MODEL.into();
+                api.v2.credential_ref = "fixture-key".into();
+                api.surface_bindings = crate::source_driver_surface_bindings(XaiApi, &base);
+                api.surface_bindings[0].verification.state = "verified".into();
+                crate::project_channel_legacy_fields(api)
+            };
+            let fixture_inline = inline.clone();
+            let upstream = tokio::spawn(async move {
+                for expected in ["b64_json", "url"] {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let request = read_request(&mut socket).await;
+                    let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+                    let headers = String::from_utf8_lossy(&request[..split]).to_ascii_lowercase();
+                    assert!(headers.starts_with("post /v1/images/edits "));
+                    assert!(headers.contains("content-type: application/json"));
+                    assert!(
+                        headers
+                            .lines()
+                            .any(|line| line == "authorization: bearer fixture-key"),
+                        "{driver:?} {expected} must use the supplier credential"
+                    );
+                    assert!(!headers.contains(IMAGE_RESPONSE_FORMAT_HEADER));
+                    assert!(!headers.contains("cookie:"));
+                    assert!(!headers.contains("caller-secret"));
+                    let body: serde_json::Value =
+                        serde_json::from_slice(&request[split + 4..]).unwrap();
+                    assert_eq!(
+                        body,
+                        serde_json::json!({
+                            "model":MODEL,"prompt":"edit fixture","n":3,"future_option":"keep",
+                            "image":{"type":"image_url","url":format!("data:image/png;base64,{PNG}")},
+                            "response_format":expected
+                        })
+                    );
+                    respond(
+                        &mut socket,
+                        200,
+                        if expected == "url" {
+                            URL
+                        } else {
+                            &fixture_inline
+                        },
+                    )
+                    .await;
+                }
+            });
+            let mut config = default_config();
+            config.endpoints.clear();
+            config.channels = vec![channel.clone()];
+            let local_key = config.api_key.clone();
+            let routes = crate::proxy_routes(Arc::new(crate::proxy::ProxyShared::from_config(
+                config,
+                Client::new(),
+            )));
+            let multipart = |platform| {
+                let mut form = Vec::new();
+                for (name, value) in [
+                    ("model", if platform { "public-alias" } else { MODEL }),
+                    ("prompt", "edit fixture"),
+                    ("n", "3"),
+                    ("future_option", "keep"),
+                    ("output_format", if platform { "jpeg" } else { "webp" }),
+                ] {
+                    form.extend_from_slice(format!("--xai-edit\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes());
+                }
+                if platform {
+                    form.extend_from_slice(b"--xai-edit\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\nurl\r\n");
+                }
+                form.extend_from_slice(b"--xai-edit\r\nContent-Disposition: form-data; name=\"image[]\"; filename=\"input.png\"\r\nContent-Type: application/octet-stream\r\n\r\n");
+                form.extend_from_slice(
+                    &base64::engine::general_purpose::STANDARD
+                        .decode(PNG)
+                        .unwrap(),
+                );
+                form.extend_from_slice(b"\r\n--xai-edit--\r\n");
+                form
+            };
+            let local = warp::test::request()
+                .method("POST")
+                .path(PATH)
+                .header("content-type", CONTENT_TYPE)
+                .header(IMAGE_RESPONSE_FORMAT_HEADER, "b64_json")
+                .header("authorization", format!("Bearer {local_key}"))
+                .header("cookie", "caller-secret")
+                .body(multipart(false))
+                .reply(&routes)
+                .await;
+            assert_eq!(local.status(), 200, "{driver:?}");
+            assert_eq!(local.body().as_ref(), inline.as_bytes());
+            assert_eq!(local.headers()["x-ratelimit-remaining-requests"], "12");
+            let expected_cookie = (driver == XaiApi).then_some("route=fixture");
+            assert_eq!(
+                local
+                    .headers()
+                    .get("set-cookie")
+                    .map(|v| v.to_str().unwrap()),
+                expected_cookie
+            );
+            assert!(!local.headers().contains_key("authorization"));
+            let wire = SurfaceEnvelope {
+                surface: Some(crate::surface::ApiSurface::OpenAi),
+                operation: Some(crate::surface::ApiOperation::ImagesEdits),
+                method: "POST".into(),
+                path: PATH.into(),
+                headers: [
+                    ("content-type", CONTENT_TYPE),
+                    (IMAGE_RESPONSE_FORMAT_HEADER, "b64_json"),
+                    ("authorization", "Bearer caller-secret"),
+                    ("cookie", "caller-secret"),
+                ]
+                .map(|(name, value)| crate::surface_wire::WireHeader {
+                    name: name.into(),
+                    value: WireBody::from_bytes(value.as_bytes()),
+                })
+                .into(),
+                body: WireBody::from_bytes(&multipart(true)),
+                selected_upstream_model: Some(MODEL.into()),
+                stream: Some(false),
+                ..Default::default()
+            };
+            let msg = SupplierMessage {
+                id: "edit-fixture".into(),
+                kind: "http_request".into(),
+                output_credit: None,
+                payload: crate::surface_wire::wire_payload(wire).unwrap(),
+            };
+            let (outbound, _inbound) = mpsc::channel(4);
+            let payload = forward_supplier_request(
+                &Client::new(),
+                &supplier_from_channel(&channel),
+                &msg,
+                false,
+                &outbound,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let response = SurfaceEnvelope::from_payload(&payload).unwrap();
+            assert_eq!(response.status, Some(200));
+            assert_eq!(response.body.decode().unwrap(), URL.as_bytes());
+            let headers = response.header_map().unwrap();
+            assert_eq!(headers["x-ratelimit-remaining-requests"], "12");
+            assert_eq!(
+                headers.get("set-cookie").map(|v| v.to_str().unwrap()),
+                expected_cookie
+            );
+            assert!(!headers.contains_key("authorization"));
+            assert_eq!(payload["upstream_usage"]["input_tokens"], 7);
+            assert!(
+                payload["upstream_usage"]["usage_meters"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m["meter_kind"] == "image_output_unit" && m["quantity"] == 1)
+            );
+            upstream.await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -308,7 +544,7 @@ mod grok_media_tests {
 
     #[test]
     fn grok_media_usage_counts_returned_images_without_fabricating_tokens() {
-        let usage = grok_image_response_usage(br#"{"data":[{"url":"https://example.test/a"},{"b64_json":"AA=="},{"url":""},{"error":"filtered"}],"usage":{"cost_in_usd_ticks":4}}"#).unwrap();
+        let usage = upstream_image_usage_from_body(br#"{"data":[{"url":"https://example.test/a"},{"b64_json":"AA=="},{"url":""},{"error":"filtered"}],"usage":{"cost_in_usd_ticks":4}}"#).unwrap();
         let usage = serde_json::to_value(usage).unwrap();
         assert!(
             usage["usage_meters"]
@@ -324,12 +560,14 @@ mod grok_media_tests {
             br#"{"data":[]}"#,
             br#"{"data":[{"url":""}]}"#,
         ] {
-            assert!(grok_image_response_usage(body).is_none());
+            assert!(upstream_image_usage_from_body(body).is_none());
         }
     }
 
     #[tokio::test]
     async fn grok_media_supplier_wire_preserves_native_body_errors_and_image_meter() {
+        const BODY: &[u8] = br#"{ "model":"grok-imagine-image", "prompt":"blue dot", "n":3, "extension":{"keep":true} }"#;
+        const CASES: [(u16, bool); 4] = [(200, false), (200, true), (403, false), (503, false)];
         let _lock = MEDIA_TEST_LOCK.lock().await;
         let directory = tempfile::tempdir().unwrap();
         let credential = directory.path().join("grok.json");
@@ -349,7 +587,7 @@ mod grok_media_tests {
         );
         let _reset = MediaOverride;
         let upstream = tokio::spawn(async move {
-            for status in [200, 403, 503] {
+            for (status, inline) in CASES {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let request = read_request(&mut socket).await;
                 let split = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
@@ -369,11 +607,19 @@ mod grok_media_tests {
                     serde_json::from_slice(&request[split + 4..]).unwrap();
                 assert_eq!(value["model"], "grok-imagine-image");
                 assert_eq!(value["extension"], serde_json::json!({"keep":true}));
+                assert!(!headers.contains(IMAGE_RESPONSE_FORMAT_HEADER));
+                if inline {
+                    assert_eq!(value["response_format"], "b64_json");
+                } else {
+                    assert_eq!(&request[split + 4..], BODY);
+                }
                 respond(
                     &mut socket,
                     status,
-                    if status == 200 {
+                    if inline {
                         r#"{"data":[{"b64_json":"AA=="}],"future_field":42}"#
+                    } else if status == 200 {
+                        r#"{"data":[{"url":"https://images.invalid/fixture"}],"future_field":42}"#
                     } else {
                         r#"{"error":{"message":"subscription required"}}"#
                     },
@@ -381,19 +627,25 @@ mod grok_media_tests {
                 .await;
             }
         });
-        for status in [200, 403, 503] {
-            let wire = crate::surface_wire::SurfaceEnvelope {
+        for (status, inline) in CASES {
+            let mut wire = crate::surface_wire::SurfaceEnvelope {
                 surface: Some(crate::surface::ApiSurface::OpenAi),
                 operation: Some(crate::surface::ApiOperation::ImagesGenerations),
                 method: "POST".into(), path: "/v1/images/generations".into(),
                 headers: ["authorization", "cookie", "x-forwarded-for", "x-codex-installation-id"]
                     .map(|name| crate::surface_wire::WireHeader { name:name.into(), value:crate::surface_wire::WireBody::from_bytes(b"caller-token") }).into(),
-                body: crate::surface_wire::WireBody::from_bytes(br#"{"model":"grok-imagine-image","prompt":"blue dot","n":3,"extension":{"keep":true}}"#),
+                body: crate::surface_wire::WireBody::from_bytes(BODY),
                 selected_upstream_model: Some("grok-imagine-image".into()), stream: Some(false),
                 ..Default::default()
             };
+            if inline {
+                wire.headers.push(crate::surface_wire::WireHeader {
+                    name: IMAGE_RESPONSE_FORMAT_HEADER.into(),
+                    value: crate::surface_wire::WireBody::from_bytes(b"b64_json"),
+                });
+            }
             let msg = SupplierMessage {
-                id: format!("media-{status}"),
+                id: format!("media-{status}-{inline}"),
                 kind: "http_request".into(),
                 output_credit: None,
                 payload: crate::surface_wire::wire_payload(wire).unwrap(),
@@ -427,11 +679,9 @@ mod grok_media_tests {
                         .is_none_or(serde_json::Value::is_null)
                 );
             }
-            assert!(
-                !serde_json::to_string(&response.headers)
-                    .unwrap()
-                    .contains("supplier-private")
-            );
+            let headers = response.header_map().unwrap();
+            assert!(!headers.contains_key("set-cookie"));
+            assert!(!headers.contains_key("authorization"));
         }
         upstream.await.unwrap();
     }

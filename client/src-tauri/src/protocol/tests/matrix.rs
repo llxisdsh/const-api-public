@@ -3500,6 +3500,185 @@ fn unsigned_reasoning_history_is_omitted_across_protocols_without_losing_visible
 }
 
 #[test]
+fn responses_standalone_outputs_preserve_context_and_real_tool_pairs_for_all_targets() {
+    let source = ProtocolKind::OpenAiResponses;
+    for stream in [false, true] {
+        let body = json!({
+            "model":"source-model", "stream":stream,
+            "tools":[responses_function("lookup")],
+            "input":[
+                {"role":"user","content":"Look up the page."},
+                {"type":"function_call","call_id":"call_lookup","name":"lookup","arguments":"{\"query\":\"page\"}"},
+                {"type":"function_call_output","call_id":"call_lookup","output":"Lookup complete."},
+                {"type":"function_call_output","id":"notification_open","name":"codex_apps_open_page",
+                    "namespace":"pages","output":"Page opened.","future_metadata":{"keep":true}},
+                {"type":"function_call_output","call_id":null,"name":"codex_apps_selected_page_part_1_of_1",
+                    "output":[{"type":"input_text","text":"Selected page content."},
+                        {"type":"input_image","image_url":"data:image/png;base64,aGk="}]},
+                {"role":"user","content":"Review this page."}
+            ]
+        });
+        for target in PROTOCOLS {
+            let target_context = target_context(source, target);
+            let converted = convert_non_stream(
+                source,
+                target,
+                &body,
+                &context(source, "source-model", "source-account"),
+                &target_context,
+                &CapabilityProfile::default(),
+                ConversionPolicy::Production,
+            )
+            .unwrap_or_else(|error| {
+                panic!("standalone output -> {target}, stream={stream}: {error}")
+            });
+            if target == source {
+                assert_eq!(converted.body, body);
+                assert!(converted.plan.repairs().is_empty());
+                continue;
+            }
+            assert_eq!(
+                converted
+                    .plan
+                    .repairs()
+                    .iter()
+                    .filter(|repair| repair.code == "standalone_tool_output_projected")
+                    .count(),
+                2,
+            );
+            let decoded = decode_request(target, &converted.body, &target_context).unwrap();
+            let blocks = decoded
+                .turns
+                .iter()
+                .flat_map(|turn| &turn.blocks)
+                .collect::<Vec<_>>();
+            let calls = blocks
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::ToolCall(call) => Some(call),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let results = blocks
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::ToolResult(result) => Some(result),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(calls.len(), 1, "{target}");
+            assert_eq!(calls[0].id, "call_lookup");
+            assert_eq!(calls[0].name, "lookup");
+            assert_eq!(results.len(), 1, "{target}");
+            assert_eq!(results[0].call_id, "call_lookup");
+            let result_text = visible_text(&results[0].content);
+            if target == ProtocolKind::GeminiNative {
+                // Gemini functionResponse always carries a JSON object.
+                assert_eq!(
+                    serde_json::from_str::<Value>(&result_text).unwrap(),
+                    json!({"content":"Lookup complete."})
+                );
+            } else {
+                assert_eq!(result_text, "Lookup complete.");
+            }
+            assert_eq!(
+                decoded.tools.len(),
+                1,
+                "notifications are not callable tools"
+            );
+
+            let text = blocks
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::Text(text) => Some(text.text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("codex_apps_open_page"));
+            assert!(text.contains("\"namespace\":\"pages\""));
+            assert!(text.contains("codex_apps_selected_page_part_1_of_1"));
+            assert!(
+                text.find("Page opened.").unwrap() < text.find("Selected page content.").unwrap()
+            );
+            assert!(
+                text.find("Selected page content.").unwrap()
+                    < text.find("Review this page.").unwrap()
+            );
+            assert!(blocks.iter().any(|block| matches!(block,
+                ContentBlock::Image(MediaBlock { source: MediaSource::InlineBase64 { media_type, data }, .. })
+                    if media_type == "image/png" && data == "aGk=")));
+            assert!(
+                !blocks
+                    .iter()
+                    .any(|block| matches!(block, ContentBlock::ProviderArtifact(_)))
+            );
+        }
+    }
+}
+
+#[test]
+fn responses_standalone_output_support_keeps_invalid_tool_results_rejected() {
+    let source = ProtocolKind::OpenAiResponses;
+    for (item, expected_code) in [
+        (
+            json!({"type":"function_call_output","output":"bad"}),
+            "tool_call_id_missing",
+        ),
+        (
+            json!({"type":"function_call_output","name":" ","output":"bad"}),
+            "tool_call_id_missing",
+        ),
+        (
+            json!({"type":"function_call_output","name":9,"output":"bad"}),
+            "tool_call_id_missing",
+        ),
+        (
+            json!({"type":"function_call_output","name":"notification","call_id":"","output":"bad"}),
+            "tool_call_id_missing",
+        ),
+        (
+            json!({"type":"function_call_output","name":"notification","call_id":9,"output":"bad"}),
+            "tool_call_id_missing",
+        ),
+        (
+            json!({"type":"custom_tool_call_output","name":"notification","output":"bad"}),
+            "tool_call_id_missing",
+        ),
+        (
+            json!({"type":"function_call_output","name":"notification","call_id":"missing-call","output":"bad"}),
+            "tool_result_orphaned",
+        ),
+        (
+            json!({"type":"function_call_output","name":"notification","namespace":9,"output":"bad"}),
+            "tool_namespace_invalid",
+        ),
+        (
+            json!({"type":"function_call_output","name":"notification","output":{"text":"bad"}}),
+            "content_invalid",
+        ),
+    ] {
+        for target in [
+            ProtocolKind::GeminiNative,
+            ProtocolKind::OpenAiChat,
+            ProtocolKind::AnthropicMessages,
+        ] {
+            let error = convert_non_stream(
+                source,
+                target,
+                &json!({"model":"source-model","input":[item.clone()]}),
+                &context(source, "source-model", "source-account"),
+                &target_context(source, target),
+                &CapabilityProfile::default(),
+                ConversionPolicy::Production,
+            )
+            .expect_err("standalone notifications must not relax paired tool validation");
+            assert_eq!(error.code(), expected_code, "{target}: {item}");
+        }
+    }
+}
+
+#[test]
 fn runtime_conversion_rejects_an_orphaned_tool_result_before_encoding() {
     let source = ProtocolKind::OpenAiChat;
     let target = ProtocolKind::AnthropicMessages;

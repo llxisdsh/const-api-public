@@ -118,7 +118,7 @@ async fn fetch_quota_at(
     channel: &ChannelConfig,
     url: &str,
 ) -> Result<Vec<QuotaWindow>> {
-    use crate::upstream_transport::AdaptiveRequestBuilderExt;
+    use crate::upstream_transport::UpstreamRequestBuilderExt;
     let auth = if channel.source_driver() == SourceDriverId::GlmCodingPlan {
         channel.v2.credential_ref.trim().to_string()
     } else {
@@ -129,7 +129,7 @@ async fn fetch_quota_at(
         .header("authorization", auth)
         .header("accept", "application/json");
     let response = crate::channel_user_agent::apply_to_request(channel, request)
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let value = crate::detection::quota_response_json(response, "coding plan quota").await?;
     parse_quota(channel.source_driver(), &value, crate::now_unix())

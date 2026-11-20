@@ -578,12 +578,8 @@ pub(crate) const fn api_operation_requires_native_api_credential(operation: ApiO
             | ApiOperation::UploadsComplete
             | ApiOperation::UploadsCancel
             | ApiOperation::ImagesVariations
-            | ApiOperation::AudioSpeech
-            | ApiOperation::AudioTranscriptions
-            | ApiOperation::AudioTranslations
             | ApiOperation::VideosList
             | ApiOperation::VideosDelete
-            | ApiOperation::VideosContent
             | ApiOperation::VideosRemix
             | ApiOperation::BatchesCreate
             | ApiOperation::BatchesList
@@ -604,15 +600,31 @@ pub(crate) const fn api_operation_requires_native_api_credential(operation: ApiO
 pub(crate) const fn api_operation_requires_local_backend(operation: ApiOperation) -> bool {
     matches!(
         operation,
-        ApiOperation::ImagesEdits
-            | ApiOperation::VideosCreate
-            | ApiOperation::VideosGet
-            | ApiOperation::VideosEdit
+        ApiOperation::VideosEdit
             | ApiOperation::VideosExtend
             | ApiOperation::RealtimeCallsCreate
             | ApiOperation::RealtimeLiveCallCreate
             | ApiOperation::RealtimeLiveConnect
             | ApiOperation::RealtimeLiveWebSocket
+    )
+}
+
+// Native media keeps its own model/operation selection even when it can also
+// be supplied by the platform. Platform admission is not a text protocol.
+pub(crate) const fn api_operation_is_native_media(operation: ApiOperation) -> bool {
+    matches!(
+        operation,
+        ApiOperation::ImagesGenerations
+            | ApiOperation::ImagesEdits
+            | ApiOperation::ImagesVariations
+            | ApiOperation::AudioSpeech
+            | ApiOperation::AudioTranscriptions
+            | ApiOperation::AudioTranslations
+            | ApiOperation::VideosCreate
+            | ApiOperation::VideosGet
+            | ApiOperation::VideosContent
+            | ApiOperation::VideosEdit
+            | ApiOperation::VideosExtend
     )
 }
 
@@ -2648,6 +2660,13 @@ mod tests {
             ),
             (
                 "POST",
+                "/v1/images/edits",
+                ApiOperation::ImagesEdits,
+                "small_buffered",
+                "capability_routed",
+            ),
+            (
+                "POST",
                 "/v1/images/variations",
                 ApiOperation::ImagesVariations,
                 "streaming_upload",
@@ -2658,35 +2677,35 @@ mod tests {
                 "/v1/audio/speech",
                 ApiOperation::AudioSpeech,
                 "small_buffered",
-                "native_backend_only",
+                "capability_routed",
             ),
             (
                 "POST",
                 "/v1/audio/transcriptions",
                 ApiOperation::AudioTranscriptions,
                 "streaming_upload",
-                "native_backend_only",
+                "capability_routed",
             ),
             (
                 "POST",
                 "/v1/videos",
                 ApiOperation::VideosCreate,
                 "streaming_upload",
-                "local_backend_only",
+                "capability_routed",
             ),
             (
                 "POST",
                 "/v1/videos/generations",
                 ApiOperation::VideosCreate,
                 "streaming_upload",
-                "local_backend_only",
+                "capability_routed",
             ),
             (
                 "GET",
                 "/v1/videos/video_1/content",
                 ApiOperation::VideosContent,
                 "none",
-                "native_backend_only",
+                "capability_routed",
             ),
         ];
         for (method, path, operation, body_mode, policy) in cases {

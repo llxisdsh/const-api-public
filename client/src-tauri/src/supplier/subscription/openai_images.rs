@@ -52,7 +52,7 @@ fn insert_openai_image_form_value(
 
 fn openai_image_form_scalar(name: &str, value: String) -> serde_json::Value {
     let trimmed = value.trim();
-    if matches!(name, "n" | "output_compression" | "partial_images") {
+    if matches!(name, "n" | "output_compression" | "partial_images" | "frame_count" | "frame_duration_ms") {
         if let Ok(value) = trimmed.parse::<i64>() {
             return serde_json::Value::Number(value.into());
         }
@@ -65,33 +65,38 @@ fn openai_image_form_scalar(name: &str, value: String) -> serde_json::Value {
     serde_json::Value::String(value)
 }
 
-fn append_openai_image_reference(images: &mut Vec<serde_json::Value>, value: String) {
+enum ImageEditInput {
+    Upload { mime: String, bytes: bytes::Bytes },
+    Reference(serde_json::Value),
+}
+
+fn append_openai_image_reference(images: &mut Vec<ImageEditInput>, value: String) {
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&value) {
         match parsed {
             serde_json::Value::Array(values) => {
-                images.extend(values);
+                images.extend(values.into_iter().map(ImageEditInput::Reference));
                 return;
             }
             serde_json::Value::Object(_) => {
-                images.push(parsed);
+                images.push(ImageEditInput::Reference(parsed));
                 return;
             }
             serde_json::Value::String(image_url) => {
-                images.push(serde_json::json!({"image_url": image_url}));
+                images.push(ImageEditInput::Reference(
+                    serde_json::json!({"image_url": image_url}),
+                ));
                 return;
             }
             _ => {}
         }
     }
-    images.push(serde_json::json!({"image_url": value}));
+    images.push(ImageEditInput::Reference(
+        serde_json::json!({"image_url": value}),
+    ));
 }
 
-fn openai_image_data_url(
-    content_type: Option<&str>,
-    file_name: Option<&str>,
-    bytes: &[u8],
-) -> String {
-    let content_type = content_type
+fn image_edit_upload_mime(content_type: Option<&str>, file_name: Option<&str>) -> String {
+    content_type
         .map(str::trim)
         .filter(|value| value.starts_with("image/"))
         .map(str::to_string)
@@ -109,11 +114,13 @@ fn openai_image_data_url(
                 _ => None,
             }
         })
-        .unwrap_or_else(|| "application/octet-stream".to_string());
-    format!(
-        "data:{content_type};base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(bytes)
-    )
+        .unwrap_or_else(|| "application/octet-stream".to_string())
+}
+
+fn image_edit_data_url(mime: &str, bytes: &[u8]) -> String {
+    let mut url = format!("data:{mime};base64,");
+    base64::engine::general_purpose::STANDARD.encode_string(bytes, &mut url);
+    url
 }
 
 pub(crate) async fn normalize_openai_subscription_image_payload(
@@ -122,7 +129,7 @@ pub(crate) async fn normalize_openai_subscription_image_payload(
     body: bytes::Bytes,
 ) -> Result<OpenAiSubscriptionImagePayload> {
     let content_type = openai_subscription_image_content_type(headers);
-    if serde_json::from_slice::<serde_json::Value>(&body).is_ok() {
+    if serde_json::from_slice::<serde::de::IgnoredAny>(&body).is_ok() {
         return Ok(OpenAiSubscriptionImagePayload {
             body,
             content_type: "application/json".to_string(),
@@ -132,8 +139,34 @@ pub(crate) async fn normalize_openai_subscription_image_payload(
         return Ok(OpenAiSubscriptionImagePayload { body, content_type });
     }
 
-    let boundary = multer::parse_boundary(&content_type)
-        .map_err(|err| anyhow!("invalid OpenAI image edit multipart boundary: {err}"))?;
+    let (mut object, inputs) = parse_image_edit_multipart(&content_type, body).await?;
+    if !inputs.is_empty() {
+        let images = inputs
+            .into_iter()
+            .map(|input| match input {
+                ImageEditInput::Upload { mime, bytes } => {
+                    serde_json::json!({"image_url": image_edit_data_url(&mime, &bytes)})
+                }
+                ImageEditInput::Reference(reference) => reference,
+            })
+            .collect();
+        object.insert("images".into(), serde_json::Value::Array(images));
+    }
+    Ok(OpenAiSubscriptionImagePayload {
+        body: bytes::Bytes::from(serde_json::to_vec(&object)?),
+        content_type: "application/json".into(),
+    })
+}
+
+async fn parse_image_edit_multipart(
+    content_type: &str,
+    body: bytes::Bytes,
+) -> Result<(
+    serde_json::Map<String, serde_json::Value>,
+    Vec<ImageEditInput>,
+)> {
+    let boundary = multer::parse_boundary(content_type)
+        .map_err(|_| anyhow!("invalid image edit multipart boundary"))?;
     let stream = futures_util::stream::once(async move { Ok::<_, std::io::Error>(body) });
     let mut multipart = multer::Multipart::new(stream, boundary);
     let mut object = serde_json::Map::new();
@@ -143,13 +176,13 @@ pub(crate) async fn normalize_openai_subscription_image_payload(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|err| anyhow!("parse OpenAI image edit multipart body: {err}"))?
+        .map_err(|_| anyhow!("invalid image edit multipart body"))?
     {
         let name = field
             .name()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("OpenAI image edit multipart field has no name"))?
+            .ok_or_else(|| anyhow!("image edit multipart field has no name"))?
             .to_string();
         let file_name = field.file_name().map(str::to_string);
         let field_content_type = field.content_type().map(ToString::to_string);
@@ -162,31 +195,28 @@ pub(crate) async fn normalize_openai_subscription_image_payload(
         let value = field
             .bytes()
             .await
-            .map_err(|err| anyhow!("read OpenAI image edit multipart field {name}: {err}"))?;
+            .map_err(|_| anyhow!("invalid image edit multipart field"))?;
 
         if is_file {
             if !is_image_file && !is_mask_file {
-                return Err(anyhow!(
-                    "unsupported OpenAI image edit multipart file field {name}"
-                ));
+                return Err(anyhow!("unsupported image edit multipart file field"));
             }
-            let data_url =
-                openai_image_data_url(field_content_type.as_deref(), file_name.as_deref(), &value);
+            let mime = image_edit_upload_mime(field_content_type.as_deref(), file_name.as_deref());
             if is_mask_file {
                 if mask.is_some() {
                     return Err(anyhow!(
-                        "OpenAI image edit multipart request contains more than one mask"
+                        "image edit multipart request contains more than one mask"
                     ));
                 }
-                mask = Some(serde_json::json!({"image_url": data_url}));
+                mask = Some(serde_json::json!({"image_url": image_edit_data_url(&mime, &value)}));
             } else {
-                images.push(serde_json::json!({"image_url": data_url}));
+                images.push(ImageEditInput::Upload { mime, bytes: value });
             }
             continue;
         }
 
         let text = String::from_utf8(value.to_vec())
-            .map_err(|_| anyhow!("OpenAI image edit multipart field {name} is not UTF-8"))?;
+            .map_err(|_| anyhow!("image edit multipart text field is not UTF-8"))?;
         match name.as_str() {
             "image" | "image[]" | "images" | "images[]" => {
                 append_openai_image_reference(&mut images, text);
@@ -207,20 +237,10 @@ pub(crate) async fn normalize_openai_subscription_image_payload(
         }
     }
 
-    if !images.is_empty() {
-        object.insert("images".to_string(), serde_json::Value::Array(images));
-    }
     if let Some(mask) = mask {
         object.insert("mask".to_string(), mask);
     }
-
-    Ok(OpenAiSubscriptionImagePayload {
-        body: bytes::Bytes::from(
-            serde_json::to_vec(&serde_json::Value::Object(object))
-                .map_err(|err| anyhow!("encode OpenAI image edit JSON body: {err}"))?,
-        ),
-        content_type: "application/json".to_string(),
-    })
+    Ok((object, images))
 }
 
 pub(crate) fn codex_image_url_from_responses_url(responses_url: &str, operation: &str) -> String {

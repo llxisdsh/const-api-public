@@ -161,7 +161,7 @@ button.quiet,
 /* Standalone interactive rows use the control curve, not card curvature. */
 
 .guide-root-link,
-.guide-surface-row > button {
+.guide-copy-button {
   border-radius: var(--radius-control) !important;
 }
 

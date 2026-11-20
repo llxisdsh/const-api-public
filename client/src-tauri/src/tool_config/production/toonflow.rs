@@ -62,8 +62,7 @@ fn toonflow_data_dir_from_program(path: &Path) -> Option<PathBuf> {
         "launcher.exe" => path.parent()?.parent()?.parent()?.to_path_buf(),
         _ => path.to_path_buf(),
     };
-    let mut ancestors = candidate.ancestors();
-    while let Some(ancestor) = ancestors.next() {
+    for ancestor in candidate.ancestors() {
         let data = ancestor.join("data");
         if data.exists()
             || ancestor

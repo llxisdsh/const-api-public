@@ -14,8 +14,8 @@ use crate::protocol::continuation::{
     previous_part_entries, reasoning_artifacts_are_encrypted, reasoning_entries, tool_call_entries,
 };
 use crate::protocol::conversion::{
-    ArtifactDisposition, ConversionPlan, FeatureDisposition, canonicalize_schema,
-    canonicalize_tool_schema,
+    ArtifactDisposition, ConversionPlan, ConversionRepair, FeatureDisposition, RepairClass,
+    canonicalize_schema, canonicalize_tool_schema,
 };
 use crate::protocol::ir::*;
 use crate::protocol::kind::ProtocolKind;
@@ -432,6 +432,17 @@ fn decode_input_item(
             TurnRole::Assistant,
             vec![ContentBlock::ToolCall(decode_tool_call(item, index)?)],
         ),
+        "function_call_output" if standalone_tool_output_name(item).is_some() => {
+            // Codex also sends named external notifications without a preceding
+            // call. Retain their native envelope; cross-protocol consumers lower
+            // them to user context, never to an invented call/result pair.
+            let mut artifact = provider_artifact(item.clone(), context, model);
+            artifact.criticality = ArtifactCriticality::Required;
+            (
+                TurnRole::User,
+                vec![ContentBlock::ProviderArtifact(artifact)],
+            )
+        }
         "function_call_output" | "custom_tool_call_output" => (
             TurnRole::User,
             vec![ContentBlock::ToolResult(decode_tool_result(
@@ -1025,6 +1036,77 @@ fn decode_tool_result(
             ..Default::default()
         },
     })
+}
+
+fn standalone_tool_output_name(item: &Value) -> Option<&str> {
+    if item.get("type").and_then(Value::as_str) != Some("function_call_output")
+        || !item.get("call_id").is_none_or(Value::is_null)
+    {
+        return None;
+    }
+    item.get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+}
+
+/// Shared by cross-protocol conversion and subscriptions with private wire
+/// formats. Responses itself keeps the original item, including unknown fields.
+pub(crate) fn project_responses_standalone_outputs(
+    request: &mut CanonicalRequestV2,
+    context: &AdapterContext,
+) -> Result<Vec<ConversionRepair>, AdapterError> {
+    let mut repairs = Vec::new();
+    if request.metadata.source_protocol != Some(ProtocolKind::OpenAiResponses) {
+        return Ok(repairs);
+    }
+    for (turn_index, turn) in request.turns.iter_mut().enumerate() {
+        if !turn.blocks.iter().any(|block| {
+            matches!(block, ContentBlock::ProviderArtifact(artifact)
+                if standalone_tool_output_name(&artifact.payload).is_some())
+        }) {
+            continue;
+        }
+        let mut projected = Vec::new();
+        for (block_index, block) in std::mem::take(&mut turn.blocks).into_iter().enumerate() {
+            if let ContentBlock::ProviderArtifact(artifact) = &block
+                && let Some(name) = standalone_tool_output_name(&artifact.payload)
+            {
+                let path = format!("turns[{turn_index}].blocks[{block_index}]");
+                let mut source = json!({"name": name});
+                match artifact.payload.get("namespace") {
+                    None | Some(Value::Null) => {}
+                    Some(Value::String(namespace)) => source["namespace"] = json!(namespace),
+                    Some(_) => {
+                        return Err(AdapterError::new(
+                            "tool_namespace_invalid",
+                            format!("{path}.namespace"),
+                            "tool namespace must be a string",
+                        ));
+                    }
+                }
+                projected.push(ContentBlock::Text(TextBlock::new(format!(
+                    "External tool notification {source}:"
+                ))));
+                projected.extend(decode_content(
+                    artifact.payload.get("output").unwrap_or(&Value::Null),
+                    context,
+                    &request.model,
+                    &format!("{path}.output"),
+                )?);
+                repairs.push(ConversionRepair {
+                    code: "standalone_tool_output_projected".to_string(),
+                    class: RepairClass::CompatibleAllowlisted,
+                    path,
+                    action: "preserve_named_external_output_as_user_context".to_string(),
+                    reason: "Target has no standalone tool-result envelope; notification source and content were retained as user context without inventing a tool call.".to_string(),
+                });
+            } else {
+                projected.push(block);
+            }
+        }
+        turn.blocks = projected;
+    }
+    Ok(repairs)
 }
 
 fn decode_tools(value: Option<&Value>, path: &str) -> Result<Vec<ToolDefinition>, AdapterError> {

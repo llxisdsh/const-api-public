@@ -83,6 +83,59 @@ describe("shared tool program selection", () => {
     localStorage.removeItem(TOOL_ORDER_STORAGE_KEY);
   });
 
+  it("shares an on-demand model snapshot between the guide, tool settings and compatibility editor", async () => {
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    const readModels = vi.fn(async () => ({ aliases: {}, local_available_models: ["local-model"] }));
+    vi.mocked(invoke).mockImplementation((command, args) =>
+      command === "fetch_model_compatibility" ? readModels() : base(command, args));
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.toolConfigChecking).toBe(false));
+    act(() => result.current.setAccessGuideOpen(true));
+    expect(readModels).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.setAccessGuideOpen(false);
+      result.current.setModelAliasPreviewOpen(true);
+    });
+    await waitFor(() => expect(result.current.modelCompatibilityPolicy.localAvailableModels).toEqual(["local-model"]));
+    expect(readModels).toHaveBeenCalledTimes(1);
+    act(() => {
+      result.current.setModelAliasPreviewOpen(false);
+      result.current.setAccessGuideOpen(true);
+    });
+    const stopWatching = result.current.watchModelCompatibilityPolicy();
+    expect(readModels).toHaveBeenCalledTimes(1);
+    await act(() => result.current.refreshModelCompatibilityPolicy({ force: true }));
+    expect(readModels).toHaveBeenCalledTimes(2);
+    stopWatching();
+  });
+
+  it("finishes a pending model read before loading a different account's models", async () => {
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let accountId = "first";
+    let finishFirst!: () => void;
+    const readModels = vi.fn(async () => {
+      const id = accountId;
+      if (id === "first") await new Promise<void>(resolve => { finishFirst = resolve; });
+      return { aliases: {}, platform_available_models: [id] };
+    });
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "fetch_model_compatibility") return readModels();
+      if (command === "account_status") return { ...emptyAccountStatus(), state: "signed_in", user_id: accountId };
+      return base(command, args);
+    });
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.account.status.user_id).toBe("first"));
+    act(() => result.current.setModelAliasPreviewOpen(true));
+    expect(readModels).toHaveBeenCalledTimes(1);
+    accountId = "second";
+    await act(async () => { await result.current.account.actions.readStatus(); });
+    expect(readModels).toHaveBeenCalledTimes(1);
+    await act(async () => { finishFirst(); });
+    expect(readModels).toHaveBeenCalledTimes(2);
+    expect(result.current.modelCompatibilityPolicy.platformAvailableModels).toEqual(["second"]);
+  });
+
   it("checks only visible tools on startup and connection changes without clearing hidden state", async () => {
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.toolConfigChecking).toBe(false));
@@ -190,16 +243,17 @@ describe("shared tool program selection", () => {
     expect(result.current.visibleToolCards.map(({ tool }) => tool)).toEqual(["cline", "mimocode"]);
   });
 
-  it("continues batch removal after one configured tool fails", async () => {
+  it("reports session-index warnings and continues batch removal after a tool fails", async () => {
     setVisibleTools([]);
     const removed = new Set<string>();
+    const configured = new Set(["codex", "claude", "cline", "mimocode"]);
     const base = vi.mocked(invoke).getMockImplementation()!;
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "check_tool_config") {
         const tool = (args as { tool: string }).tool;
         return configStatus(tool, false, {
-          program_located: String(tool === "mimocode" || tool === "cline"),
-          has_managed_config: String(!removed.has(tool) && (tool === "mimocode" || tool === "cline")),
+          program_located: String(configured.has(tool)),
+          has_managed_config: String(configured.has(tool) && !removed.has(tool)),
           tool_protocol: "openai_chat",
         });
       }
@@ -207,6 +261,7 @@ describe("shared tool program selection", () => {
         const tool = (args as { tool: string }).tool;
         if (tool === "cline") throw new Error("first tool failed");
         removed.add(tool);
+        if (tool === "codex") return { result: configStatus(tool, false, { session_migrated_sqlite_invalid_rows: "2" }) };
         return { result: configStatus(tool, false) };
       }
       return base(command, args);
@@ -217,14 +272,21 @@ describe("shared tool program selection", () => {
 
     let batchPromise!: Promise<void>;
     act(() => { batchPromise = result.current.removeConfiguredTools(); });
-    await waitFor(() => expect(checkedTools()).toHaveLength(result.current.toolCards.length));
+    await waitFor(() => expect(result.current.confirmDialog?.hint).toContain("Claude Code"));
+    expect(result.current.confirmDialog?.tone).not.toBe("danger");
+    expect(checkedTools()).toHaveLength(result.current.toolCards.length);
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "execute_tool_config_operation")).toBe(false);
     act(() => result.current.resolveConfirmDialog(true));
     await act(async () => { await batchPromise; });
 
     const operations = vi.mocked(invoke).mock.calls
       .filter(([command]) => command === "execute_tool_config_operation")
       .map(([, args]) => (args as { tool: string }).tool);
-    expect(operations).toEqual(["cline", "mimocode"]);
+    expect(operations).toEqual(["codex", "claude", "cline", "mimocode"]);
+    expect(result.current.toast).toMatchObject({
+      tone: "error",
+      text: i18n.t("access.batchRemoveSummary", { succeeded: 2, skipped: result.current.toolCards.length - configured.size, failed: 2 }),
+    });
   });
 
   it("keeps a pending visible batch busy when a newly shown tool finishes first", async () => {
@@ -403,6 +465,63 @@ describe("shared tool program selection", () => {
     });
     expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual(["save_tool_model_injection_settings"]);
     expect(result.current.config.tool_model_injection).toEqual(settings);
+  });
+
+  it.each([false, true])("carries the Hermes confirmation through IPC with restart=%s", async (restart) => {
+    setVisibleTools(["hermes"]);
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.toolConfigStatuses.hermes?.already_configured).toBe(true));
+    const ipc = vi.mocked(invoke);
+    const base = ipc.getMockImplementation()!;
+    const token = "hermes-image-preview";
+    ipc.mockClear().mockImplementation(async (command, args) => {
+      const request = args as { confirmationToken?: string; operationId?: string };
+      if (command === "begin_tool_config_operation") {
+        return { operation_id: request.confirmationToken === token ? "confirmed" : "preview" };
+      }
+      if (command === "execute_tool_config_operation") {
+        if (request.operationId === "preview") {
+          return { confirmation_required: true, confirmation_token: token, running: true };
+        }
+        return {
+          result: configStatus("hermes", true, {
+            restart_command: "launched",
+            restart_launcher_path: "Hermes",
+          }),
+        };
+      }
+      return base(command, args);
+    });
+    let pending!: Promise<void>;
+    act(() => {
+      pending = restart
+        ? result.current.launchToolConfig("hermes", "Hermes")
+        : result.current.applyToolConfig("hermes", "Hermes");
+    });
+    await waitFor(() => expect(result.current.confirmDialog).not.toBeNull());
+    const lifecycle = () => ipc.mock.calls.filter(([command]) => [
+      "begin_tool_config_operation",
+      "wait_tool_config_operation_update",
+      "execute_tool_config_operation",
+      "start_tool_program",
+      "check_tool_config",
+    ].includes(command));
+    const action = { tool: "hermes", action: "apply", restart };
+    const round = (operationId: string, confirmationToken?: string) => [
+      ["begin_tool_config_operation", expect.objectContaining({ ...action, confirmationToken })],
+      ["wait_tool_config_operation_update", expect.objectContaining({ operationId })],
+      ["execute_tool_config_operation", expect.objectContaining({
+        ...action, operationId, confirmationToken, protocol: "openai_chat",
+      })],
+    ];
+    expect(lifecycle()).toEqual(round("preview"));
+    act(() => result.current.resolveConfirmDialog(true));
+    await act(async () => pending);
+    expect(lifecycle()).toEqual([
+      ...round("preview"),
+      ...round("confirmed", token),
+      ["check_tool_config", expect.objectContaining({ tool: "hermes" })],
+    ]);
   });
 
   it("reports incomplete injection readback instead of counting it as synced", async () => {
@@ -623,6 +742,25 @@ describe("shared tool program selection", () => {
     expect(toolHasManagedConfig(status)).toBe(true);
   });
 
+  it.each(["codex", "claude", "claude-desktop", "gemini", "workbuddy"] as const)(
+    "requires confirmation before removing %s and keeps the tool-specific guidance",
+    async (tool) => {
+      const { result } = renderHook(() => useAppController());
+      let removal!: Promise<void>;
+      act(() => { removal = result.current.removeToolConfig(tool, tool); });
+      expect(result.current.confirmDialog?.message).toContain({
+        codex: "ChatGPT", claude: "鉴权", "claude-desktop": "档案", gemini: "Google", workbuddy: "其他模型",
+      }[tool]);
+      expect(result.current.confirmDialog?.hint).toContain("自动关闭相关进程");
+      expect(result.current.confirmDialog?.tone).not.toBe("danger");
+      await act(async () => {
+        result.current.resolveConfirmDialog(false);
+        await removal;
+      });
+      expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "begin_tool_config_operation")).toBe(false);
+    },
+  );
+
   it("clears hidden-tool presence after verified removal and refreshes partial failed removal", async () => {
     setVisibleTools([...DEFAULT_VISIBLE_TOOL_IDS, "mimocode"]);
     const { result } = renderHook(() => useAppController());
@@ -642,7 +780,7 @@ describe("shared tool program selection", () => {
       failed = shouldFail;
       let removal!: Promise<void>;
       act(() => { removal = result.current.removeToolConfig("mimocode", "MiMo Code"); });
-      await act(async () => result.current.resolveToolRemoveDialog("restore_pre_const"));
+      await act(async () => result.current.resolveConfirmDialog(true));
       await waitFor(() => expect(result.current.confirmDialog).not.toBeNull());
       expect(toolHasManagedConfig(result.current.toolConfigStatuses.mimocode)).toBe(shouldFail);
       await act(async () => {

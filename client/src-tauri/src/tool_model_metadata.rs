@@ -362,6 +362,22 @@ pub(crate) fn catalog_token_limits(id: &str) -> (Option<u64>, Option<u64>) {
     (limits.context_tokens, limits.output_tokens)
 }
 
+/// Descriptive only. A signed model identity cannot establish an account's endpoint.
+pub(crate) fn catalog_output_modalities(id: &str) -> Vec<String> {
+    let key = model_identity_key(id);
+    with_document(|document| {
+        let id = identity_aliases(document)
+            .get(key.as_ref())
+            .map(String::as_str)
+            .unwrap_or(&key);
+        document
+            .models
+            .get(id)
+            .map(|m| m.output_modalities.clone())
+            .unwrap_or_default()
+    })
+}
+
 pub(crate) fn catalog_model_token_limits(id: &str) -> ModelTokenLimits {
     with_document(|document| {
         document

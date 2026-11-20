@@ -309,6 +309,10 @@ fn with_tool_config_file_transaction<T>(
         .cloned()
         .chain(original_tool_ownership.keys().map(PathBuf::from))
     {
+        // Restoration also skips a skill replaced with a user's link or directory.
+        if path.ends_with(IMAGE_SKILL_FILE) && image_skill_reserved_by_user(&path)? {
+            continue;
+        }
         if !unique_paths.iter().any(|existing| existing == &path) {
             unique_paths.push(path);
         }
@@ -436,6 +440,9 @@ fn tool_config_presence_value_hash(
 
 impl ToolConfigPresenceFile {
     fn is_present(&self) -> Result<bool> {
+        if self.path.ends_with(IMAGE_SKILL_FILE) && image_skill_reserved_by_user(&self.path)? {
+            return Ok(false);
+        }
         let Some(content) = read_optional_file(&self.path)? else {
             return Ok(false);
         };
@@ -472,8 +479,25 @@ fn tool_config_presence_cache() -> &'static Mutex<Option<ToolConfigPresenceIndex
 }
 
 fn tool_has_owned_config_files(tool: &str) -> Result<bool> {
+    with_tool_config_presence_files(tool, |files| {
+        for file in files {
+            if file
+                .is_present()
+                .with_context(|| format!("check configuration presence {}", file.path.display()))?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })
+}
+
+fn with_tool_config_presence_files<T>(
+    tool: &str,
+    inspect: impl FnOnce(&[ToolConfigPresenceFile]) -> Result<T>,
+) -> Result<T> {
     if !manifest_manages_tool(tool) {
-        return Ok(false);
+        return inspect(&[]);
     }
     let _guard = tool_config_manifest_lock()
         .lock()
@@ -486,7 +510,7 @@ fn tool_has_owned_config_files(tool: &str) -> Result<bool> {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             *cache = None;
-            return Ok(false);
+            return inspect(&[]);
         }
         Err(error) => return Err(error).with_context(|| format!("stat {}", path.display())),
     };
@@ -555,16 +579,14 @@ fn tool_has_owned_config_files(tool: &str) -> Result<bool> {
         }
         *cache = Some(ToolConfigPresenceIndex { stamp, files });
     }
-    if let Some(files) = cache.as_ref().unwrap().files.get(tool) {
-        for file in files {
-            if file.is_present().with_context(|| {
-                format!("check configuration presence {}", file.path.display())
-            })? {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
+    inspect(
+        cache
+            .as_ref()
+            .unwrap()
+            .files
+            .get(tool)
+            .map_or(&[], Vec::as_slice),
+    )
 }
 
 pub(crate) fn attach_tool_config_presence(result: &mut ToolApplyResult) -> Result<()> {
@@ -1932,14 +1954,61 @@ fn restore_structured_tool_config_fields(
         }
         ToolConfigFormat::Json | ToolConfigFormat::Yaml | ToolConfigFormat::Text => {
             let mut document = parse_tool_config_document_at(path, ownership.format, current)?;
+            // A user who switched the nested endpoint still needs the OpenAI plugin selected.
+            let keep_image_provider =
+                ownership.tool == "hermes" && hermes_switched_openai_endpoint(&document);
+            let mut added_hermes_endpoint = None;
             let mut changed = false;
             for field in &ownership.fields {
+                if ownership.tool == "hermes"
+                    && matches!(field.original, ToolConfigFieldValue::Missing)
+                    && matches!(
+                        field.path.as_slice(),
+                        [ToolConfigFieldPath::Key(section), ToolConfigFieldPath::Named(name)]
+                        if section == "custom_providers" && name == CODEX_CONST_API_PROVIDER_ID
+                    )
+                {
+                    // Restore the image binding before removing its named endpoint.
+                    added_hermes_endpoint = Some(field);
+                    continue;
+                }
+                if keep_image_provider
+                    && matches!(
+                        field.path.as_slice(),
+                        [ToolConfigFieldPath::Key(section), ToolConfigFieldPath::Key(key)]
+                        if section == "image_gen" && key == "provider"
+                    )
+                {
+                    preserved += 1;
+                    continue;
+                }
                 let current_value = tool_config_field_value_at(&document, &field.path);
+                // VS Code permits independent model URLs and credentials inside one provider.
+                // Its adapter removes matching models after this field-level cleanup.
+                if ownership.tool == "vscode"
+                    && owned_field_is_added_entry(field)
+                    && matches!(field.path.as_slice(), [ToolConfigFieldPath::Named(name)] if name == CONST_API_DISPLAY_NAME)
+                    && current_value != field.applied
+                {
+                    continue;
+                }
                 if current_value == field.applied || owned_field_is_added_entry(field) {
                     set_tool_config_field_value(&mut document, &field.path, &field.original);
                     changed = true;
                 } else if current_value != field.original {
                     preserved += 1;
+                }
+            }
+            if let Some(field) = added_hermes_endpoint {
+                if document
+                    .pointer("/image_gen/openai/provider")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(hermes_const_image_name)
+                {
+                    preserved += 1;
+                } else {
+                    set_tool_config_field_value(&mut document, &field.path, &field.original);
+                    changed = true;
                 }
             }
             if !changed {
@@ -1973,6 +2042,127 @@ fn restore_structured_tool_config_fields(
 }
 
 fn restore_tool_config_from_manifest(tool: &str) -> Result<ToolApplyResult> {
+    restore_tool_config_from_manifest_matching(tool, |_| true)
+}
+
+fn restore_tool_config_from_manifest_matching(
+    tool: &str,
+    matches_path: impl Fn(&Path) -> bool,
+) -> Result<ToolApplyResult> {
+    restore_tool_config_files(tool, matches_path, restore_owned_tool_file)
+}
+
+// A provider file may already contain the configured connection when it first
+// comes under management, or predate receipts entirely. Apply the adapter's
+// same identity check to that baseline and to a live file without a receipt.
+fn remove_tool_config_with_json_cleanup(
+    tool: &str,
+    config: &Path,
+    keep_file: Option<&Path>,
+    cleanup: impl Fn(&mut serde_json::Value, Option<&serde_json::Value>) -> Result<bool>,
+) -> Result<ToolApplyResult> {
+    remove_tool_config_with_file_cleanup(tool, config, keep_file, |bytes, live| {
+        let mut root = parse_tool_config_document_at(config, ToolConfigFormat::Json, Some(bytes))?;
+        let live = live
+            .map(|bytes| parse_tool_config_document_at(config, ToolConfigFormat::Json, Some(bytes)))
+            .transpose()?;
+        if cleanup(&mut root, live.as_ref())? {
+            Ok(Some(json_text(&root)?.into_bytes()))
+        } else {
+            Ok(None)
+        }
+    })
+}
+
+fn remove_tool_config_with_file_cleanup(
+    tool: &str,
+    config: &Path,
+    keep_file: Option<&Path>,
+    clean: impl Fn(&[u8], Option<&[u8]>) -> Result<Option<Vec<u8>>>,
+) -> Result<ToolApplyResult> {
+    let mut result = restore_tool_config_files(
+        tool,
+        |_| true,
+        |path, current, ownership, matches_applied| {
+            if Some(path) == keep_file {
+                return Ok((current.map(<[u8]>::to_vec), usize::from(current.is_some())));
+            }
+            if path != config {
+                return restore_owned_tool_file(path, current, ownership, matches_applied);
+            }
+            // A differently configured live provider may reuse our original name.
+            // Leave that file to its current owner when our connection has gone.
+            if !matches_applied
+                && let Some(live) = current
+                && clean(live, None)?.is_none()
+                && let Some(applied) = ownership_applied_bytes(ownership)?
+                // Compare the receipt against the live binding: the local key
+                // may have rotated since this tool was last configured.
+                && clean(&applied, Some(live))?.is_some()
+            {
+                return Ok((Some(live.to_vec()), 1));
+            }
+            let (restored, preserved) =
+                restore_owned_tool_file(path, current, ownership, matches_applied)?;
+            // Check individual historical entries against the actual live document.
+            // Another provider may still be present alongside this connection.
+            if let Some(bytes) = restored.as_deref()
+                && let Some(cleaned) = clean(bytes, current.filter(|live| *live != bytes))?
+            {
+                Ok(((!cleaned.is_empty()).then_some(cleaned), preserved))
+            } else {
+                Ok((restored, preserved))
+            }
+        },
+    )?;
+    if !result
+        .file_statuses
+        .iter()
+        .any(|status| Path::new(&status.path) == config)
+        && let Some(before) = read_optional_file(config)?
+        && let Some(after) = clean(&before, None)?
+    {
+        let after = (!after.is_empty()).then_some(after);
+        record_post_restore_cleanup(&mut result, config, before, after, tool)?;
+    }
+    Ok(result)
+}
+
+fn restore_owned_tool_file(
+    path: &Path,
+    current: Option<&[u8]>,
+    ownership: &ToolConfigOwnership,
+    matches_applied: bool,
+) -> Result<(Option<Vec<u8>>, usize)> {
+    // Removing a connection must never recreate a file already removed by the
+    // user or the tool. Its receipt can be released without reconstructing it.
+    if current.is_none() {
+        return Ok((None, 0));
+    }
+    if path.ends_with(IMAGE_SKILL_FILE) && !matches_applied {
+        // Markdown is a whole user-editable document, including its encoding.
+        return Ok((current.map(<[u8]>::to_vec), usize::from(current.is_some())));
+    }
+    if ownership.fields.is_empty() {
+        let original = ownership_original_bytes(ownership)?;
+        if matches_applied || original.as_deref() == current {
+            return Ok((original, 0));
+        }
+        // Very old manifests lack field ownership. Preserve external edits and
+        // let the adapter clean up entries it can still identify.
+        return Ok((current.map(<[u8]>::to_vec), 1));
+    }
+    if ownership.whole_file_restore_safe && matches_applied {
+        return Ok((ownership_original_bytes(ownership)?, 0));
+    }
+    restore_structured_tool_config_fields(path, current, ownership)
+}
+
+fn restore_tool_config_files(
+    tool: &str,
+    matches_path: impl Fn(&Path) -> bool,
+    restore: impl Fn(&Path, Option<&[u8]>, &ToolConfigOwnership, bool) -> Result<(Option<Vec<u8>>, usize)>,
+) -> Result<ToolApplyResult> {
     let _guard = tool_config_manifest_lock()
         .lock()
         .map_err(|_| anyhow!("TOOL_CONFIG_MANIFEST_LOCK_POISONED: manifest lock is poisoned"))?;
@@ -1980,7 +2170,7 @@ fn restore_tool_config_from_manifest(tool: &str) -> Result<ToolApplyResult> {
     let mut owned = manifest
         .files
         .iter()
-        .filter(|(_, ownership)| ownership.tool == tool)
+        .filter(|(path, ownership)| ownership.tool == tool && matches_path(Path::new(path)))
         .map(|(key, ownership)| (key.clone(), PathBuf::from(key), ownership.clone()))
         .collect::<Vec<_>>();
     for (_, _, ownership) in &mut owned {
@@ -1988,7 +2178,13 @@ fn restore_tool_config_from_manifest(tool: &str) -> Result<ToolApplyResult> {
     }
     let owned_count = owned.len();
     let mut current_files = Vec::with_capacity(owned.len());
+    let mut reserved_skills = 0;
     for (key, path, ownership) in &mut owned {
+        if path.ends_with(IMAGE_SKILL_FILE) && image_skill_reserved_by_user(path)? {
+            manifest.files.remove(key);
+            reserved_skills += 1;
+            continue;
+        }
         let current = read_optional_file(path)?;
         normalize_deepseek_harness_credential_ownership(ownership, current.as_deref())?;
         let matches_applied = current
@@ -1996,32 +2192,12 @@ fn restore_tool_config_from_manifest(tool: &str) -> Result<ToolApplyResult> {
             .map(sha256_hex)
             .map(|hash| hash == ownership.applied_sha256)
             .unwrap_or(false);
-        let (restored, preserved) = if ownership.fields.is_empty() {
-            let original = ownership_original_bytes(ownership)?;
-            let matches_original = match (original.as_deref(), current.as_deref()) {
-                (Some(original), Some(current)) => original == current,
-                (None, None) => true,
-                _ => false,
-            };
-            if matches_applied || matches_original {
-                (original, 0)
-            } else {
-                // Very old manifests may not contain enough information for a
-                // field-level restore. Cancellation must still complete: keep
-                // the externally changed file and let the tool-specific alias
-                // cleanup remove any recognizable CONST API entries.
-                (current.clone(), 1)
-            }
-        } else if ownership.whole_file_restore_safe && matches_applied {
-            (ownership_original_bytes(ownership)?, 0)
-        } else {
-            restore_structured_tool_config_fields(path, current.as_deref(), ownership)?
-        };
+        let (restored, preserved) = restore(path, current.as_deref(), ownership, matches_applied)?;
         current_files.push((key.clone(), path.clone(), restored, current, preserved));
     }
 
     let mut result = ToolApplyBuilder::default();
-    let mut preserved_fields = 0usize;
+    let mut preserved_fields = reserved_skills;
     for (key, path, restored, current, preserved) in current_files {
         preserved_fields += preserved;
         let changed = restored.as_deref() != current.as_deref();
@@ -2240,34 +2416,6 @@ fn cleanup_opencode_provider_aliases(
     record_post_restore_cleanup(result, &path, before, Some(after), "opencode")
 }
 
-fn cleanup_unmanaged_vscode_provider_aliases(result: &mut ToolApplyResult) -> Result<()> {
-    let path = vscode_chat_language_models_path();
-    if !path.exists() {
-        return Ok(());
-    }
-    let before = fs::read(&path)?;
-    let mut root = serde_json::from_slice::<serde_json::Value>(&before)
-        .with_context(|| format!("parse {}", path.display()))?;
-    let providers = root
-        .as_array_mut()
-        .ok_or_else(|| anyhow!("VS Code chatLanguageModels.json must contain a JSON array"))?;
-    let original_len = providers.len();
-    providers.retain(|provider| {
-        provider
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .is_none_or(|name| {
-                name != CONST_API_DISPLAY_NAME && name != CONST_API_LEGACY_DISPLAY_NAME
-            })
-    });
-    if providers.len() == original_len {
-        return Ok(());
-    }
-    let mut after = serde_json::to_vec_pretty(&root)?;
-    after.push(b'\n');
-    record_post_restore_cleanup(result, &path, before, Some(after), "vscode")
-}
-
 fn cleanup_openclaw_provider_aliases(
     result: &mut ToolApplyResult,
     root_url: &str,
@@ -2301,6 +2449,12 @@ fn cleanup_hermes_provider_aliases(
         let before = fs::read(&path)?;
         let value = serde_yaml::from_slice::<serde_yaml::Value>(&before)?;
         let mut root = value.as_mapping().cloned().unwrap_or_default();
+        // A pre-existing or subsequently chosen native image binding still
+        // depends on this named credential after the manifest restore.
+        let keep_image_endpoint = root
+            .get("image_gen")
+            .and_then(|image| image["openai"]["provider"].as_str())
+            .is_some_and(hermes_const_image_name);
         let original = root.clone();
         let model_key = yaml_key("model");
         if let Some(model) = root
@@ -2334,9 +2488,10 @@ fn cleanup_hermes_provider_aliases(
                 root.remove(&model_key);
             }
         }
-        if let Some(providers) = root
-            .get_mut(yaml_key("custom_providers"))
-            .and_then(serde_yaml::Value::as_sequence_mut)
+        if !keep_image_endpoint
+            && let Some(providers) = root
+                .get_mut(yaml_key("custom_providers"))
+                .and_then(serde_yaml::Value::as_sequence_mut)
         {
             providers.retain(|value| {
                 let Some(provider) = value.as_mapping() else {
@@ -2365,7 +2520,9 @@ fn cleanup_hermes_provider_aliases(
                 root.remove(yaml_key("custom_providers"));
             }
         }
-        remove_hermes_const_api_provider_dict(&mut root);
+        if !keep_image_endpoint {
+            remove_hermes_const_api_provider_dict(&mut root);
+        }
         if root == original {
             continue;
         }

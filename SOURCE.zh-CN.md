@@ -16,6 +16,15 @@
 
 ## 运行和构建
 
+OpenCode 免费模型与 Claude 订阅的 Bun 传输需要 CMake、Clang/libclang；Windows 另需 NASM。
+将 NASM 放入 `PATH`，未自动检测到 libclang 时设置其目录为 `LIBCLANG_PATH`。
+Visual Studio 18 需要 CMake 4.2+；安装多个版本时，将 `CMAKE` 设为兼容版本的
+`cmake.exe` 完整路径。修改用户环境变量后需重开终端或 IDE。
+macOS 可运行 `brew install cmake llvm` 并设置
+`LIBCLANG_PATH="$(brew --prefix llvm)/lib"`；Debian/Ubuntu 安装
+`cmake clang libclang-dev binutils`。生成的客户端不依赖这些编译工具，也不需要
+外部 OpenCode/Bun 运行时。
+
 从仓库根目录执行：
 
 ```sh

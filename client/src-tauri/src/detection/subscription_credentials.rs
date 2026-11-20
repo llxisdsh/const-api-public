@@ -188,7 +188,7 @@ fn subscription_channel_from_managed_credential(
             v2,
             id,
             enabled: false,
-            share_enabled: false,
+            share_enabled: true,
             kind: "subscription_adapter".to_string(),
             api_format: "subscription_skeleton".to_string(),
             node_id: String::new(),
@@ -860,7 +860,7 @@ pub(crate) async fn exchange_openai_oauth_code(
         .post(OPENAI_OAUTH_TOKEN_URL)
         .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
         .form(&form)
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let mut token = crate::subscription_oauth_error::token_exchange_response(
         "openai", response, &[code.trim(), code_verifier.trim()],
@@ -899,7 +899,7 @@ pub(crate) async fn exchange_claude_oauth_code(
         .header("Content-Type", "application/json")
         .header("User-Agent", CLAUDE_OAUTH_AXIOS_USER_AGENT)
         .json(&body)
-        .send_adaptive()
+        .send_upstream()
         .await?
         .error_for_status()?
         .json::<serde_json::Value>()
@@ -932,7 +932,7 @@ pub(crate) async fn exchange_antigravity_oauth_code(
         .post(ANTIGRAVITY_OAUTH_TOKEN_URL)
         .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
         .form(&form)
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let status = response.status();
     let mut token = response.json::<serde_json::Value>().await?;
@@ -963,7 +963,7 @@ pub(crate) async fn exchange_antigravity_oauth_code(
             .get(ANTIGRAVITY_USERINFO_URL)
             .header("Authorization", format!("Bearer {access_token}"))
             .header("User-Agent", antigravity_user_agent())
-            .send_adaptive()
+            .send_upstream()
             .await
         {
             if response.status().is_success() {
@@ -1002,7 +1002,7 @@ pub(crate) async fn exchange_grok_oauth_code(
         .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
         .header("User-Agent", "const-api-grok-oauth/1.0")
         .form(&form)
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let status = response.status();
     let mut token = response.json::<serde_json::Value>().await?;

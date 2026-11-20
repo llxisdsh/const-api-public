@@ -3,6 +3,7 @@ pub(crate) async fn handle_supplier_request(
     config: &SupplierConfig,
     msg: SupplierMessage,
     outbound: &SupplierOutbound,
+    tasks: Option<&SupplierRequestTasks>,
 ) -> Result<()> {
     let id = msg.id.clone();
     let wire =
@@ -19,6 +20,11 @@ pub(crate) async fn handle_supplier_request(
     let response =
         forward_supplier_request(client, config, &msg, stream_requested, outbound).await?;
     if let Some(payload) = response {
+        if wire.operation == Some(crate::surface::ApiOperation::VideosCreate)
+            && let Some(tasks) = tasks
+        {
+            tasks.accepted_videos().remember(config, &payload);
+        }
         let msg = SupplierMessage {
             output_credit: None,
             id,
@@ -32,6 +38,7 @@ pub(crate) async fn handle_supplier_request(
 
 #[derive(Clone, Default)]
 pub(crate) struct SupplierRequestTasks {
+    accepted_videos: Arc<StdMutex<accepted_videos::AcceptedVideos>>,
     active: Arc<StdMutex<HashMap<String, (u64, tokio::task::AbortHandle)>>>,
     duplex_commands: Arc<StdMutex<HashMap<String, SupplierDuplexCommands>>>,
     completed: Arc<StdMutex<HashMap<String, Instant>>>,
@@ -47,6 +54,10 @@ struct SupplierDuplexCommands {
 }
 
 impl SupplierRequestTasks {
+    fn accepted_videos(&self) -> std::sync::MutexGuard<'_, accepted_videos::AcceptedVideos> {
+        self.accepted_videos.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub(crate) fn spawn(
         &self,
         client: Client,
@@ -87,7 +98,7 @@ impl SupplierRequestTasks {
                     // As with duplex requests, box the executor before the
                     // output-accounting and panic wrappers multiply its size.
                     Box::pin(execute_supplier_request_and_report(
-                        &client, &supplier, message, &outbound,
+                        &client, &supplier, message, &outbound, Some(&tasks),
                     )),
                 )),
             )
@@ -418,9 +429,10 @@ async fn execute_supplier_request_and_report(
     supplier: &SupplierConfig,
     message: SupplierMessage,
     outbound: &SupplierOutbound,
+    tasks: Option<&SupplierRequestTasks>,
 ) {
     let error_id = message.id.clone();
-    if let Err(err) = handle_supplier_request(client, supplier, message, outbound).await {
+    if let Err(err) = handle_supplier_request(client, supplier, message, outbound, tasks).await {
         let payload = supplier_execution_error_payload(&err);
         if let Some(diagnostics) = payload
             .get(EXECUTION_EVIDENCE_FIELD)
@@ -891,10 +903,12 @@ mod request_task_tests {
             .get_or_init(|| StdMutex::new(()))
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        for (provider, streaming) in [
-            ("openai", false),
-            ("antigravity", false),
-            ("antigravity", true),
+        for (provider, streaming, edit, api) in [
+            ("openai", false, false, false),
+            ("openai", false, true, false),
+            ("openai", true, true, true),
+            ("antigravity", false, false, false),
+            ("antigravity", true, false, false),
         ] {
             let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
                 .await
@@ -912,7 +926,11 @@ mod request_task_tests {
             } else {
                 "AA==".into()
             };
-            let response_body = if provider == "openai" {
+            let response_body = if provider == "openai" && streaming {
+                serde_json::json!({"type":"image_edit.completed","b64_json":image,
+                    "usage":{"input_tokens":15,"output_tokens":20,"input_tokens_details":{"image_tokens":5}},
+                    "future_image_field":{"keep":true}})
+            } else if provider == "openai" {
                 serde_json::json!({"created":1,"data":[{"b64_json":"AA==","generation_id":"image-1"}],
                     "usage":{"input_tokens":15,"output_tokens":20,"input_tokens_details":{"image_tokens":5},
                     "output_tokens_details":{"image_tokens":20}},"future_image_field":{"keep":true}})
@@ -963,15 +981,21 @@ mod request_task_tests {
             let mut config =
                 retained_subscription_supplier(provider, credential.to_string_lossy().to_string());
             config.kind = "subscription_adapter".into();
+            if api {
+                let channel = crate::coding_gateway::tests::channel(
+                    crate::source_driver::SourceDriverId::OpenAiApi, &format!("http://{address}/v1"));
+                config = supplier_from_channel_unfiltered(&channel);
+            }
             config.models = vec![model.into()];
             config.upstream_model = model.into();
             let (path, surface, operation, protocol, body) = if provider == "openai" {
                 (
-                    "/v1/images/generations".to_string(),
+                    if edit { "/v1/images/edits" } else { "/v1/images/generations" }.to_string(),
                     ApiSurface::OpenAi,
-                    ApiOperation::ImagesGenerations,
+                    if edit { ApiOperation::ImagesEdits } else { ApiOperation::ImagesGenerations },
                     None,
-                    serde_json::json!({"model":model,"prompt":"one dot","size":"1024x1024","future_image_option":true}),
+                    serde_json::json!({"model":model,"prompt":"one dot","size":"1024x1024","stream":streaming,
+                        "images":[{"image_url":"data:image/png;base64,AA=="}],"future_image_option":true}),
                 )
             } else {
                 let action = if streaming {
@@ -1032,21 +1056,22 @@ mod request_task_tests {
                     .await
                     .unwrap()
                     .unwrap();
-                let response_wire = SurfaceEnvelope::from_payload(&response.payload).unwrap();
                 match response.kind.as_str() {
                     "http_response" | "stream_start" => {
+                        let response_wire = SurfaceEnvelope::from_payload(&response.payload).unwrap();
                         assert_eq!(
                             response_wire.status,
                             Some(200),
                             "{provider}: {:?}",
                             response.payload
                         );
-                        assert!(
-                            !response_wire
+                        assert_eq!(
+                            response_wire
                                 .header_map()
                                 .unwrap()
                                 .contains_key("set-cookie"),
-                            "{provider}"
+                            api,
+                            "subscription cookies are private; native API headers are preserved"
                         );
                         assert!(!saw_start);
                         saw_start = true;
@@ -1058,6 +1083,7 @@ mod request_task_tests {
                         assert!(streaming);
                     }
                     "stream_chunk" => {
+                        let response_wire = SurfaceEnvelope::from_payload(&response.payload).unwrap();
                         assert!(saw_start && streaming);
                         output.extend_from_slice(&response_wire.body.decode().unwrap());
                     }
@@ -1065,7 +1091,7 @@ mod request_task_tests {
                         assert!(saw_start && streaming);
                         break response.payload["upstream_usage"].clone();
                     }
-                    other => panic!("unexpected image response: {other}"),
+                    other => panic!("unexpected image response: {provider} streaming={streaming} edit={edit} {other} {:?}", response.payload),
                 }
             };
             wait_for_task_count(&tasks, 0).await;
@@ -1082,7 +1108,8 @@ mod request_task_tests {
             };
             assert_eq!(actual["future_image_field"], expected["future_image_field"]);
             if provider == "openai" {
-                assert_eq!(actual["data"], expected["data"]);
+                if streaming { assert_eq!(actual["b64_json"], expected["b64_json"]); }
+                else { assert_eq!(actual["data"], expected["data"]); }
             } else {
                 assert!(
                     actual["candidates"] == expected["candidates"],
@@ -1105,7 +1132,9 @@ mod request_task_tests {
             let split = sent.windows(4).position(|p| p == b"\r\n\r\n").unwrap();
             let payload: serde_json::Value = serde_json::from_slice(&sent[split + 4..]).unwrap();
             if provider == "openai" {
-                assert!(sent.starts_with(b"POST /images/generations "));
+                let expected_path: &[u8] = if api { b"POST /v1/images/edits " }
+                    else if edit { b"POST /images/edits " } else { b"POST /images/generations " };
+                assert!(sent.starts_with(expected_path));
                 assert_eq!(payload, body);
             } else {
                 assert_eq!(

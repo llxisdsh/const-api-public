@@ -376,7 +376,7 @@ pub(super) fn health_observation(
 
 // This is deliberately independent of access tokens, display names, prices and model sorting.
 // It is never logged or exported. Endpoints, credential binding and execution policy invalidate it.
-fn fingerprint(channel: &ChannelConfig) -> String {
+pub(super) fn fingerprint(channel: &ChannelConfig) -> String {
     let bindings = channel
         .surface_bindings
         .iter()
@@ -1358,6 +1358,8 @@ mod tests {
             assert_eq!(attempts, 0);
             // Even an older healthy runtime observation cannot override a model gate.
             health.status = "available".into();
+            channel.enabled = true;
+            channel.share_enabled = true;
             let mut cfg = crate::default_config();
             cfg.channels = vec![channel.clone()];
             let payload = super::super::supplier_registration_snapshot(

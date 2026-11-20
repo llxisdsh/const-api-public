@@ -192,6 +192,81 @@ pub(crate) fn is_opencode(driver: SourceDriverId) -> bool {
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ConsoleImageApi {
+    Openai,
+    Xai,
+    Gemini,
+}
+
+pub(crate) fn console_image_api(channel: &ChannelConfig, model: &str) -> Option<ConsoleImageApi> {
+    channel
+        .capability_profiles
+        .iter()
+        .filter(|p| {
+            p.catalog_metadata
+                && p.model_pattern.eq_ignore_ascii_case(model)
+                && crate::model::capability_layer_is_routable(&p.capability_layer)
+                && matches!(p.verification_state.as_str(), "verified" | "declared")
+                && !matches!(p.release_status.as_str(), "prepared" | "suspended")
+        })
+        .find_map(|p| p.opencode_image_api)
+}
+
+/// Console publishes MIME types and a per-model API, including distinct
+/// OpenAI, xAI and Gemini image dialects on the same account.
+pub(crate) fn apply_console_media_descriptor(
+    model: &mut ModelObservation,
+    row: &serde_json::Value,
+) {
+    let modalities = |key: &str| {
+        let mut result = Vec::new();
+        for value in row["modalities"][key]
+            .as_array()?
+            .iter()
+            .filter_map(|v| v.as_str())
+        {
+            let kind = match value.split_once('/').map_or(value, |(kind, _)| kind) {
+                "application" if value == "application/pdf" => "pdf",
+                kind @ ("audio" | "video" | "image" | "text") => kind,
+                _ => continue,
+            };
+            if !result.iter().any(|v| v == kind) {
+                result.push(kind.to_owned());
+            }
+        }
+        Some(result)
+    };
+    if let Some(input) = modalities("input") {
+        model.input_modalities = input;
+    }
+    if let Some(output) = modalities("output") {
+        model.output_modalities = output;
+    }
+    if row["type"] != "image" || !model.output_modalities.iter().any(|v| v == "image") {
+        return;
+    }
+    model.opencode_image_api = match row
+        .pointer("/api/images/base_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim_end_matches('/'))
+    {
+        Some("https://opencode.ai/inference/openai/v1") => Some(ConsoleImageApi::Openai),
+        Some("https://opencode.ai/inference/xai/v1") => Some(ConsoleImageApi::Xai),
+        Some("https://opencode.ai/inference/google/v1beta") => Some(ConsoleImageApi::Gemini),
+        _ => None,
+    };
+    let images = matches!(
+        model.opencode_image_api,
+        Some(ConsoleImageApi::Openai | ConsoleImageApi::Xai)
+    );
+    model.image_operations = Some(crate::image_models::ImageOperations {
+        generate: images && model.input_modalities.iter().any(|v| v == "text"),
+        edit: images && model.input_modalities.iter().any(|v| v == "image"),
+    });
+}
+
 /// Jev/System One entries are decision endpoints, not text-generation models.
 /// This is a model-family rule, rather than an OpenCode-provider rule: the
 /// model ID must not enter any ordinary conversational model pool.
@@ -523,6 +598,11 @@ pub(crate) fn model_protocol(driver: SourceDriverId, model: &str) -> Option<Prot
 pub(crate) fn channel_model_protocol(channel: &ChannelConfig, model: &str) -> Option<ProtocolKind> {
     if is_non_conversational_model(model) {
         return None;
+    }
+    if channel.source_driver() == SourceDriverId::OpencodeConsole
+        && console_image_api(channel, model) == Some(ConsoleImageApi::Gemini)
+    {
+        return Some(ProtocolKind::GeminiNative);
     }
     if matches!(
         channel.source_driver(),

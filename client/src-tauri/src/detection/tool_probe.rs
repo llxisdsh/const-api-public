@@ -45,7 +45,7 @@ pub(super) async fn run(
                 &body,
             )?,
         };
-        let mut response = request.send_adaptive().await?;
+        let mut response = request.send_upstream().await?;
         let status = response.status();
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {

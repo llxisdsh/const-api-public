@@ -160,8 +160,7 @@ fn supplier_auto_recovery_candidate(
         .find(|route| route.channel_id == channel.id);
     let safety_state = supplier_auto_recovery_safety_state(channel, health);
     SupplierAutoRecoveryCandidate {
-        pooled: channel.enabled
-            && crate::source_driver::channel_is_platform_shareable(channel),
+        pooled: crate::source_driver::channel_shares_to_market(channel),
         detectable: channel.kind == "subscription_adapter"
             || !channel.upstream_base_url.trim().is_empty(),
         signed_in,

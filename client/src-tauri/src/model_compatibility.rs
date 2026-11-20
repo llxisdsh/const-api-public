@@ -1837,7 +1837,12 @@ mod tests {
 
         assert_eq!(
             model_compatibility_candidates(&config, "claude-opus-5-5"),
-            vec!["claude-fable-5-2", "gpt-6-astra", "gemini-4-carbon"]
+            vec![
+                "claude-fable-5-2",
+                "gpt-6.2-astra",
+                "gpt-6-astra",
+                "gemini-4-carbon"
+            ]
         );
     }
 
@@ -2184,6 +2189,7 @@ mod tests {
                 .unwrap()
                 .retain(|alias| alias != "gemini-3-pro-preview" && alias != "gemini-3-flash");
             if group["id"] == "frontier" {
+                group["models"] = json!(["gpt-6.1-sol"]);
                 group["match_models"] = json!(["gpt-5.4-mini"]);
             }
             if group["id"] == "basic" {

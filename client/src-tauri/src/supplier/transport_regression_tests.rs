@@ -193,7 +193,7 @@ mod transport_regression_tests {
                 )
             });
             let mut agent = fixture.clone();
-            let (_updates, mut updates) = mpsc::channel(1);
+            let (_updates, mut updates) = registration_channel();
             let state = Arc::new(StdMutex::new(SupplierTransportSnapshot::default()));
             let started = Instant::now();
             let result = tokio::time::timeout(
@@ -247,6 +247,31 @@ mod transport_regression_tests {
             64,
             "signatures must not retain multi-MiB catalogs"
         );
+    }
+
+    #[tokio::test]
+    async fn reconnect_reports_withdrawal_and_latest_peer_without_replaying_offline_snapshots() {
+        let mut a = default_supplier_config();
+        a.channel_id = "withdrawn".into();
+        let mut b = a.clone();
+        b.channel_id = "peer".into();
+        let mut config = SupplierAgentConfig::single(a.clone());
+        let (tx, mut rx) = registration_channel();
+        send_register_update(&tx, vec![a.clone(), b.clone()]);
+        for generation in 1..=100 {
+            b.name = format!("refresh-{generation}");
+            send_register_update(&tx, vec![b.clone()]);
+        }
+        a.registration_removed = true;
+        send_forced_register_update(&tx, vec![a]);
+        assert_eq!(tx.pending.lock().unwrap().len(), 2);
+        let declaration = initial_supplier_registration(&mut config, &mut rx, &SupplierRequestTasks::default());
+        assert_eq!(config.channel_ids(), ["peer"]);
+        assert_eq!(config.suppliers[0].name, "refresh-100");
+        assert!(declaration.suppliers.iter().any(|s| s.channel_id == "withdrawn" && s.registration_removed));
+        assert!(declaration.suppliers.iter().any(|s| s.channel_id == "peer" && !s.registration_removed));
+        drop(tx);
+        assert!(rx.recv().await.is_none());
     }
 
     #[tokio::test]
@@ -369,7 +394,7 @@ mod transport_regression_tests {
         let mut config = large_catalog().with_suppliers(vec![supplier.clone()]);
         let mut removed = supplier;
         removed.registration_removed = true;
-        let (updates_tx, mut updates) = mpsc::channel(8);
+        let (updates_tx, mut updates) = registration_channel();
         let (finished, finished_rx) = oneshot::channel();
         let peer = tokio::spawn(async move {
             let mut peer = listener.accept().await;
@@ -395,7 +420,7 @@ mod transport_regression_tests {
             payload.insert("target_channel_id".into(), removed.channel_id.clone().into());
             peer.send(serde_json::json!({"id":id,"type":"http_request","payload":payload})).await;
             started_rx.await.unwrap();
-            updates_tx.send(SupplierRegistrationUpdate { suppliers: vec![removed], force: true }).await.unwrap();
+            updates_tx.send(SupplierRegistrationUpdate { suppliers: vec![removed], force: true }).unwrap();
             let mut finish = Some(finish);
             let mut refused = 0;
             let mut saw_tail = false;
@@ -707,7 +732,7 @@ mod transport_regression_tests {
             let _ = finished_rx.await;
         });
         let mut config = large_catalog().with_suppliers(vec![default_supplier_config()]);
-        let (_updates, mut updates) = mpsc::channel(1);
+        let (_updates, mut updates) = registration_channel();
         let (output, mut output_rx) = mpsc::channel(1);
         let state = Arc::new(StdMutex::new(SupplierTransportSnapshot::default()));
         let mut replay = SupplierReplayState::default();
@@ -820,7 +845,7 @@ mod transport_regression_tests {
         let (output, mut output_rx) = mpsc::channel(8);
         output.send(message(72)).await.unwrap();
         let mut config = large_catalog().with_suppliers(vec![default_supplier_config()]);
-        let (_updates, mut updates) = mpsc::channel(1);
+        let (_updates, mut updates) = registration_channel();
         let state = Arc::new(StdMutex::new(SupplierTransportSnapshot::default()));
         let mut disconnected = resumable.then(Instant::now);
         let outcome = tokio::time::timeout(Duration::from_secs(5), async {
@@ -924,7 +949,7 @@ mod transport_regression_tests {
         let mut config = large_catalog().with_suppliers(vec![default_supplier_config()]);
         config.access_token = access_token;
         let (_shutdown, mut shutdown) = oneshot::channel();
-        let (_updates, mut updates) = mpsc::channel(1);
+        let (_updates, mut updates) = registration_channel();
         let state = Arc::new(StdMutex::new(SupplierTransportSnapshot::default()));
         let mut replay = SupplierReplayState::default();
         let mut disconnected = None;

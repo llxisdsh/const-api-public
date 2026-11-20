@@ -456,8 +456,74 @@ fn check_claude_science_config(root_url: &str, api_key: &str) -> Result<ToolAppl
     Ok(result)
 }
 
-fn remove_claude_science_config() -> Result<ToolApplyResult> {
-    restore_tool_config_from_manifest("claude-science")
+fn remove_tool_env_connection(
+    tool: &str,
+    base_url: &str,
+    api_key: &str,
+) -> Result<ToolApplyResult> {
+    let (path, endpoint, url_var, key_var, model_var, selector) = match tool {
+        "claude-science" => (
+            claude_science_env_path(),
+            tool_surface_url(base_url, "anthropic"),
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_AUTH_TOKEN",
+            None,
+            None,
+        ),
+        "copilot" => (
+            copilot_env_path(),
+            tool_surface_url(base_url, "v1"),
+            "COPILOT_PROVIDER_BASE_URL",
+            "COPILOT_PROVIDER_API_KEY",
+            Some("COPILOT_MODEL"),
+            Some(("COPILOT_PROVIDER_TYPE", "openai")),
+        ),
+        "vibe-trading" => (
+            vibe_trading_config_path(),
+            tool_surface_url(base_url, "v1"),
+            "OPENAI_BASE_URL",
+            "OPENAI_API_KEY",
+            Some("LANGCHAIN_MODEL_NAME"),
+            Some(("LANGCHAIN_PROVIDER", "openai")),
+        ),
+        "anythingllm" => (
+            anythingllm_config_path(),
+            tool_surface_url(base_url, "v1"),
+            "GENERIC_OPEN_AI_BASE_PATH",
+            "GENERIC_OPEN_AI_API_KEY",
+            Some("GENERIC_OPEN_AI_MODEL_PREF"),
+            Some(("LLM_PROVIDER", "generic-openai")),
+        ),
+        _ => return Err(anyhow!("unknown tool environment: {tool}")),
+    };
+    remove_tool_config_with_file_cleanup(tool, &path, None, |bytes, live| {
+        let raw = std::str::from_utf8(bytes).with_context(|| format!("read {}", path.display()))?;
+        let (Some(url), Some(key)) = (env_value(raw, url_var), env_value(raw, key_var)) else {
+            return Ok(None);
+        };
+        let historical = live
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .is_some_and(|current| {
+                env_value(current, url_var).as_ref() != Some(&url)
+                    || env_value(current, key_var).as_ref() != Some(&key)
+            });
+        if !tool_cleanup_connection_matches(&url, &key, &endpoint, api_key, historical) {
+            return Ok(None);
+        }
+        let selected = selector
+            .is_none_or(|(name, expected)| env_value(raw, name).as_deref() == Some(expected));
+        let cleaned = remove_env_vars_if(raw, |name, _| {
+            name == url_var
+                || name == key_var
+                || (selected
+                    && (Some(name) == model_var || selector.is_some_and(|(key, _)| name == key)))
+        });
+        Ok(Some(if cleaned.trim().is_empty() {
+            Vec::new()
+        } else {
+            cleaned.into_bytes()
+        }))
+    })
 }
 
 fn configured_additional_tool_models(
@@ -2638,32 +2704,27 @@ fn qoder_model_context_window(model: &ToolModelInfo) -> u64 {
         .unwrap_or(200_000)
 }
 
-fn qoder_reasoning_efforts(model: &ToolModelInfo, protocol: ToolProtocol) -> Vec<String> {
-    let supported: &[&str] = match protocol {
-        ToolProtocol::AnthropicMessages => &["low", "medium", "high", "xhigh", "max"],
-        ToolProtocol::OpenAiChat | ToolProtocol::OpenAiResponses => {
-            &["minimal", "low", "medium", "high", "xhigh", "max"]
-        }
-        ToolProtocol::GeminiNative => &[],
-    };
-    model
-        .reasoning_efforts
-        .iter()
-        .filter(|effort| supported.iter().any(|supported| *supported == effort.as_str()))
-        .cloned()
-        .collect()
+fn qoder_supports_reasoning_effort(effort: &str) -> bool {
+    // The SDK rejects the whole provider if any model has an unknown effort.
+    matches!(effort, "low" | "medium" | "high" | "xhigh" | "max")
 }
 
 fn qoder_model_entry(model: &ToolModelInfo, protocol: ToolProtocol) -> serde_json::Value {
-    let efforts = qoder_reasoning_efforts(model, protocol);
+    let efforts: Vec<_> = model
+        .reasoning_efforts
+        .iter()
+        .filter(|effort| model.reasoning && qoder_supports_reasoning_effort(effort))
+        .collect();
     let vision = model.attachment
         || model
             .input_modalities
             .iter()
             .any(|modality| modality.eq_ignore_ascii_case("image"));
-    let thinking_mode = (protocol == ToolProtocol::AnthropicMessages)
-        .then_some("adaptive")
-        .unwrap_or("enabled");
+    let thinking_mode = if protocol == ToolProtocol::AnthropicMessages {
+        "adaptive"
+    } else {
+        "enabled"
+    };
     serde_json::json!({
         "model": model.id.trim(),
         "displayName": if model.display_name.trim().is_empty() { model.id.trim() } else { model.display_name.trim() },
@@ -2673,11 +2734,23 @@ fn qoder_model_entry(model: &ToolModelInfo, protocol: ToolProtocol) -> serde_jso
             "vision": vision,
             "thinking": {
                 "modes": if model.reasoning { serde_json::json!([thinking_mode]) } else { serde_json::json!([]) },
-                "supportsEffort": model.reasoning && !efforts.is_empty(),
-                "supportedEffortLevels": if model.reasoning { serde_json::json!(efforts) } else { serde_json::json!([]) },
+                "supportsEffort": !efforts.is_empty(),
+                "supportedEffortLevels": efforts,
             }
         }
     })
+}
+
+fn qoder_configured_model_is_valid(model: &serde_json::Value) -> bool {
+    let levels = model.pointer("/capabilities/thinking/supportedEffortLevels");
+    model["model"].as_str().is_some_and(|id| !id.trim().is_empty())
+        && levels.is_none_or(|value| {
+            value.as_array().is_some_and(|efforts| {
+                efforts
+                    .iter()
+                    .all(|effort| effort.as_str().is_some_and(qoder_supports_reasoning_effort))
+            })
+        })
 }
 
 fn qoder_provider_matches(
@@ -2783,42 +2856,153 @@ fn check_qoder_config(tool: &str, base_url: &str, api_key: &str) -> Result<ToolA
         tool_surface_url(base_url, ToolProtocol::OpenAiResponses.surface()),
         tool_surface_url(base_url, ToolProtocol::AnthropicMessages.surface()),
     ];
-    let configured = root
-        .get("providers")
-        .and_then(serde_json::Value::as_object)
-        .is_some_and(|providers| {
-            providers.values().any(|provider| {
-                let endpoint = provider.get("baseUrl").and_then(serde_json::Value::as_str);
-                let endpoint_matches = endpoint.is_some_and(|value| {
-                    expected_endpoints.iter().any(|expected| expected == value)
-                });
-                endpoint_matches
-                    && qoder_provider_matches(provider, endpoint.unwrap_or_default(), Some(api_key), None)
-                    && provider
-                        .get("models")
-                        .and_then(serde_json::Value::as_array)
-                        .is_some_and(|models| {
-                            models.iter().any(|model| {
-                                model
-                                    .get("model")
-                                    .and_then(serde_json::Value::as_str)
-                                    .is_some_and(|id| !id.trim().is_empty())
-                            })
-                        })
-            })
-        });
+    let mut present = false;
+    let mut configured = false;
+    if let Some(providers) = root["providers"].as_object() {
+        for provider in providers.values() {
+            let Some(models) = provider["models"].as_array() else {
+                continue;
+            };
+            if models.is_empty()
+                || !expected_endpoints.iter().any(|endpoint| {
+                    qoder_provider_matches(provider, endpoint, Some(api_key), None)
+                })
+            {
+                continue;
+            }
+            present = true;
+            if models.iter().all(qoder_configured_model_is_valid) {
+                configured = true;
+                break;
+            }
+        }
+    }
     let mut result = ToolApplyBuilder::default();
     observe_json(&path, &root, &mut result)?;
     let mut result = result.finish(tool);
     result.already_configured &= configured;
     result
         .details
-        .insert("has_managed_config".to_string(), configured.to_string());
+        .insert("has_managed_config".to_string(), present.to_string());
     Ok(result)
 }
 
-fn remove_qoder_config(tool: &str) -> Result<ToolApplyResult> {
-    restore_tool_config_from_manifest(tool)
+fn remove_qoder_config(tool: &str, base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
+    let alternate_id = format!("const-api-{tool}");
+    let protocols = [
+        ToolProtocol::OpenAiResponses,
+        ToolProtocol::OpenAiChat,
+        ToolProtocol::AnthropicMessages,
+    ];
+    remove_tool_config_with_json_cleanup(tool, &qoder_settings_path(tool)?, None, |root, live| {
+        let Some(providers) = root
+            .get_mut("providers")
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            return Ok(false);
+        };
+        let count = providers.len();
+        providers.retain(|id, provider| {
+            let historical = live.is_some_and(|doc| {
+                doc["providers"].get(id).is_none_or(|other| {
+                    other["baseUrl"] != provider["baseUrl"] || other["apiKey"] != provider["apiKey"]
+                })
+            });
+            let managed = (id == ADDITIONAL_CONST_API_PROVIDER_ID || id == &alternate_id)
+                && provider["type"] == "openai-compatible"
+                && protocols.iter().any(|&protocol| {
+                    let Some(url) = provider["baseUrl"].as_str() else {
+                        return false;
+                    };
+                    let Some(key) = provider["apiKey"].as_str() else {
+                        return false;
+                    };
+                    qoder_provider_matches(provider, url, None, Some(protocol))
+                        && tool_cleanup_connection_matches(
+                            url,
+                            key,
+                            &tool_surface_url(base_url, protocol.surface()),
+                            api_key,
+                            historical,
+                        )
+                });
+            !managed
+        });
+        Ok(count != providers.len())
+    })
+}
+
+fn remove_named_json_tool_provider(
+    tool: &str,
+    base_url: &str,
+    api_key: &str,
+) -> Result<ToolApplyResult> {
+    let (path, collection, protocol_path, endpoint_path, key_path) = match tool {
+        "mimocode" => (
+            mimocode_config_path()?,
+            "provider",
+            "/npm",
+            "/api",
+            "/options/apiKey",
+        ),
+        "openscience" => (
+            openscience_config_path()?,
+            "provider",
+            "/npm",
+            "/api",
+            "/options/apiKey",
+        ),
+        "pi" => (pi_models_path(), "providers", "/api", "/baseUrl", "/apiKey"),
+        _ => return Err(anyhow!("unknown named provider tool: {tool}")),
+    };
+    let id = ADDITIONAL_CONST_API_PROVIDER_ID;
+    remove_tool_config_with_json_cleanup(tool, &path, None, |root, live| {
+        let provider = &root[collection][id];
+        let (Some(protocol), Some(url), Some(key)) = (
+            provider
+                .pointer(protocol_path)
+                .and_then(serde_json::Value::as_str),
+            provider
+                .pointer(endpoint_path)
+                .and_then(serde_json::Value::as_str),
+            provider
+                .pointer(key_path)
+                .and_then(serde_json::Value::as_str),
+        ) else {
+            return Ok(false);
+        };
+        let expected = if tool == "pi" {
+            pi_sdk_protocol(protocol).map(|protocol| pi_sdk_base_url(base_url, protocol))
+        } else {
+            opencode_package_protocol(protocol).map(|protocol| opencode_api_url(base_url, protocol))
+        };
+        let historical = live.is_some_and(|doc| {
+            let other = &doc[collection][id];
+            other.pointer(endpoint_path) != provider.pointer(endpoint_path)
+                || other.pointer(key_path) != provider.pointer(key_path)
+        });
+        if !expected.is_some_and(|endpoint| {
+            tool_cleanup_connection_matches(url, key, &endpoint, api_key, historical)
+        }) {
+            return Ok(false);
+        }
+        if let Some(providers) = root
+            .get_mut(collection)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            providers.remove(id);
+        }
+        if tool != "pi"
+            && root["model"]
+                .as_str()
+                .and_then(|model| model.split_once('/'))
+                .is_some_and(|(provider, _)| provider == id)
+            && let Some(settings) = root.as_object_mut()
+        {
+            settings.remove("model");
+        }
+        Ok(true)
+    })
 }
 
 pub(crate) fn apply_additional_tool_config_with_model_info_for_protocol(
@@ -2933,7 +3117,6 @@ pub(crate) fn remove_additional_tool_config(tool: &str) -> Result<ToolApplyResul
         | "deepseek-harness" | "open-interpreter" | "anythingllm" | "goose" | "mistral-vibe"
         | "open-design" | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading"
         | "zcode" => restore_tool_config_from_manifest(tool),
-        "qoder" | "qoder-cn" => remove_qoder_config(tool),
         _ => Err(anyhow!("unknown additional tool: {tool}")),
     }
 }

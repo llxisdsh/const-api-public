@@ -621,11 +621,11 @@ pre {
     0 1px 3px rgba(0, 0, 0, 0.06);
 
   position: fixed;
-  right: 18px;
-  bottom: 72px;
+  right: 12px;
+  bottom: 18px;
   z-index: 91;
   display: grid;
-  width: min(var(--guidance-notice-width), calc(100vw - 36px));
+  width: min(var(--guidance-notice-width), calc(100vw - 24px));
   height: auto;
   min-height: 0;
   max-height: min(64vh, 560px);
@@ -648,10 +648,12 @@ pre {
 }
 
 .guidance-notice-stack.is-bubble-only {
-  right: 12px;
-  bottom: 18px;
   width: auto;
   max-height: none;
+}
+
+.guidance-notice-stack:not(.is-bubble-only):has(+ .toast) {
+  bottom: 72px;
 }
 
 .guidance-notice-tray {
@@ -1120,9 +1122,6 @@ pre {
 
 @media (max-width: 760px) {
   .guidance-notice-stack {
-    right: 12px;
-    bottom: 70px;
-    width: min(var(--guidance-notice-width), calc(100vw - 24px));
     max-height: 64vh;
   }
 

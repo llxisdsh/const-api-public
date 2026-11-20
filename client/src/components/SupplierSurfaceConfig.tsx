@@ -115,9 +115,10 @@ export function SupplierSurfaceConfig({
                       (binding) => binding.protocol === protocol,
                     ));
                     return (
-                      <label key={protocol}>
+                      <span className="supplier-protocol-option" key={protocol}>
                         <input
                           type="checkbox"
+                          aria-label={protocolLabel(protocol)}
                           checked={checked}
                           onChange={(event) => onToggleProtocol?.(
                             row.surface,
@@ -126,7 +127,7 @@ export function SupplierSurfaceConfig({
                           )}
                         />
                         <span>{protocolLabel(protocol)}</span>
-                      </label>
+                      </span>
                     );
                   })}
                 </div>

@@ -282,3 +282,99 @@ async fn voice_audio_upload_routes_by_model_and_keeps_binary_form() {
     assert!(captured.iter().all(|received| received.as_ref() == body));
     task.abort();
 }
+
+#[tokio::test]
+async fn voice_audio_upload_without_local_supply_reaches_platform_unchanged() {
+    let captured = Arc::new(StdMutex::new(Vec::new()));
+    let capture = captured.clone();
+    let upstream = warp::post()
+        .and(warp::header::optional::<String>("authorization"))
+        .and(warp::body::bytes())
+        .map(move |authorization: Option<String>, body: bytes::Bytes| {
+            capture.lock().unwrap().push((authorization, body));
+            warp::reply::json(
+                &serde_json::json!({"text":"ok","usage":{"type":"duration","seconds":1.25}}),
+            )
+        });
+    let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+    let task = tokio::spawn(server);
+    let mut config = default_config();
+    config.api_key = "audio-local".into();
+    config.account_device_api_key = "sk-platform".into();
+    config.channels.clear();
+    config.supplier.enabled = false;
+    config.prefer_local_supply = true;
+    config.endpoints = vec![Endpoint {
+        server_id: String::new(),
+        name: "platform".into(),
+        base_url: format!("http://{address}"),
+        supplier_ws_url: String::new(),
+        supplier_quic_url: String::new(),
+        enabled: true,
+    }];
+    let shared = Arc::new(ProxyShared::from_config(config, Client::new()));
+    let body=b"--audio-test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\nRIFF\0\xff\r\n--audio-test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-test\r\n--audio-test--\r\n";
+    for path in ["/v1/audio/transcriptions", "/v1/audio/translations"] {
+        let response = warp::test::request()
+            .method("POST")
+            .path(path)
+            .header("authorization", "Bearer audio-local")
+            .header("content-type", "multipart/form-data; boundary=audio-test")
+            .body(body.as_slice())
+            .reply(&crate::proxy_routes(shared.clone()))
+            .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{path}: {:?}",
+            response.body()
+        );
+    }
+    let captured = captured.lock().unwrap();
+    assert_eq!(captured.len(), 2);
+    for (authorization, received) in captured.iter() {
+        assert_eq!(authorization.as_deref(), Some("Bearer sk-platform"));
+        assert_eq!(received.as_ref(), body);
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn platform_media_streams_use_streaming_pool_timeout_and_replay() {
+    let method = warp::http::Method::POST;
+    let mut headers = warp::http::HeaderMap::new();
+    headers.insert("content-type", "application/json".parse().unwrap());
+    let speech = bytes::Bytes::from_static(
+        br#"{"model":"gpt-4o-mini-tts","input":"hello","stream_format":"sse"}"#,
+    );
+    let streaming =
+        platform_media_stream_requested(&method, "/v1/audio/speech", "", &headers, &speech)
+            .await
+            .unwrap();
+    assert!(streaming);
+    assert_eq!(platform_request_timeout(streaming), None);
+    assert!(
+        !platform_media_stream_requested(
+            &method,
+            "/v1/audio/speech",
+            "",
+            &headers,
+            &bytes::Bytes::from_static(br#"{"model":"tts-1","input":"hello"}"#)
+        )
+        .await
+        .unwrap()
+    );
+
+    headers.insert(
+        "content-type",
+        "multipart/form-data; boundary=media".parse().unwrap(),
+    );
+    let image = bytes::Bytes::from_static(b"--media\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-2\r\n--media\r\nContent-Disposition: form-data; name=\"stream\"\r\n\r\ntrue\r\n--media\r\nContent-Disposition: form-data; name=\"image\"; filename=\"image.png\"\r\n\r\n\0\xff\r\n--media--\r\n");
+    let original = image.clone();
+    assert!(
+        platform_media_stream_requested(&method, "/v1/images/edits", "", &headers, &image)
+            .await
+            .unwrap()
+    );
+    assert_eq!(image, original);
+}

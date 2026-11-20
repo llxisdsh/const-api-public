@@ -1,0 +1,94 @@
+[
+  {
+    "name": "Claude session precedes generic fields and a shared cache label",
+    "body": {"metadata":{"user_id":"{\"device_id\":\"device-a\",\"session_id\":\"cross-route-session\"}"},"client_metadata":{"session_id":"other-session"},"prompt_cache_key":"shared-label"},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Empty nested session falls through to thread",
+    "body": {"client_metadata":{"session_id":"  ","thread_id":"cross-route-session"},"session_id":"other-session"},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Invalid nested session falls through to thread",
+    "body": {"client_metadata":{"session_id":"bad\nsession","thread_id":"cross-route-session"}},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Oversized session falls through to cache label",
+    "body": {"session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prompt_cache_key":"cross-route-session"},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Wrong field types do not hide root session alias",
+    "body": {"client_metadata":{"session_id":false,"thread_id":{}},"session_id":null,"sessionId":"cross-route-session"},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Native Codex session retains precedence over thread and cache label",
+    "body": {"client_metadata":{"session_id":"cross-route-session","thread_id":"parent-thread"},"prompt_cache_key":"parent-cache"},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Ordinary Claude user is not a session",
+    "body": {"metadata":{"user_id":"business-user"},"session_id":"cross-route-session"},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Claude identity without device falls through",
+    "body": {"metadata":{"user_id":"{\"session_id\":\"other-session\"}"},"conversation_id":"cross-route-session"},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Claude identity rejects internal tab",
+    "body": {"metadata":{"user_id":"{\"device_id\":\"device-a\",\"session_id\":\"bad\\tsession\"}"},"prompt_cache_key":"cross-route-session"},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Claude identity rejects Unicode control",
+    "body": {"metadata":{"user_id":"{\"device_id\":\"device-a\",\"session_id\":\"bad\\u0085session\"}"},"prompt_cache_key":"cross-route-session"},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Conversation object remains a valid fallback",
+    "body": {"prompt_cache_key":"","conversation":{"id":" cross-route-session "}},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Conversation string remains a valid fallback",
+    "body": {"session_id":"","conversation":"cross-route-session"},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Header precedes Claude and Codex body identities",
+    "headers": {"x-claude-code-session-id":"cross-route-session","session-id":"other-header","thread-id":"parent-thread"},
+    "body": {"metadata":{"user_id":"{\"device_id\":\"device-a\",\"session_id\":\"other-body\"}"},"client_metadata":{"session_id":"other-session"}},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "Blank header does not hide legacy session header",
+    "headers": {"x-claude-code-session-id":" ","session_id":"cross-route-session","x-session-id":"other-header"},
+    "body": {"prompt_cache_key":"other-body"},
+    "session": "cross-route-session",
+    "cache_identity": "c1_f4468667066147d5bfdcfbe96a8451a68674be1a"
+  },
+  {
+    "name": "No valid identity remains absent",
+    "body": {"metadata":{"user_id":"business-user"},"client_metadata":{"session_id":"bad\nsession","thread_id":false},"session_id":"","prompt_cache_key":null},
+    "session": null,
+    "cache_identity": null
+  }
+]

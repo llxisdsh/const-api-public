@@ -54,7 +54,9 @@ fn read(account: &str) -> Result<Option<String>> {
         }
         let bytes = unsafe { std::slice::from_raw_parts(record.CredentialBlob, len) };
         let words = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect::<Vec<_>>();
         String::from_utf16(&words)

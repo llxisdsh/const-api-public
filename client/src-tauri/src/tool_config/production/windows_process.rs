@@ -79,27 +79,31 @@ fn windows_descendant_process_ids(
 }
 
 impl ToolProcessScope {
-    fn matches_windows_probe(&self, probe: &WindowsProcessProbe) -> bool {
-        if probe
-            .package_family_name
-            .as_ref()
-            .map(|family| family.to_ascii_lowercase())
-            .is_some_and(|family| self.package_family_names.contains(&family))
-        {
-            return true;
-        }
-
-        let path = normalized_windows_process_path(Path::new(&probe.identity.executable_path));
-        if self.exact_executable_paths.contains(&path)
+    fn matches_windows_executable(&self, executable: &str) -> bool {
+        let path = normalized_windows_process_path(Path::new(executable));
+        self.exact_executable_paths.contains(&path)
             || self
                 .install_roots
                 .iter()
                 .any(|root| windows_path_is_within_root(&path, root))
-            || probe.command_line.as_ref().is_some_and(|command_line| {
-                self.command_line_markers
-                    .iter()
-                    .any(|owner| windows_command_line_matches_owner(command_line, owner))
-            })
+    }
+
+    fn matches_windows_package(&self, family: Option<&str>) -> bool {
+        family.is_some_and(|name| self.package_family_names.contains(&name.to_ascii_lowercase()))
+    }
+
+    fn matches_windows_command_line(&self, command: Option<&str>) -> bool {
+        command.is_some_and(|line| {
+            self.command_line_markers
+                .iter()
+                .any(|owner| windows_command_line_matches_owner(line, owner))
+        })
+    }
+
+    fn matches_windows_probe(&self, probe: &WindowsProcessProbe) -> bool {
+        if self.matches_windows_executable(&probe.identity.executable_path)
+            || self.matches_windows_package(probe.package_family_name.as_deref())
+            || self.matches_windows_command_line(probe.command_line.as_deref())
         {
             return true;
         }
@@ -137,18 +141,19 @@ fn windows_process_snapshot(scope: &ToolProcessScope) -> Result<ToolProcessSnaps
 
     let mut probes = BTreeMap::<u32, WindowsProcessProbe>::new();
     let mut root_process_ids = BTreeSet::new();
-    for entry in entries.iter().filter(|entry| {
-        scope
-            .executable_names
-            .contains(&normalized_process_name(&entry.name))
-    }) {
+    for entry in &entries {
+        let name = normalized_process_name(&entry.name);
+        let named = scope.executable_names.contains(&name);
+        let hosted = !scope.command_line_markers.is_empty()
+            && windows_runtime_host_process_names().contains(&name.as_str());
+        if !named && !hosted {
+            continue;
+        }
         ensure_windows_process_snapshot_deadline(deadline)?;
-        let Some(probe) = windows_process_probe_by_pid(entry.pid).with_context(|| {
-            format!(
-                "TOOL_CONFIG_PROCESS_PROBE_FAILED: read native identity for PID {}",
-                entry.pid
-            )
-        })? else {
+        let probe = windows_probe_candidate(entry.pid, (!named).then_some(scope)).with_context(|| {
+            format!("TOOL_CONFIG_PROCESS_PROBE_FAILED: read native identity for PID {}", entry.pid)
+        })?;
+        let Some(probe) = probe else {
             continue;
         };
         ensure_windows_process_snapshot_deadline(deadline)?;
@@ -159,10 +164,7 @@ fn windows_process_snapshot(scope: &ToolProcessScope) -> Result<ToolProcessSnaps
             .file_name()
             .and_then(|value| value.to_str())
             .map(normalized_process_name);
-        if !current_name
-            .as_ref()
-            .is_some_and(|name| scope.executable_names.contains(name))
-        {
+        if current_name.as_ref() != Some(&name) {
             continue;
         }
         if scope.matches_windows_probe(&probe) {
@@ -307,7 +309,7 @@ fn ensure_windows_process_snapshot_deadline(deadline: Instant) -> Result<()> {
     Ok(())
 }
 
-fn windows_open_process(pid: u32, access: u32) -> Result<Option<WindowsOwnedHandle>> {
+fn windows_open_process(pid: u32, access: u32) -> std::io::Result<Option<WindowsOwnedHandle>> {
     use windows_sys::Win32::{
         Foundation::ERROR_INVALID_PARAMETER,
         System::Threading::OpenProcess,
@@ -320,25 +322,118 @@ fn windows_open_process(pid: u32, access: u32) -> Result<Option<WindowsOwnedHand
         if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
             return Ok(None);
         }
-        return Err(anyhow!(
-            "TOOL_CONFIG_PROCESS_IDENTITY_UNAVAILABLE: OpenProcess PID {pid}: {error}"
-        ));
+        return Err(error);
     }
     Ok(Some(WindowsOwnedHandle(raw_process)))
 }
 
 fn windows_process_probe_by_pid(pid: u32) -> Result<Option<WindowsProcessProbe>> {
+    windows_probe_candidate(pid, None)
+}
+
+fn windows_probe_candidate(
+    pid: u32,
+    optional_host: Option<&ToolProcessScope>,
+) -> Result<Option<WindowsProcessProbe>> {
     use windows_sys::Win32::System::Threading::{
         PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
     };
 
-    let Some(process) = windows_open_process(
+    let process = match windows_open_process(
         pid,
         PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
-    )? else {
-        return Ok(None);
+    ) {
+        Ok(Some(process)) => process,
+        Ok(None) => return Ok(None),
+        Err(error) if optional_host.is_some() && error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Ok(None);
+        }
+        Err(error) => return Err(anyhow!(
+            "TOOL_CONFIG_PROCESS_IDENTITY_UNAVAILABLE: OpenProcess PID {pid}: {error}"
+        )),
     };
-    windows_process_probe_from_handle(process.raw(), pid)
+    let handle = process.raw();
+    match (windows_process_probe_from_handle(handle, pid), optional_host) {
+        (Err(error), Some(scope)) => windows_host_probe_failure(handle, scope, error),
+        (result, _) => result,
+    }
+}
+
+fn windows_host_probe_failure(
+    process: windows_sys::Win32::Foundation::HANDLE,
+    scope: &ToolProcessScope,
+    error: anyhow::Error,
+) -> Result<Option<WindowsProcessProbe>> {
+    // Shared interpreters need positive evidence. If any part of the identity still
+    // establishes ownership, preserve the error and require the usual manual decision.
+    let command_line = windows_process_command_line(process).ok().flatten();
+    let family = windows_process_package_family_name(process).ok().flatten();
+    if scope.matches_windows_command_line(command_line.as_deref())
+        || scope.matches_windows_package(family.as_deref())
+        || windows_process_image_path(process).is_ok_and(|path| scope.matches_windows_executable(&path))
+    {
+        return Err(error);
+    }
+    Ok(None)
+}
+
+fn windows_dos_path_for_native_image(native: &str, buffer: &mut [u16]) -> Option<String> {
+    use windows_sys::Win32::Storage::FileSystem::{GetLogicalDrives, QueryDosDeviceW};
+    // SAFETY: GetLogicalDrives takes no arguments.
+    let drives = unsafe { GetLogicalDrives() };
+    for index in 0..26 {
+        if drives & (1 << index) == 0 {
+            continue;
+        }
+        let letter = b'A' + index;
+        let drive = [u16::from(letter), u16::from(b':'), 0];
+        // SAFETY: drive is NUL-terminated and buffer has the stated capacity.
+        let len = unsafe {
+            QueryDosDeviceW(drive.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32)
+        };
+        let Some(end) = buffer[..len as usize].iter().position(|c| *c == 0) else {
+            continue;
+        };
+        // Only the first mapping is current. Match at a separator (Volume2 vs Volume20).
+        if let Ok(device) = String::from_utf16(&buffer[..end])
+            && let Some(suffix) = native.get(device.len()..)
+            && suffix.starts_with('\\')
+            && native[..device.len()].eq_ignore_ascii_case(&device)
+        {
+            return Some(format!("{}:{suffix}", char::from(letter)));
+        }
+    }
+    None
+}
+
+fn windows_process_image_path(
+    process: windows_sys::Win32::Foundation::HANDLE,
+) -> std::io::Result<String> {
+    use windows_sys::Win32::{
+        Foundation::ERROR_GEN_FAILURE,
+        System::Threading::{PROCESS_NAME_NATIVE, QueryFullProcessImageNameW},
+    };
+    let mut buffer = vec![0_u16; WINDOWS_PROCESS_IMAGE_BUFFER_CHARS];
+    let mut query = |format| {
+        let mut len = buffer.len() as u32;
+        // SAFETY: the buffer is writable for len UTF-16 code units.
+        if unsafe { QueryFullProcessImageNameW(process, format, buffer.as_mut_ptr(), &mut len) } == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        String::from_utf16(&buffer[..len as usize])
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    };
+    match query(0) {
+        Err(error) if error.raw_os_error() == Some(ERROR_GEN_FAILURE as i32) => {
+            // The live handle can still return the NT path even if Win32 path conversion failed.
+            query(PROCESS_NAME_NATIVE)
+                .ok()
+                .and_then(|native| windows_dos_path_for_native_image(&native, &mut buffer))
+                .ok_or(error)
+        }
+        result => result,
+    }
 }
 
 fn windows_process_probe_from_handle(
@@ -347,32 +442,22 @@ fn windows_process_probe_from_handle(
 ) -> Result<Option<WindowsProcessProbe>> {
     use windows_sys::Win32::{
         Foundation::FILETIME,
-        System::Threading::{GetProcessTimes, QueryFullProcessImageNameW},
+        System::Threading::GetProcessTimes,
     };
 
     if windows_process_handle_exited(process)? {
         return Ok(None);
     }
 
-    let mut path = vec![0_u16; WINDOWS_PROCESS_IMAGE_BUFFER_CHARS];
-    let mut path_len = path.len() as u32;
-    // SAFETY: path is a writable UTF-16 buffer and path_len contains its capacity in characters.
-    if unsafe { QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut path_len) } == 0 {
-        let error = std::io::Error::last_os_error();
-        windows_process_query_failure_or_exit(
-            process,
-            pid,
-            "QueryFullProcessImageNameW",
-            error.to_string(),
-        )?;
-        return Ok(None);
-    }
-    path.truncate(path_len as usize);
-    let executable_path = String::from_utf16(&path).map_err(|error| {
-        anyhow!(
-            "TOOL_CONFIG_PROCESS_IDENTITY_UNAVAILABLE: PID {pid} executable path is not valid UTF-16: {error}"
-        )
-    })?;
+    let executable_path = match windows_process_image_path(process) {
+        Ok(path) => path,
+        Err(error) => {
+            windows_process_query_failure_or_exit(
+                process, pid, "QueryFullProcessImageNameW", error.to_string(),
+            )?;
+            return Ok(None);
+        }
+    };
     if executable_path.trim().is_empty() {
         windows_process_query_failure_or_exit(
             process,

@@ -88,6 +88,36 @@ fn bounded_text_and_function_schema_roundtrips_are_stable_for_every_adapter() {
 }
 
 #[test]
+fn responses_standalone_outputs_keep_native_envelopes_through_decode_and_encode() {
+    let protocol = ProtocolKind::OpenAiResponses;
+    let context = context(protocol);
+    let input = json!([
+        {"type":"function_call_output","id":"notification_1","name":"notifications",
+            "namespace":"pages","output":"Page opened.","future_metadata":{"keep":true}},
+        {"type":"function_call_output","call_id":null,"name":"selected_page",
+            "output":[{"type":"input_text","text":"Page content."}]}
+    ]);
+    let request = decode_request(
+        protocol,
+        &json!({"model":"roundtrip-model","input":input}),
+        &context,
+    )
+    .unwrap();
+    let plan = plan_conversion(
+        &request,
+        protocol,
+        protocol,
+        &context.issuer,
+        &context.issuer,
+        &CapabilityProfile::default(),
+        ConversionPolicy::Production,
+    )
+    .unwrap();
+    let encoded = encode_request(protocol, &request, &plan, &context).unwrap();
+    assert_eq!(encoded["input"], input);
+}
+
+#[test]
 fn bounded_schema_normalization_is_idempotent() {
     for schema in [
         json!(true),

@@ -1599,11 +1599,9 @@ pub(crate) fn subscription_structured_error_response(
         crate::surface_wire::LOGICAL_REQUEST_STARTED_FIELD.to_string(),
         serde_json::Value::Bool(false),
     );
-    if error_kind == "concurrency_full" {
-        attach_execution_evidence(
-            &mut payload,
-            &execution_evidence_for_error(&channel_concurrency_failure()),
-        );
-    }
+    attach_execution_evidence(
+        &mut payload,
+        &execution_evidence_for_error(&local_admission_failure(error_kind, message)),
+    );
     payload
 }

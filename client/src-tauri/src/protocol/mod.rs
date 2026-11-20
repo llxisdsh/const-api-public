@@ -234,10 +234,14 @@ fn convert_non_stream_inner(
     if let Some(model) = target_context.issuer.model_family.as_deref() {
         request.model = model.to_string();
     }
+    let mut repairs = if target != ProtocolKind::OpenAiResponses {
+        adapters::project_responses_standalone_outputs(&mut request, source_context)?
+    } else {
+        Vec::new()
+    };
     // The decoder retains each additional_tools item for native replay, but
     // also includes its definitions in request.tools. Drop only that envelope
     // before cross-protocol role normalization to avoid empty assistant turns.
-    let mut repairs = Vec::new();
     if source == ProtocolKind::OpenAiResponses
         && target != ProtocolKind::OpenAiResponses
         && request.metadata.responses_tool_placement.is_some()

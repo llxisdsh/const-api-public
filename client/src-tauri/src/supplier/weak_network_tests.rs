@@ -182,7 +182,7 @@ mod weak_network_tests {
     struct Agent {
         stop: Option<oneshot::Sender<()>>,
         task: tokio::task::JoinHandle<()>,
-        _updates: mpsc::Sender<SupplierRegistrationUpdate>,
+        _updates: RegistrationSender,
         state: Arc<StdMutex<SupplierTransportSnapshot>>,
     }
     impl Drop for Agent {
@@ -241,7 +241,7 @@ mod weak_network_tests {
             account_refresh_notify: Arc::new(Notify::new()),
         };
         let (stop, shutdown) = oneshot::channel();
-        let (updates, changes) = mpsc::channel(4);
+        let (updates, changes) = registration_channel();
         let state = Arc::new(StdMutex::new(SupplierTransportSnapshot::default()));
         let task = tokio::spawn(run_supplier_agent(config, shutdown, changes, state.clone()));
         Agent {

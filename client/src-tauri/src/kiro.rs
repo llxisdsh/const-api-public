@@ -2,7 +2,7 @@
 use crate::{
     model::QuotaWindow, model_catalog::ModelObservation,
     subscription_oauth_error::SubscriptionOAuthError,
-    upstream_transport::AdaptiveRequestBuilderExt,
+    upstream_transport::UpstreamRequestBuilderExt,
 };
 use anyhow::{Context, Result, anyhow, ensure};
 use futures_util::StreamExt;
@@ -147,7 +147,7 @@ async fn oauth_post(client: &Client, url: &str, body: &Value, secrets: &[&str]) 
         .post(url)
         .timeout(Duration::from_secs(30))
         .json(body)
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let status = response.status().as_u16();
     let value = bounded_json(response).await?;
@@ -496,7 +496,7 @@ async fn metadata_post(
 ) -> Result<Value> {
     let response = api_request(client, url, token, target, body)
         .timeout(Duration::from_secs(30))
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let status = response.status().as_u16();
     let value = bounded_json(response).await?;

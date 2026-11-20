@@ -21,6 +21,29 @@ use crate::protocol::kind::ProtocolKind;
 
 pub(crate) struct GeminiNativeAdapter;
 
+/// countTokens can wrap the original generation request. Inspect only protocol
+/// envelopes, never similarly named fields in tools or function arguments.
+pub(crate) fn gemini_cached_content_names(
+    fields: &Map<String, Value>,
+    count_tokens: bool,
+) -> impl Iterator<Item = &str> {
+    let nested = count_tokens
+        .then(|| {
+            fields
+                .get("generateContentRequest")
+                .or_else(|| fields.get("generate_content_request"))
+                .and_then(Value::as_object)
+        })
+        .flatten();
+    std::iter::once(fields).chain(nested).flat_map(|request| {
+        ["cachedContent", "cached_content"]
+            .into_iter()
+            .filter_map(|key| request.get(key).and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+    })
+}
+
 impl ProtocolAdapter for GeminiNativeAdapter {
     fn decode_request(
         &self,

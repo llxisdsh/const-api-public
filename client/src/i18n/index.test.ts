@@ -49,6 +49,17 @@ describe("localizedError", () => {
     expect(result).not.toContain("auth.json");
   });
 
+  it("distinguishes a running-state check from a failure to start the program", async () => {
+    const diagnostic = JSON.stringify({ code: "tool_config_launch_unverified", params: { detail: "native probe failed" } });
+    for (const language of ["zh-CN", "en-US"] as const) {
+      await changeAppLanguage(language);
+      const expected = language === "zh-CN" ? "已发出启动命令" : "The launch command was sent";
+      expect(localizedError(diagnostic)).toContain(expected);
+      expect(localizedError(`TOOL_CONFIG_START_FAILED: start and verify: ${diagnostic}`)).toContain(expected);
+      expect(localizedError("TOOL_CONFIG_START_FAILED: spawn failed")).not.toContain(expected);
+    }
+  });
+
   it("labels desktop and command-line programs in both locator languages", () => {
     expect(i18n.t("access.locator.editions.desktop", { lng: "zh-CN" })).toBe("桌面版");
     expect(i18n.t("access.locator.editions.cli", { lng: "zh-CN" })).toBe("命令行版（CLI）");

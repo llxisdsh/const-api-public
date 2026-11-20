@@ -3,8 +3,11 @@
 //! The Console subscription adapter speaks for OpenCode, not for CONST. Its
 //! requests carry the captured 1.19.0 User-Agent, OpenCode-shaped session and
 //! turn IDs, and no `x-session-affinity`/`X-Session-Id`. Free-model requests
-//! also need streaming and the `bash`/`read` compatibility declarations.
+//! retain the previously measured streaming and `bash`/`read` declarations.
 //! These declarations do not install tools or grant execution permissions.
+//! Free inference also uses a small environment block and the dedicated Bun
+//! TLS profile, verified against released 2.1.3/2.3.0. No tool is executed here.
+//! See docs/coding-gateways.md's 2026-11-16 recheck.
 
 use crate::{model::ChannelConfig, protocol::kind::ProtocolKind};
 use anyhow::Result;
@@ -15,7 +18,9 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-/// Captured from OpenCode 1.19.0; the version is part of the free-tier gate.
+pub(crate) mod transport;
+
+/// Captured from OpenCode 1.19.0; revalidated with the current free-tier contract.
 pub(crate) const USER_AGENT_VALUE: &str =
     "opencode/1.19.0 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14";
 pub(crate) const SESSION_HEADER: &str = "x-opencode-session";
@@ -35,6 +40,10 @@ const FREE_TOOL_DESCRIPTION: &str = "Not available in this session. Never call t
 const BASH_SCHEMA: &str = r#"{"type":"object","properties":{"command":{"type":"string","description":"The command to execute"},"timeout":{"type":"integer","description":"Optional timeout in milliseconds"},"workdir":{"type":"string","description":"The working directory to run the command in"}},"required":["command"]}"#;
 const READ_SCHEMA: &str = r#"{"type":"object","properties":{"filePath":{"type":"string","description":"The absolute path to the file or directory to read"},"offset":{"type":"integer","description":"The line number to start reading from (1-indexed)"},"limit":{"type":"integer","description":"The maximum number of lines to read"}},"required":["filePath"]}"#;
 const FREE_TOOLS: [(&str, &str); 2] = [("bash", BASH_SCHEMA), ("read", READ_SCHEMA)];
+// Fixed metadata, not a substitute for the caller's instructions or a claim
+// about its filesystem. Never send a supplier machine's local working directory.
+const FREE_ENVIRONMENT: &str =
+    "<env>\nWorking directory: not provided by this API gateway.\nPlatform: unknown\n</env>";
 
 struct SessionIds {
     by_seed: HashMap<String, String>,
@@ -112,7 +121,7 @@ pub(crate) fn is_free_model(channel: &ChannelConfig, model: &str) -> bool {
     })
 }
 
-/// Apply the measured Console free-model contract: stream plus bash/read
+/// Apply the measured Console free-model contract: environment, stream, bash/read
 /// declarations. Only append missing declarations; never rewrite a caller's
 /// tools, including zero-argument and composed schemas. Tool-free callers use
 /// `tool_choice: none`, so compatibility declarations cannot become calls.
@@ -147,7 +156,7 @@ pub(crate) fn apply_free_tier_body_contract(
         }
     }
     let original = std::str::from_utf8(body)?;
-    let mut adjusted = original.to_string();
+    let mut adjusted = free_environment(protocol, &object, original)?;
     if object.get("stream").and_then(Value::as_bool) != Some(true) {
         adjusted =
             crate::supplier::rewrite_top_level_json_field(&adjusted, "stream", "true", true)?;
@@ -180,6 +189,99 @@ pub(crate) fn apply_free_tier_body_contract(
         }
     }
     Ok((adjusted != original).then(|| adjusted.into_bytes()))
+}
+
+fn has_environment(value: &Value) -> bool {
+    match value {
+        Value::String(text) => {
+            text.contains("<env>")
+                && text.contains("Working directory:")
+                && text.contains("Platform:")
+                && text.contains("</env>")
+        }
+        Value::Array(parts) => parts
+            .iter()
+            .any(|part| part.get("text").is_some_and(has_environment)),
+        _ => false,
+    }
+}
+
+fn free_environment(
+    protocol: ProtocolKind,
+    object: &serde_json::Map<String, Value>,
+    original: &str,
+) -> Result<String> {
+    let has_message_environment = |messages: &Value| {
+        messages.as_array().is_some_and(|messages| {
+            messages.iter().any(|message| {
+                matches!(message["role"].as_str(), Some("system" | "developer"))
+                    && has_environment(&message["content"])
+            })
+        })
+    };
+    let (field, replacement) = match protocol {
+        ProtocolKind::OpenAiChat => {
+            let messages = object
+                .get("messages")
+                .ok_or_else(|| anyhow::anyhow!("OpenCode free-model messages are required"))?;
+            if has_message_environment(messages) {
+                return Ok(original.to_string());
+            }
+            let messages = messages
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("OpenCode free-model messages must be an array"))?;
+            let raw = crate::supplier::top_level_json_raw_token(original.as_bytes(), "messages")
+                .expect("validated messages have a raw token");
+            let prefix = json!({"role":"system","content":FREE_ENVIRONMENT}).to_string();
+            (
+                "messages",
+                format!(
+                    "[{prefix}{}{}",
+                    if messages.is_empty() { "" } else { "," },
+                    &raw[1..]
+                ),
+            )
+        }
+        ProtocolKind::OpenAiResponses => {
+            if object.get("instructions").is_some_and(has_environment)
+                || object.get("input").is_some_and(has_message_environment)
+            {
+                return Ok(original.to_string());
+            }
+            let instructions = match object.get("instructions") {
+                None | Some(Value::Null) => FREE_ENVIRONMENT.to_string(),
+                Some(Value::String(text)) => format!("{text}\n\n{FREE_ENVIRONMENT}"),
+                _ => anyhow::bail!("OpenCode free-model instructions must be a string"),
+            };
+            ("instructions", serde_json::to_string(&instructions)?)
+        }
+        ProtocolKind::AnthropicMessages => {
+            if object.get("system").is_some_and(has_environment) {
+                return Ok(original.to_string());
+            }
+            let system = match object.get("system") {
+                None | Some(Value::Null) => serde_json::to_string(FREE_ENVIRONMENT)?,
+                Some(Value::String(text)) => {
+                    serde_json::to_string(&format!("{text}\n\n{FREE_ENVIRONMENT}"))?
+                }
+                Some(Value::Array(parts)) => {
+                    let raw =
+                        crate::supplier::top_level_json_raw_token(original.as_bytes(), "system")
+                            .expect("validated system has a raw token");
+                    format!(
+                        "{}{}{}]",
+                        &raw[..raw.len() - 1],
+                        if parts.is_empty() { "" } else { "," },
+                        json!({"type":"text","text":FREE_ENVIRONMENT})
+                    )
+                }
+                _ => anyhow::bail!("OpenCode free-model system must be text or content blocks"),
+            };
+            ("system", system)
+        }
+        _ => return Ok(original.to_string()),
+    };
+    crate::supplier::rewrite_top_level_json_field(original, field, &replacement, true)
 }
 
 fn tool_name(tool: &Value, protocol: ProtocolKind) -> Option<&str> {
@@ -425,7 +527,7 @@ mod tests {
             ProtocolKind::AnthropicMessages,
         ] {
             for raw_tools in ["", ",\"tools\":[]", ",\"tools\":null"] {
-                let body = format!(r#"{{"stream":true{raw_tools}}}"#);
+                let body = format!(r#"{{"messages":[],"stream":true{raw_tools}}}"#);
                 let updated = apply_free_tier_body_contract(protocol, body.as_bytes())
                     .unwrap()
                     .unwrap();
@@ -496,7 +598,7 @@ mod tests {
         for (protocol, body) in [
             (
                 ProtocolKind::OpenAiChat,
-                r#"{ "stream":false, "tools":[{"type":"function","function":{"name":"bash","parameters":{"anyOf":[{"type":"object","properties":{}}]}}}],"tool_choice":"required" }"#,
+                r#"{ "messages":[], "stream":false, "tools":[{"type":"function","function":{"name":"bash","parameters":{"anyOf":[{"type":"object","properties":{}}]}}}],"tool_choice":"required" }"#,
             ),
             (
                 ProtocolKind::OpenAiResponses,
@@ -516,6 +618,14 @@ mod tests {
             assert!(text.contains(&original_tools[1..original_tools.len() - 1]));
             let mut expected: Value = serde_json::from_str(body).unwrap();
             expected["stream"] = json!(true);
+            match protocol {
+                ProtocolKind::OpenAiChat => {
+                    expected["messages"] = json!([{"role":"system","content":FREE_ENVIRONMENT}])
+                }
+                ProtocolKind::OpenAiResponses => expected["instructions"] = json!(FREE_ENVIRONMENT),
+                ProtocolKind::AnthropicMessages => expected["system"] = json!(FREE_ENVIRONMENT),
+                _ => unreachable!(),
+            }
             let mut received: Value = serde_json::from_slice(&changed).unwrap();
             received["tools"].as_array_mut().unwrap().truncate(1);
             assert_eq!(received, expected);
@@ -528,8 +638,80 @@ mod tests {
     }
 
     #[test]
+    fn environment_preserves_history_instructions_and_cache_blocks() {
+        let messages = r#"[{ "role":"system", "content":"Keep caller instructions." }, {"role":"user","content":"hello","extension":42}]"#;
+        let chat = format!(r#"{{"messages":{messages}}}"#);
+        let changed = apply_free_tier_body_contract(ProtocolKind::OpenAiChat, chat.as_bytes())
+            .unwrap()
+            .unwrap();
+        assert!(
+            std::str::from_utf8(&changed)
+                .unwrap()
+                .contains(&messages[1..messages.len() - 1])
+        );
+        let value: Value = serde_json::from_slice(&changed).unwrap();
+        assert_eq!(value["messages"][0]["content"], FREE_ENVIRONMENT);
+        assert_eq!(value["messages"].as_array().unwrap().len(), 3);
+
+        let responses = br#"{"input":"hello","instructions":"Keep caller instructions."}"#;
+        let changed = apply_free_tier_body_contract(ProtocolKind::OpenAiResponses, responses)
+            .unwrap()
+            .unwrap();
+        let value: Value = serde_json::from_slice(&changed).unwrap();
+        assert_eq!(
+            value["instructions"],
+            format!("Keep caller instructions.\n\n{FREE_ENVIRONMENT}")
+        );
+        assert_eq!(value["input"], "hello");
+
+        let system = r#"[{ "type":"text", "text":"Keep caller instructions.", "cache_control":{"type":"ephemeral","ttl":"1h"}}]"#;
+        let anthropic = format!(r#"{{"system":{system},"messages":[]}}"#);
+        let changed =
+            apply_free_tier_body_contract(ProtocolKind::AnthropicMessages, anthropic.as_bytes())
+                .unwrap()
+                .unwrap();
+        assert!(
+            std::str::from_utf8(&changed)
+                .unwrap()
+                .contains(&system[1..system.len() - 1])
+        );
+        let value: Value = serde_json::from_slice(&changed).unwrap();
+        assert_eq!(value["system"][1]["text"], FREE_ENVIRONMENT);
+        assert_eq!(value["system"].as_array().unwrap().len(), 2);
+        assert!(
+            apply_free_tier_body_contract(ProtocolKind::AnthropicMessages, &changed)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn caller_environment_is_retained_without_supplier_metadata() {
+        let environment = "<env>\nWorking directory: /caller-project\nPlatform: linux\n</env>";
+        for (protocol, body) in [
+            (
+                ProtocolKind::OpenAiChat,
+                json!({"messages":[{"role":"developer","content":[{"type":"text","text":environment}]}]}),
+            ),
+            (
+                ProtocolKind::OpenAiResponses,
+                json!({"input":[{"role":"system","content":environment}]}),
+            ),
+            (
+                ProtocolKind::AnthropicMessages,
+                json!({"system":[{"type":"text","text":environment,"cache_control":{"type":"ephemeral"}}]}),
+            ),
+        ] {
+            let original = body.to_string();
+            let adjusted =
+                free_environment(protocol, body.as_object().unwrap(), &original).unwrap();
+            assert_eq!(adjusted, original);
+        }
+    }
+
+    #[test]
     fn compliant_body_is_left_untouched() {
-        let body = br#"{"model":"big-pickle","stream":true,"tools":[{"type":"function","name":"bash","parameters":{"type":"object","properties":{"command":{"type":"string"}}}},{"type":"function","name":"read","parameters":{"type":"object","properties":{"filePath":{"type":"string"}}}}]}"#;
+        let body = br#"{"model":"big-pickle","instructions":"<env>Working directory: caller-provided\nPlatform: linux</env>","stream":true,"tools":[{"type":"function","name":"bash","parameters":{"type":"object","properties":{"command":{"type":"string"}}}},{"type":"function","name":"read","parameters":{"type":"object","properties":{"filePath":{"type":"string"}}}}]}"#;
         assert!(
             apply_free_tier_body_contract(ProtocolKind::OpenAiResponses, body)
                 .unwrap()
@@ -559,7 +741,7 @@ mod tests {
         headers.insert(SESSION_HEADER, parent.parse().unwrap());
         headers.insert(SESSION_ID_HEADER, child.parse().unwrap());
         apply_headers(&mut headers, None);
-        let body = r#"{ "stream":false, "tools":[{"type":"function","function":{"name":"probe","parameters":{"type":"object","properties":{}}}}],"tool_choice":"required" }"#;
+        let body = r#"{ "messages":[], "stream":false, "tools":[{"type":"function","function":{"name":"probe","parameters":{"type":"object","properties":{}}}}],"tool_choice":"required" }"#;
         let adjusted = apply_free_tier_body_contract(ProtocolKind::OpenAiChat, body.as_bytes())
             .unwrap()
             .unwrap();
@@ -592,9 +774,14 @@ mod tests {
     // Explicitly selected only. Never activates a channel or writes config;
     // uses the existing, unexpired Dev credential without refresh or migration.
     #[tokio::test]
-    #[ignore = "uses one short request on the existing Dev OpenCode Console channel"]
+    #[ignore = "uses four short free-model requests on the existing Dev OpenCode Console channel"]
     async fn live_dev_opencode_subscription_identity_smoke() -> Result<()> {
-        let root = crate::home_dir().join(".const-api-dev").canonicalize()?;
+        // Explicit live-test input only. Keep crate::home_dir() isolated for
+        // every runtime side effect; never point the whole test process at home.
+        let root = dirs::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("user home is unavailable"))?
+            .join(".const-api-dev")
+            .canonicalize()?;
         let config: crate::model::ClientConfig =
             serde_json::from_slice(&std::fs::read(root.join("client.json"))?)?;
         let channel = config
@@ -611,73 +798,100 @@ mod tests {
             !crate::detection::credential_needs_refresh(&credential),
             "Dev credential needs refresh; test does not write credentials"
         );
-        let token = credential["access_token"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing access token"))?;
-        let org = credential["org_id"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing organization"))?;
         let model = "minimax-m3.1-flash-free";
         anyhow::ensure!(
             channel.models.iter().any(|id| id == model),
             "smoke model is not in Dev channel"
         );
-        let raw = serde_json::json!({"model":model,"messages":[{"role":"user","content":"Reply only OK."}],"max_tokens":64,"stream":false}).to_string();
-        let body =
-            apply_free_tier_body_contract(ProtocolKind::OpenAiChat, raw.as_bytes())?.unwrap();
-        let mut headers = headers();
-        apply_headers(&mut headers, Some("dev-identity-smoke"));
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(45))
-            .build()?;
-        let response = client
-            .post("https://opencode.ai/inference/openai/v1/chat/completions")
-            .bearer_auth(token)
-            .header("x-org-id", org)
-            .header("content-type", "application/json")
-            .headers(headers)
-            .body(body)
-            .send()
+        let client = crate::http_client::channel_client(channel.v2.use_system_proxy)?;
+        for (path, body) in [
+            (
+                "/v1/chat/completions".to_string(),
+                json!({"model":model,"messages":[{"role":"user","content":"Reply only OK."}],"max_tokens":64,"stream":false}),
+            ),
+            (
+                "/v1/responses".to_string(),
+                json!({"model":model,"input":"Reply only OK.","max_output_tokens":64,"stream":true}),
+            ),
+            (
+                "/anthropic/v1/messages".to_string(),
+                json!({"model":model,"messages":[{"role":"user","content":"Reply only OK."}],"max_tokens":64,"stream":false}),
+            ),
+            (
+                format!("/gemini/v1beta/models/{model}:generateContent"),
+                json!({"contents":[{"role":"user","parts":[{"text":"Reply only OK."}]}],"generationConfig":{"maxOutputTokens":64}}),
+            ),
+        ] {
+            // Check again before each call: never refresh/write the user's credential.
+            anyhow::ensure!(
+                !crate::detection::credential_needs_refresh(&credential),
+                "Dev credential needs refresh"
+            );
+            let execution = crate::channel_executor::execute_channel_request(
+                &client,
+                &channel,
+                crate::channel_executor::ChannelRequest {
+                    method: reqwest::Method::POST,
+                    path: path.clone(),
+                    raw_query: String::new(),
+                    has_query: false,
+                    headers: HeaderMap::new(),
+                    body: body.to_string().into(),
+                    stream_requested: None,
+                    selected_upstream_model: Some(model.to_string()),
+                    selected_target_protocol: None,
+                    cache_identity: Some("dev-free-contract-smoke".into()),
+                    safety_identifier: None,
+                },
+            )
             .await?;
-        let status = response.status();
-        let body = response.text().await?;
-        let free_tier_policy = body.to_ascii_lowercase().contains("free tier");
-        let error = serde_json::from_str::<Value>(&body).ok();
-        let reason = error
-            .as_ref()
-            .and_then(|value| {
-                value
-                    .pointer("/error/message")
-                    .or_else(|| value.get("message"))
-            })
-            .and_then(Value::as_str)
-            .map(crate::upstream_failure::safe_excerpt)
-            .unwrap_or_default();
-        println!("Dev OpenCode: model={model}, HTTP={status}, free_tier_policy={free_tier_policy}");
-        anyhow::ensure!(
-            status.is_success(),
-            "Dev OpenCode rejected the adapted free-model request (HTTP {status}, free_tier_policy={free_tier_policy}): {reason}"
-        );
-        anyhow::ensure!(
-            body.contains("[DONE]") && body.contains("OK"),
-            "OpenCode stream did not complete with the smoke reply"
-        );
-        for line in body.lines().filter_map(|line| line.strip_prefix("data: ")) {
-            if line == "[DONE]" {
-                continue;
+            anyhow::ensure!(
+                execution.upstream_model == model && execution.target_protocol == "openai_chat",
+                "unexpected smoke route"
+            );
+            let response = execution.response;
+            let status = response.status();
+            let body = response.text().await?;
+            let free_tier_policy = body.to_ascii_lowercase().contains("free tier");
+            let error = serde_json::from_str::<Value>(&body).ok();
+            let reason = error
+                .as_ref()
+                .and_then(|value| {
+                    value
+                        .pointer("/error/message")
+                        .or_else(|| value.get("message"))
+                })
+                .and_then(Value::as_str)
+                .map(crate::upstream_failure::safe_excerpt)
+                .unwrap_or_default();
+            println!(
+                "Dev OpenCode: path={path}, model={model}, HTTP={status}, free_tier_policy={free_tier_policy}"
+            );
+            anyhow::ensure!(
+                status.is_success(),
+                "Dev OpenCode rejected the adapted free-model request (HTTP {status}, free_tier_policy={free_tier_policy}): {reason}"
+            );
+            anyhow::ensure!(
+                body.contains("[DONE]") && body.contains("OK"),
+                "OpenCode stream did not complete with the smoke reply"
+            );
+            for line in body.lines().filter_map(|line| line.strip_prefix("data: ")) {
+                if line == "[DONE]" {
+                    continue;
+                }
+                let event: Value = serde_json::from_str(line)?;
+                for choice in event["choices"].as_array().into_iter().flatten() {
+                    anyhow::ensure!(
+                        choice
+                            .pointer("/delta/tool_calls")
+                            .and_then(Value::as_array)
+                            .is_none_or(Vec::is_empty),
+                        "compatibility tool calls must be disabled"
+                    );
+                }
             }
-            let event: Value = serde_json::from_str(line)?;
-            for choice in event["choices"].as_array().into_iter().flatten() {
-                anyhow::ensure!(
-                    choice
-                        .pointer("/delta/tool_calls")
-                        .and_then(Value::as_array)
-                        .is_none_or(Vec::is_empty),
-                    "compatibility tool calls must be disabled"
-                );
-            }
+            println!("Dev OpenCode: completed OK, compatibility tool calls=0");
         }
-        println!("Dev OpenCode: completed OK, compatibility tool calls=0");
         Ok(())
     }
 }

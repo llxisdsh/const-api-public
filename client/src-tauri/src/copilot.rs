@@ -3,7 +3,7 @@
 //! service token is sent to the account-specific Copilot API origin.
 use crate::{
     model::ChannelConfig, source_driver::SourceDriverId,
-    upstream_transport::AdaptiveRequestBuilderExt,
+    upstream_transport::UpstreamRequestBuilderExt,
 };
 use anyhow::{Context, Result, anyhow, ensure};
 use reqwest::{
@@ -131,10 +131,10 @@ fn client_headers(headers: &mut HeaderMap) {
         HeaderValue::from_static(concat!("const-api/", env!("CARGO_PKG_VERSION"))),
     );
     // Keep this pair aligned with the same stable VS Code release.
-    headers.insert("editor-version", HeaderValue::from_static("vscode/1.142.0"));
+    headers.insert("editor-version", HeaderValue::from_static("vscode/1.147.0"));
     headers.insert(
         "editor-plugin-version",
-        HeaderValue::from_static("copilot-chat/0.70.0"),
+        HeaderValue::from_static("copilot-chat/0.75.0"),
     );
     headers.insert(
         "copilot-integration-id",
@@ -154,7 +154,7 @@ async fn exchange_at(client: &Client, url: &str, credential: &str) -> Result<Ser
         HeaderValue::from_str(&format!("token {credential}"))?,
     );
     headers.insert("accept", HeaderValue::from_static("application/json"));
-    let response = client.get(url).headers(headers).send_adaptive().await?;
+    let response = client.get(url).headers(headers).send_upstream().await?;
     let status = response.status();
     let parsed = response.json::<Value>().await;
     if !status.is_success() {
@@ -353,7 +353,7 @@ pub(crate) async fn catalog(
 ) -> Result<Vec<crate::model_catalog::ModelObservation>> {
     let (request, generation) =
         prepare_request_with_generation(channel, client.get(format!("{API_BASE}/models"))).await?;
-    let response = request.send_adaptive().await?;
+    let response = request.send_upstream().await?;
     let status = response.status();
     observe_response(channel, status, generation).await;
     let response = response
@@ -388,7 +388,7 @@ pub(crate) async fn quota(channel: &ChannelConfig) -> Result<Vec<crate::model::Q
             "user-agent",
             concat!("const-api/", env!("CARGO_PKG_VERSION")),
         )
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let value = crate::detection::quota_response_json(response, "Copilot quota").await?;
     parse_quota(&value, crate::now_unix())
@@ -651,10 +651,10 @@ mod tests {
         );
         assert_eq!(request.headers()["x-initiator"], "user");
         assert_eq!(request.headers()["anthropic-beta"], "future-beta");
-        assert_eq!(request.headers()["editor-version"], "vscode/1.142.0");
+        assert_eq!(request.headers()["editor-version"], "vscode/1.147.0");
         assert_eq!(
             request.headers()["editor-plugin-version"],
-            "copilot-chat/0.70.0"
+            "copilot-chat/0.75.0"
         );
         assert_eq!(request.headers()["copilot-integration-id"], "vscode-chat");
         assert_eq!(request.headers()["x-github-api-version"], "2026-01-09");
@@ -940,8 +940,8 @@ mod tests {
                             .unwrap()
                             .starts_with("token github-test-")
                     );
-                    assert_eq!(headers["editor-version"], "vscode/1.142.0");
-                    assert_eq!(headers["editor-plugin-version"], "copilot-chat/0.70.0");
+                    assert_eq!(headers["editor-version"], "vscode/1.147.0");
+                    assert_eq!(headers["editor-plugin-version"], "copilot-chat/0.75.0");
                     assert_eq!(headers["x-github-api-version"], "2025-04-01");
                     seen.fetch_add(1, Ordering::SeqCst);
                     warp::reply::json(

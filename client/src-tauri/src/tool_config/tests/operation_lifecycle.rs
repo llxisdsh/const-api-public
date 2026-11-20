@@ -676,6 +676,23 @@
 
             assert!(error.to_string().contains("TOOL_CONFIG_START_FAILED"));
             assert!(error.to_string().contains("simulated launcher failure"));
+
+            let error = test_atomic_operation(
+                "stable-error-tool",
+                ToolConfigAction::Apply,
+                None,
+                "probe-error-context",
+                None,
+                true,
+                || Ok(ToolApplyBuilder::default().finish("stable-error-tool")),
+                || {
+                    set_test_tool_runtime_probe_failure("stable-error-tool");
+                    launch_tool_program("stable-error-tool")
+                },
+            )
+            .expect_err("failed observation after spawn must be distinguishable");
+            assert!(error.to_string().contains("tool_config_launch_unverified"));
+            assert_eq!(test_tool_runtime_snapshot("stable-error-tool").unwrap().launch_calls, 1);
         });
     }
 

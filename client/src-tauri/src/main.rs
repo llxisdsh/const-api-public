@@ -73,6 +73,7 @@ mod local_policy;
 mod announcements;
 mod antigravity_models;
 mod autostart;
+mod bun_transport;
 mod catalog_registry;
 mod channel_concurrency;
 mod channel_executor;
@@ -93,6 +94,8 @@ mod debug_console;
 mod detection;
 mod endpoint;
 mod http_client;
+mod image_cli;
+mod image_models;
 
 mod instance;
 mod kiro;
@@ -100,6 +103,8 @@ mod lan_share;
 mod launch;
 mod legal_notice;
 mod logging;
+mod media_cli;
+mod media_models;
 #[cfg(all(debug_assertions, feature = "memory-diagnostics"))]
 mod memory_diagnostics;
 mod model;
@@ -115,8 +120,10 @@ mod openai_transport;
 mod opencode;
 mod opencode_client;
 mod opendesign;
+mod outgoing_secrets;
 mod window_memory;
 
+mod media_request;
 mod openrouter;
 mod output_buffer;
 mod platform_transport;
@@ -268,11 +275,11 @@ const GROK_MODELS_URL: &str = "https://cli-chat-proxy.grok.com/v1/models";
 const GROK_RESPONSES_URL: &str = "https://cli-chat-proxy.grok.com/v1/responses";
 const GROK_BILLING_WEEKLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const GROK_BILLING_MONTHLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing";
-// Official https://x.ai/cli/stable, checked 2026-11-06.
-const GROK_CLI_VERSION: &str = "1.0.77";
-const GROK_CLI_USER_AGENT: &str = "xai-grok-workspace/1.0.77";
+// Official https://x.ai/cli/stable, checked 2026-11-20.
+const GROK_CLI_VERSION: &str = "1.0.89";
+const GROK_CLI_USER_AGENT: &str = "xai-grok-workspace/1.0.89";
 const GROK_CLI_CLIENT_IDENTIFIER: &str = "grok-shell";
-const GROK_BILLING_USER_AGENT: &str = "grok-pager/1.0.77 grok-shell/1.0.77 (macos; aarch64)";
+const GROK_BILLING_USER_AGENT: &str = "grok-pager/1.0.89 grok-shell/1.0.89 (macos; aarch64)";
 const ANTIGRAVITY_OAUTH_CLIENT_ID: &str = match option_env!("CONST_LOCAL_ANTIGRAVITY_CLIENT_ID") { Some(value) => value, None => "" };
 const ANTIGRAVITY_OAUTH_CLIENT_SECRET: &str = match option_env!("CONST_LOCAL_ANTIGRAVITY_CLIENT_SECRET") { Some(value) => value, None => "" };
 const ANTIGRAVITY_OAUTH_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -283,8 +290,8 @@ const ANTIGRAVITY_DAILY_API_BASE_URL: &str = "https://daily-cloudcode-pa.googlea
 const ANTIGRAVITY_REDIRECT_URI: &str = "http://localhost:51121/oauth-callback";
 const ANTIGRAVITY_SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs";
 // Current Antigravity Hub version used when an updater override is absent;
-// checked against the official updater manifest on 2026-11-06.
-const ANTIGRAVITY_DEFAULT_USER_AGENT_VERSION: &str = "2.29.0";
+// checked against the official updater manifest on 2026-11-20.
+const ANTIGRAVITY_DEFAULT_USER_AGENT_VERSION: &str = "2.33.0";
 const ANTIGRAVITY_GOOG_API_CLIENT: &str = "gl-node/22.21.1";
 const SKIP_LOCAL_SHORT_CIRCUIT_HEADER: &str = "x-const-api-skip-local";
 const USE_LOCAL_SHORT_CIRCUIT_HEADER: &str = "x-const-api-use-local";
@@ -708,9 +715,12 @@ impl DesktopLifecycle {
 
 fn main() -> ExitCode {
     let mode = match parse_args(std::env::args_os().skip(1)) {
-        Ok(mode) => mode,
+        Ok(Invocation::Desktop(mode)) => mode,
+        Ok(Invocation::Cli(command)) => return command.run(),
         Err(error) => {
-            report_launch_error(LaunchMode::Desktop, error.message());
+            use std::io::Write;
+            attach_cli_console();
+            let _ = writeln!(std::io::stderr().lock(), "{}", error.message());
             return ExitCode::from(2);
         }
     };
@@ -915,13 +925,7 @@ async fn run_desktop_host(
     let update_marker_state_dir = state_dir_for_config(&runtime.state().config_path);
     let lifecycle = DesktopLifecycle::new(runtime.clone(), owner, accepted_on_start);
     let setup_lifecycle = lifecycle.clone();
-    let automatic_updates = runtime
-        .state()
-        .proxy_config
-        .lock()
-        .map(|config| config.automatic_updates)
-        .unwrap_or(true);
-    let native_update_manager = NativeUpdateManager::new(automatic_updates);
+    let native_update_manager = NativeUpdateManager::new();
     let setup_update_manager = native_update_manager.clone();
     let setup_mode = mode;
     let page_mode = mode;
@@ -1057,11 +1061,14 @@ async fn run_desktop_host(
             get_config,
             save_config,
             save_routing_preference,
+            image_cli::image_command_usage,
             save_supplier_config,
             get_lan_share_status,
             model_discovery::get_model_presentation,
+            model_discovery::get_available_model_directory,
             tool_model_injection::get_tool_model_recommendations,
             tool_model_injection::save_tool_model_injection_settings,
+            tool_config::save_media_skill_tools,
             power_management::set_prevent_sleep_while_supplying,
             set_lan_share_connect_address,
             set_lan_share_models,
@@ -1162,12 +1169,12 @@ async fn run_desktop_host(
             debug_protocol_exchange,
             test_channel_upstream,
             activate_supplier_channel,
+            set_channel_market_sharing,
             start_supplier,
             recover_supplier_channel,
             notify_supplier_offline,
             close_main_window,
             native_update_status,
-            set_automatic_updates,
             request_native_update_check,
             request_native_update_install,
             autostart_status,
@@ -1593,6 +1600,8 @@ async fn save_supplier_config(
 enum RoutingPreference {
     PreferLocalSupply,
     AllowModelEquivalence,
+    ProtectOutgoingSecrets,
+    ConfigureImageSkill,
 }
 
 #[tauri::command]
@@ -1616,18 +1625,22 @@ fn save_routing_preference_authoritatively(
     preference: RoutingPreference,
     enabled: bool,
 ) -> Result<bool> {
-    // Routing reads this shared configuration on subsequent decisions. Do not
-    // restart listeners or terminate established streams to change a preference.
+    // Persist this one Use-page preference. Tool integration reads it during
+    // configuration; routing reads its preferences on subsequent requests.
     let (config, ()) = commit_config_update(config_path, live_config, |config| {
         match preference {
             RoutingPreference::PreferLocalSupply => config.prefer_local_supply = enabled,
             RoutingPreference::AllowModelEquivalence => config.allow_model_equivalence = enabled,
+            RoutingPreference::ProtectOutgoingSecrets => config.protect_outgoing_secrets = enabled,
+            RoutingPreference::ConfigureImageSkill => config.configure_image_skill = enabled,
         }
         Ok(())
     })?;
     Ok(match preference {
         RoutingPreference::PreferLocalSupply => config.prefer_local_supply,
         RoutingPreference::AllowModelEquivalence => config.allow_model_equivalence,
+        RoutingPreference::ProtectOutgoingSecrets => config.protect_outgoing_secrets,
+        RoutingPreference::ConfigureImageSkill => config.configure_image_skill,
     })
 }
 
@@ -1746,6 +1759,8 @@ fn apply_renderer_supplier_config(
             .find(|channel| channel.id == incoming_channel.id)
         {
             let mut merged = incoming_channel.clone();
+            // Ordinary edits, including stopping and restarting the channel, preserve the sharing preference.
+            merged.share_enabled = current_channel.share_enabled;
             // Adjacent older renderers do not know this optional field.
             merged.v2.local_priority = merged
                 .v2
@@ -1756,6 +1771,8 @@ fn apply_renderer_supplier_config(
             }
             *current_channel = merged;
         } else {
+            // A new channel carries the choice from the creation form. Normalization
+            // enforces edition and source eligibility before this can take effect.
             current.channels.push(incoming_channel.clone());
         }
     }
@@ -2272,6 +2289,7 @@ async fn fetch_market_prices(
     page: Option<usize>,
     page_size: Option<usize>,
     if_revision: Option<String>,
+    model_ids: Option<Vec<String>>,
 ) -> Result<serde_json::Value, String> {
     account_market_prices(
         state.inner(),
@@ -2283,6 +2301,7 @@ async fn fetch_market_prices(
         page,
         page_size,
         if_revision,
+        model_ids,
     )
     .await
 }
@@ -2582,7 +2601,7 @@ async fn test_channel_upstream(
 ) -> Result<ChannelUpstreamTestResult, String> {
     let channel_id = channel.id.clone();
     let result = supplier::health_recovery::check_channel(state.inner(), &channel, async {
-        supplier::test_channel_upstream_model_inner(channel.clone(), model, prompt).await
+        supplier::test_channel_upstream_model_manual(channel.clone(), model, prompt).await
     })
     .await?;
     supplier::record_supplier_channel_upstream_observation(state.inner(), &channel_id, &result)
@@ -2596,6 +2615,15 @@ async fn activate_supplier_channel(
     channel_id: String,
 ) -> Result<SupplierStatus, String> {
     supplier::activate_supplier_channel_inner(state.inner(), channel_id).await
+}
+
+#[tauri::command]
+async fn set_channel_market_sharing(
+    state: State<'_, AppState>,
+    channel_id: String,
+    enabled: bool,
+) -> Result<SupplierStatus, String> {
+    supplier::set_channel_market_sharing_inner(state.inner(), channel_id, enabled).await
 }
 
 #[tauri::command]
@@ -3004,9 +3032,10 @@ async fn execute_tool_config_operation(
 ) -> Result<ToolConfigOperationResponse, String> {
     let action = ToolConfigAction::parse(&action).map_err(|err| err.to_string())?;
     let remove_mode = match action {
-        ToolConfigAction::Remove => ToolConfigRemoveMode::parse(remove_mode.as_deref())
-            .and_then(|mode| mode.validate_for_tool(&tool))
-            .map_err(|err| err.to_string())?,
+        ToolConfigAction::Remove => {
+            ToolConfigRemoveMode::parse_for_tool(&tool, remove_mode.as_deref())
+                .map_err(|err| err.to_string())?
+        }
         ToolConfigAction::Apply if remove_mode.is_some() => {
             return Err("TOOL_CONFIG_REMOVE_MODE_WITH_APPLY: removeMode is valid only for remove operations".to_string());
         }
@@ -3183,7 +3212,8 @@ async fn execute_codex_tool_config_operation_inner(
     } else {
         Vec::new()
     };
-    let model_context = format!("{model_source:?}:{models:?}");
+    let include_skill = media_skill_enabled(&cfg, "codex");
+    let model_context = format!("{model_source:?}:{models:?}:image_skill={}", include_skill);
     let context_digest = tool_config_operation_context_digest(
         &state.config_path,
         &api_key,
@@ -3235,6 +3265,7 @@ async fn execute_codex_tool_config_operation_inner(
                         catalog.as_ref(),
                         &mut report,
                     )?;
+                    tool_config::sync_tool_image_skill(&mut result, include_skill)?;
                     if let Some(protocol) = protocol {
                         attach_tool_protocol(&mut result, protocol);
                     }
@@ -3302,6 +3333,7 @@ async fn execute_tool_config_operation_inner(
     }
 
     let requested_protocol = protocol.as_deref();
+    let include_skill = media_skill_enabled(&cfg, tool);
     let outcome = if tool == "claude" {
         let settings = claude_model_settings.unwrap_or_default();
         validate_claude_model_settings(&settings).map_err(|err| err.to_string())?;
@@ -3318,6 +3350,7 @@ async fn execute_tool_config_operation_inner(
         );
         execute_previewed_tool_config_operation(
             operation,
+            include_skill,
             Some(protocol.as_str()),
             &context_digest,
             confirmation_token.as_deref(),
@@ -3354,6 +3387,7 @@ async fn execute_tool_config_operation_inner(
         );
         execute_previewed_tool_config_operation(
             operation,
+            include_skill,
             Some(protocol.as_str()),
             &context_digest,
             confirmation_token.as_deref(),
@@ -3366,6 +3400,34 @@ async fn execute_tool_config_operation_inner(
                 )
             },
             |launch_context| launch_tool_program_for_atomic_operation(tool, launch_context),
+        )
+    } else if tool == "hermes" {
+        let protocol =
+            resolve_tool_protocol(tool, requested_protocol).map_err(|err| err.to_string())?;
+        let payload = if hermes_needs_image_model_discovery().map_err(|err| err.to_string())? {
+            fetch_local_platform_model_payload_for_operation(&cfg, operation, tool).await?
+        } else {
+            None
+        };
+        let image_models = payload
+            .as_ref()
+            .map(hermes_image_model_ids)
+            .unwrap_or_default();
+        let context_digest = tool_config_operation_context_digest(
+            &state.config_path,
+            &api_key,
+            &urls,
+            Some(protocol),
+            &format!("{image_models:?}"),
+        );
+        execute_previewed_tool_config_operation(
+            operation,
+            include_skill,
+            Some(protocol.as_str()),
+            &context_digest,
+            confirmation_token.as_deref(),
+            || apply_hermes_config_for_protocol(&urls.root, &api_key, protocol, &image_models),
+            |context| launch_tool_program_for_atomic_operation(tool, context),
         )
     } else if tool == "openclaw" {
         let models = openclaw_tool_model_snapshot_for_operation(&cfg, operation).await?;
@@ -3381,6 +3443,7 @@ async fn execute_tool_config_operation_inner(
         );
         execute_previewed_tool_config_operation(
             operation,
+            include_skill,
             Some(protocol.as_str()),
             &context_digest,
             confirmation_token.as_deref(),
@@ -3405,6 +3468,7 @@ async fn execute_tool_config_operation_inner(
         );
         execute_previewed_tool_config_operation(
             operation,
+            include_skill,
             Some(protocol.as_str()),
             &context_digest,
             confirmation_token.as_deref(),
@@ -3440,6 +3504,7 @@ async fn execute_tool_config_operation_inner(
         );
         execute_previewed_tool_config_operation(
             operation,
+            include_skill,
             Some(protocol.as_str()),
             &context_digest,
             confirmation_token.as_deref(),
@@ -3523,6 +3588,7 @@ async fn execute_tool_config_operation_inner(
         );
         execute_previewed_tool_config_operation(
             operation,
+            include_skill,
             Some(protocol.as_str()),
             &context_digest,
             confirmation_token.as_deref(),
@@ -3566,6 +3632,7 @@ async fn execute_tool_config_operation_inner(
         );
         execute_previewed_tool_config_operation(
             operation,
+            include_skill,
             Some(protocol.as_str()),
             &context_digest,
             confirmation_token.as_deref(),
@@ -3594,6 +3661,7 @@ async fn execute_tool_config_operation_inner(
         );
         execute_previewed_tool_config_operation(
             operation,
+            include_skill,
             Some(protocol.as_str()),
             &context_digest,
             confirmation_token.as_deref(),
@@ -3662,6 +3730,7 @@ fn tool_config_operation_context_digest(
 
 fn execute_previewed_tool_config_operation<A, L>(
     operation: &ToolConfigOperationControl,
+    configure_image_skill: bool,
     protocol: Option<&str>,
     context_digest: &str,
     confirmation_token: Option<&str>,
@@ -3672,14 +3741,19 @@ where
     A: Fn() -> anyhow::Result<ToolApplyResult>,
     L: FnOnce(&ToolConfigLaunchContext<'_>) -> anyhow::Result<(String, std::path::PathBuf)>,
 {
-    let apply = &apply;
+    let apply_with_skill = || {
+        let mut result = apply()?;
+        tool_config::sync_tool_image_skill(&mut result, configure_image_skill)?;
+        Ok(result)
+    };
+    let context_digest = format!("{context_digest}:image_skill={configure_image_skill}");
     execute_atomic_tool_config_operation_with_preview(
         operation,
         protocol,
-        context_digest,
+        &context_digest,
         confirmation_token,
-        || preview_tool_config_apply(|| apply()),
-        || apply(),
+        || preview_tool_config_apply(&apply_with_skill),
+        &apply_with_skill,
         launch,
     )
 }
@@ -3781,6 +3855,12 @@ async fn check_tool_config(
         .entry("model_sync_policy".to_string())
         .or_insert_with(|| tool_model_sync_policy(&tool).as_str().to_string());
     tool_config::attach_tool_config_presence(&mut result).map_err(|err| err.to_string())?;
+    if result.already_configured {
+        preview_tool_config_apply(|| {
+            tool_config::sync_tool_image_skill(&mut result, media_skill_enabled(&cfg, &tool))
+        })
+        .map_err(|err| err.to_string())?;
+    }
     attach_external_launch_environment_warning(&mut result, &tool);
     match tool_program_located_without_process_scan(&tool) {
         Ok(located) => {
@@ -3808,6 +3888,17 @@ async fn fetch_local_platform_models_for_operation(
     operation: &ToolConfigOperationControl,
     tool: &str,
 ) -> Result<Vec<ToolModelInfo>, String> {
+    match fetch_local_platform_model_payload_for_operation(cfg, operation, tool).await? {
+        Some(payload) => cfg.tool_model_injection.select_from_payload(tool, &payload),
+        None => Ok(Vec::new()),
+    }
+}
+
+async fn fetch_local_platform_model_payload_for_operation(
+    cfg: &ClientConfig,
+    operation: &ToolConfigOperationControl,
+    tool: &str,
+) -> Result<Option<serde_json::Value>, String> {
     update_tool_config_operation_progress(operation, "loading_models", None, None);
     let refresh_timeout = if operation.restarts() && existing_model_tool_config_is_ready(cfg, tool)
     {
@@ -3835,13 +3926,13 @@ async fn fetch_local_platform_models_for_operation(
             crate::http_client::observe_error(&error);
             ensure_tool_config_operation_active(operation, "model refresh response")
                 .map_err(|err| err.to_string())?;
-            return Ok(Vec::new());
+            return Ok(None);
         }
     };
     if !response.status().is_success() {
         ensure_tool_config_operation_active(operation, "model refresh status")
             .map_err(|err| err.to_string())?;
-        return Ok(Vec::new());
+        return Ok(None);
     }
     let value = tokio::select! {
         _ = wait_for_tool_config_operation_cancellation(operation) => {
@@ -3854,12 +3945,12 @@ async fn fetch_local_platform_models_for_operation(
         Err(_) => {
             ensure_tool_config_operation_active(operation, "model refresh body")
                 .map_err(|err| err.to_string())?;
-            return Ok(Vec::new());
+            return Ok(None);
         }
     };
     ensure_tool_config_operation_active(operation, "model refresh completion")
         .map_err(|err| err.to_string())?;
-    cfg.tool_model_injection.select_from_payload(tool, &value)
+    Ok(Some(value))
 }
 
 async fn require_tool_model_snapshot_for_operation(

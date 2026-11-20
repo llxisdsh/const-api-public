@@ -74,15 +74,18 @@ impl SupplierMessageBuffer {
     }
 
     fn into_message(self) -> Result<SupplierMessage> {
+        self.into_json().context("invalid reassembled supplier message")
+    }
+
+    fn into_json<T: serde::de::DeserializeOwned>(self) -> Result<T> {
         use std::io::Seek;
         match self.storage {
             tempfile::SpooledData::InMemory(cursor) => {
-                serde_json::from_slice(cursor.get_ref()).context("invalid reassembled supplier message")
+                Ok(serde_json::from_slice(cursor.get_ref())?)
             }
             tempfile::SpooledData::OnDisk(mut file) => {
                 file.rewind()?;
-                serde_json::from_reader(std::io::BufReader::with_capacity(SUPPLIER_MESSAGE_CHUNK_BYTES, file))
-                    .context("invalid reassembled supplier message")
+                Ok(serde_json::from_reader(std::io::BufReader::with_capacity(SUPPLIER_MESSAGE_CHUNK_BYTES, file))?)
             }
         }
     }

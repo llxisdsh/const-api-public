@@ -444,7 +444,7 @@ fn validate_contract(contract: &SurfaceContract) -> Result<(), String> {
                     && required_contexts.is_subset(&allowed_contexts)
                     && matches!(
                         operation.request_body_mode.as_str(),
-                        "small_buffered" | "none" | "duplex_frames"
+                        "small_buffered" | "streaming_upload" | "none" | "duplex_frames"
                     ) => {}
             "native_backend_only"
                 if operation.ownership == "routed_known"

@@ -523,6 +523,10 @@ export function parseSourceDriverManifest(value: unknown): { version: number; dr
   };
 }
 
+export function sourceDriverAllowsMarketSharing(_id: SourceDriverId) {
+  return false;
+}
+
 export function sourceDriverById(id: SourceDriverId): SourceDriver {
   const driver = SOURCE_DRIVERS.find((candidate) => candidate.id === id);
   if (!driver) throw new Error(`Unknown source driver: ${id}`);
@@ -599,7 +603,7 @@ export function sourceDriverInitialChannelV5(
     created_at_unix_ms: input.createdAtUnixMs ?? 0,
     source_driver: defaults.sourceDriver,
     enabled: false,
-    share_enabled: false,
+    share_enabled: sourceDriverAllowsMarketSharing(driver.id),
     credential_ref: input.credentialRef ?? "",
     executor: { ...defaults.executor },
     surfaces: defaults.surfaces.map(cloneInitialSurface),
@@ -639,9 +643,7 @@ export function sourceDriverInitialChannelV5(
 
 export function normalizeChannelV5<T extends ChannelConfigV5>(channel: T): T {
   const normalized = structuredClone(channel);
-  // V5 keeps share_enabled on the wire for older clients, but enabled is the
-  // only product switch. LAN share channels are intentionally local-only.
-  normalized.share_enabled = normalized.enabled && normalized.source_driver !== "lan_share";
+  normalized.share_enabled = normalized.share_enabled !== false && sourceDriverAllowsMarketSharing(normalized.source_driver);
   normalized.use_system_proxy = normalized.use_system_proxy ?? false;
   let userAgentProfile = (normalized.user_agent_profile ?? "").trim().toLowerCase();
   if (normalized.source_driver === "openai_subscription" && userAgentProfile === "codex") {
@@ -857,7 +859,7 @@ export function serializeChannelV5(channel: ChannelConfigV5): ChannelConfigV5 {
     created_at_unix_ms: normalized.created_at_unix_ms,
     source_driver: normalized.source_driver,
     enabled: normalized.enabled,
-    share_enabled: normalized.enabled && normalized.source_driver !== "lan_share",
+    share_enabled: normalized.share_enabled,
     credential_ref: normalized.credential_ref,
     executor: structuredClone(normalized.executor),
     surfaces: structuredClone(normalized.surfaces),

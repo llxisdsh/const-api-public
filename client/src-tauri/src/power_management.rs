@@ -403,7 +403,7 @@ mod tests {
         let readiness = HashMap::from([(id.clone(), true)]);
         let mut runtime = supplier();
         let (shutdown, _) = tokio::sync::oneshot::channel();
-        let (register, _) = tokio::sync::mpsc::channel(1);
+        let (register, _) = crate::supplier::registration_channel();
         runtime.channel_agents.insert(
             "test".into(),
             crate::model::SupplierAgentHandle {

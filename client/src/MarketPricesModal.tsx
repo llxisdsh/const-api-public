@@ -10,6 +10,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import {
+  capabilityLabels, operationKeys, outputKeys, sourceMatches, supportsOperation,
+  type DirectoryFilter, type DirectoryModel, type PlatformDirectoryEntry,
+} from "./availableMarketModels";
 import { DialogBackdrop } from "./DialogBackdrop";
 import { accountDisplayAmountFromUSD, accountDisplayCurrency } from "./account/accountFormat";
 import { currentAppLanguage } from "./i18n";
@@ -41,6 +45,9 @@ export type MarketRecentSummary = {
 
 export type MarketModelPrice = {
   model: string;
+  directory?: DirectoryModel;
+  directoryOnly?: boolean;
+  pricePending?: boolean;
   context_tokens?: number;
   output_tokens?: number;
   currency: string;
@@ -98,6 +105,11 @@ export type MarketPriceSnapshot = {
   models: MarketModelPrice[];
   my_offers: MarketSupplierOffer[];
   model_total?: number;
+  model_index?: string[];
+  model_directory?: PlatformDirectoryEntry[] | null;
+  directoryPurpose?: DirectoryFilter;
+  directoryUnavailable?: boolean;
+  marketError?: string;
   offer_group_total?: number;
   view?: MarketView;
   sort?: string;
@@ -158,10 +170,11 @@ type MarketPriceRequest = {
   order: MarketOrder;
   page: number;
   pageSize: number;
+  purpose: DirectoryFilter;
+  online: boolean;
 };
 
 const MARKET_PAGE_SIZE = 10;
-const MARKET_REQUEST_SETTLE_MS = 80;
 
 export function marketModelAvailability(
   model: Pick<MarketModelPrice, "ready_supplier_count" | "ready_custom_supplier_count" | "routable_supplier_count">,
@@ -329,6 +342,19 @@ function unitLabel(unit: string, t: TFunction): string {
   });
 }
 
+function mediaRateLabel(model: MarketModelPrice, t: TFunction, cnyPerUSD?: number): string | undefined {
+  const components = model.reference_components ?? [];
+  const media = components.find((item) =>
+    ["image_output_unit", "image_output_tokens", "video_output_second", "audio_output_second", "input_characters"].includes(item.meter_kind));
+  if (!media) return;
+  const prices = components.filter((item) => item.meter_kind === media.meter_kind && item.unit === media.unit)
+    .map((item) => item.price_usd).filter(Number.isFinite);
+  if (!prices.length) return;
+  const low = Math.min(...prices), high = Math.max(...prices);
+  const price = low === high ? formatMoney(low, cnyPerUSD) : `${formatMoney(low, cnyPerUSD)}–${formatMoney(high, cnyPerUSD)}`;
+  return `${t("market.catalogPrice", { price })} · ${t(`market.meters.${media.meter_kind}`)} · ${unitLabel(media.unit, t)}`;
+}
+
 function executableUnitPrice(
   component: MarketReferenceComponent,
   model: MarketModelPrice,
@@ -407,30 +433,33 @@ export function MarketPricesModal({
   cache: sharedCache,
   cacheScope = "",
   cnyPerUSD,
-  initialView = "catalog",
+  initialView: requestedView = "catalog",
   channelContext,
   onClose,
 }: MarketPricesModalProps) {
   useEscapeDismiss(onClose);
+  const initialView = platformAvailable ? requestedView : "catalog";
   const { t } = useTranslation();
   const [localCache] = useState(createMarketPriceCache);
   const priceCache = sharedCache ?? localCache;
-  const [snapshotState, setSnapshotState] = useState(() => ({
-    scope: cacheScope,
-    data: platformAvailable ? priceCache.peek(cacheScope, {
+  const [snapshotState, setSnapshotState] = useState(() => {
+    const initialQuery = {
       view: initialView, query: null,
       channelId: initialView === "offers" ? channelContext?.channelId ?? null : null,
       sort: initialView === "catalog" ? "model" : "channel", order: initialView === "catalog" ? "default" : "asc", page: 1, pageSize: MARKET_PAGE_SIZE,
-    }) : null,
-  }));
-  const snapshot = platformAvailable
-    && snapshotState.scope === cacheScope
+    } as const;
+    return { scope: cacheScope, online: platformAvailable, data: initialView === "catalog"
+      ? priceCache.peekAvailable(cacheScope, initialQuery, "all", platformAvailable)
+      : platformAvailable ? priceCache.peek(cacheScope, initialQuery) : null };
+  });
+  const snapshot = snapshotState.online === platformAvailable && snapshotState.scope === cacheScope
     ? snapshotState.data
     : null;
-  const [loading, setLoading] = useState(platformAvailable && !snapshot);
+  const [loading, setLoading] = useState<"page" | "refresh" | false>(snapshot ? false : "page");
   const [error, setError] = useState("");
   const [refreshToken, setRefreshToken] = useState(0);
   const [activeView, setActiveView] = useState<MarketView>(initialView);
+  const [purpose, setPurpose] = useState<DirectoryFilter>("all");
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [channelFilterId, setChannelFilterId] = useState<string | null>(
@@ -448,13 +477,10 @@ export function MarketPricesModal({
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
   const [expandedOfferGroups, setExpandedOfferGroups] = useState<Set<string>>(new Set());
   const mountedRef = useRef(false);
-  const platformAvailableRef = useRef(platformAvailable);
   const requestVersionRef = useRef(0);
   const requestInFlightRef = useRef(false);
   const pendingRequestRef = useRef<MarketPriceRequest | null>(null);
   const [refreshGate] = useState(createRefreshGate);
-
-  platformAvailableRef.current = platformAvailable;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -466,31 +492,31 @@ export function MarketPricesModal({
   }, []);
 
   useEffect(() => {
+    const text = query.trim();
+    if (text === debouncedQuery) return;
     const timer = window.setTimeout(() => {
-      setDebouncedQuery(query.trim());
+      setDebouncedQuery(text);
+      setPage(1);
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [query]);
+  }, [query, debouncedQuery]);
 
   const drainMarketRequests = useCallback(async () => {
     if (requestInFlightRef.current) return;
     requestInFlightRef.current = true;
     try {
+      // Coalesce updates from the same render without delaying a user-initiated page turn.
+      await Promise.resolve();
       while (
         mountedRef.current
-        && platformAvailableRef.current
         && document.visibilityState === "visible"
         && pendingRequestRef.current
       ) {
-        await new Promise((resolve) => window.setTimeout(resolve, MARKET_REQUEST_SETTLE_MS));
-        if (!mountedRef.current || !platformAvailableRef.current || document.visibilityState !== "visible") break;
-
         const request = pendingRequestRef.current;
         pendingRequestRef.current = null;
-        if (!request) continue;
 
         try {
-          const nextSnapshot = await priceCache.fetch(request.scope, {
+          const query = {
             view: request.view,
             query: request.query,
             channelId: request.channelId,
@@ -498,10 +524,13 @@ export function MarketPricesModal({
             order: request.order,
             page: request.page,
             pageSize: request.pageSize,
-          });
+          };
+          const nextSnapshot = request.view === "catalog"
+            ? await priceCache.fetchAvailable(request.scope, query, request.purpose, request.online, () =>
+              mountedRef.current && document.visibilityState === "visible" && request.version === requestVersionRef.current)
+            : await priceCache.fetch(request.scope, query);
           if (
             mountedRef.current
-            && platformAvailableRef.current
             && request.version === requestVersionRef.current
           ) {
             if (
@@ -512,17 +541,17 @@ export function MarketPricesModal({
             }
             setSnapshotState({
               scope: request.scope,
+              online: request.online,
               data: nextSnapshot,
             });
           }
         } catch (reason) {
           if (
             mountedRef.current
-            && platformAvailableRef.current
             && request.version === requestVersionRef.current
           ) {
             refreshGate.reset();
-            setError(String(reason));
+            if (!(reason instanceof DOMException && reason.name === "AbortError")) setError(String(reason));
           }
         }
       }
@@ -537,14 +566,14 @@ export function MarketPricesModal({
   useEffect(() => {
     setExpandedModels(new Set());
     setExpandedOfferGroups(new Set(activeView === "offers" && channelFilterId ? [channelFilterId] : []));
-  }, [activeView, catalogSort, offerSort, channelFilterId, debouncedQuery, page, cacheScope]);
+  }, [activeView, catalogSort, offerSort, channelFilterId, debouncedQuery, page, cacheScope, purpose]);
 
   useEffect(() => {
-    if (!platformAvailable) {
+    if (!platformAvailable && activeView === "offers") {
       requestVersionRef.current += 1;
       pendingRequestRef.current = null;
       refreshGate.reset();
-      setSnapshotState({ scope: cacheScope, data: null });
+      setSnapshotState({ scope: cacheScope, online: platformAvailable, data: null });
       setError("");
       setLoading(false);
       return;
@@ -562,12 +591,15 @@ export function MarketPricesModal({
       order: activeSort.order,
       page,
       pageSize: MARKET_PAGE_SIZE,
+      purpose, online: platformAvailable,
     };
-    const cached = priceCache.peek(cacheScope, request);
-    if (cached) setSnapshotState({ scope: cacheScope, data: cached });
+    const cached = activeView === "catalog"
+      ? priceCache.peekAvailable(cacheScope, request, purpose, platformAvailable)
+      : priceCache.peek(cacheScope, request);
+    if (cached) setSnapshotState({ scope: cacheScope, online: platformAvailable, data: cached });
     if (document.visibilityState !== "visible") return;
     refreshGate.begin({ force: true });
-    setLoading(true);
+    setLoading(cached ? "refresh" : "page");
     setError("");
     pendingRequestRef.current = request;
     void drainMarketRequests();
@@ -581,13 +613,14 @@ export function MarketPricesModal({
     offerSort,
     page,
     platformAvailable,
+    purpose,
     priceCache,
     refreshGate,
     refreshToken,
   ]);
 
   useEffect(() => {
-    if (!platformAvailable) {
+    if (!platformAvailable && activeView === "offers") {
       return undefined;
     }
     // Capacity changes the indicative price; poll only while this dialog is open and visible.
@@ -605,7 +638,7 @@ export function MarketPricesModal({
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", resume);
     };
-  }, [platformAvailable, refreshGate]);
+  }, [platformAvailable, activeView, refreshGate]);
 
   const refreshSnapshot = useCallback(() => {
     if (!refreshGate.begin({ throttle: true })) return;
@@ -618,7 +651,8 @@ export function MarketPricesModal({
   );
 
   const snapshotMatchesView = Boolean(
-    snapshot && (!snapshot.view || snapshot.view === activeView),
+    snapshot && (!snapshot.view || snapshot.view === activeView)
+    && (activeView !== "catalog" || snapshot.directoryPurpose === purpose),
   );
   const visibleModels = snapshotMatchesView && activeView === "catalog"
     ? snapshot?.models ?? []
@@ -628,6 +662,8 @@ export function MarketPricesModal({
     : [];
   const modelTotal = snapshot?.model_total
     ?? (snapshot?.view === "offers" ? 0 : snapshot?.models.length ?? 0);
+  const catalogTabTotal = snapshot && snapshot.view !== "offers" && activeView === "catalog"
+    ? modelTotal : priceCache.availableTotal(cacheScope);
   const offerGroupTotal = snapshot?.offer_group_total
     ?? (snapshot?.view === "catalog" ? 0 : offerGroups.length);
   const visibleWarnings = (snapshot?.warnings ?? []).filter(
@@ -711,15 +747,77 @@ export function MarketPricesModal({
         <div className="section-title-row market-prices-title">
           <div>
             <h2 id="market-prices-title">{t("market.title")}</h2>
-            <p className="section-hint">{t("market.subtitle")}</p>
+            {platformAvailable && <p className="section-hint">{t("market.subtitle")}</p>}
           </div>
           <div className="market-prices-title-actions">
             <ModalCloseButton onClick={onClose} />
           </div>
         </div>
 
+        <div className="market-data-toolbar">
+          <div
+            className="account-center-tabs market-view-tabs"
+            role="tablist"
+            aria-label={t("market.viewAria")}
+          >
+            <button
+              className={activeView === "catalog" ? "active" : ""}
+              data-testid="market-catalog-tab"
+              type="button"
+              role="tab"
+              aria-selected={activeView === "catalog"}
+              onClick={() => changeView("catalog")}
+            >
+              {t("market.catalogTab")}
+              {catalogTabTotal != null && <span>{catalogTabTotal}</span>}
+            </button>
+            {platformAvailable && <button
+              className={activeView === "offers" ? "active" : ""}
+              data-testid="market-offers-tab"
+              type="button"
+              role="tab"
+              aria-selected={activeView === "offers"}
+              onClick={() => changeView("offers")}
+            >
+              {t("market.offersTab")}
+              {snapshot && <span>{offerGroupTotal}</span>}
+            </button>}
+          </div>
+          <div className="market-filters">
+            {activeView === "catalog" && (
+              <select
+                aria-label={t("market.directory.filter")}
+                value={purpose}
+                onChange={(event) => {
+                  setPurpose(event.currentTarget.value as DirectoryFilter);
+                  setPage(1);
+                }}
+              >
+                <option value="all">{t("market.directory.all")}</option>
+                <optgroup label={t("market.directory.operations")}>
+                  {operationKeys.map((key) => <option key={key} value={key}>{t(`market.directory.${key}`)}</option>)}
+                </optgroup>
+                <optgroup label={t("market.directory.modalities")}>
+                  {(["imageInput", ...outputKeys] as const).map((key) =>
+                    <option key={key} value={key}>{t(`market.directory.${key}`)}</option>)}
+                </optgroup>
+              </select>
+            )}
+            <label className="market-search">
+              <Search aria-hidden="true" size={15} />
+              <input
+                type="search"
+                value={query}
+                aria-label={t(activeView === "catalog" ? "market.directory.search" : "market.searchAria")}
+                placeholder={t(activeView === "catalog" ? "market.directory.search" : "market.searchPlaceholder")}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+              />
+            </label>
+          </div>
+        </div>
+
         <div className="market-overview-shell">
-          <dl className="market-overview">
+          {platformAvailable && <dl className="market-overview">
             <div>
               <dt>{t("market.routingPolicy")}</dt>
               <dd>
@@ -731,22 +829,20 @@ export function MarketPricesModal({
               <dt>{t("market.updatedAt")}</dt>
               <dd>{observedAt}</dd>
             </div>
-          </dl>
-          {platformAvailable && (
-            <button
-              className="quiet market-overview-refresh"
-              type="button"
-              disabled={loading}
-              onClick={refreshSnapshot}
-            >
-              <RefreshCw className={loading ? "spin-icon" : ""} size={15} />
-              {t("common.refresh")}
-            </button>
-          )}
+          </dl>}
+          <button
+            className="quiet market-overview-refresh"
+            type="button"
+            disabled={!!loading}
+            onClick={refreshSnapshot}
+          >
+            <RefreshCw className={loading ? "spin-icon" : ""} size={15} />
+            {t("common.refresh")}
+          </button>
         </div>
 
         <div className="market-snapshot-content">
-          {!platformAvailable && (
+          {!platformAvailable && activeView === "offers" && (
             <div className="market-inline-notice" role="status">
               <CircleDollarSign aria-hidden="true" size={20} />
               <div>
@@ -756,15 +852,16 @@ export function MarketPricesModal({
             </div>
           )}
 
-          {platformAvailable && error && (
+          {(error || snapshot?.marketError) && (
             <div className="market-inline-notice" role="status">
               <CircleDollarSign aria-hidden="true" size={20} />
               <div>
                 <strong>{t("market.unavailable")}</strong>
-                <span>{marketErrorMessage(error, t)}</span>
+                <span>{marketErrorMessage(error || snapshot?.marketError || "", t)}</span>
               </div>
             </div>
           )}
+          {snapshot?.directoryUnavailable && <p className="market-inline-notice" role="status">{t("market.directory.error")}</p>}
 
           {visibleWarnings.length > 0 && (
             <div className="market-inline-notice" role="status">
@@ -778,58 +875,14 @@ export function MarketPricesModal({
             </div>
           )}
 
-          {loading && !snapshot ? (
+          {loading && !snapshotMatchesView ? (
             <div className="market-empty">{t("common.loading")}</div>
-          ) : !platformAvailable ? (
+          ) : !platformAvailable && activeView === "offers" ? (
             <div className="market-empty">{t("market.platformPlaceholder")}</div>
           ) : error && !snapshot ? (
             <div className="market-empty">{t("market.unavailablePlaceholder")}</div>
           ) : snapshot ? (
             <div className="market-data-shell">
-              <div className="market-data-toolbar">
-                <div
-                  className="market-view-tabs"
-                  role="tablist"
-                  aria-label={t("market.viewAria")}
-                >
-                  <button
-                    className={activeView === "catalog" ? "active" : ""}
-                    data-testid="market-catalog-tab"
-                    type="button"
-                    role="tab"
-                    aria-selected={activeView === "catalog"}
-                    onClick={() => changeView("catalog")}
-                  >
-                    {t("market.catalogTab")}
-                    <span>{modelTotal}</span>
-                  </button>
-                  <button
-                    className={activeView === "offers" ? "active" : ""}
-                    data-testid="market-offers-tab"
-                    type="button"
-                    role="tab"
-                    aria-selected={activeView === "offers"}
-                    onClick={() => changeView("offers")}
-                  >
-                    {t("market.offersTab")}
-                    <span>{offerGroupTotal}</span>
-                  </button>
-                </div>
-                <label className="market-search">
-                  <Search aria-hidden="true" size={15} />
-                  <input
-                    type="search"
-                    value={query}
-                    aria-label={t("market.searchAria")}
-                    placeholder={t("market.searchPlaceholder")}
-                    onChange={(event) => {
-                      setQuery(event.currentTarget.value);
-                      setPage(1);
-                    }}
-                  />
-                </label>
-              </div>
-
               {activeView === "catalog" ? (
                 <div
                   className="market-view-panel"
@@ -854,6 +907,7 @@ export function MarketPricesModal({
                           title={t("market.modelSortHint")}
                           onClick={() => changeCatalogSort("model")}
                         />
+                        <span className="market-column-label">{t("market.columns.source")}</span>
                         <span
                           className="market-column-label"
                           title={t("market.modelStatus.hint")}
@@ -883,11 +937,27 @@ export function MarketPricesModal({
                       <div className="market-price-list">
                         {visibleModels.map((model) => {
                           const expanded = expandedModels.has(model.model);
-                          const componentCount = model.reference_components?.length ?? 0;
-                          const inputPrice = tokenPriceComponent(model, "input_tokens");
-                          const outputPrice = tokenPriceComponent(model, "output_tokens");
+                          const dir = model.directory;
+                          const local = sourceMatches(dir, "local", purpose);
+                          const platform = sourceMatches(dir, "platform", purpose) || (purpose === "all" && (model.routable_supplier_count ?? model.ready_supplier_count) > 0);
+                          const showPrices = !model.directoryOnly && (purpose === "all" || platform);
+                          const inputPrice = showPrices ? tokenPriceComponent(model, "input_tokens") : undefined;
+                          const outputPrice = showPrices ? tokenPriceComponent(model, "output_tokens") : undefined;
+                          const mediaRate = showPrices ? mediaRateLabel(model, t, cnyPerUSD) : undefined;
+                          const sourceContext = local && !platform && dir?.localMedia
+                            ? dir.localMedia.contextTokens
+                            : platform && !local && dir?.platformMedia
+                              ? dir.platformMedia.contextTokens ?? model.context_tokens
+                              : dir?.contextTokens ?? model.context_tokens;
+                          const context = modelContextLabel(sourceContext ?? undefined);
+                          const subtitle = capabilityLabels(dir, local, platform).map((key) => t(`market.directory.${key}`));
+                          if (context) subtitle.push(t("market.contextWindow", { capacity: context }));
                           const availability = marketModelAvailability(model);
-                          const availabilityLabel = t(`market.modelStatus.${availability.state}`);
+                          const state = local ? "available"
+                            : (platform && model.directoryOnly) || (!platform && purpose !== "all") ? "listed"
+                            : availability.state;
+                          const pendingStatus = model.pricePending && !local;
+                          const availabilityLabel = pendingStatus ? t("common.loading") : t(`market.modelStatus.${state}`);
                           const availabilityCounts = (availability.customReady ?? 0) > 0
                             ? t(availability.limited > 0
                               ? "market.modelStatus.readyWithCustomAndLimited"
@@ -903,35 +973,41 @@ export function MarketPricesModal({
                             : t("market.modelStatus.readyOnly", {
                               ready: availability.ready,
                             });
+                          const counts = showPrices ? (local ? t("market.modelStatus.sourceCounts", { counts: availabilityCounts }) : availabilityCounts) : "";
+                          const sourceDetails = (["local", "platform"] as const).flatMap((side) => {
+                            const ops = dir?.[side];
+                            if (!ops) return [];
+                            const labels = operationKeys.filter((key) => supportsOperation(ops, key)).map((key) => t(`market.directory.${key}`));
+                            return [`${t(`market.directory.${side}`)} · ${labels.join(" · ") || t("market.directory.listed")}`];
+                          }).join("\n");
                           return (
-                            <article className="market-model-card" key={model.model}>
+                            <article className="market-model-card" key={model.model} aria-busy={model.pricePending || undefined}>
                               <div className="market-model-heading market-model-grid">
                                 <div className="market-model-identity">
                                   <h3 title={model.model}>{modelDisplayName(model.model)}</h3>
-                                  <small>{t("market.billingItems", {
-                                    count: componentCount,
-                                  })}{modelContextLabel(model.context_tokens) && ` · ${t("market.contextWindow", { capacity: modelContextLabel(model.context_tokens) })}`}</small>
+                                  {subtitle.length > 0 && <small>{subtitle.join(" · ")}</small>}
+                                  {mediaRate && <small>{mediaRate}</small>}
                                 </div>
+                                <span className="market-model-source" title={sourceDetails || undefined} aria-label={t("market.columns.source")}>
+                                  {[local && t("market.local"), platform && t("market.platform")].filter(Boolean).join(" / ") || "—"}
+                                </span>
                                 <div
-                                  className={`market-model-status market-model-status-${availability.state}`}
-                                  aria-label={t("market.modelStatus.aria", {
-                                    status: availabilityLabel,
-                                    counts: availabilityCounts,
-                                  })}
+                                  className={`market-model-status market-model-status-${state}`}
+                                  aria-label={counts ? t("market.modelStatus.aria", { status: availabilityLabel, counts }) : availabilityLabel}
                                   title={t("market.modelStatus.hint")}
                                 >
                                   <strong>
-                                    <span className="market-model-status-dot" aria-hidden="true" />
+                                    {!pendingStatus && <span className="market-model-status-dot" aria-hidden="true" />}
                                     {availabilityLabel}
                                   </strong>
-                                  <small>{availabilityCounts}</small>
+                                  {counts && <small>{counts}</small>}
                                 </div>
                                 <div
                                   className="market-row-metric market-row-token-price market-row-input-price"
                                   aria-label={t("market.columns.inputPrice")}
                                   title={t("market.indicativePriceHint")}
                                 >
-                                  <strong>{indicativeUnitPrice(inputPrice, model, cnyPerUSD)}</strong>
+                                  <strong>{model.pricePending ? "…" : indicativeUnitPrice(inputPrice, model, cnyPerUSD)}</strong>
                                   {inputPrice && <small>{unitLabel(inputPrice.unit, t)}</small>}
                                 </div>
                                 <div
@@ -939,12 +1015,12 @@ export function MarketPricesModal({
                                   aria-label={t("market.columns.outputPrice")}
                                   title={t("market.indicativePriceHint")}
                                 >
-                                  <strong>{indicativeUnitPrice(outputPrice, model, cnyPerUSD)}</strong>
+                                  <strong>{model.pricePending ? "…" : indicativeUnitPrice(outputPrice, model, cnyPerUSD)}</strong>
                                   {outputPrice && <small>{unitLabel(outputPrice.unit, t)}</small>}
                                 </div>
-                                <div className="market-row-metric market-row-metric-wide market-row-executable">
+                                <div className="market-row-metric market-row-metric-wide market-row-executable" aria-label={t("market.columns.executableRatio")}>
                                   <strong>
-                                    {model.ready_supplier_count > 0
+                                    {model.pricePending ? "…" : showPrices && model.ready_supplier_count > 0
                                       ? formatRatio(model.indicative_ratio)
                                       : "\u2014"}
                                   </strong>
@@ -952,6 +1028,7 @@ export function MarketPricesModal({
                                 <button
                                   className="market-expand-button"
                                   type="button"
+                                  disabled={!showPrices}
                                   aria-expanded={expanded}
                                   aria-label={t(
                                     expanded ? "market.collapseModel" : "market.expandModel",
@@ -963,7 +1040,7 @@ export function MarketPricesModal({
                                 </button>
                               </div>
 
-                              {expanded && (
+                              {expanded && showPrices && (
                                 (model.reference_components ?? []).length > 0 ? (
                                   <>
                                     {model.pricing_confidence === "variant_fallback" && (
@@ -1003,7 +1080,7 @@ export function MarketPricesModal({
                       </div>
                       <MarketPager
                         pagination={snapshot.pagination}
-                        loading={loading}
+                        loading={loading === "page"}
                         onPageChange={(nextPage) => {
                           setPage(nextPage);
                           setExpandedModels(new Set());
@@ -1166,7 +1243,7 @@ export function MarketPricesModal({
                       </div>
                       <MarketPager
                         pagination={snapshot.pagination}
-                        loading={loading}
+                        loading={loading === "page"}
                         onPageChange={(nextPage) => {
                           setPage(nextPage);
                           setExpandedOfferGroups(new Set());
@@ -1187,9 +1264,9 @@ export function MarketPricesModal({
           ) : null}
         </div>
 
-        <p className="market-disclaimer">
+        {platformAvailable && <p className="market-disclaimer">
           {t("market.disclaimer", { count: snapshot?.history_record_limit ?? 5000 })}
-        </p>
+        </p>}
       </div>
     </DialogBackdrop>
   );

@@ -21,10 +21,17 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
+// A portable preference for the selected supplier. OpenAI GPT Image already
+// returns inline bytes and rejects an explicit response_format body field.
+pub(crate) const IMAGE_RESPONSE_FORMAT_HEADER: &str = "x-const-api-image-response-format";
+
+mod accepted_videos;
 pub(crate) mod availability;
 pub(crate) mod health_recovery;
+pub(crate) mod local_failure;
 include!("supplier/register_update.rs");
 include!("supplier/channel_probe.rs");
+include!("supplier/media_probe.rs");
 include!("supplier/lifecycle.rs");
 include!("supplier/auto_recovery.rs");
 include!("supplier/payload_encryption.rs");
@@ -38,6 +45,7 @@ include!("supplier/transport.rs");
 include!("supplier/platform_duplex.rs");
 include!("supplier/execution_evidence.rs");
 include!("supplier/upstream_usage.rs");
+include!("supplier/image_usage.rs");
 include!("supplier/inbound.rs");
 include!("supplier/register_payload.rs");
 include!("supplier/stream_batch.rs");

@@ -570,19 +570,43 @@ fn local_resource_references(
         }
         _ => {}
     }
-    if matches!(
+    let gemini_count = route.surface == crate::surface::ApiSurface::Gemini
+        && route.operation == crate::surface::ApiOperation::CountTokens;
+    if gemini_count || matches!(
         route.operation,
         crate::surface::ApiOperation::GenerateContent
             | crate::surface::ApiOperation::StreamGenerateContent
             | crate::surface::ApiOperation::InteractionsCreate
     ) {
-        if let Some(id) = fields
-            .get("cachedContent")
-            .or_else(|| fields.get("cached_content"))
-            .and_then(local_resource_id_from_json)
-            .and_then(|value| local_gemini_cached_content_id(&value))
+        for id in crate::protocol::adapters::gemini_cached_content_names(&fields, gemini_count)
+            .filter_map(local_gemini_cached_content_id)
         {
             references.push(reference("cached_content", id, true));
+        }
+    }
+    if matches!(route.operation, crate::surface::ApiOperation::ImagesEdits | crate::surface::ApiOperation::ImagesVariations | crate::surface::ApiOperation::VideosCreate) {
+        let keys: &[&str] = if route.operation == crate::surface::ApiOperation::VideosCreate {
+            &["image", "input_reference", "last_frame", "reference_images", "keyframes"]
+        } else {
+            &["image", "images", "mask"]
+        };
+        for &key in keys {
+            if let Some(value) = fields.get(key) {
+                let items = match value { serde_json::Value::Array(items) => items.as_slice(), value => std::slice::from_ref(value) };
+                for item in items {
+                    let image = if key == "keyframes" {
+                        item.get("image")
+                    } else {
+                        Some(item)
+                    };
+                    if let Some(id) = image
+                        .and_then(|image| image.get("file_id"))
+                        .and_then(local_resource_id_from_json)
+                    {
+                        references.push(reference("file", id, true));
+                    }
+                }
+            }
         }
     }
     if matches!(
@@ -778,10 +802,30 @@ fn local_openai_video_id_from_path(path: &str) -> Option<String> {
     .then(|| id.to_string())
 }
 
+/// Absence from the local registry is not evidence of absence on the platform.
+/// This marker permits the platform's owner lookup, never another local channel.
+#[derive(Clone, Copy)]
+struct LocalResourceOwnerUnknown;
+
+#[derive(Debug)]
 struct LocalResourceRouteError {
     surface: crate::surface::ApiSurface,
     status: StatusCode,
     message: &'static str,
+}
+
+impl LocalResourceRouteError {
+    fn into_response(self) -> Result<warp::reply::Response> {
+        let mut response = local_surface_error_response(self.surface, self.status, self.message)?;
+        if self.status == StatusCode::NOT_FOUND {
+            response.extensions_mut().insert(LocalResourceOwnerUnknown);
+        } else {
+            // A known/conflicting owner is terminal even on lifecycle paths
+            // that do not use the model-fidelity router.
+            response.extensions_mut().insert(LocalRetryForbidden);
+        }
+        Ok(response)
+    }
 }
 
 fn select_resource_owned_local_channel<'a>(
@@ -1326,6 +1370,19 @@ mod local_resource_owner_tests {
     use super::*;
 
     #[test]
+    fn image_edit_uses_only_defined_file_references_and_requires_ownership() {
+        let route = crate::surface::resolve_api_route("POST", "/v1/images/edits", false).unwrap();
+        let refs = local_resource_references(&route, "/v1/images/edits", br#"{
+            "images":[{"file_id":"file-image","extension":{"file_id":"ignore"}}],
+            "mask":{"file_id":"file-mask"},"extension":{"file_id":"ignore-too"}
+        }"#);
+        assert_eq!(refs.len(), 2);
+        assert!(refs.iter().all(|r| r.required && r.resource_type == "file"));
+        assert_eq!(refs[0].resource_id, "file-image");
+        assert_eq!(refs[1].resource_id, "file-mask");
+    }
+
+    #[test]
     fn realtime_call_owner_is_read_from_provider_location_header() {
         let mut headers = warp::http::HeaderMap::new();
         headers.insert(
@@ -1436,6 +1493,20 @@ mod local_resource_owner_tests {
         );
         assert_eq!(references.len(), 2);
         assert!(references.iter().all(|reference| !reference.required));
+    }
+
+    #[test]
+    fn video_image_references_keep_owner_without_scanning_extensions() {
+        let route = crate::surface::resolve_api_route("POST", "/v1/videos", false).unwrap();
+        let refs = local_resource_references(
+            &route,
+            "/v1/videos",
+            br#"{"input_reference":{"file_id":"input"},"image":{"file_id":"first"},"last_frame":{"file_id":"last"},"reference_images":[{"file_id":"ref","extension":{"file_id":"ignored"}}],"keyframes":[{"image":{"file_id":"middle"},"extension":{"file_id":"ignored"}}],"extension":{"file_id":"ignored"}}"#,
+        );
+        let mut ids: Vec<_> = refs.iter().map(|reference| reference.resource_id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["first", "input", "last", "middle", "ref"]);
+        assert!(refs.iter().all(|reference| reference.required));
     }
 
     #[test]
@@ -1741,5 +1812,47 @@ mod local_resource_owner_tests {
         assert_eq!(references.len(), 1);
         assert!(references[0].required);
         assert_eq!(references[0].resource_id, "cache_owned");
+    }
+
+    #[tokio::test]
+    async fn gemini_count_tokens_keeps_cached_content_owner() {
+        let path = "/gemini/v1beta/models/gemini-test:countTokens";
+        let route = crate::surface::resolve_api_route("POST", path, false).unwrap();
+        let registry = LocalResourceOwnerRegistry::in_memory();
+        registry.bind_many(vec![LocalResourceOwner {
+            key: LocalResourceOwnerKey {
+                surface: crate::surface::ApiSurface::Gemini,
+                resource_type: "cached_content".into(), resource_id: "cache_owned".into(),
+            },
+            channel_id: "cache-channel".into(), route_model: "gemini-test".into(), updated_at_unix: now_unix(),
+        }]).await.unwrap();
+        let mut config = default_config();
+        config.channels = vec![crate::channel_from_supplier("cache-channel".into(), &crate::default_supplier_config())];
+        config.channels[0].enabled = true;
+        let ready = HashSet::from(["cache-channel".to_string()]);
+        for body in [
+            br#"{"cachedContent":"cachedContents/cache_owned","contents":[]}"#.as_slice(),
+            br#"{"generateContentRequest":{"model":"models/gemini-test","cachedContent":"cachedContents/cache_owned","contents":[]}}"#,
+            br#"{"generate_content_request":{"cached_content":"cachedContents/cache_owned"}}"#,
+        ] {
+            let selected = select_resource_owned_local_channel(&registry, &config, &route, path, body, &ready)
+                .unwrap().expect("cache owner");
+            assert_eq!(selected.channel.id, "cache-channel");
+            assert_eq!(selected.route_model, "gemini-test");
+        }
+        for body in [
+            br#"{"contents":[],"tools":[{"functionDeclarations":[{"name":"lookup","parameters":{"cachedContent":"cachedContents/not_a_cache"}}]}]}"#.as_slice(),
+            br#"{"generateContentRequest":{"contents":[{"parts":[{"functionCall":{"name":"lookup","args":{"cachedContent":"cachedContents/not_a_cache"}}}]}]}}"#,
+        ] {
+            assert!(local_resource_references(&route, path, body).is_empty());
+        }
+        let unknown = select_resource_owned_local_channel(
+            &registry, &config, &route, path, br#"{"cachedContent":"cachedContents/unknown"}"#, &ready,
+        ).err().expect("unknown cache cannot be routed to another local account");
+        assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+        let unavailable = select_resource_owned_local_channel(
+            &registry, &config, &route, path, br#"{"cachedContent":"cachedContents/cache_owned"}"#, &HashSet::new(),
+        ).err().expect("unavailable owner cannot be rebalanced");
+        assert_eq!(unavailable.status, StatusCode::SERVICE_UNAVAILABLE);
     }
 }

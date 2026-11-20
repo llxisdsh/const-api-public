@@ -1,0 +1,384 @@
+[
+  {
+    "name": "concurrency_full",
+    "status": 429,
+    "payload": {
+      "_const_execution": {
+        "version": 1,
+        "outcome": "failure",
+        "stage": "local_admission",
+        "fault_domain_hint": "capacity",
+        "error_code": "concurrency_full",
+        "upstream_attempted": false,
+        "upstream_response_received": false,
+        "response_started": false,
+        "usable_output_produced": false,
+        "recommendation": {
+          "consumer_charge": "deny",
+          "supplier_settlement": "deny",
+          "consumer_compensation": "none",
+          "supplier_penalty": "ineligible",
+          "retry": "other_channel"
+        }
+      },
+      "safe_to_retry_other_channel": true
+    },
+    "exempt": true
+  },
+  {
+    "name": "rate_limited",
+    "status": 429,
+    "payload": {
+      "_const_execution": {
+        "version": 1,
+        "outcome": "failure",
+        "stage": "local_admission",
+        "fault_domain_hint": "capacity",
+        "error_code": "rate_limited",
+        "upstream_attempted": false,
+        "upstream_response_received": false,
+        "response_started": false,
+        "usable_output_produced": false,
+        "recommendation": {
+          "consumer_charge": "deny",
+          "supplier_settlement": "deny",
+          "consumer_compensation": "none",
+          "supplier_penalty": "ineligible",
+          "retry": "other_channel"
+        }
+      },
+      "safe_to_retry_other_channel": true
+    },
+    "exempt": true
+  },
+  {
+    "name": "quota_reserved",
+    "status": 429,
+    "payload": {
+      "_const_execution": {
+        "version": 1,
+        "outcome": "failure",
+        "stage": "local_admission",
+        "fault_domain_hint": "capacity",
+        "error_code": "quota_reserved",
+        "upstream_attempted": false,
+        "upstream_response_received": false,
+        "response_started": false,
+        "usable_output_produced": false,
+        "recommendation": {
+          "consumer_charge": "deny",
+          "supplier_settlement": "deny",
+          "consumer_compensation": "none",
+          "supplier_penalty": "ineligible",
+          "retry": "other_channel"
+        }
+      },
+      "safe_to_retry_other_channel": true
+    },
+    "exempt": true
+  },
+  {
+    "name": "conversion",
+    "status": 500,
+    "payload": {
+      "_const_execution": {
+        "version": 1,
+        "outcome": "failure",
+        "stage": "request_protocol_convert",
+        "fault_domain_hint": "platform",
+        "error_code": "conversion_failed",
+        "upstream_attempted": false,
+        "upstream_response_received": false,
+        "response_started": false,
+        "usable_output_produced": false,
+        "recommendation": {
+          "consumer_charge": "deny",
+          "supplier_settlement": "deny",
+          "consumer_compensation": "none",
+          "supplier_penalty": "ineligible",
+          "retry": "other_channel"
+        }
+      }
+    },
+    "exempt": true
+  },
+  {
+    "name": "account_quota_upstream",
+    "status": 429,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 429,
+        "cause": "account_quota",
+        "scope": "model",
+        "model": "model-a",
+        "rule_id": "fixture.known.v1"
+      },
+      "safe_to_retry_other_channel": true
+    },
+    "exempt": true
+  },
+  {
+    "name": "model_quota_upstream",
+    "status": 429,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 429,
+        "cause": "model_quota",
+        "scope": "model",
+        "model": "model-a",
+        "rule_id": "fixture.known.v1"
+      },
+      "safe_to_retry_other_channel": true
+    },
+    "exempt": true
+  },
+  {
+    "name": "model_entitlement_upstream",
+    "status": 429,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 429,
+        "cause": "model_entitlement",
+        "scope": "model",
+        "model": "model-a",
+        "rule_id": "fixture.known.v1"
+      },
+      "safe_to_retry_other_channel": true
+    },
+    "exempt": true
+  },
+  {
+    "name": "model_unavailable_upstream",
+    "status": 429,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 429,
+        "cause": "model_unavailable",
+        "scope": "model",
+        "model": "model-a",
+        "rule_id": "fixture.known.v1"
+      },
+      "safe_to_retry_other_channel": true
+    },
+    "exempt": true
+  },
+  {
+    "name": "auth_error_upstream",
+    "status": 429,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 429,
+        "cause": "auth_error",
+        "scope": "model",
+        "model": "model-a",
+        "rule_id": "fixture.known.v1"
+      },
+      "safe_to_retry_other_channel": true
+    },
+    "exempt": true
+  },
+  {
+    "name": "rate_limited_upstream",
+    "status": 429,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 429,
+        "cause": "rate_limited",
+        "scope": "model",
+        "model": "model-a",
+        "rule_id": "fixture.known.v1"
+      },
+      "safe_to_retry_other_channel": true
+    },
+    "exempt": true
+  },
+  {
+    "name": "model_capacity_upstream",
+    "status": 429,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 429,
+        "cause": "model_capacity",
+        "scope": "model",
+        "model": "model-a",
+        "rule_id": "fixture.known.v1"
+      },
+      "safe_to_retry_other_channel": true
+    },
+    "exempt": true
+  },
+  {
+    "name": "provider_overload_upstream",
+    "status": 429,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 429,
+        "cause": "provider_overload",
+        "scope": "model",
+        "model": "model-a",
+        "rule_id": "availability.overload_rejection.v1"
+      },
+      "safe_to_retry_other_channel": true
+    },
+    "exempt": true
+  },
+  {
+    "name": "unknown",
+    "status": 503,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 503,
+        "cause": "unknown"
+      }
+    },
+    "exempt": false
+  },
+  {
+    "name": "generic_or_legacy_server_error",
+    "status": 503,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 503,
+        "cause": "provider_overload",
+        "rule_id": "availability.structured.v1"
+      },
+      "safe_to_retry_other_channel": true
+    },
+    "exempt": false
+  },
+  {
+    "name": "plain_503",
+    "status": 503,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 503,
+        "cause": "provider_overload",
+        "rule_id": "http.unavailable.v1"
+      }
+    },
+    "exempt": false
+  },
+  {
+    "name": "network",
+    "status": 503,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 502,
+        "cause": "network_error"
+      }
+    },
+    "exempt": false
+  },
+  {
+    "name": "partial",
+    "status": 503,
+    "payload": {
+      "_const_execution": {
+        "version": 1,
+        "outcome": "failure",
+        "stage": "local_admission",
+        "fault_domain_hint": "capacity",
+        "error_code": "quota_exhausted",
+        "upstream_attempted": true,
+        "upstream_response_received": true,
+        "response_started": true,
+        "usable_output_produced": true,
+        "recommendation": {
+          "consumer_charge": "deny",
+          "supplier_settlement": "deny",
+          "consumer_compensation": "none",
+          "supplier_penalty": "ineligible",
+          "retry": "other_channel"
+        }
+      }
+    },
+    "exempt": false
+  },
+  {
+    "name": "ambiguous",
+    "status": 503,
+    "payload": {
+      "_const_execution": {
+        "version": 1,
+        "outcome": "failure",
+        "stage": "local_admission",
+        "fault_domain_hint": "capacity",
+        "error_code": "ambiguous_transport",
+        "upstream_attempted": false,
+        "upstream_response_received": false,
+        "response_started": false,
+        "usable_output_produced": false,
+        "recommendation": {
+          "consumer_charge": "deny",
+          "supplier_settlement": "deny",
+          "consumer_compensation": "none",
+          "supplier_penalty": "ineligible",
+          "retry": "other_channel"
+        }
+      }
+    },
+    "exempt": false
+  },
+  {
+    "name": "missing_proof",
+    "status": 503,
+    "payload": {
+      "_const_execution": {
+        "version": 1,
+        "outcome": "failure",
+        "stage": "local_admission",
+        "error_code": "rate_limited"
+      }
+    },
+    "exempt": false
+  },
+  {
+    "name": "future_version",
+    "status": 503,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 2,
+        "status": 429,
+        "cause": "account_quota"
+      }
+    },
+    "exempt": false
+  },
+  {
+    "name": "stream_error",
+    "status": 503,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 200,
+        "cause": "account_quota"
+      }
+    },
+    "exempt": false
+  },
+  {
+    "name": "explicit_denial",
+    "status": 503,
+    "payload": {
+      "failure_observation_v1": {
+        "version": 1,
+        "status": 429,
+        "cause": "account_quota"
+      },
+      "safe_to_retry_other_channel": false
+    },
+    "exempt": false
+  }
+]

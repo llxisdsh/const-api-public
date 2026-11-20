@@ -1,4 +1,4 @@
-const OPENAI_SUBSCRIPTION_REALTIME_MODEL: &str = "gpt-live-1-codex";
+use crate::codex_identity::LIVE_MODEL as OPENAI_SUBSCRIPTION_REALTIME_MODEL;
 const OPENAI_REALTIME_LIVE_BASE_URL: &str = "https://api.openai.com/v1/live";
 const OPENAI_REALTIME_SDP_MAX_BYTES: usize = 1024 * 1024;
 const OPENAI_REALTIME_SESSION_MAX_BYTES: usize = 1024 * 1024;
@@ -139,7 +139,11 @@ fn normalize_openai_subscription_realtime_session(
         "delegation".to_string(),
         serde_json::json!({"type": "client"}),
     );
-    let upstream_model = OPENAI_SUBSCRIPTION_REALTIME_MODEL.to_string();
+    let upstream_model = match object.get("model").and_then(serde_json::Value::as_str) {
+        Some("gpt-live-1-codex") => "gpt-live-1-codex",
+        _ => OPENAI_SUBSCRIPTION_REALTIME_MODEL,
+    }
+    .to_owned();
     normalized.insert(
         "model".to_string(),
         serde_json::Value::String(upstream_model.clone()),
@@ -181,7 +185,7 @@ fn normalize_openai_subscription_frameless_session(
             serde_json::json!({"type": "client"}),
         );
     }
-    // Native Codex owns the model and session dialect. Only supply the legacy
+    // Native Codex owns the model and session dialect. Only supply the current
     // default when omitted; silently rewriting a future model breaks upgrades.
     let upstream_model = object
         .get("model")
@@ -247,11 +251,20 @@ async fn normalize_openai_subscription_realtime_call_payload(
 ) -> Result<OpenAiSubscriptionRealtimeCallPayload> {
     let mut value = parse_openai_realtime_call_payload(headers, body).await?;
     let session = value["session"].take();
-    let (session, upstream_model) = if native_frameless {
+    let (mut session, upstream_model) = if native_frameless {
         normalize_openai_subscription_frameless_session(session)?
     } else {
         normalize_openai_subscription_realtime_session(session)?
     };
+    // The backend dialect in Codex 0.171 supplies Cove when no voice is selected.
+    if session.pointer("/audio/output/voice").is_none_or(serde_json::Value::is_null) {
+        for path in ["/audio", "/audio/output"] {
+            if session.pointer(path).is_some_and(|v| !v.is_null() && !v.is_object()) {
+                return Err(anyhow!("Codex Live session{path} must be an object"));
+            }
+        }
+        session["audio"]["output"]["voice"] = "cove".into();
+    }
     value["session"] = session;
     Ok(OpenAiSubscriptionRealtimeCallPayload {
         body: bytes::Bytes::from(serde_json::to_vec(&value)?),
@@ -409,6 +422,7 @@ mod openai_subscription_realtime_tests {
         assert_eq!(payload.content_type, "application/json");
         assert_eq!(payload.upstream_model, OPENAI_SUBSCRIPTION_REALTIME_MODEL);
         assert_eq!(value["sdp"], "v=0\r\n");
+        assert_eq!(value["session"]["audio"]["output"]["voice"], "marin");
         assert!(value["session"].get("type").is_none());
         assert_eq!(
             value["session"]["model"],
@@ -437,6 +451,7 @@ mod openai_subscription_realtime_tests {
 
         assert_eq!(payload.content_type, "application/json");
         assert_eq!(value["sdp"], "v=0\r\n");
+        assert_eq!(value["session"]["audio"]["output"]["voice"], "cove");
         assert_eq!(
             value["session"]["model"],
             OPENAI_SUBSCRIPTION_REALTIME_MODEL

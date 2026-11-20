@@ -1523,9 +1523,7 @@ mod usage_tests {
 
     #[test]
     fn responses_incomplete_preserves_reason_and_details() {
-        let raw = concat!(
-            "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp-1\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"content_filter\"},\"output\":[],\"usage\":{\"input_tokens\":4,\"output_tokens\":2,\"total_tokens\":6}}}\n\n"
-        );
+        let raw = "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp-1\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"content_filter\"},\"output\":[],\"usage\":{\"input_tokens\":4,\"output_tokens\":2,\"total_tokens\":6}}}\n\n";
         let mut parser = StreamParser::new(ProtocolKind::OpenAiResponses, "model");
         let events = parser.push(raw.as_bytes()).unwrap();
         let finish = events.iter().find_map(|event| match event {

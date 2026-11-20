@@ -95,6 +95,11 @@ export type CopyField =
   | "guide-gemini-stream-url"
   | "guide-gemini-models-url"
   | "guide-model-id"
+  | "guide-image-command"
+  | "guide-image-usage"
+  | "guide-video-usage"
+  | "guide-speech-usage"
+  | `guide-prompt-${"discover" | "generate" | "edit" | "video" | "speech" | "music"}`
   | "guide-models";
 
 export type ClientConfig = {
@@ -110,7 +115,6 @@ export type ClientConfig = {
   allow_lan_access: boolean;
   lan_share: LanShareConfig;
   proxy_auto_start: boolean;
-  automatic_updates: boolean;
   prevent_sleep_while_supplying?: boolean;
   /** Runtime capability, not a persisted preference. */
   sleep_prevention_supported?: boolean;
@@ -122,6 +126,9 @@ export type ClientConfig = {
   registry_version: number;
   development_endpoint: string;
   allow_model_equivalence: boolean;
+  protect_outgoing_secrets: boolean;
+  configure_image_skill: boolean;
+  media_skill_tools: string[];
   prefer_local_supply: boolean;
   tool_model_injection?: import("./toolModelInjection").ToolModelInjectionSettings;
   /** Legacy persisted field; runtime routing now always permits custom fallback. */
@@ -381,19 +388,6 @@ export type ToolConfigOperationResponse = {
 
 export type ToolConfigOperationTicket = {
   operation_id: string;
-};
-
-export type ToolRemoveMode = "restore_pre_const" | "native_route";
-
-export type ToolRemoveDecision = ToolRemoveMode | "cancel";
-
-export type ToolRemoveDialogState = {
-  tool: string;
-  toolTitle: string;
-  nativeOption?: {
-    title: string;
-    description: string;
-  };
 };
 
 export type ToolConfigOperationStatus = {
@@ -720,7 +714,7 @@ export type AppLogEntry = {
 };
 
 export type UpdateState = {
-  status: "idle" | "checking" | "downloading" | "ready" | "ready_waiting_idle" | "installing" | "error";
+  status: "idle" | "checking" | "available" | "downloading" | "ready" | "ready_waiting_idle" | "installing" | "error";
   version?: string;
   error?: string;
   waitingReason?: string;
@@ -755,7 +749,6 @@ export type NativeUpdateStatus = {
   sourceUrl?: string | null;
   sources: NativeUpdateSourceStatus[];
   preferredSourceUrl?: string | null;
-  automatic: boolean;
   readiness: UpdateInstallReadiness;
 };
 

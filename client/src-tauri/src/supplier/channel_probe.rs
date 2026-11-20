@@ -3,8 +3,8 @@ pub(crate) async fn test_channel_upstream_inner(
     prompt: String,
 ) -> Result<ChannelUpstreamTestResult, String> {
     let channel = normalize_probe_channel(channel);
-    let primary_model = pick_primary_model(&channel.models, &channel);
-    match test_channel_upstream_with_model_inner(channel.clone(), None, prompt.clone()).await {
+    let primary_model = automatic_probe_model(&channel);
+    match test_channel_upstream_with_model_inner(channel.clone(), Some(primary_model.clone()), prompt.clone()).await {
         Ok(result) => Ok(result),
         Err(primary_error)
             if channel_is_claude_subscription(&channel)
@@ -152,6 +152,11 @@ async fn test_channel_upstream_attempt_inner(
     let requested_model = requested_model
         .map(|model| exact_probe_model(&channel, &model))
         .transpose()?;
+    let probe_model = requested_model.clone().unwrap_or_else(|| pick_primary_model(&channel.models, &channel));
+    if media_probe_kind(&channel, &probe_model).is_some_and(|kind| kind.non_text) {
+        return Err(ProbeError { failure: None, deferred: true,
+            message: "media model requires an explicit media test; automatic chat probes do not generate paid media".into() });
+    }
     // Managed HTTP subscriptions must use the same credential adapter as real
     // traffic. Their presentation kind alone does not select the legacy bridge.
     if channel.kind.trim() == "subscription_adapter"

@@ -105,6 +105,8 @@ include!("tool_config/production/storage.rs");
 include!("tool_config/production/codex.rs");
 include!("tool_config/production/codex_catalog.rs");
 include!("tool_config/production/tool_writers.rs");
+include!("tool_config/production/hermes_images.rs");
+include!("tool_config/production/image_skill.rs");
 include!("tool_config/production/additional_tools.rs");
 include!("tool_config/production/octop.rs");
 include!("tool_config/production/toonflow.rs");
@@ -127,6 +129,8 @@ include!("tool_config/production/formats.rs");
 #[cfg(test)]
 mod tests {
     include!("tool_config/tests/config_files.rs");
+    include!("tool_config/tests/hermes_images.rs");
+    include!("tool_config/tests/image_skill.rs");
     include!("tool_config/tests/deepseek_harness_settings.rs");
     include!("tool_config/tests/runtime_guard.rs");
     include!("tool_config/tests/operation_lifecycle.rs");

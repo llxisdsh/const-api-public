@@ -4,10 +4,18 @@ export type ModelPresentationPolicy = {
   rules: readonly { pattern: string; hidden: boolean }[];
 };
 
-// Keep the first source for each short name, but retain its complete request ID.
+function withoutContextHint(model: string): string {
+  return model.trim().replace(/\[1m\]$/i, "").trim();
+}
+
+// Mirrors the public ID in /v1/models. A provider prefix alone has no callable ID.
+export function publicModelId(model: string): string {
+  const value = withoutContextHint(model);
+  return value.slice(value.lastIndexOf("/") + 1).trim().toLowerCase();
+}
+
 export function modelDisplayName(model: string): string {
-  const value = model.trim().replace(/\[1m\]$/i, "").trim();
-  return (value.slice(value.lastIndexOf("/") + 1) || value).toLowerCase();
+  return publicModelId(model) || withoutContextHint(model).toLowerCase();
 }
 
 export function modelContextLabel(tokens: number | undefined): string {

@@ -60,6 +60,8 @@ describe("SupplierSurfaceConfig", () => {
     expect(screen.getByText("Anthropic API")).toBeInTheDocument();
     expect(screen.queryAllByText("Base URL")).toHaveLength(1);
 
+    await userEvent.click(screen.getByText("Anthropic Messages"));
+    expect(onToggleProtocol).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("checkbox", { name: "Anthropic Messages" }));
     expect(onToggleProtocol).toHaveBeenCalledWith(
       "anthropic",

@@ -149,7 +149,7 @@ pub(super) async fn enrich(
                 &json!({"model":null,"input":null}),
             )
             .await?;
-            read_response(request.send_adaptive().await?).await
+            read_response(request.send_upstream().await?).await
         })
         .await;
         let (status, message) = match result {
@@ -333,7 +333,7 @@ async fn read_response(response: reqwest::Response) -> Result<(u16, Vec<u8>)> {
 }
 
 async fn completed_response(request: reqwest::RequestBuilder) -> Result<Value> {
-    let (status, body) = read_response(request.send_adaptive().await?).await?;
+    let (status, body) = read_response(request.send_upstream().await?).await?;
     if !(200..300).contains(&status) {
         // Do not persist raw upstream bodies, which may echo credentials/prompts.
         return Err(anyhow!("custom tool probe HTTP {status}"));

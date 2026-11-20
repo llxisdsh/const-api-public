@@ -8,6 +8,62 @@
         assert_eq!(find_sse_event_boundary("data: one\r\n"), None);
     }
 
+    #[tokio::test]
+    async fn grok_build_normal_responses_post_preserves_codex_stream_for_other_callers() {
+        const DELTA: &str = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"visible</final>\"}\n\n";
+        const META: &str = "event: response.metadata\ndata: {\"type\":\"response.metadata\",\"headers\":{\"x-codex-turn-state\":\"fixture\"}}\n\n";
+        const DONE: &str = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixture\",\"metadata\":{\"user\":\"kept\"},\"output\":[]}}\n\n";
+        let upstream = warp::post()
+            .and(warp::path!("v1" / "responses"))
+            .and(warp::body::json())
+            .map(|body: serde_json::Value| {
+                assert_eq!(body["model"], "gpt-6-luna");
+                assert_eq!(body["stream"], true);
+                warp::reply::with_header(
+                    [DELTA, META, DONE].concat(),
+                    "content-type",
+                    "text/event-stream",
+                )
+            });
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        let mut config = default_config();
+        config.api_key = "fixture-consumer".into();
+        config.account_device_api_key.clear();
+        config.endpoints.clear();
+        config.prefer_local_supply = true;
+        let mut channel =
+            openai_api_channel("fixture", "gpt-6-luna", &format!("http://{address}/v1"));
+        channel.upstream_api_key = "fixture-supplier".into();
+        config.channels = vec![channel];
+        let routes = crate::proxy_routes(Arc::new(ProxyShared::from_config(
+            normalize_config(config),
+            Client::new(),
+        )));
+        for grok in [true, false] {
+            let request = warp::test::request()
+                .method("POST")
+                .path("/v1/responses")
+                .header("authorization", "Bearer fixture-consumer")
+                .json(&serde_json::json!({"model":"gpt-6-luna","input":"fixture","stream":true}));
+            let request = if grok {
+                request.header("x-grok-client-identifier", "grok-pager")
+            } else {
+                request.header("originator", "codex_vscode")
+            };
+            let response = request.reply(&routes).await;
+            assert_eq!(response.status(), 200);
+            let wire = std::str::from_utf8(response.body()).unwrap();
+            assert!(wire.starts_with(DELTA) && wire.ends_with(DONE));
+            if grok {
+                assert!(!wire.contains("response.metadata"));
+            } else {
+                assert_eq!(wire, [DELTA, META, DONE].concat());
+            }
+        }
+        server.abort();
+    }
+
     #[test]
     fn streaming_converters_accept_crlf_sse_boundaries() {
         let mut responses = crate::protocol::stream::stream_converter(
@@ -3327,24 +3383,27 @@ data: {"type":"message_delta","delta":{"stop_reason":"compaction"},"usage":{"out
     }
 
     #[tokio::test]
-    async fn platform_sse_network_change_resumes_even_if_old_socket_never_fails() {
-        let first = bytes::Bytes::from_static(b"data: first\n\n");
-        let last = b"data: [DONE]\n\n";
+    async fn grok_build_platform_sse_network_change_resumes_even_if_old_socket_never_fails() {
+        const DELTA: &str = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n";
+        const ERROR: &str = "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"terminal\"}}\n\n";
+        let first = bytes::Bytes::from([DELTA, "data: {\"type\":\"response.met"].concat());
+        let expected_offset = first.len().to_string();
+        let last = ["adata\"}\n\n", ERROR].concat();
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = read_raw_http_request(&mut socket).await;
             assert_eq!(raw_header_values(&request.headers, PLATFORM_STREAM_ID_HEADER), vec!["network-test"]);
-            assert_eq!(raw_header_values(&request.headers, PLATFORM_STREAM_OFFSET_HEADER), vec!["13"]);
+            assert_eq!(raw_header_values(&request.headers, PLATFORM_STREAM_OFFSET_HEADER), vec![expected_offset.as_str()]);
             assert_eq!(request.body, b"test-only");
             socket.write_all(format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Const-Stream-Id: network-test\r\nX-Const-Stream-Resumable: 1\r\nX-Const-Stream-Resumed: 1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", last.len()
             ).as_bytes()).await.unwrap();
-            socket.write_all(last).await.unwrap();
+            socket.write_all(last.as_bytes()).await.unwrap();
         });
         let (changes, receiver) = tokio::sync::watch::channel(0);
-        let source = futures_util::stream::iter([Ok::<_, std::io::Error>(first.clone())])
+        let source = futures_util::stream::iter([Ok::<_, std::io::Error>(first)])
             .chain(futures_util::stream::pending());
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(PLATFORM_STREAM_ID_HEADER, reqwest::header::HeaderValue::from_static("network-test"));
@@ -3357,20 +3416,27 @@ data: {"type":"message_delta","delta":{"stop_reason":"compaction"},"usage":{"out
             request_version: None,
             network_changes: receiver.clone(),
         };
+        let mut sse_headers = HeaderMap::new();
+        sse_headers.insert("content-type", "text/event-stream".parse().unwrap());
         let response = response_from_resumable_platform_event_stream(
             warp::http::StatusCode::OK,
-            &reqwest::header::HeaderMap::new(),
+            &sse_headers,
             crate::network_recovery::watch_stream(source, receiver), request,
         ).unwrap();
+        let mut tool_headers = HeaderMap::new();
+        tool_headers.insert("x-grok-client-identifier", "grok-shell".parse().unwrap());
+        let response = grok_responses::for_tool(&http::Method::POST, "/v1/responses", &tool_headers, response);
         let mut output = http_body_util::BodyExt::into_data_stream(response.into_body());
-        assert_eq!(tokio::time::timeout(Duration::from_secs(2), output.next()).await.unwrap().unwrap().unwrap(), first);
+        assert_eq!(tokio::time::timeout(Duration::from_secs(2), output.next()).await.unwrap().unwrap().unwrap(), DELTA);
         changes.send_modify(|generation| *generation += 1);
         let remaining = tokio::time::timeout(Duration::from_secs(2), async {
             let mut bytes = Vec::new();
             while let Some(chunk) = output.next().await { bytes.extend_from_slice(&chunk.unwrap()); }
             bytes
         }).await.expect("network change must wake the silent stream");
-        assert_eq!(remaining, last);
+        let remaining = std::str::from_utf8(&remaining).unwrap();
+        assert!(remaining.starts_with(':') && remaining.ends_with(ERROR));
+        assert_eq!(remaining.lines().filter(|line| line.starts_with("data:")).count(), 1);
         server.await.unwrap();
     }
 
@@ -3478,6 +3544,7 @@ data: {"type":"message_delta","delta":{"stop_reason":"compaction"},"usage":{"out
             false,
             HeaderMap::new(),
             bytes::Bytes::from_static(br#"{"model":"gpt-test","stream":true}"#),
+            true,
             &client,
             &cfg,
             &endpoint.base_url,

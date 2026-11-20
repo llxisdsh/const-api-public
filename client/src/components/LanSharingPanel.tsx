@@ -603,15 +603,16 @@ export function LanSharingPanel({
             <p className="lan-share-section-description">{t("lanShare.selectModelsHint")}</p>
             <div className="lan-share-models">
               {modelOptions.size > 0 ? [...modelOptions].map(([model, label]) => (
-                <label key={model} className={selectedModels.has(model.toLocaleLowerCase()) ? "selected" : ""}>
+                <div key={model} className="lan-share-model-option">
                   <input
                     type="checkbox"
+                    aria-label={label}
                     checked={selectedModels.has(model.toLocaleLowerCase())}
                     onChange={() => toggleModel(model)}
                     disabled={effectiveBusy}
                   />
                   <span>{label}</span>
-                </label>
+                </div>
               )) : <p className="lan-share-empty">{t("lanShare.noAvailableModels")}</p>}
             </div>
           </div>

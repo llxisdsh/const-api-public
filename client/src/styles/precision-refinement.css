@@ -597,7 +597,6 @@ textarea:focus-visible,
 :root[data-theme="dark"] .brand-badge-anythingllm img,
 :root[data-theme="dark"] .brand-badge-goose img,
 :root[data-theme="dark"] .brand-badge-mimocode img,
-:root[data-theme="dark"] .brand-badge-minimax-code img,
 :root[data-theme="dark"] .brand-badge-grok img {
   filter: invert(0.84) brightness(1.02);
   opacity: 0.96;
@@ -629,7 +628,8 @@ textarea:focus-visible,
   filter: brightness(0.88) saturate(0.92);
 }
 
-:root[data-theme="dark"] .brand-badge-raven img {
+:root[data-theme="dark"] .brand-badge-raven img,
+:root[data-theme="dark"] .brand-badge-minimax-code img {
   filter: brightness(0.86) saturate(0.92);
 }
 
@@ -641,13 +641,9 @@ textarea:focus-visible,
   filter: brightness(0.68) saturate(0.84);
 }
 
-:root[data-theme="dark"] .brand-badge-codebuddy img {
-  filter: brightness(0.78) saturate(0.88);
-}
-
+:root[data-theme="dark"] .brand-badge-codebuddy img,
 :root[data-theme="dark"] .brand-badge-qoder img {
-  filter: invert(1) brightness(0.76);
-  opacity: 0.94;
+  filter: brightness(0.78) saturate(0.88);
 }
 
 :root[data-theme="dark"] .brand-badge-toonflow img {
@@ -668,7 +664,6 @@ textarea:focus-visible,
 
 #claude-tool-button,
 #gemini-tool-button,
-#minimax-code-tool-button,
 #open-interpreter-tool-button {
   --tool-dock-icon-size: 32px;
 }
@@ -679,6 +674,7 @@ textarea:focus-visible,
 #trae-work-tool-button,
 #qwencode-tool-button,
 #mistral-vibe-tool-button,
+#minimax-code-tool-button,
 #openscience-tool-button,
 #open-design-tool-button {
   --tool-dock-icon-size: 30px;
@@ -1373,7 +1369,8 @@ textarea:focus-visible,
   --selection-surface: color-mix(in srgb, var(--blue) 8%, transparent);
 }
 
-.detail-drawer label {
+.detail-drawer label,
+.detail-drawer .checkbox-field {
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;

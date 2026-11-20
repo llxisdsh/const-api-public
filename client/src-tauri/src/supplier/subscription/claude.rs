@@ -510,7 +510,7 @@ async fn send_claude_subscription_body_with_headers(
     let status = resp.status().as_u16();
     let content_type = response_content_type(&resp);
     let headers = response_header_pairs(resp.headers());
-    let raw = resp.text().await?;
+    let raw = read_subscription_response_body(resp).await?;
     Ok((status, content_type, raw, headers))
 }
 
@@ -563,10 +563,9 @@ async fn send_claude_subscription_response(
     let mut body = claude_subscription_fast_policy(body, channel.subscription.claude_fast_enabled)?;
     let mut refreshed = false;
     loop {
-        let response = crate::upstream_transport::send(claude_subscription_request_with_headers(
-            client, url, &token, body.clone(), request_headers,
-        ))
-        .await?;
+        let response = send_claude_request(
+            client, channel, url, &token, body.clone(), request_headers,
+        ).await?;
         crate::detection::observe_claude_subscription_response_headers(channel, response.headers());
         if response.status() == reqwest::StatusCode::UNAUTHORIZED && !refreshed {
             let _ = response.text().await;
@@ -1056,6 +1055,7 @@ pub(crate) fn claude_subscription_request(
     claude_subscription_request_with_headers(client, url, token, body, None)
 }
 
+#[cfg(test)]
 fn claude_subscription_request_with_headers(
     client: &Client,
     url: &str,
@@ -1063,7 +1063,44 @@ fn claude_subscription_request_with_headers(
     body: String,
     request_headers: Option<&reqwest::header::HeaderMap>,
 ) -> reqwest::RequestBuilder {
-    let session_id = claude_code_session_id_from_body(&body);
+    claude_subscription_headers_request(client, url, token, &body, request_headers).body(body)
+}
+
+async fn send_claude_request(
+    client: &Client,
+    channel: &ChannelConfig,
+    url: &str,
+    token: &str,
+    body: String,
+    request_headers: Option<&reqwest::header::HeaderMap>,
+) -> Result<reqwest::Response> {
+    let request = claude_subscription_headers_request(client, url, token, &body, request_headers);
+    let url = reqwest::Url::parse(url)?;
+    if crate::claude_client_profile::uses_bun_transport(&url) {
+        // Only the measured inference/count endpoint uses Bun. OAuth and other
+        // control requests keep their existing client until separately measured.
+        // No new body copy: headers borrow it, then Bytes takes the owned String.
+        static TRANSPORT: crate::bun_transport::Transport = crate::bun_transport::Transport::new();
+        let request = request.build()?;
+        Ok(TRANSPORT.send(
+            request.method().clone(), url, request.headers().clone(),
+            bytes::Bytes::from(body), channel.v2.use_system_proxy,
+        ).await?)
+    } else {
+        // Explicit alternate/mock endpoints retain their supplied client's DNS,
+        // trust and timeout configuration, without automatic HTTP3 probing.
+        Ok(crate::upstream_transport::send(request.body(body)).await?)
+    }
+}
+
+fn claude_subscription_headers_request(
+    client: &Client,
+    url: &str,
+    token: &str,
+    body: &str,
+    request_headers: Option<&reqwest::header::HeaderMap>,
+) -> reqwest::RequestBuilder {
+    let session_id = claude_code_session_id_from_body(body);
     let count_tokens = is_anthropic_count_tokens_path(url);
     let stream = !count_tokens && top_level_json_bool(body.as_bytes(), "stream").unwrap_or(false);
     let mut beta_header = if count_tokens {
@@ -1078,7 +1115,7 @@ fn claude_subscription_request_with_headers(
     {
         beta_header.push_str(",fast-mode-2026-02-01");
     }
-    if claude_request_uses_server_side_compaction(&body)
+    if claude_request_uses_server_side_compaction(body)
         && !beta_header.split(',').any(|beta| {
             beta.trim()
                 .eq_ignore_ascii_case(CLAUDE_SERVER_SIDE_COMPACTION_BETA)
@@ -1122,8 +1159,7 @@ fn claude_subscription_request_with_headers(
         .header("Accept", accept)
         .header("Accept-Encoding", CLAUDE_RESPONSE_ACCEPT_ENCODING)
         .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {token}"))
-        .body(body);
+        .header("Authorization", format!("Bearer {token}"));
     if let Some(native_protocol_headers) = native_protocol_headers {
         request = request.headers(native_protocol_headers);
     }
@@ -1190,6 +1226,10 @@ fn random_request_uuid() -> String {
 
 fn claude_code_session_id_from_body(body: &str) -> Option<String> {
     let body: serde_json::Value = serde_json::from_str(body).ok()?;
+    claude_code_session_id_from_value(&body)
+}
+
+fn claude_code_session_id_from_value(body: &serde_json::Value) -> Option<String> {
     let raw = body.pointer("/metadata/user_id")?.as_str()?.trim();
     let session_id = if raw.starts_with('{') {
         let metadata: serde_json::Value = serde_json::from_str(raw).ok()?;
@@ -1205,13 +1245,7 @@ fn claude_code_session_id_from_body(body: &str) -> Option<String> {
     } else {
         legacy_claude_code_session_id(raw)?.to_string()
     };
-    if session_id.is_empty()
-        || session_id.len() > 256
-        || reqwest::header::HeaderValue::from_str(&session_id).is_err()
-    {
-        return None;
-    }
-    Some(session_id)
+    normalized_subscription_cache_identity(Some(&session_id)).map(str::to_string)
 }
 
 fn legacy_claude_code_session_id(raw: &str) -> Option<&str> {

@@ -64,6 +64,8 @@ pub(crate) struct SupplierUpstreamUsage {
     terminal_error: Option<serde_json::Value>,
     #[serde(skip)]
     openrouter_service_tier: bool,
+    #[serde(skip)]
+    image_operation: bool,
 }
 
 impl SupplierUpstreamUsage {
@@ -96,7 +98,10 @@ impl SupplierUpstreamUsage {
     }
     fn new(protocol: &str) -> Self {
         let openrouter_service_tier = protocol == "openrouter_messages";
-        let protocol = if openrouter_service_tier {
+        let image_operation = protocol == "openai_images";
+        let protocol = if image_operation {
+            "openai_responses"
+        } else if openrouter_service_tier {
             "anthropic_messages"
         } else {
             protocol
@@ -106,6 +111,7 @@ impl SupplierUpstreamUsage {
             input_tokens_include_cache_read: protocol != "anthropic_messages",
             input_tokens_include_cache_write: protocol != "anthropic_messages",
             openrouter_service_tier,
+            image_operation,
             ..Default::default()
         }
     }
@@ -594,6 +600,18 @@ impl SupplierUpstreamUsage {
             _ => {}
         }
         self.absorb_common_usage_meters(usage);
+        // The Images contract reports output_tokens as image output when no
+        // modality breakdown is present. This must never apply to chat/Responses.
+        if self.image_operation
+            && first_u64_pointer(usage, &["/output_tokens_details/image_tokens", "/output_token_details/image_tokens", "/completion_tokens_details/image_tokens"]).is_none()
+            && let Some(total) = usage.get("output_tokens").and_then(serde_json::Value::as_u64)
+        {
+            let text = usage.pointer("/output_tokens_details/text_tokens")
+                .and_then(serde_json::Value::as_u64).unwrap_or(0);
+            if let Some(images) = total.checked_sub(text) {
+                self.replace_meter("image_output_tokens", "per_1m_tokens", images, 1, true);
+            }
+        }
     }
 
     fn absorb_common_usage_meters(&mut self, usage: &serde_json::Value) {
@@ -919,6 +937,29 @@ fn upstream_usage_from_body(protocol: &str, body: &[u8]) -> Option<SupplierUpstr
     let value = serde_json::from_slice(body).ok()?;
     let usage = SupplierUpstreamUsage::from_json(protocol, &value);
     usage.observed().then_some(usage)
+}
+
+// Only native Images operations use this count fallback. Never infer billable
+// images from requested n, previews, or unrelated JSON arrays in a chat response.
+fn upstream_image_usage_from_body(body: &[u8]) -> Option<SupplierUpstreamUsage> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    if value.get("error").is_some_and(|error| !error.is_null()) { return None; }
+    let mut usage = SupplierUpstreamUsage::from_json("openai_images", &value);
+    if usage.output_tokens.is_none()
+        && !usage.usage_meters.iter().any(|meter| matches!(meter.meter_kind.as_str(), "image_output_tokens" | "image_output_unit"))
+    {
+        let count = returned_image_count(&value);
+        if count > 0 { usage.replace_meter("image_output_unit", "per_image", count, 1, false); }
+    }
+    usage.observed().then_some(usage)
+}
+
+fn returned_image_count(value: &serde_json::Value) -> u64 {
+    value.get("data").and_then(serde_json::Value::as_array).into_iter().flatten()
+        .filter(|image| !image.get("error").is_some_and(|error| !error.is_null())
+            && ["url", "b64_json"].iter().any(|key| image.get(key)
+                .and_then(serde_json::Value::as_str).is_some_and(|text| !text.trim().is_empty())))
+        .count() as u64
 }
 
 fn upstream_usage_from_response(protocol: &str, body: &[u8]) -> Option<SupplierUpstreamUsage> {

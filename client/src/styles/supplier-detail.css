@@ -330,17 +330,26 @@
   gap: 8px;
   min-height: 38px;
   color: var(--text);
-  cursor: pointer;
   font-size: 13px;
+  font-weight: var(--weight-medium);
   white-space: nowrap;
 }
 
-.supply-toggle input {
+.supply-toggle-control {
+  position: relative;
+  display: inline-flex;
+}
+
+.supply-toggle-control input[type="checkbox"] {
   position: absolute;
-  width: 1px;
-  height: 1px;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
   opacity: 0;
-  pointer-events: none;
 }
 
 .supply-toggle-track {
@@ -371,11 +380,6 @@
 
 .supply-toggle.checked .supply-toggle-track span {
   transform: translateX(14px);
-}
-
-.supply-toggle:has(input:disabled) {
-  cursor: not-allowed;
-  opacity: 0.48;
 }
 
 .supply-toggle:focus-within .supply-toggle-track {
@@ -839,7 +843,7 @@
   gap: 7px 12px;
 }
 
-.supplier-surface-protocols label {
+.supplier-protocol-option {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1305,8 +1309,11 @@
   gap: 6px;
 }
 
-.check input {
-  width: auto;
+.check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
 }
 
 button.supplier-field-link {

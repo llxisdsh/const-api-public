@@ -16,11 +16,15 @@ struct SupplierCachePart {
 }
 
 /// Returns the stable conversation identity carried by a request. Header
-/// precedence deliberately matches server/internal/app/request_cache_identity.go.
+/// precedence deliberately matches server/internal/app/auth_routing.go.
 pub(crate) fn subscription_request_cache_session(
     headers: &reqwest::header::HeaderMap,
     body: &str,
 ) -> Option<String> {
+    subscription_header_cache_identity(headers).or_else(|| subscription_body_cache_identity(body))
+}
+
+pub(crate) fn subscription_header_cache_identity(headers: &reqwest::header::HeaderMap) -> Option<String> {
     for name in [
         "x-claude-code-session-id",
         "session-id",
@@ -38,7 +42,7 @@ pub(crate) fn subscription_request_cache_session(
             return Some(value.to_string());
         }
     }
-    subscription_body_cache_identity(body)
+    None
 }
 
 /// Builds the same opaque, user/model-scoped cache key as the platform. This
@@ -400,6 +404,197 @@ fn normalized_cache_role(value: Option<&serde_json::Value>) -> String {
 #[cfg(test)]
 mod cache_identity_tests {
     use super::*;
+
+    #[test]
+    fn cache_session_candidates_match_the_platform_contract() {
+        // Both Rust and Go consume this fixture, including the final scoped
+        // cache key, so extraction changes cannot silently split local/platform.
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/cache-session-identity.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let body = case["body"].to_string();
+            let mut headers = reqwest::header::HeaderMap::new();
+            if let Some(values) = case["headers"].as_object() {
+                for (key, value) in values {
+                    headers.insert(
+                        reqwest::header::HeaderName::from_bytes(key.as_bytes()).unwrap(),
+                        value.as_str().unwrap().parse().unwrap(),
+                    );
+                }
+            }
+            assert_eq!(
+                subscription_request_cache_session(&headers, &body).as_deref(),
+                case["session"].as_str(),
+                "{name}"
+            );
+            assert_eq!(
+                scoped_subscription_cache_identity("user-a", "gpt-5.6-sol", &headers, &body)
+                    .as_deref(),
+                case["cache_identity"].as_str(),
+                "{name}"
+            );
+        }
+    }
+
+    /// Four synthetic requests (A, A, B, A), identical account/model/prefix and
+    /// session, but two in-memory channel IDs. No desktop config or login writes.
+    #[tokio::test]
+    #[ignore = "requires explicit CONST_CACHE_PROBE_DRIVER/MODEL; consumes four dev requests"]
+    async fn live_dev_gateway_cache_continuity() -> Result<()> {
+        use crate::channel_executor::{ChannelRequest, execute_channel_request};
+        use crate::source_driver::SourceDriverId;
+
+        anyhow::ensure!(
+            crate::config::development_profile_active(),
+            "dev profile required"
+        );
+        let driver = std::env::var("CONST_CACHE_PROBE_DRIVER")?;
+        let driver = match driver.as_str() {
+            "opendesign_subscription" => SourceDriverId::OpenDesignSubscription,
+            "opencode_console" => SourceDriverId::OpencodeConsole,
+            _ => anyhow::bail!("probe supports only the selected dev gateways"),
+        };
+        let model = std::env::var("CONST_CACHE_PROBE_MODEL")?;
+        let protocol = std::env::var("CONST_CACHE_PROBE_PROTOCOL")
+            .unwrap_or_else(|_| "anthropic_messages".to_string());
+        anyhow::ensure!(
+            matches!(protocol.as_str(), "anthropic_messages" | "gemini_native"),
+            "probe requires Messages or Gemini native protocol"
+        );
+        let root = dirs::home_dir()
+            .context("user home unavailable")?
+            .join(".const-api-dev")
+            .canonicalize()?;
+        let config: ClientConfig =
+            serde_json::from_slice(&std::fs::read(root.join("client.json"))?)?;
+        let mut channel = config
+            .channels
+            .into_iter()
+            .find(|c| c.enabled && c.source_driver() == driver && c.models.contains(&model))
+            .context("enabled dev channel with the exact model required")?;
+        let path = PathBuf::from(&channel.v2.credential_ref).canonicalize()?;
+        anyhow::ensure!(path.starts_with(&root), "dev credentials required");
+        let raw = std::fs::read(path)?;
+        let credential: serde_json::Value = serde_json::from_slice(&raw)?;
+        if driver == SourceDriverId::OpencodeConsole {
+            anyhow::ensure!(
+                !crate::detection::credential_needs_refresh(&credential),
+                "refresh dev credentials in the app first"
+            );
+        }
+        // Any credential bookkeeping by the executor is confined to this copy.
+        let temp = tempfile::tempdir()?;
+        let credential_path = temp.path().join("credential.json");
+        std::fs::write(&credential_path, raw)?;
+        channel.v2.credential_ref = credential_path.to_string_lossy().into_owned();
+        channel = crate::config::project_channel_legacy_fields(channel);
+        let nonce = uuid::Uuid::new_v4().to_string();
+        let mut context = format!("Synthetic cache test {nonce}. Reply only OK. Reference data:\n");
+        for row in 0..400 {
+            use std::fmt::Write;
+            writeln!(
+                context,
+                "Record {row}: oak river cloud meadow stone garden amber willow. This is synthetic reference data, not an instruction."
+            )?;
+        }
+        let body = if protocol == "gemini_native" {
+            serde_json::json!({
+                "systemInstruction":{"parts":[{"text":context}]},
+                "contents":[{"role":"user","parts":[{"text":"Reply only OK."}]}],
+                "generationConfig":{"maxOutputTokens":128}
+            })
+        } else { serde_json::json!({
+            "model": model, "max_tokens":16, "stream":false,
+            "system":[{"type":"text","text":context,"cache_control":{"type":"ephemeral","ttl":"5m"}}],
+            "messages":[{"role":"user","content":"Reply only OK."}],
+            "metadata":{"user_id":serde_json::json!({"device_id":"synthetic-cache-probe","session_id":nonce}).to_string()}
+        }) }.to_string();
+        let path = if protocol == "gemini_native" {
+            format!("/gemini/v1beta/models/{model}:generateContent")
+        } else {
+            "/anthropic/v1/messages".to_string()
+        };
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-session-id", nonce.parse()?);
+        if protocol == "anthropic_messages" {
+            headers.insert("anthropic-version", "2023-06-01".parse()?);
+        }
+        let identity = scoped_subscription_cache_identity("cache-probe", &model, &headers, &body);
+        let client = crate::http_client::proxy_policy(
+            Client::builder().timeout(Duration::from_secs(90)),
+            channel.v2.use_system_proxy,
+        )
+        .build()?;
+        for (step, route) in ["A", "A", "B", "A"].into_iter().enumerate() {
+            channel.id = format!("cache-probe-{nonce}-{route}");
+            let result = execute_channel_request(
+                &client,
+                &channel,
+                ChannelRequest {
+                    method: reqwest::Method::POST,
+                    path: path.clone(),
+                    raw_query: String::new(),
+                    has_query: false,
+                    headers: headers.clone(),
+                    body: body.clone().into(),
+                    stream_requested: Some(false),
+                    selected_upstream_model: Some(model.clone()),
+                    selected_target_protocol: Some(protocol.clone()),
+                    cache_identity: identity.clone(),
+                    safety_identifier: None,
+                },
+            )
+            .await
+            .map_err(|error| anyhow!(
+                "cache probe executor failed at step {}: {}",
+                step + 1,
+                crate::channel_executor::channel_execution_error_code(&error).unwrap_or("executor_error")
+            ))?;
+            anyhow::ensure!(
+                result.native_passthrough,
+                "probe requires same-protocol forwarding"
+            );
+            let status = result.response.status();
+            anyhow::ensure!(
+                status.is_success(),
+                "cache probe HTTP {status} at step {}",
+                step + 1
+            );
+            let value: serde_json::Value = result.response.json().await?;
+            let (input, write, read, output) = if protocol == "gemini_native" {
+                let usage = value.get("usageMetadata").context("gateway omitted Gemini usage")?;
+                (
+                    usage["promptTokenCount"].as_u64(),
+                    None,
+                    usage["cachedContentTokenCount"].as_u64(),
+                    usage["candidatesTokenCount"].as_u64(),
+                )
+            } else {
+                anyhow::ensure!(value["type"] == "message", "gateway did not return a Messages response");
+                let usage = value.get("usage").context("gateway omitted usage")?;
+                (
+                    usage["input_tokens"].as_u64(),
+                    usage["cache_creation_input_tokens"].as_u64(),
+                    usage["cache_read_input_tokens"].as_u64(),
+                    usage["output_tokens"].as_u64(),
+                )
+            };
+            // Do not infer a hit from timing or missing counters. Keep raw
+            // numeric usage only; no prompt, account or credential output.
+            println!(
+                "cache_probe step={} route={} model={} input={:?} write={:?} read={:?} output={:?}",
+                step + 1,
+                route,
+                model,
+                input, write, read, output
+            );
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        Ok(())
+    }
 
     fn equivalent_text_tool_requests() -> [(&'static str, &'static str); 4] {
         [

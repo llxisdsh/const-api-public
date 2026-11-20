@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex as StdMutex},
 };
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, oneshot};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct CodexClientIdentity {
@@ -146,8 +146,6 @@ pub(crate) struct ClientConfig {
     #[serde(default = "crate::default_true")]
     pub(crate) proxy_auto_start: bool,
     #[serde(default = "crate::default_true")]
-    pub(crate) automatic_updates: bool,
-    #[serde(default = "crate::default_true")]
     pub(crate) prevent_sleep_while_supplying: bool,
     #[serde(default)]
     pub(crate) supplier_auto_start: bool,
@@ -166,6 +164,12 @@ pub(crate) struct ClientConfig {
     pub(crate) allow_model_equivalence: bool,
     #[serde(default)]
     pub(crate) prefer_local_supply: bool,
+    #[serde(default = "crate::default_true")]
+    pub(crate) protect_outgoing_secrets: bool,
+    #[serde(default = "crate::default_true")]
+    pub(crate) configure_image_skill: bool,
+    #[serde(default = "crate::tool_config::default_media_skill_tools")]
+    pub(crate) media_skill_tools: Vec<String>,
     #[serde(default)]
     pub(crate) tool_model_injection: crate::tool_model_injection::ToolModelInjectionSettings,
     // Legacy serialized field, normalized to true. Platform source priority
@@ -210,8 +214,6 @@ pub(crate) struct ClientConfigV4Read {
     pub(crate) lan_share: LanShareConfig,
     #[serde(default = "crate::default_true")]
     pub(crate) proxy_auto_start: bool,
-    #[serde(default = "crate::default_true")]
-    pub(crate) automatic_updates: bool,
     #[serde(default)]
     pub(crate) supplier_auto_start: bool,
     pub(crate) api_key: String,
@@ -238,7 +240,7 @@ pub(crate) struct ClientConfigV4Read {
     pub(crate) supplier: Option<SupplierConfigV4Read>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SupplierConfig {
     pub(crate) source_driver: crate::source_driver::SourceDriverId,
     pub(crate) credential_ref: String,
@@ -283,7 +285,7 @@ impl SupplierConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct SubscriptionAdapterConfig {
     #[serde(default)]
     pub(crate) claude_fast_enabled: bool,
@@ -588,6 +590,7 @@ pub(crate) struct ChannelConfigV2 {
     pub(crate) created_at_unix_ms: i64,
     pub(crate) source_driver: crate::source_driver::SourceDriverId,
     pub(crate) enabled: bool,
+    #[serde(default = "crate::default_true")]
     pub(crate) share_enabled: bool,
     pub(crate) credential_ref: String,
     pub(crate) executor: ChannelExecutorLocator,
@@ -1428,6 +1431,16 @@ pub(crate) struct ChannelCapabilityProfile {
     pub(crate) probe_cost_nanos: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) catalog_text_output: Option<bool>,
+    /// Exact model's declared Images endpoints, independent of chat modalities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) catalog_image_operations: Option<crate::image_models::ImageOperations>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) opencode_image_api: Option<crate::coding_gateway::ConsoleImageApi>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::media_models::MediaOperations::empty"
+    )]
+    pub(crate) catalog_media_operations: crate::media_models::MediaOperations,
     /// Original catalog identity, retained before public short-name normalization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) catalog_source_model: Option<String>,
@@ -1736,7 +1749,7 @@ pub(crate) struct SupplierAgentHandle {
     pub(crate) suppliers: Vec<SupplierConfig>,
     pub(crate) agent_shutdown: oneshot::Sender<()>,
     pub(crate) monitor_shutdown: Option<oneshot::Sender<()>>,
-    pub(crate) register_update: mpsc::Sender<SupplierRegistrationUpdate>,
+    pub(crate) register_update: crate::supplier::RegistrationSender,
 }
 
 #[derive(Debug, Clone)]

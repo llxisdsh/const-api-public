@@ -1,12 +1,13 @@
 use crate::config::*;
 use crate::model::*;
-use crate::upstream_transport::AdaptiveRequestBuilderExt;
+use crate::upstream_transport::UpstreamRequestBuilderExt;
 use crate::*;
 use anyhow::{Context, Result, anyhow};
 use base64::{
     Engine as _,
     engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
 };
+use futures_util::FutureExt;
 use rand::TryRng;
 use reqwest::{
     Client, Url,
@@ -422,7 +423,10 @@ pub(crate) async fn detect_channel(channel: ChannelConfig) -> Result<ChannelDete
             .push("live interaction skipped because quota reserve is active".into());
         return Ok(metadata);
     }
-    let report = Box::pin(crate::supplier::availability::check(&inspected)).await;
+    // Keep the Send proof for parallel HTTP probes here, outside the supplier monitor's future.
+    let report = crate::supplier::availability::check(&inspected)
+        .boxed()
+        .await;
     let mut result = if crate::supplier::availability::is_automatic_recheck() {
         // An already verified route needs only the due basic representative, not
         // repeated protocol/tool probes or unrelated successful model groups.
@@ -2134,6 +2138,9 @@ fn model_observations_from_tool_catalog(
             output_tokens: None,
             supported_parameters: None,
             supported_endpoints: None,
+            image_operations: None,
+            opencode_image_api: None,
+            media_operations: Default::default(),
             kiro_request_schema: None,
             probe_cost_nanos: None,
             id: model.id,
@@ -2169,6 +2176,18 @@ fn model_observations_from_saved_channel(
                     && !matches!(profile.release_status.as_str(), "suspended" | "prepared")
                 {
                     observation.kiro_request_schema = profile.kiro_request_schema.clone();
+                    observation.opencode_image_api = observation
+                        .opencode_image_api
+                        .or(profile.opencode_image_api);
+                    observation
+                        .media_operations
+                        .union(profile.catalog_media_operations);
+                    if let Some(ops) = profile.catalog_image_operations {
+                        observation
+                            .image_operations
+                            .get_or_insert_default()
+                            .union(ops);
+                    }
                     observation.context_tokens = crate::model_catalog::conservative_limit(
                         observation.context_tokens,
                         profile.context_tokens,
@@ -2310,6 +2329,8 @@ fn model_modality_capability_profiles(
                 || model.output_tokens.is_some()
                 || model.supported_parameters.is_some()
                 || model.supported_endpoints.is_some()
+                || model.image_operations.is_some()
+                || !model.media_operations.empty()
         })
         .map(|model| {
             let has_input = |candidate: &str| {
@@ -2333,6 +2354,15 @@ fn model_modality_capability_profiles(
                 catalog_text_output: (!model.output_modalities.is_empty())
                     .then(|| model.output_modalities.iter().any(|m| m == "text")),
                 catalog_source_model: Some(model.id.clone()),
+                catalog_media_operations: model.media_operations,
+                opencode_image_api: model.opencode_image_api,
+                catalog_image_operations: model.image_operations.or_else(|| {
+                    model.supported_endpoints.as_ref().map(|endpoints| {
+                        crate::image_models::ImageOperations::from_names(
+                            endpoints.iter().map(String::as_str),
+                        )
+                    })
+                }),
                 kiro_request_schema: model.kiro_request_schema.clone(),
                 output_tokens: model.output_tokens,
                 catalog_metadata: true,
@@ -2362,9 +2392,12 @@ fn model_modality_capability_profiles(
             profile.audio_input = has_input("audio");
             profile.video_input = has_input("video");
             profile.file_input = has_input("file") || has_input("pdf");
-            profile.image_output = has_output("image");
-            profile.audio_output = has_output("audio");
-            profile.video_output = has_output("video");
+            profile.image_output = has_output("image")
+                || profile
+                    .catalog_image_operations
+                    .is_some_and(|ops| ops.generate || ops.edit);
+            profile.audio_output = has_output("audio") || profile.catalog_media_operations.speech;
+            profile.video_output = has_output("video") || profile.catalog_media_operations.video;
             profile.file_output = has_output("file");
             profile.release_status = if experimental_media
                 && (profile.audio_input
@@ -3156,6 +3189,78 @@ mod stream_probe_tests {
     }
 
     #[test]
+    fn console_directory_keeps_native_images_separate_from_vision_and_audio() {
+        use crate::coding_gateway::ConsoleImageApi;
+        use crate::image_models::ImageOperations;
+        use crate::model_catalog::ModelCatalogKind;
+        let image = |id: &str, base: &str| {
+            serde_json::json!({
+                "id":id, "type":"image", "api":{"images":{"base_url":base}},
+                "modalities":{"input":["text","image/png","image/jpeg"],"output":["image/png"]}
+            })
+        };
+        let rows = serde_json::json!({"data":[
+            image("a","https://opencode.ai/inference/openai/v1"),
+            image("b","https://opencode.ai/inference/xai/v1"),
+            image("c","https://opencode.ai/inference/google/v1beta"),
+            image("d","https://different.example/inference/openai/v1"),
+            {"id":"image-reader","modalities":{"input":["image/png"],"output":["text"]}},
+            {"id":"live","modalities":{"input":["audio/wav"],"output":["audio/wav","text"]}},
+            {"id":"sparse","architecture":{"input_modalities":["text"],"output_modalities":["text"]}}
+        ]});
+        let models = crate::model_catalog::model_observations_from_value(
+            ModelCatalogKind::OpenCodeConsole,
+            &rows,
+            "fixture",
+        );
+        let full = ImageOperations {
+            generate: true,
+            edit: true,
+        };
+        for (index, api) in [
+            ConsoleImageApi::Openai,
+            ConsoleImageApi::Xai,
+            ConsoleImageApi::Gemini,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(models[index].opencode_image_api, Some(api));
+            assert_eq!(models[index].input_modalities, ["text", "image"]);
+            assert_eq!(
+                models[index].image_operations,
+                Some(if api == ConsoleImageApi::Gemini {
+                    Default::default()
+                } else {
+                    full
+                })
+            );
+        }
+        assert_eq!(models[3].image_operations, Some(Default::default()));
+        assert!(models[3].opencode_image_api.is_none());
+        assert!(models[4].image_operations.is_none() && models[5].media_operations.empty());
+        assert_eq!(models[6].output_modalities, ["text"]);
+        let mut channel =
+            crate::channel_from_supplier("fixture".into(), &crate::default_supplier_config());
+        channel.set_source_driver(crate::source_driver::SourceDriverId::OpencodeConsole);
+        channel.surface_bindings =
+            crate::source_driver_surface_bindings(channel.source_driver(), "");
+        channel.capability_profiles = model_modality_capability_profiles(
+            &basic_protocol_capability("gemini_native", "declared"),
+            &models,
+            false,
+        );
+        assert_eq!(
+            crate::coding_gateway::channel_model_protocol(&channel, "c"),
+            Some(crate::protocol::kind::ProtocolKind::GeminiNative)
+        );
+        assert_eq!(
+            crate::media_models::native_generation(&channel, &channel.capability_profiles[2]),
+            Some(crate::media_models::GEMINI_IMAGE)
+        );
+    }
+
+    #[test]
     fn model_catalog_modalities_become_exact_experimental_media_profiles() {
         let base = basic_protocol_capability("openai_responses", "declared");
         let profiles = model_modality_capability_profiles(
@@ -3167,6 +3272,9 @@ mod stream_probe_tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                image_operations: None,
+                opencode_image_api: None,
+                media_operations: Default::default(),
                 kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "gpt-audio-preview".to_string(),
@@ -3209,6 +3317,9 @@ mod stream_probe_tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                image_operations: None,
+                opencode_image_api: None,
+                media_operations: Default::default(),
                 kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "gpt-5.6-sol".to_string(),
@@ -3272,6 +3383,9 @@ mod stream_probe_tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                image_operations: None,
+                opencode_image_api: None,
+                media_operations: Default::default(),
                 kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "gpt-5.6-sol".to_string(),
@@ -3289,6 +3403,9 @@ mod stream_probe_tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                image_operations: None,
+                opencode_image_api: None,
+                media_operations: Default::default(),
                 kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "future-codex-model".to_string(),
@@ -3732,7 +3849,7 @@ async fn fetch_opencode_console_catalog(
         client,
         Url::parse(OPENCODE_CONSOLE_CATALOG_URL)?,
         headers.clone(),
-        ModelCatalogKind::OpenAI,
+        ModelCatalogKind::OpenCodeConsole,
     )
     .await?;
     // The Console config is the same authenticated, workspace-scoped source
@@ -3743,7 +3860,7 @@ async fn fetch_opencode_console_catalog(
         .get(OPENCODE_CONSOLE_CONFIG_URL)
         .headers(headers)
         .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
-        .send_adaptive()
+        .send_upstream()
         .await
     {
         crate::http_client::observe_response(&response);
@@ -4698,7 +4815,7 @@ pub(crate) async fn fetch_claude_subscription_quota_windows(
         .header("Authorization", format!("Bearer {}", token.trim()))
         .header("anthropic-beta", "oauth-2025-04-20")
         .header("User-Agent", CLAUDE_CODE_CONTROL_USER_AGENT)
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let value = quota_response_json(response, "Claude OAuth usage").await?;
     Ok(claude_quota_windows_from_usage(&value))
@@ -5069,7 +5186,7 @@ async fn fetch_grok_billing_payload(
         .header("X-XAI-Token-Auth", "xai-grok-cli")
         .header("x-grok-client-version", GROK_CLI_VERSION)
         .header("User-Agent", GROK_BILLING_USER_AGENT)
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let value = quota_response_json(response, "Grok billing").await?;
     Ok(value)
@@ -5158,7 +5275,7 @@ pub(crate) async fn fetch_openai_subscription_quota_windows(
     {
         req = req.header("Chatgpt-Account-Id", account_id);
     }
-    let resp = req.send_adaptive().await?;
+    let resp = req.send_upstream().await?;
     let value = quota_response_json(resp, "Codex usage").await?;
     Ok(openai_quota_windows_from_usage(&value))
 }
@@ -5353,7 +5470,7 @@ pub(crate) async fn ensure_openai_subscription_access_token_with_options(
                 .json(&refresh_request),
             &identity,
         )
-        .send_adaptive()
+        .send_upstream()
         .await?;
         let status = resp.status();
         let refreshed = resp.json::<serde_json::Value>().await;
@@ -5477,7 +5594,7 @@ pub(crate) async fn ensure_opencode_subscription_access_token(
                         .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
                         .header(USER_AGENT, crate::opencode_client::USER_AGENT_VALUE)
                         .json(&refresh_request)
-                        .send_adaptive()
+                        .send_upstream()
                         .await?;
                     let status = response.status();
                     let body = response
@@ -6025,7 +6142,7 @@ async fn send_antigravity_json_once(
     if control_plane {
         request = request.header("X-Goog-Api-Client", ANTIGRAVITY_GOOG_API_CLIENT);
     }
-    let response = request.send_adaptive().await?;
+    let response = request.send_upstream().await?;
     let status = response.status();
     if url.ends_with(":retrieveUserQuota") && (status.as_u16() == 429 || status.as_u16() == 503) {
         // Keep this RPC's Retry-After without changing OAuth refresh or the
@@ -6357,7 +6474,7 @@ pub(crate) async fn ensure_antigravity_subscription_access_token_with_options(
             .post(token_url)
             .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
             .form(&form)
-            .send_adaptive()
+            .send_upstream()
             .await?;
         let status = response.status();
         let mut refreshed = response.json::<serde_json::Value>().await?;
@@ -6482,7 +6599,7 @@ pub(crate) async fn ensure_claude_subscription_access_token_with_options(
                         .header("Content-Type", "application/json")
                         .header("User-Agent", CLAUDE_OAUTH_AXIOS_USER_AGENT)
                         .json(&body)
-                        .send_adaptive()
+                        .send_upstream()
                         .await?;
                     let status = resp.status();
                     let mut refreshed = resp.json::<serde_json::Value>().await?;
@@ -6583,7 +6700,7 @@ pub(crate) async fn ensure_grok_subscription_access_token_with_options(
                 .timeout(SUBSCRIPTION_OAUTH_HTTP_TIMEOUT)
                 .header("User-Agent", "const-api-grok-oauth/1.0")
                 .form(&form)
-                .send_adaptive()
+                .send_upstream()
                 .await?;
             let status = response.status();
             let mut refreshed = response.json::<serde_json::Value>().await?;

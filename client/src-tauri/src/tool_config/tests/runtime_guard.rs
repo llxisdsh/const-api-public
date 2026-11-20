@@ -723,11 +723,13 @@
         );
     }
 
-    fn wait_for_fixture_marker(path: &Path) -> String {
+    fn wait_for_fixture_pid(path: &Path) -> u32 {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            if let Ok(value) = fs::read_to_string(path) {
-                return value;
+            if let Ok(value) = fs::read_to_string(path)
+                && let Ok(pid) = value.trim().parse()
+            {
+                return pid;
             }
             assert!(
                 Instant::now() < deadline,
@@ -738,15 +740,21 @@
     }
 
     #[cfg(target_os = "windows")]
-    fn test_process_pid_running(pid: u32) -> bool {
-        use windows_sys::Win32::System::Threading::PROCESS_SYNCHRONIZE;
-
-        let Some(process) = windows_open_process(pid, PROCESS_SYNCHRONIZE)
-            .expect("open test process for liveness check")
-        else {
+    fn fixture_alive_at_deadline(process: Option<&WindowsOwnedHandle>, deadline: Instant) -> bool {
+        use windows_sys::Win32::{
+            Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
+            System::Threading::WaitForSingleObject,
+        };
+        let Some(process) = process else {
             return false;
         };
-        !windows_process_handle_exited(process.raw()).expect("read test process liveness")
+        let remaining_ms = deadline.saturating_duration_since(Instant::now()).as_millis() as u32;
+        // SAFETY: the fixture's synchronize handle stays open through the wait and cleanup.
+        match unsafe { WaitForSingleObject(process.raw(), remaining_ms) } {
+            WAIT_OBJECT_0 => false,
+            WAIT_TIMEOUT => true,
+            result => panic!("failed to wait for fixture process: {result}"),
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -803,12 +811,20 @@
             let _ = result_tx.send(result);
         });
 
-        let grandchild_pid = wait_for_fixture_marker(&grandchild_marker)
-            .trim()
-            .parse::<u32>()
-            .expect("grandchild PID");
-        let first_result = result_rx.recv_timeout(Duration::from_secs(5));
+        let grandchild_pid = wait_for_fixture_pid(&grandchild_marker);
+        #[cfg(target_os = "windows")]
+        let grandchild = windows_open_process(
+            grandchild_pid,
+            windows_sys::Win32::System::Threading::PROCESS_SYNCHRONIZE,
+        )
+        .expect("open the fixture process while it is alive");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let first_result =
+            result_rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
         let completed_before_cleanup = first_result.is_ok();
+        #[cfg(target_os = "windows")]
+        let survived_timeout = fixture_alive_at_deadline(grandchild.as_ref(), deadline);
+        #[cfg(not(target_os = "windows"))]
         let survived_timeout = test_process_pid_running(grandchild_pid);
         if survived_timeout {
             force_cleanup_test_process_tree(grandchild_pid);
@@ -828,10 +844,11 @@
             !survived_timeout,
             "helper timeout left grandchild PID {grandchild_pid} running"
         );
-        let error = result.expect_err("stubborn helper tree must time out");
+        let error = result.expect_err("stubborn helper tree must time out").to_string();
         assert!(
-            error.to_string().contains("TOOL_CONFIG_HELPER_TIMEOUT"),
-            "{error:#}"
+            error.contains("TOOL_CONFIG_HELPER_TIMEOUT")
+                && error.contains("tree_kill_error=None; stdout_error=None; stderr_error=None"),
+            "{error}"
         );
     }
 

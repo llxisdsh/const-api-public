@@ -82,6 +82,7 @@ export function toolHasManagedConfig(status: ToolConfigStatusLike | null | undef
 }
 
 export function toolConfigCapabilityWarning(status: ToolConfigStatusLike | null | undefined): string | undefined {
+  if (status?.details?.image_skill === "user_managed") return tr("toolOperations.imageSkillUserManaged");
   const models = status?.details?.trae_image_input_limited?.trim();
   return models ? tr("toolOperations.traeImageInputLimited", { models }) : undefined;
 }

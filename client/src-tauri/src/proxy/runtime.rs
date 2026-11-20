@@ -83,6 +83,12 @@ enum LocalDeclaredFailureScope {
 #[derive(Clone, Copy, Debug)]
 struct LocalRetryForbidden;
 
+#[derive(Clone, Copy, Debug)]
+struct LocalRetryBudgetExempt { channel_admission: bool }
+
+#[derive(Clone, Debug)]
+struct LocalObservedFailure(crate::upstream_failure::Failure);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalAdmissionFailure {
     ConcurrencyFull { before_dispatch: bool },
@@ -305,16 +311,7 @@ impl ProxyShared {
     }
 
     fn ready_local_channel_ids(&self) -> HashSet<String> {
-        self.local_channel_readiness
-            .lock()
-            .map(|readiness| {
-                readiness
-                    .iter()
-                    .filter(|(_, ready)| **ready)
-                    .map(|(channel_id, _)| channel_id.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
+        ready_local_channel_ids(&self.local_channel_readiness)
     }
 
     fn remember_model_catalog_snapshot(
@@ -895,6 +892,13 @@ pub(crate) async fn proxy_request(
         return Ok(response);
     };
 
+    let mut headers = headers;
+    let body = if request_config.protect_outgoing_secrets {
+        match crate::outgoing_secrets::protect_http(method.as_str(), path_str, &mut headers, body, identity.api_key()) {
+            Ok(body) => body,
+            Err(reason) => return Ok(error_response(StatusCode::BAD_REQUEST, reason)),
+        }
+    } else { body };
     let raw_query = strip_local_auth_query_for_key(
         path_str,
         &raw_query,
@@ -955,6 +959,9 @@ pub(crate) async fn proxy_request(
     } else {
         response
     };
+    // The tool sees the stream after routing, raw-byte resume and usage observation.
+    let response =
+        grok_responses::for_tool(&method_for_log, path_str, &request_headers_for_log, response);
     Ok(hold_proxy_update_activity_until_body_end(
         response,
         update_activity_guard,
@@ -1209,7 +1216,9 @@ async fn forward_with_failover_with_query_presence(
     };
     let platform_authenticated = !platform_api_key.trim().is_empty();
     let local_request_allowed = !path.starts_with("/api/") && !skip_local_short_circuit;
-    if local_request_allowed && crate::surface::resolve_api_route(method.as_str(), path, false)
+    let api_route = crate::surface::resolve_api_route(method.as_str(), path, false);
+    let video_create = api_route.as_ref().is_some_and(|route| route.operation == crate::surface::ApiOperation::VideosCreate);
+    if local_request_allowed && api_route.as_ref()
         .is_some_and(|route| matches!(route.operation, crate::surface::ApiOperation::ChatCompletions
             | crate::surface::ApiOperation::Responses | crate::surface::ApiOperation::Messages
             | crate::surface::ApiOperation::GenerateContent | crate::surface::ApiOperation::StreamGenerateContent)) {
@@ -1222,16 +1231,14 @@ async fn forward_with_failover_with_query_presence(
             }
         }
     }
-    let requires_local_backend = crate::surface::resolve_api_route(method.as_str(), path, false)
-        .is_some_and(|route| crate::surface::api_operation_requires_local_backend(route.operation));
+    let requires_local_backend = api_route.as_ref().is_some_and(|route| crate::surface::api_operation_requires_local_backend(route.operation));
     let local_first = local_request_allowed
         && (requires_local_backend
             || explicit_local_short_circuit
             || config.prefer_local_supply
             || !platform_authenticated);
     let local_after_platform = local_request_allowed && platform_authenticated && !local_first;
-    let model_control_route = crate::surface::resolve_api_route(method.as_str(), path, false)
-        .filter(|route| {
+    let model_control_route = api_route.filter(|route| {
             matches!(
                 route.operation,
                 crate::surface::ApiOperation::ListModels | crate::surface::ApiOperation::GetModel
@@ -1309,7 +1316,12 @@ async fn forward_with_failover_with_query_presence(
         .await
         {
             match result {
-                Ok(resp) if !local_response_marks_channel_unready(resp.status()) => {
+                Ok(resp) if resp.extensions().get::<LocalRetryForbidden>().is_some()
+                    || (video_create && resp.extensions().get::<LocalRetryBudgetExempt>().is_none()
+                        && !matches!(resp.extensions().get::<LocalAdmissionFailure>(), Some(LocalAdmissionFailure::ConcurrencyFull { before_dispatch: true }))
+                        && resp.extensions().get::<LocalResourceOwnerUnknown>().is_none())
+                    || (!local_response_marks_channel_unready(resp.status())
+                        && resp.extensions().get::<LocalResourceOwnerUnknown>().is_none()) => {
                     return Ok(resp);
                 }
                 Ok(resp) => {
@@ -1319,7 +1331,8 @@ async fn forward_with_failover_with_query_presence(
                     local_server_response = Some(resp);
                 }
                 Err(err) => {
-                    if requires_local_backend || !platform_authenticated {
+                    if requires_local_backend || !platform_authenticated || (video_create && !matches!(
+                        local_execution_error_retry_scope(&err, false, path), LocalRouteRetryScope::Preflight | LocalRouteRetryScope::AdmissionCapacity)) {
                         return Err(err);
                     }
                     local_err = Some(err);
@@ -1434,6 +1447,11 @@ async fn forward_with_failover_with_query_presence(
             }
         }
         match response {
+            // A generic 5xx can follow a successful paid submission. Only replay a
+            // create on another route when the platform confirms no execution.
+            Ok(resp) if video_create && !resp.status().is_success() && !video_platform_rejected_before_execution(&resp) => {
+                return Ok(resp);
+            }
             Ok(resp) if is_model_control && !resp.status().is_success() => {
                 last_server_response = Some(resp);
             }
@@ -1474,7 +1492,7 @@ async fn forward_with_failover_with_query_presence(
                 }
                 return Ok(resp);
             }
-            Err(err) if is_ambiguous_http3_request_error(&err) => {
+            Err(err) if is_ambiguous_http3_request_error(&err) || (video_create && !http3_error_is_safe_to_fallback(&method, &err)) => {
                 return Err(err);
             }
             Err(err) => {
@@ -1566,6 +1584,23 @@ struct LocalChannelExecution {
     route_key: String,
     retry_scope: LocalRouteRetryScope,
     result: Result<warp::reply::Response>,
+}
+
+impl LocalChannelExecution {
+    fn excludes_channel(&self) -> bool {
+        self.retry_scope.is_capacity() || self.result.as_ref().is_ok_and(|response|
+            response.extensions().get::<LocalRetryBudgetExempt>().is_some_and(|exempt| exempt.channel_admission))
+    }
+    fn consumes_attempt(&self) -> bool {
+        if matches!(self.retry_scope, LocalRouteRetryScope::Preflight | LocalRouteRetryScope::AdmissionCapacity) {
+            return false;
+        }
+        match &self.result {
+            Ok(response) => response.extensions().get::<LocalRetryBudgetExempt>().is_none(),
+            Err(error) => !crate::supplier::execution_failure_before_dispatch(
+                &crate::supplier::execution_evidence_for_error(error)),
+        }
+    }
 }
 
 enum ModelRouteTerminalFailure {
@@ -1796,6 +1831,15 @@ fn attach_local_model_failure_evidence(
     response: &mut warp::reply::Response,
     payload: &serde_json::Map<String, serde_json::Value>,
 ) {
+    if crate::supplier::failure_payload_skips_attempt_budget(payload) {
+        let channel_admission = payload.get(crate::supplier::EXECUTION_EVIDENCE_FIELD)
+            .and_then(|evidence| evidence.get("stage")).and_then(serde_json::Value::as_str) == Some("local_admission");
+        response.extensions_mut().insert(LocalRetryBudgetExempt { channel_admission });
+    }
+    if let Some(failure) = payload.get("failure_observation_v1").and_then(|raw|
+        serde_json::from_value::<crate::upstream_failure::Failure>(raw.clone()).ok()) {
+        response.extensions_mut().insert(LocalObservedFailure(failure));
+    }
     if payload.get("safe_to_retry_other_channel").and_then(serde_json::Value::as_bool)
         == Some(false)
     {
@@ -1898,8 +1942,18 @@ async fn forward_model_request_by_fidelity(
         .is_some_and(|route| local_operation_proves_model_health(route.operation));
 
     for match_mode in [ModelMatchMode::ExactOnly, ModelMatchMode::CompatibleOnly] {
-        if match_mode == ModelMatchMode::CompatibleOnly && !config.allow_model_equivalence {
-            break;
+        if match_mode == ModelMatchMode::CompatibleOnly {
+            if !config.allow_model_equivalence {
+                break;
+            }
+            // An unknown local owner may be looked up on the platform, but an
+            // opaque resource cannot be replayed against a substitute model.
+            // Inspect only after exact routing failed, off the successful path.
+            if crate::surface::resolve_api_route(method.as_str(), path, false).is_some_and(|route| {
+                local_resource_references(&route, path, &body).iter().any(|reference| reference.required)
+            }) {
+                break;
+            }
         }
 		for scope in scopes {
 			if matches!(scope, ModelSupplyScope::Platform) && platform_routes_blocked {
@@ -2086,20 +2140,19 @@ async fn attempt_local_model_route(
         };
         if execution.route_key.is_empty() {
             return match execution.result {
+                Ok(response) if response.extensions().get::<LocalResourceOwnerUnknown>().is_some() =>
+                    ModelRouteAttempt::RetryResponse(response),
                 Ok(response) => ModelRouteAttempt::CompleteResponse(response),
                 Err(error) => ModelRouteAttempt::CompleteError(error),
             };
         }
-        // A proven pre-dispatch failure did not spend an upstream attempt.
-        // Still exclude that route below so each configured route is tried once.
-        if !matches!(
-            execution.retry_scope,
-            LocalRouteRetryScope::Preflight | LocalRouteRetryScope::AdmissionCapacity
-        ) {
+        // Local admission misses and explicit provider rejections do not spend
+        // the execution budget. Exclusions still bound every configured route.
+        if execution.consumes_attempt() {
             budget.consume(1);
         }
         attempted_route_keys.insert(execution.route_key.clone());
-        if execution.retry_scope.is_capacity() {
+        if execution.excludes_channel() {
             if let Some(channel_id) = execution.channel_id.as_ref() {
                 capacity_excluded_channel_ids.insert(channel_id.clone());
             }
@@ -2346,6 +2399,14 @@ fn platform_response_requires_local_only_fallback(response: &warp::reply::Respon
         )
 }
 
+fn video_platform_rejected_before_execution(response: &warp::reply::Response) -> bool {
+    let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok());
+    header(PLATFORM_ERROR_CODE_HEADER) == Some("insufficient_balance")
+        || (header(PLATFORM_UPSTREAM_ATTEMPTS_USED_HEADER) == Some("0")
+            && (response.status() == StatusCode::PAYMENT_REQUIRED
+                || header(PLATFORM_MODEL_FALLBACK_SAFE_HEADER) == Some("1")))
+}
+
 fn platform_response_allows_model_stage_fallback(response: &warp::reply::Response) -> bool {
     let truthy = |name: &'static str| {
         response
@@ -2440,6 +2501,17 @@ async fn forward_ready_local_channel_with_match(
     excluded_channel_ids: &HashSet<String>,
     promotion: Option<LocalRoutePromotion>,
 ) -> Option<LocalChannelExecution> {
+    let routing_body = if let Some(route) = crate::surface::resolve_api_route(method.as_str(), path, false) {
+        match crate::media_request::media_routing_body(route.operation, headers, body).await {
+            Ok(body) => body,
+            Err(error) => return Some(LocalChannelExecution {
+                channel_id: None,
+                route_key: String::new(),
+                retry_scope: LocalRouteRetryScope::None,
+                result: Ok(error_response(StatusCode::BAD_REQUEST, &error.to_string())),
+            }),
+        }
+    } else { body.clone() };
     let mut claim_excluded = excluded_route_keys.clone();
     let (selection, route_key, resource_owned) = loop {
         let route = crate::surface::resolve_api_route(method.as_str(), path, false);
@@ -2452,7 +2524,7 @@ async fn forward_ready_local_channel_with_match(
                     config,
                     route,
                     path,
-                    body,
+                    &routing_body,
                     ready_local_channel_ids,
                 )
             });
@@ -2463,11 +2535,7 @@ async fn forward_ready_local_channel_with_match(
                     channel_id: None,
                     route_key: String::new(),
                     retry_scope: LocalRouteRetryScope::None,
-                    result: local_surface_error_response(
-                        error.surface,
-                        error.status,
-                        error.message,
-                    ),
+                    result: error.into_response(),
                 });
             }
             _ if let Ok(model_quota_routes) = shared.local_model_quota_routes.lock() => (
@@ -2475,7 +2543,7 @@ async fn forward_ready_local_channel_with_match(
                     config,
                     method,
                     path,
-                    body,
+                    &routing_body,
                     ready_local_channel_ids,
                     &model_quota_routes,
                     now_unix(),
@@ -2491,7 +2559,7 @@ async fn forward_ready_local_channel_with_match(
                     config,
                     method,
                     path,
-                    body,
+                    &routing_body,
                     ready_local_channel_ids,
                     &HashMap::new(),
                     now_unix(),
@@ -2509,13 +2577,27 @@ async fn forward_ready_local_channel_with_match(
             && let Some(context) = &promotion
         {
             selection = reselect_preferred_local_channel(
-                shared, config, selection, &context.affinity_key, method, path, body,
+                shared, config, selection, &context.affinity_key, method, path, &routing_body,
                 ready_local_channel_ids, match_mode, &claim_excluded, excluded_channel_ids,
             );
         }
         let route_key = local_model_route_key(selection.channel, &selection.route_model);
         if shared.claim_local_model_route(&route_key, now_unix()) {
             break (selection, route_key, resource_owned);
+        }
+        if resource_owned {
+            // Ownership ignores candidate exclusions by design. Re-entering
+            // this loop would therefore spin on the same unavailable route.
+            return Some(LocalChannelExecution {
+                channel_id: None,
+                route_key: String::new(),
+                retry_scope: LocalRouteRetryScope::None,
+                result: LocalResourceRouteError {
+                    surface: route.expect("resource ownership requires a resolved route").surface,
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                    message: "the resource owner model is cooling down or a recovery probe is in progress",
+                }.into_response(),
+            });
         }
         claim_excluded.insert(route_key);
     };
@@ -2531,7 +2613,7 @@ async fn forward_ready_local_channel_with_match(
         .as_ref()
         .is_some_and(|route| local_operation_proves_model_health(route.operation));
     let mut model_observation = model_operation
-        .then(|| LocalModelOutcomeGuard::new(shared.clone(), &channel_id, &route_upstream_model));
+        .then(|| LocalModelOutcomeGuard::new(shared.clone(), &channel_id, &route_upstream_model).with_channel(channel));
     if !resource_owned && let Some(observation) = model_observation.as_mut() {
         observation.promotion = promotion;
     }
@@ -2579,6 +2661,9 @@ async fn forward_ready_local_channel_with_match(
                 None => response,
             };
             let status = local_response_upstream_status(&response);
+            if model_operation && let Some(failure) = response.extensions().get::<LocalObservedFailure>() {
+                crate::supplier::local_failure::record(channel, &failure.0);
+            }
             let evidence = response
                 .extensions()
                 .get::<LocalModelRouteFailureEvidence>()
@@ -2678,6 +2763,9 @@ async fn forward_ready_local_channel_with_match(
             }
         }
         Err(err) => {
+            if model_operation {
+                crate::supplier::local_failure::record_execution_error(channel, &route_upstream_model, &err);
+            }
             if model_observation.is_none() {
                 shared.release_local_model_route_probe(&route_key);
             }
@@ -3149,6 +3237,12 @@ pub(crate) fn visible_channel_models(channel: &ChannelConfig) -> Vec<String> {
     ))
 }
 
+pub(crate) fn ready_local_channel_ids(readiness: &StdMutex<HashMap<String, bool>>) -> HashSet<String> {
+    readiness.lock().map(|rows| {
+        rows.iter().filter(|(_, ready)| **ready).map(|(id, _)| id.clone()).collect()
+    }).unwrap_or_default()
+}
+
 pub(crate) fn local_model_entries(
     cfg: &ClientConfig,
     ready_channel_ids: &HashSet<String>,
@@ -3157,20 +3251,29 @@ pub(crate) fn local_model_entries(
     let mut models: Vec<LocalModelEntry> = Vec::new();
     for channel in local_channels(cfg).filter(|channel| ready_channel_ids.contains(&channel.id)) {
         let mut channel_names = HashSet::new();
+        let images = crate::image_models::ChannelImages::new(channel);
+        let media = crate::media_models::ChannelMedia::new(channel);
         for model in visible_channel_models(channel) {
             let id = model.trim();
             let key = public_model_name(id);
             if key.is_empty() || !channel_names.insert(key.clone()) {
                 continue;
             }
-            let capability = LocalModelCapability::from_channel(channel, id);
+            // A context alias or a legacy public/upstream pair can resolve to a
+            // different wire ID. Ordinary catalog entries already name the wire.
+            let resolved = (channel.models.is_empty() || crate::config::without_context_hint(id) != id)
+                .then(|| channel_upstream_model_for_request(channel, Some(&key)));
+            let wire = resolved.as_deref().unwrap_or(id);
+            let mut capability = LocalModelCapability::from_channel(channel, wire);
+            capability.image_operations = images.model(wire).unwrap_or_default();
+            capability.media_operations = media.model(wire);
             if let Some(index) = positions.get(&key).copied() {
                 models[index].capability.merge(&capability);
             } else {
                 positions.insert(key, models.len());
                 models.push(LocalModelEntry {
                     id: id.to_string(),
-                    capability: capability.clone(),
+                    capability,
                 });
             }
         }
@@ -3178,12 +3281,18 @@ pub(crate) fn local_model_entries(
     models
         .into_iter()
         .map(|model| {
-            serde_json::json!({
+            let mut entry = serde_json::json!({
                 "id": model.id,
                 "object": "model",
                 "owned_by": "local",
                 "const_api": model.capability.into_metadata()
-            })
+            });
+            let output = crate::tool_model_metadata::catalog_output_modalities(&model.id);
+            if !output.is_empty() {
+                entry["const_api"]["catalog_output_modalities"] = output.into();
+            }
+            crate::model_discovery::mark_directory_source(&mut entry, "local");
+            entry
         })
         .collect()
 }
@@ -3204,6 +3313,9 @@ struct LocalModelCapability {
     thinking: bool,
     vision: bool,
     image_output: bool,
+    image_operations: crate::image_models::ImageOperations,
+    media_operations: crate::media_models::MediaOperations,
+    native_media: Vec<String>,
     audio_input: bool,
     audio_output: bool,
     video_input: bool,
@@ -3258,6 +3370,13 @@ impl LocalModelCapability {
                 continue;
             }
             push_unique_string(&mut capability.protocols, &profile.protocol);
+            if profile.model_pattern.eq_ignore_ascii_case(model)
+                && let Some(operation) = crate::media_models::native_generation(channel, profile) {
+                push_unique_string(&mut capability.native_media, operation);
+                if operation == crate::media_models::GEMINI_IMAGE && profile.image_input {
+                    push_unique_string(&mut capability.native_media, crate::media_models::GEMINI_IMAGE_EDIT);
+                }
+            }
             capability.reasoning |= profile.reasoning;
             capability.thinking |= profile.thinking;
             capability.vision |= profile.vision || profile.image_input;
@@ -3301,6 +3420,11 @@ impl LocalModelCapability {
         self.thinking |= other.thinking;
         self.vision |= other.vision;
         self.image_output |= other.image_output;
+        self.image_operations.union(other.image_operations);
+        self.media_operations.union(other.media_operations);
+        for op in &other.native_media {
+            push_unique_string(&mut self.native_media, op);
+        }
         self.audio_input |= other.audio_input;
         self.audio_output |= other.audio_output;
         self.video_input |= other.video_input;
@@ -3325,7 +3449,7 @@ impl LocalModelCapability {
         .into_iter()
         .find(|candidate| self.protocols.iter().any(|value| value == candidate))
         .unwrap_or_default();
-        serde_json::json!({
+        let mut metadata = serde_json::json!({
             "source": "local_supplier",
             "context_tokens": self.context_tokens,
             "max_context_tokens": self.max_context_tokens,
@@ -3338,11 +3462,11 @@ impl LocalModelCapability {
             "thinking": self.thinking,
             "vision": self.vision,
             "image_input": self.vision,
-            "image_output": self.image_output,
+            "image_output": self.image_output || self.image_operations.generate || self.image_operations.edit,
             "audio_input": self.audio_input,
-            "audio_output": self.audio_output,
+            "audio_output": self.audio_output || self.media_operations.speech,
             "video_input": self.video_input,
-            "video_output": self.video_output,
+            "video_output": self.video_output || self.media_operations.video,
             "file_input": self.file_input,
             "file_output": self.file_output,
             "tool_calls": self.tool_calls,
@@ -3350,7 +3474,17 @@ impl LocalModelCapability {
             "parallel_tool_calls": self.parallel_tool_calls,
             "json_schema": self.json_schema,
             "cache_control": self.cache_control
-        })
+        });
+        if self.image_operations.generate || self.image_operations.edit {
+            metadata["image_operations"] = self.image_operations.names().collect::<Vec<_>>().into();
+        }
+        if !self.media_operations.empty() {
+            metadata["media_operations"] = self.media_operations.names().collect::<Vec<_>>().into();
+        }
+        if !self.native_media.is_empty() {
+            metadata["native_media_operations"] = self.native_media.into();
+        }
+        metadata
     }
 }
 
@@ -3507,7 +3641,11 @@ fn local_surface_error_response(
         crate::surface::ApiSurface::Anthropic => serde_json::json!({
             "type": "error",
             "error": {
-                "type": if status == StatusCode::NOT_FOUND { "not_found_error" } else { "invalid_request_error" },
+                "type": match status {
+                    StatusCode::NOT_FOUND => "not_found_error",
+                    StatusCode::SERVICE_UNAVAILABLE => "api_error",
+                    _ => "invalid_request_error",
+                },
                 "message": message
             },
             "request_id": &request_id
@@ -3516,7 +3654,11 @@ fn local_surface_error_response(
             "error": {
                 "code": status.as_u16(),
                 "message": message,
-                "status": if status == StatusCode::NOT_FOUND { "NOT_FOUND" } else { "INVALID_ARGUMENT" }
+                "status": match status {
+                    StatusCode::NOT_FOUND => "NOT_FOUND",
+                    StatusCode::SERVICE_UNAVAILABLE => "UNAVAILABLE",
+                    _ => "INVALID_ARGUMENT",
+                }
             }
         }),
         crate::surface::ApiSurface::OpenAi => serde_json::json!({
@@ -3570,7 +3712,10 @@ async fn merge_local_models_response(
     };
 
     let local_models = render_models_for_surface(config, surface, local_models);
-    let rendered_platform_models = render_models_for_surface(config, surface, platform_models);
+    let mut rendered_platform_models = render_models_for_surface(config, surface, platform_models);
+    for model in &mut rendered_platform_models {
+        crate::model_discovery::mark_directory_source(model, "platform");
+    }
     let mut positions = std::collections::HashMap::new();
     let mut merged = Vec::with_capacity(local_models.len() + rendered_platform_models.len());
     let ordered_models = if prefer_local {
@@ -4095,6 +4240,7 @@ fn select_ready_local_channel_with_model_route_policy<'a>(
                 crate::surface::ApiOperation::Opaque | crate::surface::ApiOperation::Embeddings
             ) || crate::surface::api_operation_requires_native_api_credential(route.operation)
                 || crate::surface::api_operation_requires_local_backend(route.operation)
+                || crate::surface::api_operation_is_native_media(route.operation)
                 || subscription_image
             {
                 if match_mode == ModelMatchMode::CompatibleOnly {
@@ -4131,8 +4277,10 @@ fn select_ready_local_channel_with_model_route_policy<'a>(
                     });
                 }
                 if crate::supplier::grok_media_operation(&route).is_some() {
+                    let streaming_image = subscription_image && crate::supplier::top_level_json_bool(body, "stream") == Some(true);
                     return select_native_media_channel_where(cfg, &route, &direct_route_model, |channel| {
                             ready_channel_ids.contains(&channel.id)
+                                && !(streaming_image && channel.source_driver() == crate::source_driver::SourceDriverId::Openrouter)
                                 && !excluded_channel_ids.contains(&channel.id)
                                 && local_model_quota_route_available(
                                     model_quota_routes,
@@ -4154,6 +4302,7 @@ fn select_ready_local_channel_with_model_route_policy<'a>(
                         });
                 }
                 let require_verified_surface = route.operation == crate::surface::ApiOperation::Opaque
+                    || crate::surface::api_operation_is_native_media(route.operation)
                     || crate::surface::api_operation_requires_native_api_credential(route.operation)
                     || crate::surface::api_operation_requires_local_backend(route.operation)
                     || subscription_image;
@@ -4299,11 +4448,17 @@ fn select_direct_http_surface_channel_where<'a>(
         let matching = candidates
             .iter()
             .copied()
-            .filter(|channel| channel_supports_model(channel, &requested_model))
-            .collect::<Vec<_>>();
-        if let Some(channel) = select_local_priority_channel(cfg, matching
-            .iter().copied().map(|channel| (channel, evidence_rank(channel), 0)))
-        {
+            .filter(|channel| channel_supports_model(channel, &requested_model));
+        let speech = crate::surface::resolve_api_route("POST", path, false)
+            .is_some_and(|route| route.operation == crate::surface::ApiOperation::AudioSpeech);
+        let ranked = matching.map(|channel| {
+            let unconfirmed = speech && {
+                let wire = channel_upstream_model_for_request(channel, Some(&requested_model));
+                !crate::media_models::ChannelMedia::new(channel).model(&wire).speech
+            };
+            (channel, u8::from(unconfirmed), evidence_rank(channel))
+        });
+        if let Some(channel) = select_local_priority_channel(cfg, ranked) {
             return Some(channel);
         }
     }
@@ -4318,6 +4473,7 @@ fn select_native_media_channel_where<'a>(
     model: &str,
     predicate: impl Fn(&ChannelConfig) -> bool,
 ) -> Option<&'a ChannelConfig> {
+    use crate::surface::ApiOperation;
     let candidates = local_channels(cfg).filter(|channel| {
         if !predicate(channel) { return false; }
         match crate::channel_executor::execution_kind_for_source(channel.source_driver()) {
@@ -4331,14 +4487,30 @@ fn select_native_media_channel_where<'a>(
             }
             _ => false,
         }
+    }).filter_map(|channel| {
+        // Discovery exposes public IDs; capability evidence describes the wire model.
+        let declared = match route.operation {
+            ApiOperation::ImagesGenerations | ApiOperation::ImagesEdits => {
+                let wire = channel_upstream_model_for_request(channel, Some(model));
+                crate::image_models::ChannelImages::new(channel).supports(&wire, route.operation)
+            }
+            ApiOperation::VideosCreate => {
+                let wire = channel_upstream_model_for_request(channel, Some(model));
+                crate::media_models::ChannelMedia::new(channel).model(&wire).video.then_some(true)
+            }
+            _ => None,
+        };
+        let matched = !model.is_empty() && channel_supports_model(channel, model);
+        (declared != Some(false)).then_some((channel, matched, declared == Some(true)))
     }).collect::<Vec<_>>();
     // Use the same priority policy for API and subscription media. Subscription
     // rights belong to the account catalog: never send another provider's model
     // to the first OpenAI account merely because the path is /images/… .
+    let confirmed = candidates.iter().any(|(_, matched, known)| *matched && *known);
     select_local_priority_channel(cfg, candidates.iter().copied()
-        .filter(|channel| !model.is_empty() && channel_supports_model(channel, model))
-        .map(|channel| (channel, 0, 0)))
-        .or_else(|| select_local_priority_channel(cfg, candidates.into_iter()
+        .filter(|(_, matched, known)| *matched && (!confirmed || *known))
+        .map(|(channel, _, _)| (channel, 0, 0)))
+        .or_else(|| select_local_priority_channel(cfg, candidates.into_iter().map(|(channel, _, _)| channel)
             .filter(|channel| crate::channel_executor::execution_kind_for_source(channel.source_driver())
                 .is_ok_and(|kind| kind == crate::source_driver::ExecutionKind::HttpSurface))
             .map(|channel| (channel, 0, 0))))

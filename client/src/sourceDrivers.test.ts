@@ -9,6 +9,7 @@ import {
   serializeClientConfigV5,
   SOURCE_DRIVER_MANIFEST_VERSION,
   SOURCE_DRIVERS,
+  sourceDriverAllowsMarketSharing,
   sourceDriverById,
   sourceDriversForCategory,
   sourceDriversForApiAccess,
@@ -825,6 +826,10 @@ describe("source drivers", () => {
       });
       expect(() => validateChannelV5(channel)).not.toThrow();
 
+      expect(channel.enabled).toBe(false);
+      expect(serializeChannelV5(channel).share_enabled).toBe(sourceDriverAllowsMarketSharing(driver.id));
+      // Both editions use the same wire snapshot for an explicitly private channel.
+      channel.share_enabled = false;
       const serialized = serializeChannelV5(channel);
       expect(serialized).not.toHaveProperty("kind");
       expect(serialized).not.toHaveProperty("api_format");

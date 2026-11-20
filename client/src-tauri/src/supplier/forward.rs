@@ -528,7 +528,10 @@ pub(crate) async fn forward_supplier_request(
     let diagnostics = crate::openrouter::response_diagnostics(&execution.response);
     let upstream_model = execution.upstream_model;
     let target_protocol = execution.target_protocol;
-    let usage_protocol = crate::openrouter::usage_protocol(&channel, &target_protocol);
+    let image_operation = matches!(resolved.route.operation,
+        crate::surface::ApiOperation::ImagesGenerations | crate::surface::ApiOperation::ImagesEdits);
+    let usage_protocol = if image_operation { "openai_images" }
+        else { crate::openrouter::usage_protocol(&channel, &target_protocol) };
     let inbound_protocol = execution
         .inbound_protocol
         .unwrap_or_else(|| target_protocol.clone());
@@ -618,6 +621,7 @@ pub(crate) async fn forward_supplier_request(
     if native_passthrough && stream_requested && is_event_stream {
         let mut stream = SupplierByteStreamBatcher::new(resp.bytes_stream());
         let mut upstream_usage = SupplierUpstreamUsageAccumulator::new(usage_protocol);
+        let mut image_usage = image_operation.then(ImageUsageObserver::new);
         let mut started = false;
         loop {
             let chunk = match stream.next().await? {
@@ -645,7 +649,8 @@ pub(crate) async fn forward_supplier_request(
                     return Err(anyhow!("upstream stream inactivity timeout"));
                 }
             };
-            upstream_usage.push(&chunk);
+            if let Some(observer) = &mut image_usage { observer.push(&chunk)?; }
+            else { upstream_usage.push(&chunk); }
             if !started {
                 send_supplier_message(
                     outbound,
@@ -679,7 +684,10 @@ pub(crate) async fn forward_supplier_request(
                 kind: "stream_end".to_string(),
                 payload: {
                     let mut payload = serde_json::Map::new();
-                    let (usage, failure) = upstream_usage.finish_observed(Some(&upstream_model));
+                    let (usage, failure) = match image_usage {
+                        Some(observer) => observer.finish(&upstream_model)?,
+                        None => upstream_usage.finish_observed(Some(&upstream_model)),
+                    };
                     attach_upstream_usage(&mut payload, usage.as_ref());
                     if let Some(failure) = failure { failure.attach(&mut payload); }
                     if let Some(diagnostics) = &diagnostics { diagnostics.attach(&mut payload); }
@@ -692,10 +700,8 @@ pub(crate) async fn forward_supplier_request(
     }
     if native_passthrough && !is_event_stream {
         let body = resp.bytes().await?;
-        let upstream_usage = if channel.source_driver() == crate::source_driver::SourceDriverId::GrokSubscription
-            && matches!(resolved.route.operation, crate::surface::ApiOperation::ImagesGenerations | crate::surface::ApiOperation::ImagesEdits)
-        {
-            grok_image_response_usage(&body)
+        let upstream_usage = if image_operation {
+            upstream_image_usage_from_body(&body)
         } else {
             upstream_usage_from_body(usage_protocol, &body)
         };

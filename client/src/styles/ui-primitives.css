@@ -6,7 +6,8 @@
  * geometry contract while allowing feature styles to add only local layout.
  */
 
-label {
+label,
+.checkbox-field {
   display: grid;
   align-content: start;
   align-self: start;
@@ -15,6 +16,18 @@ label {
   font-size: 13px;
   font-weight: var(--weight-medium);
   line-height: 1.4;
+}
+
+input[type="checkbox"] {
+  padding: 0;
+}
+
+input[type="checkbox"]:enabled {
+  cursor: pointer;
+}
+
+input[type="checkbox"]:disabled {
+  cursor: not-allowed;
 }
 
 label > div {

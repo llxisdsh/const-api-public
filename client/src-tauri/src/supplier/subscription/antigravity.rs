@@ -92,25 +92,23 @@ async fn forward_antigravity_subscription_request_with_cache_identity(
     let upstream_model = prepared.upstream_model;
     let native_body = prepared.native_body;
     let upstream_body = if count_tokens {
-        let mut native: serde_json::Value = serde_json::from_str(&native_body)?;
-        if let Some(object) = native.as_object_mut() {
-            if object.remove("safetySettings").is_some() {
-                let summary = "Antigravity countTokens transport does not accept safetySettings; the field was omitted so token counting could continue";
-                log::debug!(
-                    "[const-api][subscription] endpoint adjustment endpoint=antigravity_count_tokens code=gemini_count_tokens_safety_settings_omitted path=$.safetySettings"
-                );
-                improvement_faults.push(ImprovementFault::endpoint_adjustment(
-                    "gemini_count_tokens_safety_settings_omitted",
-                    "google",
-                    "antigravity_count_tokens",
-                    "gemini_native",
-                    "gemini_native",
-                    &model,
-                    "$.safetySettings",
-                    summary,
-                ));
-            }
-            object.remove("stream");
+        let (native, omitted) =
+            antigravity_count_tokens_request(&native_body).map_err(request_conversion_failure)?;
+        if !omitted.is_empty() {
+            let summary = format!(
+                "Antigravity countTokens omitted unsupported generation controls: {}",
+                omitted.join(", ")
+            );
+            improvement_faults.push(ImprovementFault::endpoint_adjustment(
+                "gemini_count_tokens_generation_controls_omitted",
+                "google",
+                "antigravity_count_tokens",
+                "gemini_native",
+                "gemini_native",
+                &model,
+                "$",
+                &summary,
+            ));
         }
         serde_json::json!({"request": native}).to_string()
     } else {
@@ -192,6 +190,50 @@ async fn forward_antigravity_subscription_request_with_cache_identity(
     Ok(payload)
 }
 
+fn antigravity_count_tokens_request(body: &str) -> Result<(serde_json::Value, Vec<&'static str>)> {
+    let mut native: serde_json::Value = serde_json::from_str(body)?;
+    let object = native
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("Antigravity countTokens request must be an object"))?;
+    let camel = object
+        .remove("generateContentRequest")
+        .filter(|v| !v.is_null());
+    let snake = object
+        .remove("generate_content_request")
+        .filter(|v| !v.is_null());
+    if camel.is_some() && snake.is_some() {
+        anyhow::bail!(
+            "Antigravity countTokens request contains duplicate generateContentRequest fields"
+        );
+    }
+    if let Some(nested) = camel.or(snake) {
+        let serde_json::Value::Object(nested) = nested else {
+            anyhow::bail!("Antigravity countTokens generateContentRequest must be an object");
+        };
+        // Public Gemini gives the nested generation request precedence. The
+        // Antigravity RPC instead wraps Vertex CountTokensRequest directly.
+        object.remove("contents");
+        object.extend(nested);
+    }
+    // Verified against the shipped Hub's CountTokensRequest descriptor. Omit
+    // only generation controls, not prompt data, tools, signatures or unknown
+    // fields. In particular cachedContent must not be dropped to fake a count.
+    let omitted = [
+        "stream",
+        "safetySettings",
+        "safety_settings",
+        "toolConfig",
+        "tool_config",
+        "labels",
+        "sessionId",
+        "session_id",
+    ]
+    .into_iter()
+    .filter(|field| object.remove(*field).is_some())
+    .collect();
+    Ok((native, omitted))
+}
+
 fn antigravity_body_to_native_body(raw: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(raw).ok()?;
     value
@@ -220,7 +262,7 @@ pub(crate) async fn send_antigravity_body(
     let status = resp.status().as_u16();
     let content_type = response_content_type(&resp);
     let headers = response_header_pairs(resp.headers());
-    let raw = resp.text().await?;
+    let raw = read_subscription_response_body(resp).await?;
     if status != 401 {
         return Ok((status, content_type, raw, headers));
     }
@@ -239,7 +281,7 @@ pub(crate) async fn send_antigravity_body(
     let retry_status = retry.status().as_u16();
     let retry_content_type = response_content_type(&retry);
     let retry_headers = response_header_pairs(retry.headers());
-    let retry_raw = retry.text().await?;
+    let retry_raw = read_subscription_response_body(retry).await?;
     Ok((retry_status, retry_content_type, retry_raw, retry_headers))
 }
 
@@ -501,7 +543,7 @@ pub(crate) async fn forward_antigravity_subscription_stream_request_with_capacit
     let content_type = response_content_type(&resp);
     if !(200..300).contains(&status) || !content_type.contains("event-stream") {
         let headers = resp.headers().clone();
-        let raw = resp.text().await?;
+        let raw = read_subscription_response_body(resp).await?;
         let mut payload = subscription_wire_response_payload_with_header_map(
             status,
             &content_type,

@@ -1,7 +1,7 @@
 /*
  * Editorial paper
  *
- * The final visual layer. Warm paper stock, ink type and one vermilion
+ * The final visual layer. Neutral paper stock, ink type and one vermilion
  * accent; hierarchy comes from serif display type and hairline rules, not
  * from filled blocks, glass or stacked shadows. Floating surfaces (menus,
  * dialogs, the guidance tray) keep real elevation because they must read as
@@ -110,7 +110,7 @@ main > section > header,
 
 main > section > header p {
   max-width: 920px;
-  color: color-mix(in srgb, var(--text) 74%, var(--muted));
+  color: color-mix(in srgb, var(--text) 88%, var(--bg));
   font-family: var(--font-serif);
   font-size: 15px;
   line-height: 1.6;
@@ -252,7 +252,7 @@ textarea:focus {
 :root[data-theme="dark"] .quick-card:hover .tool-dock-button:not(:disabled) {
   border-color: var(--border-strong) !important;
   background: var(--surface-floating) !important;
-  box-shadow: 0 6px 14px rgba(46, 36, 18, 0.08);
+  box-shadow: 0 6px 14px rgba(20, 20, 24, 0.08);
 }
 
 :root[data-theme="dark"] .quick-card:hover .tool-dock-button:not(:disabled) {
@@ -289,8 +289,8 @@ textarea:focus {
 
 .guidance-notice-stack {
   --guidance-notice-shadow:
-    0 22px 48px rgba(46, 36, 18, 0.16),
-    0 2px 8px rgba(46, 36, 18, 0.08);
+    0 22px 48px rgba(20, 20, 24, 0.16),
+    0 2px 8px rgba(20, 20, 24, 0.08);
 }
 
 :root[data-theme="dark"] .guidance-notice-stack {
@@ -590,7 +590,7 @@ th {
 }
 
 .account-center-trend-bars span.usage {
-  background: color-mix(in srgb, var(--text) 62%, var(--bg));
+  background: color-mix(in srgb, var(--text) 82%, var(--bg));
 }
 
 .account-center-trend-bars span.supply {

@@ -5,6 +5,7 @@ use std::borrow::Cow;
 
 mod catalog;
 mod diagnostics;
+pub(crate) mod images;
 mod request;
 pub(crate) use catalog::{
     apply_catalog_capabilities, apply_refreshed_catalog, catalog_cache_key, empty_catalog_health,
@@ -27,6 +28,14 @@ pub(crate) fn canonical_error_type(
 }
 pub(crate) use diagnostics::{ResponseDiagnostics, observe_response, response_diagnostics};
 pub(crate) use request::prepare_headers;
+
+pub(crate) fn supports_operation(
+    driver: SourceDriverId,
+    operation: crate::surface::ApiOperation,
+) -> bool {
+    driver != SourceDriverId::Openrouter
+        || operation != crate::surface::ApiOperation::ImagesVariations
+}
 
 // OpenRouter Messages reports the served acceleration tier even for non-Claude
 // models. Do not apply that interpretation to Anthropic capacity tiers.
@@ -140,6 +149,22 @@ pub(crate) fn public_models(models: Vec<String>) -> Vec<String> {
 pub(crate) fn upstream_model(channel: &ChannelConfig, model: &str) -> String {
     if channel.source_driver() != SourceDriverId::Openrouter {
         return model.to_string();
+    }
+    if let Some(wire) = channel
+        .capability_profiles
+        .iter()
+        .filter(|p| {
+            p.catalog_metadata
+                && p.model_pattern
+                    .eq_ignore_ascii_case(crate::config::without_context_hint(model))
+        })
+        .find_map(|p| {
+            p.catalog_source_model
+                .as_deref()
+                .filter(|id| id.contains('/'))
+        })
+    {
+        return wire.to_owned();
     }
     let catalog = crate::tool_model_metadata::active_tool_catalog_models();
     let public = public_id_with_catalog(model, &catalog);

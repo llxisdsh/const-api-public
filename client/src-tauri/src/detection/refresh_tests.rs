@@ -283,9 +283,7 @@ fn missing_rotation_is_expired() {
         "access_token": "access-a",
         "org_id": "org-a"
     }));
-    let error = missing_refresh
-        .err()
-        .expect("missing rotated token must fail");
+    let error = missing_refresh.expect_err("missing rotated token must fail");
     let wire = crate::subscription_oauth_error::oauth_wire_error_from_anyhow(&error).unwrap();
     assert_eq!(wire.status, 401);
     assert_eq!(wire.error_type, "subscription_credential_expired");

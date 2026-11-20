@@ -1,0 +1,19 @@
+{
+  "codex": true,
+  "claude": true,
+  "gemini": true,
+  "opencode": true,
+  "workbuddy": false,
+  "workbuddy-ai": false,
+  "hermes": false,
+  "pi": true,
+  "mistral-vibe": true,
+  "grok-build": true,
+  "qwencode": true,
+  "kimicode": true,
+  "deepseek-harness": true,
+  "mimocode": true,
+  "reasonix": true,
+  "qoder": true,
+  "qoder-cn": true
+}

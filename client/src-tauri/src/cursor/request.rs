@@ -47,6 +47,11 @@ pub(crate) fn prepare_with_models(
 ) -> Result<Prepared> {
     let context = AdapterContext::runtime("cursor", "cursor_agent", None, model);
     let mut request = crate::protocol::decode_request(protocol, body, &context)?;
+    let mut adjustments =
+        crate::protocol::adapters::project_responses_standalone_outputs(&mut request, &context)?
+            .into_iter()
+            .map(|repair| repair.reason)
+            .collect::<Vec<_>>();
     for field in ["service_tier", "speed"] {
         ensure!(
             body.get(field).is_none_or(|v| v.is_null() || v.is_string()),
@@ -96,7 +101,6 @@ pub(crate) fn prepare_with_models(
             .any(|e| e.criticality == ExtensionCriticality::Critical),
         "capability_mismatch: Cursor cannot preserve a required provider extension"
     );
-    let mut adjustments = Vec::new();
     if fast && !actual_fast {
         adjustments
             .push("Cursor Fast route is unavailable; using the standard model and tariff".into());
@@ -411,6 +415,8 @@ pub(crate) fn prepare_with_models(
         run.len() <= w::MAX_FRAME,
         "Cursor request exceeds frame limit"
     );
+    adjustments.sort();
+    adjustments.dedup();
     Ok(Prepared {
         model: super::models::public_id_in_catalog(model, catalog),
         fast: actual_fast,

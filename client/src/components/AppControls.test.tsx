@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Circle } from "lucide-react";
 import { describe, expect, test, vi } from "vitest";
 import { ToolDockMenuProvider } from "../ToolDockMenu";
@@ -18,14 +19,33 @@ import {
   HiddenToolMenu,
   ModelInput,
   QuickCard,
-  ToolRemoveDialog,
+  TrackSwitch,
   VsCodeExtensionLinkage,
 } from "./AppControls";
 
+test("track switches expose a named keyboard control and leave their status and hint passive", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  render(<><TrackSwitch label="Preview" checked={false} describedBy="preview-hint" onChange={onChange}>Off</TrackSwitch>
+    <small id="preview-hint">Preview this session</small></>);
+  const control = screen.getByRole("switch", { name: "Preview", description: "Preview this session" });
+  await user.click(screen.getByText("Off"));
+  await user.click(screen.getByText("Preview this session"));
+  expect(onChange).not.toHaveBeenCalled();
+  await user.tab();
+  expect(control).toHaveFocus();
+  await user.keyboard("[Space]");
+  await user.click(control);
+  expect(onChange.mock.calls).toEqual([[true], [true]]);
+});
+
 describe("ClaudeModelSettingsPanel", () => {
   test("keeps model choices as a draft for the shared Configure action", () => {
-    render(
+    const stopWatching = vi.fn();
+    const onWatchModels = vi.fn(() => stopWatching);
+    const { unmount } = render(
       <ClaudeModelSettingsPanel
+        onWatchModels={onWatchModels}
         settings={{
           main: "gpt-5.6-sol",
           opus: "gpt-5.6-sol",
@@ -42,6 +62,9 @@ describe("ClaudeModelSettingsPanel", () => {
 
     expect(screen.getByText("待配置")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "应用并重启 Claude Code" })).toBeNull();
+    expect(onWatchModels).toHaveBeenCalledOnce();
+    unmount();
+    expect(stopWatching).toHaveBeenCalledOnce();
   });
 });
 
@@ -166,12 +189,13 @@ describe("BlockingConfirmDialog", () => {
     const onResolve = vi.fn();
     render(
       <BlockingConfirmDialog
-        dialog={{ title: "Hermes 正在运行", message: "请确认下一步。" }}
+        dialog={{ title: "取消 Hermes 配置？", message: "请确认下一步。", confirmText: "取消配置" }}
         onResolve={onResolve}
       />,
     );
 
-    const dialog = screen.getByRole("dialog", { name: "Hermes 正在运行" });
+    const dialog = screen.getByRole("dialog", { name: "取消 Hermes 配置？" });
+    expect(screen.getByRole("button", { name: "取消配置" })).toHaveClass("primary");
     expect(dialog).toHaveAttribute("data-backdrop-dismissible", "false");
     fireEvent.click(dialog);
     expect(onResolve).not.toHaveBeenCalled();
@@ -218,88 +242,14 @@ describe("BlockingConfirmDialog", () => {
   });
 });
 
-describe("ToolRemoveDialog", () => {
-  test("confirms the pre-CONST API restore mode by default", () => {
-    const onResolve = vi.fn();
-    render(
-      <ToolRemoveDialog
-        dialog={{
-          tool: "codex",
-          toolTitle: "Codex",
-          nativeOption: {
-            title: "切换到 OpenAI / ChatGPT 原生接入",
-            description: "保留有效的官方登录。",
-          },
-        }}
-        onResolve={onResolve}
-      />,
-    );
-
-    const restore = screen.getByRole("radio", { name: /恢复 CONST API 接管前状态/ });
-    const native = screen.getByRole("radio", { name: /OpenAI \/ ChatGPT 原生接入/ });
-    expect(restore).toBeChecked();
-    expect(native).not.toBeChecked();
-    expect(screen.getByText("默认")).toHaveClass("tool-remove-option-badge");
-    expect(screen.queryByText(
-      "选择取消后要恢复到哪种接入状态。默认选项保持当前逻辑。",
-    )).not.toBeInTheDocument();
-    expect(screen.getByText(
-      "继续后，如发现 Codex 仍在运行，将自动关闭相关进程后再取消配置。",
-    )).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "取消配置" }));
-    expect(onResolve).toHaveBeenCalledWith("restore_pre_const");
-  });
-
-  test("allows choosing a supported tool's native route", () => {
-    const onResolve = vi.fn();
-    render(
-      <ToolRemoveDialog
-        dialog={{
-          tool: "codex",
-          toolTitle: "Codex",
-          nativeOption: {
-            title: "切换到 OpenAI / ChatGPT 原生接入",
-            description: "保留有效的官方登录。",
-          },
-        }}
-        onResolve={onResolve}
-      />,
-    );
-
-    const native = screen.getByRole("radio", { name: /OpenAI \/ ChatGPT 原生接入/ });
-    fireEvent.click(native);
-    fireEvent.click(screen.getByRole("button", { name: "取消配置" }));
-    expect(onResolve).toHaveBeenCalledWith("native_route");
-  });
-
-  test("shows only the restore choice for tools without a canonical native route", () => {
-    const onResolve = vi.fn();
-    render(
-      <ToolRemoveDialog
-        dialog={{ tool: "vscode", toolTitle: "VS Code" }}
-        onResolve={onResolve}
-      />,
-    );
-
-    expect(screen.getAllByRole("radio")).toHaveLength(1);
-    expect(screen.queryByText(
-      "此工具没有唯一的原生接入目标，将按现有逻辑恢复 CONST API 接管前保存的状态。",
-    )).not.toBeInTheDocument();
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(onResolve).toHaveBeenCalledWith("cancel");
-  });
-});
-
 describe("QuickCard", () => {
-  test("keeps the MiniMax interior transparent instead of painting a white inset", () => {
+  test("renders the MiniMax mascot as a color vector without an opaque tile", () => {
     const svg = new DOMParser().parseFromString(miniMaxCodeIconSource, "image/svg+xml");
-    expect(svg.querySelector("parsererror")).toBeNull();
-    const outline = svg.querySelector('path[fill-rule="evenodd"]');
-    expect(outline?.getAttribute("d")?.match(/M/g)).toHaveLength(2);
-    expect([...svg.querySelectorAll("[fill]")].every((element) => (
-      ["none", "#111"].includes(element.getAttribute("fill") ?? "")
-    ))).toBe(true);
+    expect(svg.querySelector("parsererror, image")).toBeNull();
+    expect(svg.querySelector("radialGradient")).not.toBeNull();
+    for (const layer of svg.querySelectorAll("rect")) {
+      expect(layer.closest("[clip-path]")).not.toBeNull();
+    }
   });
 
   test("keeps Kimi artwork vector-only so dark mode has no white raster matte", () => {

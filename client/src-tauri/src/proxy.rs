@@ -67,6 +67,8 @@ include!("proxy/supplier_voice_call.rs");
 include!("proxy/responses_ws_pool.rs");
 include!("proxy/streaming_upload.rs");
 include!("proxy/request_conversion.rs");
+#[path = "proxy/grok_responses.rs"]
+mod grok_responses;
 include!("proxy/sse.rs");
 include!("proxy/response_conversion.rs");
 include!("proxy/http.rs");

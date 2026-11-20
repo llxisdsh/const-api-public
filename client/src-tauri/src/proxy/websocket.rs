@@ -471,11 +471,15 @@ fn responses_websocket_terminal_metadata_from_value(
         .or_else(|| error.and_then(|value| value.get("status_code")))
         .and_then(serde_json::Value::as_u64)
         .and_then(|status| u16::try_from(status).ok())
+        .or_else(|| {
+            error_code
+                .as_deref()
+                .and_then(crate::upstream_failure::responses_terminal_request_status)
+        })
         .unwrap_or_else(|| match error_code.as_deref() {
             Some("rate_limit_exceeded" | "slow_down") => 429,
             Some("server_is_overloaded" | "policy_capacity_unavailable" | "websocket_connection_limit_reached") => 503,
-            Some(code) if crate::upstream_failure::is_responses_input_or_budget_error(code) => 400,
-            Some("context_length_exceeded" | "invalid_request_error" | "previous_response_not_found") => 400,
+            Some("context_length_exceeded" | "invalid_request_error" | "previous_response_not_found" | "content_policy_violation") => 400,
             _ => default_status,
         });
     let provider_request_id = bounded_websocket_diagnostic_value(
@@ -1151,6 +1155,7 @@ impl NativeSubscriptionWebsocketRequest {
         }
         let evidence = local_model_failure_evidence_from_payload(&payload);
         if let Some(shared) = shared {
+            crate::supplier::local_failure::record_payload(channel, &payload);
             let model_scoped = shared.record_local_model_response(
                 &channel.id,
                 &self.model,
@@ -1503,7 +1508,12 @@ async fn connect_registry_channel_websocket(
         let (socket, _) = crate::http_client::connect_channel_websocket(request, config).await?;
         Ok(ResponsesUpstreamSocket::ProxiedRegistry(socket))
     } else {
-        let (socket, _) = tokio_tungstenite::connect_async_with_config(request, Some(config), false).await?;
+        let (socket, _) = tokio_tungstenite::connect_async_tls_with_config(
+            request,
+            Some(config),
+            false,
+            Some(tokio_tungstenite::Connector::Rustls(crate::http_client::websocket_tls_config())),
+        ).await?;
         Ok(socket.into())
     }
 }
@@ -2811,7 +2821,7 @@ pub(crate) async fn proxy_websocket_request(
     let websocket = websocket
         .max_message_size(message_limit)
         .max_frame_size(message_limit);
-    Ok(websocket
+    let mut response = websocket
         .on_upgrade(move |socket| async move {
             if operation == crate::surface::ApiOperation::ResponsesWebSocket {
                 // Responses drains an admitted turn, then closes before the next one.
@@ -2872,8 +2882,17 @@ pub(crate) async fn proxy_websocket_request(
                 _ = relay => {}
             }
         })
-        .into_response())
+        .into_response();
+    if operation == crate::surface::ApiOperation::ResponsesWebSocket {
+        response.headers_mut().insert(
+            "x-codex-websocket-max-message-bytes",
+            message_limit.into(),
+        );
+    }
+    Ok(response)
 }
+
+type ResponsesClientInput = futures_util::stream::BoxStream<'static, Result<warp::ws::Message, warp::Error>>;
 
 async fn run_responses_websocket_proxy(
     client_socket: warp::ws::WebSocket,
@@ -2881,7 +2900,20 @@ async fn run_responses_websocket_proxy(
     shared: Arc<ProxyShared>,
     first_activity_guard: crate::update_activity::UpdateActivityGuard,
 ) {
-    let (mut client_sender, mut client_receiver) = client_socket.split();
+    let (mut client_sender, client_receiver) = client_socket.split();
+    let ingress = shared.clone();
+    let ingress_headers = client_headers.clone();
+    let mut protection_session = None;
+    // Every first and subsequent turn crosses this boundary before local,
+    // marketplace, or HTTP-bridge selection. A settings change applies next turn.
+    let mut client_receiver: ResponsesClientInput = client_receiver.map(move |event| {
+        event.map(|message| {
+            let config = ingress.config_snapshot();
+            if config.protect_outgoing_secrets {
+                crate::outgoing_secrets::protect_ws(message, &config.api_key, &ingress_headers, &mut protection_session)
+            } else { message }
+        })
+    }).boxed();
     // The upgrade is finished. An idle socket waiting for its first turn is not
     // an executing request; reacquire the update admission after reading it.
     drop(first_activity_guard);
@@ -3160,7 +3192,7 @@ async fn run_responses_websocket_proxy(
         ) {
             Ok(mut request) => {
                 request.local_model_observation = channel.as_ref().map(|channel| {
-                    LocalModelOutcomeGuard::new(shared.clone(), &channel.id, &request.model)
+                    LocalModelOutcomeGuard::new(shared.clone(), &channel.id, &request.model).with_channel(channel)
                 });
                 Some(request)
             }
@@ -3431,7 +3463,7 @@ async fn run_responses_websocket_proxy(
                     let mut pending_subscription_request = match subscription_config.as_ref() {
                         Some(config) => match NativeSubscriptionWebsocketRequest::start_at(config, text, request_started_at) {
                             Ok(mut request) => {
-                                request.local_model_observation = channel.as_ref().map(|channel| LocalModelOutcomeGuard::new(shared.clone(), &channel.id, &request.model));
+                                request.local_model_observation = channel.as_ref().map(|channel| LocalModelOutcomeGuard::new(shared.clone(), &channel.id, &request.model).with_channel(channel));
                                 Some(request)
                             }
                             Err(_) => {
@@ -5267,7 +5299,7 @@ fn responses_websocket_bridge_response_id(event: &serde_json::Value) -> Option<&
 
 async fn run_responses_websocket_http_bridge(
     mut client_sender: futures_util::stream::SplitSink<warp::ws::WebSocket, warp::ws::Message>,
-    mut client_receiver: futures_util::stream::SplitStream<warp::ws::WebSocket>,
+    mut client_receiver: ResponsesClientInput,
     client_headers: warp::http::HeaderMap,
     shared: Arc<ProxyShared>,
     first_value: serde_json::Value,
@@ -5478,7 +5510,7 @@ fn responses_websocket_bridge_headers(
 async fn forward_responses_websocket_bridge_response(
     response: warp::reply::Response,
     client_sender: &mut futures_util::stream::SplitSink<warp::ws::WebSocket, warp::ws::Message>,
-    client_receiver: &mut futures_util::stream::SplitStream<warp::ws::WebSocket>,
+    client_receiver: &mut ResponsesClientInput,
 ) -> Option<(ResponsesWebsocketBridgeCapture, Option<serde_json::Value>)> {
     let status = response.status();
     if !status.is_success() {
@@ -6353,6 +6385,11 @@ mod responses_websocket_tests {
     fn websocket_responses_terminal_codes_preserve_status_and_retry_semantics() {
         for (code, status, retry) in [
             ("budget_reached", 400, false),
+            ("invalid_access_program", 400, false),
+            ("unsupported_access_program", 400, false),
+            ("inference_hook_denied", 403, false),
+            ("access_program_not_enabled", 403, false),
+            ("content_policy_violation", 400, false),
             ("audio_too_large", 400, false),
             ("audio_too_short", 400, false),
             ("invalid_audio", 400, false),
@@ -7333,7 +7370,7 @@ mod responses_websocket_tests {
         let default = openai_subscription_live_websocket_request(
             None, "", "token", &serde_json::json!({}), &warp::http::HeaderMap::new(), Default::default(),
         ).expect("default Live request");
-        assert_eq!(default.uri().query(), Some("model=gpt-live-1-codex"));
+        assert_eq!(default.uri().query(), Some("model=gpt-live-1.1-codex"));
     }
 
     /// Opens and immediately closes a Voice socket. No audio, model request,
@@ -7447,7 +7484,9 @@ mod responses_websocket_tests {
         }
         fn u16s(bytes: &[u8]) -> Vec<u16> {
             bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
                 // GREASE placeholders (0x?a?a) change per connection.
                 .filter(|value| value & 0x0f0f != 0x0a0a)
@@ -7649,6 +7688,13 @@ mod responses_websocket_tests {
     // Called only by the isolated transport child; other tests may install a
     // process-wide provider for their own QUIC servers.
     pub(super) async fn subscription_https_provider_is_stable_after_quic_setup() {
+        assert!(rustls::crypto::CryptoProvider::get_default().is_none());
+        let registry_tls = crate::http_client::websocket_tls_config();
+        assert!(registry_tls.alpn_protocols.is_empty(), "ordinary WS upgrades use HTTP/1.1");
+        assert_eq!(
+            registry_tls.crypto_provider().kx_groups.iter().map(|group| group.name()).collect::<Vec<_>>(),
+            rustls::crypto::aws_lc_rs::default_provider().kx_groups.iter().map(|group| group.name()).collect::<Vec<_>>()
+        );
         assert!(rustls::crypto::CryptoProvider::get_default().is_none());
         let before = subscription_https_client_hello().await;
         let mut pinned = crate::supplier::parse_supplier_quic_url("quic://pin.example:443").unwrap();

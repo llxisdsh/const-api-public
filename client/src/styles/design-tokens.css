@@ -21,32 +21,32 @@
   --space-8: 32px;
   --motion-fast: 120ms;
   --motion-standard: 180ms;
-  --page-inline: clamp(28px, 3vw, 44px);
+  --page-inline: clamp(28px, 3vw, 32px);
   --page-block: 24px;
 
-  /* Surfaces and structure: warm paper, hairline rules, almost no fills. */
-  --bg: #f8f6f1;
-  --panel: #fcfbf8;
-  --panel-muted: #eeeae0;
-  --surface-subtle: #e7e2d6;
-  --surface-content: #fbfaf6;
-  --surface-content-hover: #f0ece3;
-  --surface-floating: #fcfbf7;
-  --surface-floating-hover: #f2eee5;
-  --surface-floating-border: #dad3c4;
-  --hover-bg: #efebe1;
-  --active-bg: #ebe4d6;
-  --border: #e3ddd0;
-  --border-strong: #cbc2b1;
-  --art-rule: #ddd6c8;
-  --art-nav: #f8f6f1;
-  --art-blue-soft: #f5e6dc;
-  --art-red-soft: #f7e0de;
+  /* Surfaces and structure: neutral white stock, hairline rules, almost no fills. */
+  --bg: #fcfcfb;
+  --panel: #ffffff;
+  --panel-muted: #f2f2f0;
+  --surface-subtle: #ebebe8;
+  --surface-content: #ffffff;
+  --surface-content-hover: #f4f4f2;
+  --surface-floating: #ffffff;
+  --surface-floating-hover: #f4f4f2;
+  --surface-floating-border: #dededa;
+  --hover-bg: #f2f2f0;
+  --active-bg: #efefec;
+  --border: #e8e8e5;
+  --border-strong: #cfcfca;
+  --art-rule: #e3e3df;
+  --art-nav: #fcfcfb;
+  --art-blue-soft: #fbe9e1;
+  --art-red-soft: #fbe4e4;
 
   /* Typography */
-  --text: #1d1b17;
-  --muted: #665f54;
-  --subtle: #918a7c;
+  --text: #121212;
+  --muted: #55565a;
+  --subtle: #8a8b90;
   --inverse-text: #ffffff;
   --weight-medium: 520;
   --weight-semibold: 600;
@@ -59,103 +59,103 @@
   --font-mono: "SFMono-Regular", "Cascadia Code", "Cascadia Mono", Consolas, monospace;
 
   /* Interaction and state: one vermilion accent; ink carries primary actions. */
-  --blue: #ad451c;
-  --blue-strong: #8f3613;
+  --blue: #c8400d;
+  --blue-strong: #9f310a;
   --accent: var(--blue);
-  --ink: #1d1b17;
+  --ink: #121212;
   --ink-strong: #000000;
   --state-fill: var(--ink);
-  --focus-ring: rgba(173, 69, 28, 0.26);
-  --green: #3a7a4d;
+  --focus-ring: rgba(200, 64, 13, 0.24);
+  --green: #16803c;
   --green-hover: #2e663f;
-  --red: #b4283a;
+  --red: #c8102e;
   --red-hover: #96202f;
-  --success-bg: #e8efe2;
-  --success-bg-strong: #dbe7d4;
-  --success-border: #a8c4a2;
-  --success-text: #2e663f;
-  --warning-bg: #f6ecd2;
-  --warning-border: #d9bf7f;
-  --warning-text: #7a5710;
-  --danger-bg: #f8e5e3;
-  --danger-border: #e2adab;
-  --danger-text: #a0222f;
+  --success-bg: #e9f6ee;
+  --success-bg-strong: #d9efe1;
+  --success-border: #a7d8b7;
+  --success-text: #15803d;
+  --warning-bg: #fdf3dc;
+  --warning-border: #e6c574;
+  --warning-text: #a15c07;
+  --danger-bg: #fdecec;
+  --danger-border: #efb1b1;
+  --danger-text: #b91c1c;
   --danger-solid: #a0222f;
-  --neutral-fill: #9b9384;
+  --neutral-fill: #9a9a9f;
   --status-success: var(--green);
   --status-warning: #b58628;
   --status-warning-text: #876212;
   --status-danger: var(--red);
   --status-neutral: var(--neutral-fill);
-  --quota-track: #e3ddd0;
+  --quota-track: #e6e6e3;
   --quota-fill: var(--ink);
-  --toast-bg: #1d1b17;
+  --toast-bg: #121212;
 
   /* Elevation */
-  --overlay: rgba(32, 26, 16, 0.3);
+  --overlay: rgba(18, 18, 20, 0.3);
   --paper-shadow:
-    0 18px 40px rgba(46, 36, 18, 0.1),
-    0 2px 8px rgba(46, 36, 18, 0.05);
+    0 18px 40px rgba(20, 20, 24, 0.1),
+    0 2px 8px rgba(20, 20, 24, 0.05);
   --surface-floating-shadow:
-    0 12px 30px rgba(46, 36, 18, 0.12),
-    0 2px 6px rgba(46, 36, 18, 0.06);
-  --overlay-shadow: 0 26px 80px rgba(40, 30, 14, 0.16);
+    0 12px 30px rgba(20, 20, 24, 0.12),
+    0 2px 6px rgba(20, 20, 24, 0.06);
+  --overlay-shadow: 0 26px 80px rgba(16, 16, 20, 0.16);
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  /* Night edition: warm charcoal stock, ivory ink, the same single accent. */
-  --bg: #171613;
-  --panel: #1d1c18;
-  --panel-muted: #25231f;
-  --surface-subtle: #2d2b26;
-  --surface-content: #1d1c18;
-  --surface-content-hover: #25231f;
-  --surface-floating: #23211d;
-  --surface-floating-hover: #2d2b26;
-  --surface-floating-border: #3e3a33;
-  --hover-bg: #24221e;
-  --active-bg: #2e2b25;
-  --border: #302d28;
-  --border-strong: #49453c;
-  --art-rule: #35322c;
-  --art-nav: #171613;
-  --art-blue-soft: #3a271c;
-  --art-red-soft: #3b2023;
-  --text: #ece6d8;
-  --muted: #ada596;
-  --subtle: #7f786b;
-  --blue: #de8058;
-  --blue-strong: #eb9b78;
-  --ink: #ece6d8;
+  /* Night edition: neutral near-black stock, white ink, the same single accent. */
+  --bg: #111112;
+  --panel: #18181a;
+  --panel-muted: #1f1f22;
+  --surface-subtle: #26262a;
+  --surface-content: #18181a;
+  --surface-content-hover: #1f1f22;
+  --surface-floating: #1c1c1f;
+  --surface-floating-hover: #26262a;
+  --surface-floating-border: #34343a;
+  --hover-bg: #1c1c1f;
+  --active-bg: #24242a;
+  --border: #26262b;
+  --border-strong: #3d3d44;
+  --art-rule: #2a2a2f;
+  --art-nav: #111112;
+  --art-blue-soft: #3a2219;
+  --art-red-soft: #3a1f21;
+  --text: #f4f4f2;
+  --muted: #a6a6ad;
+  --subtle: #74747c;
+  --blue: #ff7a45;
+  --blue-strong: #ff9466;
+  --ink: #f4f4f2;
   --ink-strong: #ffffff;
   --state-fill: var(--ink);
-  --focus-ring: rgba(222, 128, 88, 0.36);
-  --green: #6fb07f;
+  --focus-ring: rgba(255, 122, 69, 0.34);
+  --green: #4ade80;
   --green-hover: #85c193;
-  --red: #e2676f;
+  --red: #f87171;
   --red-hover: #ec8289;
-  --success-bg: #1c2a1f;
-  --success-bg-strong: #233527;
-  --success-border: #3c5e43;
-  --success-text: #8cc79a;
-  --warning-bg: #322a17;
-  --warning-border: #6b5724;
-  --warning-text: #e3bf68;
-  --danger-bg: #36201f;
-  --danger-border: #77393b;
-  --danger-text: #f08f92;
+  --success-bg: #15281c;
+  --success-bg-strong: #1b3323;
+  --success-border: #2f6a42;
+  --success-text: #4ade80;
+  --warning-bg: #2e2512;
+  --warning-border: #6b5420;
+  --warning-text: #fbbf24;
+  --danger-bg: #331b1c;
+  --danger-border: #74383b;
+  --danger-text: #fca5a5;
   --danger-solid: #a8343d;
-  --neutral-fill: #7c766a;
+  --neutral-fill: #76767e;
   --status-success: var(--green);
   --status-warning: #d8ad4f;
   --status-warning-text: #e3bf68;
   --status-danger: var(--red);
   --status-neutral: var(--neutral-fill);
-  --quota-track: #34312b;
+  --quota-track: #2a2a2f;
   --quota-fill: var(--ink);
-  --toast-bg: #2a2823;
-  --overlay: rgba(6, 5, 3, 0.66);
+  --toast-bg: #232326;
+  --overlay: rgba(4, 4, 6, 0.66);
   --paper-shadow:
     0 20px 48px rgba(0, 0, 0, 0.38),
     0 3px 12px rgba(0, 0, 0, 0.24);

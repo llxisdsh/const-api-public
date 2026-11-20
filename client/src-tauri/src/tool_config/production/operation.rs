@@ -1520,6 +1520,12 @@ fn wait_for_tool_program_start(tool: &str) -> Result<()> {
         Instant::now() + TOOL_PROCESS_START_TIMEOUT,
         "launch",
     )
+    .map_err(|cause| {
+        anyhow!("{}", serde_json::json!({
+            "code": "tool_config_launch_unverified",
+            "params": { "detail": format!("{cause:#}") }
+        }))
+    })
 }
 
 #[derive(Debug)]

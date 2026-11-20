@@ -589,6 +589,43 @@ fn tool_round(result: bool) -> Value {
 }
 
 #[test]
+fn responses_standalone_outputs_reach_kiro_user_context_without_fake_tools() {
+    let body = json!({"model":"claude-haiku-4.5","input":[
+        {"type":"function_call_output","name":"codex_apps_open_page","namespace":"pages","output":"Page opened."},
+        {"type":"function_call_output","call_id":null,"name":"selected_page","output":[
+            {"type":"input_text","text":"Selected content."},
+            {"type":"input_image","image_url":"data:image/png;base64,aGk="}
+        ]}
+    ]});
+    let prepared = request::prepare(
+        ProtocolKind::OpenAiResponses,
+        &body,
+        "claude-haiku-4.5",
+        PROFILE,
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(prepared.tool_mapping.is_empty());
+    assert_eq!(
+        prepared.adjustments.len(),
+        1,
+        "report repeated notifications once"
+    );
+    let user = &prepared.body["conversationState"]["currentMessage"]["userInputMessage"];
+    let text = user["content"].as_str().unwrap();
+    assert!(text.contains("codex_apps_open_page"));
+    assert!(text.contains("\"namespace\":\"pages\""));
+    assert!(text.contains("selected_page"));
+    assert!(text.find("Page opened.").unwrap() < text.find("Selected content.").unwrap());
+    assert_eq!(
+        user["images"][0],
+        json!({"format":"png","source":{"bytes":"aGk="}})
+    );
+    assert!(user.get("userInputMessageContext").is_none());
+}
+
+#[test]
 fn native_requests_keep_tool_payloads_and_scoped_conversation_and_continuation_ids() {
     let prepare = |body: &Value, profile: &str, session: &str| {
         request::prepare(

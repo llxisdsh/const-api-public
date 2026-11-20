@@ -45,39 +45,34 @@ pub(crate) async fn forward_subscription_supplier_request_with_headers(
 }
 
 pub(crate) fn subscription_body_cache_identity(body: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    subscription_body_cache_identity_from_value(&serde_json::from_str(body).ok()?)
+}
+
+pub(crate) fn subscription_body_cache_identity_from_value(value: &serde_json::Value) -> Option<String> {
+    // Match Go's requestAffinitySession / requestAffinitySessionFromMap. A
+    // Claude session is more specific than a shared prompt-cache label, and
+    // an invalid earlier field must not hide a later usable conversation ID.
+    if let Some(session) = claude_code_session_id_from_value(value) {
+        return Some(session);
+    }
     let metadata = value
         .get("client_metadata")
         .and_then(serde_json::Value::as_object);
-    let candidate = metadata
-        .and_then(|metadata| metadata.get("session_id"))
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| {
-            metadata
-                .and_then(|metadata| metadata.get("thread_id"))
-                .and_then(serde_json::Value::as_str)
-        })
-        .or_else(|| value.get("session_id").and_then(serde_json::Value::as_str))
-        .or_else(|| value.get("sessionId").and_then(serde_json::Value::as_str))
-        .or_else(|| {
-            value
-                .get("conversation_id")
-                .and_then(serde_json::Value::as_str)
-        })
-        .or_else(|| {
-            value
-                .get("prompt_cache_key")
-                .and_then(serde_json::Value::as_str)
-        })
-        .or_else(|| {
-            let conversation = value.get("conversation")?;
-            conversation
-                .as_str()
-                .or_else(|| conversation.get("id").and_then(serde_json::Value::as_str))
-        })
-        .map(str::to_string)
-        .or_else(|| claude_code_session_id_from_body(body));
-    normalized_subscription_cache_identity(candidate.as_deref()).map(str::to_string)
+    [
+        metadata.and_then(|metadata| metadata.get("session_id")),
+        metadata.and_then(|metadata| metadata.get("thread_id")),
+        value.get("session_id"),
+        value.get("sessionId"),
+        value.get("conversation_id"),
+        value.get("prompt_cache_key"),
+        value.get("conversation"),
+        value.pointer("/conversation/id"),
+    ]
+    .into_iter()
+    .find_map(|candidate| {
+        normalized_subscription_cache_identity(candidate.and_then(serde_json::Value::as_str))
+    })
+    .map(str::to_string)
 }
 
 pub(crate) async fn forward_subscription_supplier_request_with_capacity(
@@ -1174,6 +1169,21 @@ pub(crate) fn response_content_type(resp: &reqwest::Response) -> String {
         .to_string()
 }
 
+async fn read_subscription_response_body(response: reqwest::Response) -> Result<String> {
+    let accepted = response.status().is_success();
+    response.text().await.map_err(|error| {
+        // A 2xx response can fail while reading an already-executed generation.
+        // Preserve uncertainty through endpoint/local/platform fallback, also
+        // after an OAuth refresh. Explicit HTTP rejections keep their policy.
+        let error = error.without_url();
+        if accepted {
+            crate::upstream_transport::UpstreamTransportError::AmbiguousRequest(error).into()
+        } else {
+            error.into()
+        }
+    })
+}
+
 pub(crate) fn codex_responses_url() -> String {
     codex_responses_url_override()
         .map(|value| value.trim().to_string())
@@ -1707,7 +1717,7 @@ mod buffered_response_tests {
     fn codex_http_continuation_store_survives_process_memory_loss() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("continuations.sqlite3");
-        let history = vec![serde_json::json!({
+        let history = [serde_json::json!({
             "type": "function_call",
             "call_id": "call_persisted",
             "name": "read_file",
@@ -3505,8 +3515,7 @@ mod buffered_response_tests {
             "token",
             r#"{"input":"hello","stream":true}"#.to_string(),
         )
-        .err()
-        .expect("missing model must fail");
+        .expect_err("missing model must fail");
 
         assert!(error.to_string().contains("missing a model"));
     }
@@ -3686,6 +3695,48 @@ header"}"#,
             ),
             "https://cloudcode-pa.googleapis.com/v1internal:countTokens"
         );
+    }
+
+    #[test]
+    fn antigravity_count_tokens_normalizes_only_its_envelope_and_controls() {
+        let body = serde_json::json!({
+            "contents": [{"parts": [{"text": "ignored when nested request exists"}]}],
+            "futureCounterOption": true,
+            "generate_content_request": {
+                "contents": [{"parts": [{"text": "count this"}]}],
+                "cachedContent": "cachedContents/owned",
+                "futureGenerationOption": {"keep": true},
+                "stream": true, "safety_settings": [],
+                "tool_config": {}, "session_id": "generation-only"
+            }
+        });
+        let (native, omitted) = antigravity_count_tokens_request(&body.to_string()).unwrap();
+        assert_eq!(
+            native["contents"],
+            body["generate_content_request"]["contents"]
+        );
+        assert_eq!(native["cachedContent"], "cachedContents/owned");
+        assert_eq!(native["futureCounterOption"], true);
+        assert_eq!(native["futureGenerationOption"]["keep"], true);
+        assert!(native.get("generate_content_request").is_none());
+        assert_eq!(
+            omitted,
+            ["stream", "safety_settings", "tool_config", "session_id"]
+        );
+        for invalid in [
+            serde_json::json!({"generateContentRequest": []}),
+            serde_json::json!({"generateContentRequest": {}, "generate_content_request": {}}),
+        ] {
+            assert!(antigravity_count_tokens_request(&invalid.to_string()).is_err());
+        }
+        let (native, _) =
+            antigravity_count_tokens_request(r#"{"generateContentRequest":null,"contents":[]}"#)
+                .unwrap();
+        assert_eq!(native, serde_json::json!({"contents": []}));
+        let (native, _) = antigravity_count_tokens_request(
+            r#"{"generateContentRequest":{},"contents":[{"parts":[{"text":"ignored"}]}]}"#,
+        ).unwrap();
+        assert!(native.get("contents").is_none());
     }
 
     #[test]

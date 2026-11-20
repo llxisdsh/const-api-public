@@ -1144,40 +1144,12 @@ fn prune_stale_workbuddy_const_profiles(
     endpoint_url: &str,
     api_key: &str,
 ) -> Result<()> {
-    let mut removed = HashSet::new();
-    let models = workbuddy_models_mut(root)?;
-    models.retain(|entry| {
+    prune_workbuddy_models(root, |entry| {
         let legacy_other_profile = workbuddy_model_uses_const_local_proxy(entry)
             && !workbuddy_model_uses_endpoint(entry, endpoint_url);
-        if (workbuddy_model_has_const_marker(entry) || legacy_other_profile)
+        (workbuddy_model_has_const_marker(entry) || legacy_other_profile)
             && !workbuddy_model_uses_connection(entry, endpoint_url, api_key)
-        {
-            if let Some(id) = entry.get("id").and_then(serde_json::Value::as_str) {
-                removed.insert(id.to_string());
-            }
-            return false;
-        }
-        true
-    });
-    if removed.is_empty() {
-        return Ok(());
-    }
-
-    let retained = models
-        .iter()
-        .filter_map(|entry| entry.get("id").and_then(serde_json::Value::as_str))
-        .map(str::to_string)
-        .collect::<HashSet<_>>();
-    if let Some(available) = root
-        .get_mut("availableModels")
-        .and_then(serde_json::Value::as_array_mut)
-    {
-        available.retain(|value| {
-            value
-                .as_str()
-                .is_none_or(|id| !removed.contains(id) || retained.contains(id))
-        });
-    }
+    })?;
     Ok(())
 }
 
@@ -1232,7 +1204,11 @@ pub(crate) fn apply_workbuddy_config_with_model_info_for_protocol(
         .iter()
         .map(|model| model.id.clone())
         .collect::<Vec<_>>();
-    prune_workbuddy_managed_models(&mut root, &endpoint_url, api_key, &model_ids)?;
+    let live = model_ids.iter().map(String::as_str).collect::<HashSet<_>>();
+    prune_workbuddy_models(&mut root, |entry| {
+        workbuddy_model_uses_connection(entry, &endpoint_url, api_key)
+            && entry["id"].as_str().is_some_and(|id| !live.contains(id))
+    })?;
     {
         let configured_models = workbuddy_models_mut(&mut root)?;
         for model in models {
@@ -1257,26 +1233,25 @@ pub(crate) fn apply_workbuddy_config_with_model_info_for_protocol(
     Ok(result)
 }
 
-fn prune_workbuddy_managed_models(
+fn prune_workbuddy_models(
     root: &mut serde_json::Value,
-    endpoint_url: &str,
-    api_key: &str,
-    model_ids: &[String],
-) -> Result<()> {
-    let live = model_ids.iter().map(String::as_str).collect::<HashSet<_>>();
+    should_remove: impl Fn(&serde_json::Value) -> bool,
+) -> Result<bool> {
     let mut removed = HashSet::new();
     let models = workbuddy_models_mut(root)?;
+    let original_len = models.len();
     models.retain(|entry| {
-        let Some(id) = entry.get("id").and_then(serde_json::Value::as_str) else {
+        if !should_remove(entry) {
             return true;
-        };
-        if workbuddy_model_uses_connection(entry, endpoint_url, api_key) && !live.contains(id) {
-            removed.insert(id.to_string());
-            false
-        } else {
-            true
         }
+        if let Some(id) = entry["id"].as_str() {
+            removed.insert(id.to_string());
+        }
+        false
     });
+    if models.len() == original_len {
+        return Ok(false);
+    }
     // A different connection can legitimately expose the same model ID.
     for entry in models.iter() {
         if let Some(id) = entry.get("id").and_then(serde_json::Value::as_str) {
@@ -1289,7 +1264,7 @@ fn prune_workbuddy_managed_models(
     {
         available.retain(|value| value.as_str().is_none_or(|id| !removed.contains(id)));
     }
-    Ok(())
+    Ok(true)
 }
 
 // WorkBuddy updates an additive array rather than replacing a managed provider
@@ -1396,40 +1371,192 @@ pub(crate) fn check_workbuddy_config(tool: &str, base_url: &str, api_key: &str) 
     Ok(result)
 }
 
-fn cleanup_unmanaged_workbuddy_models(
-    tool: &str,
-    result: &mut ToolApplyResult,
-    base_url: &str,
-    api_key: &str,
-) -> Result<()> {
-    let path = workbuddy_models_path(tool);
-    if !path.exists() {
-        return Ok(());
-    }
-    let endpoint_url = workbuddy_endpoint_url(base_url, ToolProtocol::OpenAiChat)?;
-    let before = fs::read(&path)?;
-    let mut root = serde_json::from_slice::<serde_json::Value>(&before)
-        .with_context(|| format!("parse {}", path.display()))?;
-    let original_len = workbuddy_models_mut(&mut root)?.len();
-    prune_workbuddy_managed_models(&mut root, &endpoint_url, api_key, &[])?;
-    if workbuddy_models_mut(&mut root)?.len() == original_len {
-        return Ok(());
-    }
-    let mut after = serde_json::to_vec_pretty(&root)?;
-    after.push(b'\n');
-    record_post_restore_cleanup(result, &path, before, Some(after), tool)
+// A normal WorkBuddy setup writes all marked rows for one connection. Mixed or
+// unmarked files provide no evidence that another profile took over the file.
+fn workbuddy_managed_connection(root: &serde_json::Value) -> Option<(&str, &str)> {
+    let models = workbuddy_models(root).ok()?;
+    let mut marked = models
+        .iter()
+        .filter(|entry| workbuddy_model_has_const_marker(entry));
+    let first = marked.next()?;
+    let url = first.get("url")?.as_str()?.trim().trim_end_matches('/');
+    let key = first.get("apiKey")?.as_str()?;
+    (!url.is_empty()
+        && !key.is_empty()
+        && workbuddy_model_uses_connection(first, url, key)
+        && marked.all(|entry| workbuddy_model_uses_connection(entry, url, key)))
+    .then_some((url, key))
 }
 
-pub(crate) fn remove_workbuddy_config(tool: &str, base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
+fn workbuddy_model_identity(entry: &serde_json::Value) -> Option<(&str, &str, &str)> {
+    Some((
+        entry["id"].as_str()?,
+        entry["url"]
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .trim_end_matches('/'),
+        entry["apiKey"].as_str().unwrap_or_default(),
+    ))
+}
+
+fn workbuddy_model_is_managed(
+    entry: &serde_json::Value,
+    endpoint_url: &str,
+    api_key: &str,
+) -> bool {
+    let (Some(url), Some(key)) = (entry["url"].as_str(), entry["apiKey"].as_str()) else {
+        return false;
+    };
+    entry["id"].is_string()
+        && (workbuddy_model_has_const_marker(entry)
+            || ((workbuddy_model_uses_connection(entry, endpoint_url, api_key)
+                || workbuddy_model_uses_const_local_proxy(entry))
+                && workbuddy_model_is_configured(entry, url.trim().trim_end_matches('/'), key)))
+}
+
+fn clean_restored_workbuddy_models(
+    clean: &mut serde_json::Value,
+    live: &serde_json::Value,
+    matches_applied: bool,
+    recorded_connection: Option<(&str, &str)>,
+    endpoint_url: &str,
+    api_key: &str,
+) -> Result<bool> {
+    // The manifest identifies named rows, but more than one connection may use
+    // the same name. Keep independent live rows, including manual models.
+    let live_models = workbuddy_models(live)?;
+    let mut foreign_by_identity = HashMap::new();
+    let mut missing_rows = Vec::new();
+    let mut available_foreign = Vec::new();
+    let mut disabled_foreign = HashSet::new();
+    if !matches_applied {
+        for entry in live_models {
+            if !workbuddy_model_uses_connection(entry, endpoint_url, api_key)
+                && !recorded_connection
+                    .is_some_and(|(url, key)| workbuddy_model_uses_connection(entry, url, key))
+                && let Some(id) = workbuddy_model_identity(entry)
+            {
+                foreign_by_identity.insert(id, missing_rows.len());
+                missing_rows.push(Some(entry));
+                if workbuddy_model_is_available(live, entry) {
+                    available_foreign.push(id.0.to_owned());
+                } else {
+                    disabled_foreign.insert(id.0);
+                }
+            }
+        }
+    }
+    let mut changed = prune_workbuddy_models(clean, |entry| {
+        workbuddy_model_is_managed(entry, endpoint_url, api_key)
+            && !workbuddy_model_identity(entry)
+                .is_some_and(|id| foreign_by_identity.contains_key(&id))
+    })?;
+    if !missing_rows.is_empty() {
+        let models = workbuddy_models_mut(clean)?;
+        for entry in models.iter_mut() {
+            if let Some(&index) =
+                workbuddy_model_identity(entry).and_then(|id| foreign_by_identity.get(&id))
+                && let Some(active) = missing_rows[index].take()
+                && entry != active
+            {
+                *entry = active.clone();
+                changed = true;
+            }
+        }
+        for entry in missing_rows.into_iter().flatten() {
+            models.push(entry.clone());
+            changed = true;
+        }
+        if let Some(available) = clean
+            .get_mut("availableModels")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            let before = available.len();
+            available.retain(|id| id.as_str().is_none_or(|id| !disabled_foreign.contains(id)));
+            changed |= before != available.len();
+        }
+        let count = clean["availableModels"].as_array().map(Vec::len);
+        include_workbuddy_available_models(clean, &available_foreign);
+        changed |= count != clean["availableModels"].as_array().map(Vec::len);
+    }
+    Ok(changed)
+}
+
+pub(crate) fn remove_workbuddy_config(
+    tool: &str,
+    base_url: &str,
+    api_key: &str,
+) -> Result<ToolApplyResult> {
     let storage_tool = codebuddy_storage_tool(tool);
-    let mut result = restore_tool_config_from_manifest(storage_tool)?;
-    if result
-        .details
-        .get("manifest_entries_restored")
-        .map(String::as_str)
-        == Some("0")
-    {
-        cleanup_unmanaged_workbuddy_models(storage_tool, &mut result, base_url, api_key)?;
+    let path = workbuddy_models_path(storage_tool);
+    let endpoint_url = workbuddy_endpoint_url(base_url, ToolProtocol::OpenAiChat)?;
+    let mut result = restore_tool_config_files(
+        storage_tool,
+        |_| true,
+        |file, current, ownership, matches_applied| {
+            if file != path {
+                return restore_owned_tool_file(file, current, ownership, matches_applied);
+            }
+            let Some(current) = current else {
+                return Ok((None, 0));
+            };
+            let live: serde_json::Value = serde_json::from_slice(current)
+                .with_context(|| format!("parse {}", file.display()))?;
+            let applied = if matches_applied {
+                None
+            } else {
+                ownership_applied_bytes(ownership)?
+                    .map(|bytes| serde_json::from_slice(&bytes))
+                    .transpose()
+                    .context("parse recorded WorkBuddy models")?
+            };
+            let recorded = applied.as_ref().and_then(workbuddy_managed_connection);
+            if recorded
+                .zip(workbuddy_managed_connection(&live))
+                .is_some_and(|(old, active)| old != active)
+            {
+                return Ok((Some(current.to_vec()), 1));
+            }
+            let (restored, preserved) =
+                restore_owned_tool_file(file, Some(current), ownership, matches_applied)?;
+            let mut clean = match &restored {
+                Some(bytes) => serde_json::from_slice(bytes)?,
+                None => workbuddy_empty_models_root(tool),
+            };
+            if clean_restored_workbuddy_models(
+                &mut clean,
+                &live,
+                matches_applied,
+                recorded,
+                &endpoint_url,
+                api_key,
+            )? {
+                return Ok((Some(json_text(&clean)?.into_bytes()), preserved));
+            }
+            Ok((restored, preserved))
+        },
+    )?;
+    // A skill-only manifest provides no ownership evidence for legacy models.
+    let restored_models = result
+        .file_statuses
+        .iter()
+        .any(|status| Path::new(&status.path) == path);
+    if !restored_models && let Some(before) = read_optional_file(&path)? {
+        let mut root =
+            serde_json::from_slice(&before).with_context(|| format!("parse {}", path.display()))?;
+        if prune_workbuddy_models(&mut root, |entry| {
+            workbuddy_model_uses_connection(entry, &endpoint_url, api_key)
+                && workbuddy_model_is_managed(entry, &endpoint_url, api_key)
+        })? {
+            record_post_restore_cleanup(
+                &mut result,
+                &path,
+                before,
+                Some(json_text(&root)?.into_bytes()),
+                storage_tool,
+            )?;
+        }
     }
     result.tool = tool.to_string();
     Ok(result)
@@ -1701,22 +1828,127 @@ pub(crate) fn check_vscode_config(base_url: &str, api_key: &str) -> Result<ToolA
     Ok(result)
 }
 
-pub(crate) fn remove_vscode_config() -> Result<ToolApplyResult> {
-    let mut result = restore_tool_config_from_manifest("vscode")?;
-    // Older releases wrote VS Code's CONST API provider before the ownership
-    // manifest existed. With no manifest entry, a normal restore is a no-op
-    // and the provider remains active (and the dock status stays green).
-    // Remove only our unmistakably branded legacy provider in that case;
-    // manifest-backed cancellation still restores the user's original value.
-    if result
-        .details
-        .get("manifest_entries_restored")
-        .map(String::as_str)
-        == Some("0")
-    {
-        cleanup_unmanaged_vscode_provider_aliases(&mut result)?;
-    }
-    Ok(result)
+fn vscode_is_const_provider(provider: &serde_json::Value) -> bool {
+    matches!(
+        provider["name"].as_str(),
+        Some(CONST_API_DISPLAY_NAME | CONST_API_LEGACY_DISPLAY_NAME)
+    ) && provider["vendor"] == "customendpoint"
+}
+
+fn vscode_provider_uses_other_local_profile(
+    provider: &serde_json::Value,
+    current_port: u16,
+) -> bool {
+    let Some(key) = provider["apiKey"].as_str().filter(|key| !key.is_empty()) else {
+        return false;
+    };
+    let bearer = format!("Bearer {key}");
+    vscode_is_const_provider(provider)
+        && provider["models"].as_array().is_some_and(|models| {
+            models.iter().any(|model| {
+                let Some(url) = model["url"]
+                    .as_str()
+                    .and_then(|url| reqwest::Url::parse(url).ok())
+                else {
+                    return false;
+                };
+                model["id"].as_str().is_some_and(|id| !id.is_empty())
+                    && model
+                        .pointer("/requestHeaders/Authorization")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(bearer.as_str())
+                    && matches!(
+                        url.path(),
+                        "/v1/responses" | "/v1/chat/completions" | "/anthropic/v1/messages"
+                    )
+                    && local_tool_url_port(&url.origin().ascii_serialization())
+                        .is_some_and(|port| port != current_port)
+            })
+        })
+}
+
+pub(crate) fn remove_vscode_config(base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
+    let endpoints = [
+        vscode_endpoint_url(base_url, ToolProtocol::OpenAiResponses)?,
+        vscode_endpoint_url(base_url, ToolProtocol::OpenAiChat)?,
+        vscode_endpoint_url(base_url, ToolProtocol::AnthropicMessages)?,
+    ];
+    // The Copilot extension reads the shared utility setting even when another
+    // CONST profile has replaced this profile's provider in chatLanguageModels.json.
+    let config = vscode_chat_language_models_path();
+    let settings = vscode_user_settings_path();
+    let live = read_json5_or_default(&config, serde_json::json!([]))?;
+    let keep_utility = local_tool_url_port(base_url).is_some_and(|port| {
+        live.as_array().is_some_and(|providers| {
+            providers
+                .iter()
+                .any(|provider| vscode_provider_uses_other_local_profile(provider, port))
+        })
+    });
+    remove_tool_config_with_json_cleanup(
+        "vscode",
+        &config,
+        keep_utility.then_some(settings.as_path()),
+        |root, live| {
+            let mut live_models = HashSet::new();
+            for provider in live
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(key) = provider["apiKey"].as_str()
+                    && let Some(models) = provider["models"].as_array()
+                {
+                    for model in models {
+                        if let (Some(id), Some(url)) = (model["id"].as_str(), model["url"].as_str())
+                        {
+                            live_models.insert((key, id, url));
+                        }
+                    }
+                }
+            }
+            let providers = root.as_array_mut().ok_or_else(|| {
+                anyhow!("VS Code chatLanguageModels.json must contain a JSON array")
+            })?;
+            let mut changed = false;
+            providers.retain_mut(|provider| {
+                if !vscode_is_const_provider(provider) {
+                    return true;
+                }
+                let Some(key) = provider["apiKey"].as_str().map(str::to_owned) else {
+                    return true;
+                };
+                let bearer = format!("Bearer {key}");
+                let Some(models) = provider
+                    .get_mut("models")
+                    .and_then(serde_json::Value::as_array_mut)
+                else {
+                    return true;
+                };
+                let before = models.len();
+                models.retain(|model| {
+                    let historical = live.is_some()
+                        && model["id"].as_str().zip(model["url"].as_str()).is_some_and(
+                            |(id, url)| !live_models.contains(&(key.as_str(), id, url)),
+                        );
+                    let endpoint_matches = model["url"].as_str().is_some_and(|url| {
+                        endpoints.iter().any(|endpoint| {
+                            tool_cleanup_connection_matches(
+                                url, &key, endpoint, api_key, historical,
+                            )
+                        })
+                    });
+                    let auth = model
+                        .pointer("/requestHeaders/Authorization")
+                        .and_then(serde_json::Value::as_str);
+                    !(endpoint_matches && auth.is_none_or(|token| token == bearer))
+                });
+                changed |= before != models.len();
+                before == models.len() || !models.is_empty()
+            });
+            Ok(changed)
+        },
+    )
 }
 #[cfg(test)]
 pub(crate) fn apply_opencode_config(base_url: &str, api_key: &str) -> Result<ToolApplyResult> {
@@ -1966,24 +2198,35 @@ pub(crate) fn check_openclaw_config(root_url: &str, api_key: &str) -> Result<Too
 
 #[cfg(test)]
 pub(crate) fn apply_hermes_config(root_url: &str, api_key: &str) -> Result<ToolApplyResult> {
-    apply_hermes_config_for_protocol(root_url, api_key, ToolProtocol::OpenAiChat)
+    apply_hermes_config_for_protocol(root_url, api_key, ToolProtocol::OpenAiChat, &[])
 }
 
 pub(crate) fn apply_hermes_config_for_protocol(
     root_url: &str,
     api_key: &str,
     protocol: ToolProtocol,
+    image_models: &[&str],
 ) -> Result<ToolApplyResult> {
     resolve_tool_protocol("hermes", Some(protocol.as_str()))?;
     let mut result = ToolApplyBuilder::default();
     let mut plans = Vec::new();
     for path in hermes_config_paths() {
-        let raw = if path.exists() {
-            fs::read_to_string(&path)?
+        let root = parse_hermes_config(&read_text_or_empty(&path)?)?;
+        let images = if !image_models.is_empty()
+            && hermes_supports_named_images(&path)
+            && !hermes_image_env_preference(&path, &root)
+        {
+            image_models
         } else {
-            String::new()
+            &[]
         };
-        let content = upsert_hermes_sections_for_protocol(&raw, root_url, api_key, protocol)?;
+        let content = upsert_hermes_sections_for_protocol(
+            root,
+            root_url,
+            api_key,
+            protocol,
+            images,
+        )?;
         plans.push((path, content));
     }
     for (path, content) in plans {
@@ -1999,20 +2242,18 @@ pub(crate) fn check_hermes_config(root_url: &str, api_key: &str) -> Result<ToolA
     let configs = hermes_config_paths()
         .into_iter()
         .map(|path| {
-            let raw = if path.exists() {
-                fs::read_to_string(&path)?
-            } else {
-                String::new()
-            };
-            Ok((path, raw))
+            let root = parse_hermes_config(&read_text_or_empty(&path)?)?;
+            Ok((path, root))
         })
         .collect::<Result<Vec<_>>>()?;
     let protocol = configs
         .iter()
-        .find_map(|(_, raw)| detect_hermes_tool_protocol(raw))
+        .find_map(|(_, root)| detect_hermes_tool_protocol(root))
         .unwrap_or(ToolProtocol::OpenAiChat);
-    for (path, raw) in configs {
-        let content = upsert_hermes_sections_for_protocol(&raw, root_url, api_key, protocol)?;
+    for (path, root) in configs {
+        // A missing or ambiguous optional image model never blocks launching chat.
+        let content =
+            upsert_hermes_sections_for_protocol(root, root_url, api_key, protocol, &[])?;
         observe_text(&path, &content, &mut result)?;
     }
     let mut result = result.finish("hermes");
@@ -2049,7 +2290,7 @@ pub(crate) fn apply_tool_config_by_name_for_protocol(
             apply_opencode_config_with_model_info_for_protocol(base_url, api_key, &[], protocol)
         }
         "openclaw" => apply_openclaw_config_for_protocol(root_url, api_key, protocol),
-        "hermes" => apply_hermes_config_for_protocol(root_url, api_key, protocol),
+        "hermes" => apply_hermes_config_for_protocol(root_url, api_key, protocol, &[]),
         "vscode" => {
             apply_vscode_config_with_model_info_for_protocol(base_url, api_key, &[], protocol)
         }
@@ -2151,7 +2392,7 @@ pub(crate) fn remove_tool_config_by_name(
         base_url,
         root_url,
         api_key,
-        ToolConfigRemoveMode::RestorePreConst,
+        ToolConfigRemoveMode::default_for_tool(tool),
     )
 }
 
@@ -2175,21 +2416,27 @@ pub(crate) fn remove_tool_config_by_name_with_mode(
         }
         "claude" => remove_claude_config_with_mode(root_url, api_key, remove_mode),
         "claude-desktop" => remove_claude_desktop_config_with_mode(root_url, api_key, remove_mode),
-        "claude-science" => remove_claude_science_config(),
+        "claude-science" | "copilot" | "anythingllm" | "vibe-trading" => {
+            remove_tool_env_connection(tool, root_url, api_key)
+        }
         "gemini" => remove_gemini_config_with_mode(root_url, api_key, remove_mode),
         "opencode" => remove_opencode_config(base_url, api_key),
         "openclaw" => remove_openclaw_config(root_url, api_key),
         "hermes" => remove_hermes_config(root_url, api_key),
-        "vscode" => remove_vscode_config(),
+        "vscode" => remove_vscode_config(base_url, api_key),
         "workbuddy" | "workbuddy-ai" | "codebuddy" | "codebuddy-cn" => {
             remove_workbuddy_config(tool, base_url, api_key)
         }
+        "qoder" | "qoder-cn" => remove_qoder_config(tool, base_url, api_key),
+        "pi" | "mimocode" | "openscience" => {
+            remove_named_json_tool_provider(tool, base_url, api_key)
+        }
         "octop" => remove_octop_config(),
-        "copilot" | "copilot-desktop" | "raven" | "pi" | "cline" | "reasonix"
-        | "deepseek-harness" | "open-interpreter" | "goose" | "mistral-vibe" | "open-design"
-        | "kimicode" | "mimocode" | "qwencode" | "openscience" | "vibe-trading" | "zcode"
-        | "qoder" | "qoder-cn" | "toonflow"
-        | "anythingllm" | "grok-build" | "minimax-code" | "muse-code" => remove_additional_tool_config(tool),
+        "copilot-desktop" | "raven" | "cline" | "reasonix" | "deepseek-harness"
+        | "open-interpreter" | "goose" | "mistral-vibe" | "open-design" | "kimicode"
+        | "qwencode" | "zcode" | "toonflow" | "grok-build" | "minimax-code" | "muse-code" => {
+            remove_additional_tool_config(tool)
+        }
         _ => Err(anyhow!("unknown tool: {tool}")),
     }?;
     attach_tool_config_remove_mode(&mut result, remove_mode, None);

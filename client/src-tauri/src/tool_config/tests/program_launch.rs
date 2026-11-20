@@ -1536,19 +1536,21 @@
 
     #[test]
     fn locator_edition_follows_launch_policy_instead_of_executable_extension() {
-        for (tool, path, expected) in [
-            ("deepseek-harness", "D:/Apps/DeepSeek Harness/DeepSeek Harness.exe", Some("desktop")),
-            ("deepseek-harness", "C:/npm/dsh.cmd", Some("cli")),
-            ("deepseek-harness", "C:/tools/dsh.exe", Some("cli")),
-            ("minimax-code", "C:/Apps/MiniMax Code.exe", Some("desktop")),
-            ("minimax-code", "C:/tools/mcode.exe", Some("cli")),
-            ("qwencode", "C:/npm/qwen.cmd", Some("cli")),
-            ("kimicode", "C:/Apps/Kimi Code.exe", Some("desktop")),
-            ("vscode", "C:/bin/code.cmd", Some("desktop")),
-            ("claude", "C:/tools/claude.exe", Some("cli")),
-            ("deepseek-harness", "C:/tools/node.exe", None),
+        // Edition consumes discovery's declared kind. Windows discovery must
+        // not be inferred from these fixture paths while running on Linux.
+        for (tool, path, kind, expected) in [
+            ("deepseek-harness", "D:/Apps/DeepSeek Harness/DeepSeek Harness.exe", "windows_exe", Some("desktop")),
+            ("deepseek-harness", "C:/npm/dsh.cmd", "command", Some("cli")),
+            ("deepseek-harness", "C:/tools/dsh.exe", "command", Some("cli")),
+            ("minimax-code", "C:/Apps/MiniMax Code.exe", "windows_exe", Some("desktop")),
+            ("minimax-code", "C:/tools/mcode.exe", "command", Some("cli")),
+            ("qwencode", "C:/npm/qwen.cmd", "command", Some("cli")),
+            ("kimicode", "C:/Apps/Kimi Code.exe", "windows_exe", Some("desktop")),
+            ("vscode", "C:/bin/code.cmd", "command", Some("desktop")),
+            ("claude", "C:/tools/claude.exe", "command", Some("cli")),
+            ("deepseek-harness", "C:/tools/node.exe", "windows_exe", None),
         ] {
-            let candidate = ToolProgramCandidate { path: path.into(), kind: selected_path_kind(tool, path), ..Default::default() };
+            let candidate = ToolProgramCandidate { path: path.into(), kind: kind.into(), ..Default::default() };
             assert_eq!(tool_program_candidate_edition(tool, &candidate), expected, "{tool}: {path}");
         }
     }
@@ -2267,6 +2269,46 @@
             windows_quote_process_argument(OsStr::new(r#"say "hello""#)),
             r#""say \"hello\"""#
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn native_image_path_resolves_the_live_executable_and_only_owned_hosts_block() {
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentProcess, PROCESS_NAME_NATIVE, QueryFullProcessImageNameW,
+        };
+        // SAFETY: the current-process pseudo handle needs no release.
+        let handle = unsafe { GetCurrentProcess() };
+        let mut buffer = vec![0_u16; WINDOWS_PROCESS_IMAGE_BUFFER_CHARS];
+        let mut len = buffer.len() as u32;
+        // SAFETY: the buffer is writable for len UTF-16 code units.
+        let read = unsafe {
+            QueryFullProcessImageNameW(handle, PROCESS_NAME_NATIVE, buffer.as_mut_ptr(), &mut len)
+        };
+        assert_ne!(read, 0);
+        let native = String::from_utf16(&buffer[..len as usize]).unwrap();
+        let expected = normalized_windows_process_path(&std::env::current_exe().unwrap());
+        let resolved = windows_dos_path_for_native_image(&native, &mut buffer).unwrap();
+        assert_eq!(normalized_windows_process_path(Path::new(&resolved)), expected);
+        assert!(
+            windows_dos_path_for_native_image(r"\Device\UnmappedFixture\tool.exe", &mut buffer)
+                .is_none()
+        );
+
+        let mut scope = ToolProcessScope {
+            command_line_markers: BTreeSet::from([r"c:\unrelated-fixture\worker.js".into()]),
+            ..Default::default()
+        };
+        assert!(
+            windows_host_probe_failure(handle, &scope, anyhow!("identity failure"))
+                .unwrap()
+                .is_none()
+        );
+        scope.exact_executable_paths.insert(expected.clone());
+        assert!(windows_host_probe_failure(handle, &scope, anyhow!("identity failure")).is_err());
+        scope.exact_executable_paths.clear();
+        scope.command_line_markers.insert(expected);
+        assert!(windows_host_probe_failure(handle, &scope, anyhow!("identity failure")).is_err());
     }
 
     #[cfg(target_os = "windows")]

@@ -123,12 +123,11 @@ async fn finish_supplier_start(
         fail_supplier_start(state, &message).await;
         return Err(message);
     }
-    let suppliers: Vec<SupplierConfig> = cfg
+    let mut suppliers: Vec<SupplierConfig> = cfg
         .channels
         .iter()
         .filter(|channel| {
-            channel.enabled
-                && crate::source_driver::channel_is_platform_shareable(channel)
+            crate::source_driver::channel_shares_to_market(channel)
                 && supplier_channel_selected(&channel.id, &requested_channel_ids)
                 && startable_channel_ids.contains(&channel.id)
         })
@@ -173,17 +172,6 @@ async fn finish_supplier_start(
             return Err(message);
         }
     }
-    let agent_configs = supplier_agent_groups(
-        cfg.client_id.clone(),
-        suppliers,
-        access_token,
-        state.account_refresh_notify.clone(),
-    );
-    let transport_preference = agent_configs
-        .first()
-        .and_then(|group| supplier_agent_transport_candidates(group).first().cloned())
-        .map(|candidate| candidate.transport)
-        .unwrap_or_else(|| "websocket".to_string());
     update_local_channel_readiness(
         &state.local_channel_readiness,
         &state.local_model_quota_routes,
@@ -193,31 +181,42 @@ async fn finish_supplier_start(
     if !runtime.starting {
         return Ok(runtime.status());
     }
+    // A withdrawal between validation and handoff cancels only its own channel.
+    let live = state.proxy_config.snapshot().map_err(|err| err.to_string())?;
+    retain_shared_start_channels(&live, &mut suppliers, &mut health);
+    let agent_configs = supplier_agent_groups(
+        cfg.client_id.clone(),
+        suppliers,
+        access_token,
+        state.account_refresh_notify.clone(),
+    );
+    let Some(first_group) = agent_configs.first() else {
+        runtime.starting = false;
+        return Ok(runtime.status());
+    };
+    let server_ws_url = first_group.server_ws_url.clone();
+    let server_quic_url = first_group.server_quic_url.clone();
+    let transport_preference = supplier_agent_transport_candidates(first_group)
+        .first()
+        .map(|candidate| candidate.transport.clone())
+        .unwrap_or_else(|| "websocket".to_string());
     let previous_health = runtime.status().channels;
     preserve_last_observed_http_versions(&mut health, &previous_health);
     let replace_all_channels = requested_channel_ids.is_empty();
     if replace_all_channels {
-        let desired_endpoint_keys: std::collections::HashSet<String> = agent_configs
-            .iter()
-            .map(SupplierAgentConfig::endpoint_key)
-            .collect();
-        let stale_endpoints: Vec<String> = runtime
-            .channel_agents
-            .keys()
-            .filter(|endpoint_key| !desired_endpoint_keys.contains(*endpoint_key))
-            .cloned()
-            .collect();
-        for endpoint_key in stale_endpoints {
-            if let Some(handle) = runtime.channel_agents.remove(&endpoint_key) {
-                let _ = handle.agent_shutdown.send(());
-                if let Some(stop) = handle.monitor_shutdown {
-                    let _ = stop.send(());
-                }
-                clear_supplier_transport_nodes(&runtime.transport_state, &handle.node_ids);
-                runtime
-                    .nodes
-                    .retain(|node_id| !handle.node_ids.contains(node_id));
-            }
+        let desired: HashMap<_, HashSet<_>> = agent_configs.iter().map(|group| {
+            (group.endpoint_key(), group.channel_ids().into_iter().collect())
+        }).collect();
+        let mut withdrawn = Vec::new();
+        for (endpoint, handle) in &runtime.channel_agents {
+            let wanted = desired.get(endpoint);
+            withdrawn.extend(handle.channel_ids.iter()
+                .filter(|id| wanted.is_none_or(|channels| !channels.contains(*id))).cloned());
+        }
+        if !withdrawn.is_empty() {
+            // Use the same drain as an individual withdrawal, including for a
+            // missing sibling on an endpoint that still has other channels.
+            stop_supplier_channel_agents(&mut runtime, &withdrawn);
         }
     }
     let mut new_nodes = Vec::new();
@@ -327,7 +326,7 @@ async fn finish_supplier_start(
             let (agent_shutdown_tx, agent_shutdown_rx) = oneshot::channel();
             let (monitor_shutdown_tx, monitor_shutdown_rx) = oneshot::channel();
             let (register_update_tx, register_update_rx) =
-                mpsc::channel::<SupplierRegistrationUpdate>(8);
+                registration_channel();
             spawn_logged(
                 "supplier channel monitor",
                 monitor_supplier_channels(
@@ -368,26 +367,8 @@ async fn finish_supplier_start(
     runtime.running = true;
     runtime.starting = false;
     runtime.node_id = runtime.nodes.first().cloned().unwrap_or_default();
-    runtime.server_ws_url = cfg
-        .channels
-        .iter()
-        .find(|channel| {
-            channel.enabled
-                && crate::source_driver::channel_is_platform_shareable(channel)
-                && supplier_channel_selected(&channel.id, &requested_channel_ids)
-        })
-        .map(|channel| channel.server_ws_url.clone())
-        .unwrap_or_default();
-    runtime.server_quic_url = cfg
-        .channels
-        .iter()
-        .find(|channel| {
-            channel.enabled
-                && crate::source_driver::channel_is_platform_shareable(channel)
-                && supplier_channel_selected(&channel.id, &requested_channel_ids)
-        })
-        .map(|channel| channel.server_quic_url.clone())
-        .unwrap_or_default();
+    runtime.server_ws_url = server_ws_url;
+    runtime.server_quic_url = server_quic_url;
     runtime.transport_preference = transport_preference;
     runtime.nodes.retain(|node_id| !new_nodes.contains(node_id));
     runtime.nodes.extend(new_nodes);
@@ -409,6 +390,19 @@ async fn finish_supplier_start(
         String::new()
     };
     Ok(runtime.status())
+}
+
+fn retain_shared_start_channels(
+    live: &ClientConfig,
+    suppliers: &mut Vec<SupplierConfig>,
+    health: &mut Vec<SupplierChannelHealth>,
+) {
+    let shared: HashSet<&str> = live.channels.iter()
+        .filter(|channel| crate::source_driver::channel_shares_to_market(channel))
+        .map(|channel| channel.id.as_str())
+        .collect();
+    suppliers.retain(|supplier| shared.contains(supplier.channel_id.as_str()));
+    health.retain(|item| shared.contains(item.channel_id.as_str()));
 }
 
 async fn fail_supplier_start(state: &AppState, message: &str) {
@@ -436,77 +430,12 @@ pub(crate) async fn activate_supplier_channel_inner(
         .iter_mut()
         .find(|channel| channel.id == channel_id)
         .ok_or_else(|| format!("channel {channel_id} was not found"))?;
-    let platform_shareable = crate::source_driver::channel_is_platform_shareable(channel);
-    if channel.enabled || channel.share_enabled {
+    if channel.enabled {
         return Err("channel must be saved as disabled before atomic activation".to_string());
     }
     channel.enabled = true;
-    channel.share_enabled = platform_shareable;
-    let selected_ids = vec![channel_id.clone()];
-    if !platform_shareable {
-        return activate_local_only_channel_inner(state, original_cfg, cfg, selected_ids).await;
-    }
-
-    let access_token = state.account.lock().await.access_token_handle();
-    {
-        let mut runtime = state.supplier.lock().await;
-        if runtime.starting {
-            return Err("another supplier operation is already in progress".to_string());
-        }
-        runtime.starting = true;
-        runtime.last_error.clear();
-        stop_supplier_channel_agents(&mut runtime, std::slice::from_ref(&channel_id));
-        update_supplier_runtime_after_channel_stop(&mut runtime, true);
-        if !runtime.running {
-            clear_supplier_transport_state(&runtime.transport_state);
-            update_supplier_transport_state(&runtime.transport_state, "startup", "starting", "");
-        }
-    }
-
-    let observed_health = match tokio::time::timeout(
-        SUPPLIER_ACTIVATION_PROBE_TIMEOUT,
-        crate::detection::with_channel_check_deadline(
-            SUPPLIER_ACTIVATION_PROBE_TIMEOUT - Duration::from_secs(2),
-            prepare_supplier_channels_with_mode(
-                &mut cfg,
-                &selected_ids,
-                SupplierCheckMode::Activation,
-            ),
-        ),
-    )
-    .await
-    {
-        Ok(Ok(health)) => health,
-        Ok(Err(err)) => {
-            let message = err.to_string();
-            fail_supplier_start(state, &message).await;
-            return Err(message);
-        }
-        Err(_) => {
-            let message = "channel activation timed out; the channel remains disabled";
-            fail_supplier_start(state, message).await;
-            return Err(message.to_string());
-        }
-    };
-
-    finish_supplier_start(
-        state,
-        original_cfg,
-        cfg,
-        access_token,
-        selected_ids,
-        observed_health,
-        false,
-    )
-    .await
-}
-
-async fn activate_local_only_channel_inner(
-    state: &AppState,
-    original_cfg: ClientConfig,
-    mut cfg: ClientConfig,
-    selected_ids: Vec<String>,
-) -> Result<SupplierStatus, String> {
+    let publish = crate::source_driver::channel_shares_to_market(channel);
+    let selected_ids = vec![channel_id];
     {
         let mut runtime = state.supplier.lock().await;
         if runtime.starting {
@@ -519,11 +448,7 @@ async fn activate_local_only_channel_inner(
         SUPPLIER_ACTIVATION_PROBE_TIMEOUT,
         crate::detection::with_channel_check_deadline(
             SUPPLIER_ACTIVATION_PROBE_TIMEOUT - Duration::from_secs(2),
-            prepare_local_only_channels_with_mode(
-                &mut cfg,
-                &selected_ids,
-                SupplierCheckMode::Activation,
-            ),
+            prepare_channels_with_mode(&mut cfg, &selected_ids, SupplierCheckMode::Activation, |_| true),
         ),
     )
     .await
@@ -541,6 +466,12 @@ async fn activate_local_only_channel_inner(
         }
     };
 
+    // One upstream check serves both local readiness and market admission.
+    // The transport registers only after platform authentication succeeds.
+    if publish {
+        let token = state.account.lock().await.access_token_handle();
+        return finish_supplier_start(state, original_cfg, cfg, token, selected_ids, observed_health, false).await;
+    }
     let mut health = successful_supplier_monitor_health(&observed_health);
     if !health.iter().any(|item| item.status == "available") {
         let message = observed_health
@@ -750,7 +681,7 @@ pub(crate) async fn prepare_supplier_channels_with_mode(
     mode: SupplierCheckMode,
 ) -> Result<Vec<SupplierChannelHealth>> {
     prepare_channels_with_mode(cfg, channel_ids, mode, |channel| {
-        crate::source_driver::channel_is_platform_shareable(channel)
+        crate::source_driver::channel_shares_to_market(channel)
     })
     .await
 }
@@ -759,16 +690,8 @@ async fn prepare_local_only_channels_snapshot(
     cfg: &mut ClientConfig,
     channel_ids: &[String],
 ) -> Result<Vec<SupplierChannelHealth>> {
-    prepare_local_only_channels_with_mode(cfg, channel_ids, SupplierCheckMode::Snapshot).await
-}
-
-async fn prepare_local_only_channels_with_mode(
-    cfg: &mut ClientConfig,
-    channel_ids: &[String],
-    mode: SupplierCheckMode,
-) -> Result<Vec<SupplierChannelHealth>> {
-    prepare_channels_with_mode(cfg, channel_ids, mode, |channel| {
-        !crate::source_driver::channel_is_platform_shareable(channel)
+    prepare_channels_with_mode(cfg, channel_ids, SupplierCheckMode::Snapshot, |channel| {
+        !crate::source_driver::channel_shares_to_market(channel)
     })
     .await
 }
@@ -919,8 +842,6 @@ pub(crate) async fn validate_supplier_channel(
     let execution_kind = lifecycle_channel_execution_kind(&next_channel)?;
     let retained_subscription = execution_kind != ExecutionKind::HttpSurface
         || crate::coding_plan::has_quota(next_channel.source_driver());
-    next_channel.enabled = true;
-    next_channel.share_enabled = crate::source_driver::channel_is_platform_shareable(&next_channel);
     let supplier_config = supplier_from_channel(&next_channel);
     if retained_subscription && !detection.quota_windows.is_empty() {
         let mut state = subscription_safety_state_for_channel(&supplier_config)?;
@@ -939,7 +860,10 @@ pub(crate) async fn validate_supplier_channel(
         false
     };
 
-    let test = if mode == SupplierCheckMode::FullInteractive && !quota_reserve_blocked {
+    // Catalog/credential validation can admit an image-only channel, but must
+    // not silently purchase a generation. Explicit model testing is separate.
+    let test = if mode == SupplierCheckMode::FullInteractive && !quota_reserve_blocked
+        && !channel_has_only_non_text_models(&next_channel) {
         if let Some(report) = &detection.availability {
             report.test.clone()
         } else { Some(
@@ -1357,6 +1281,25 @@ mod lifecycle_config_tests {
     use super::*;
 
     #[test]
+    fn withdrawal_during_bulk_start_keeps_other_validated_channels() {
+        let mut live = default_config();
+        live.channels[0].enabled = true;
+        live.channels[0].share_enabled = true;
+        let mut peer = live.channels[0].clone();
+        peer.id = "still-shared".into();
+        live.channels.push(peer);
+        let mut suppliers = live.channels.iter().map(supplier_from_channel_for_node).collect();
+        let mut health = live.channels.iter().map(|c| failed_supplier_channel_health(c, String::new(), 0, 0)).collect();
+        live.channels[0].share_enabled = false;
+        retain_shared_start_channels(&live, &mut suppliers, &mut health);
+        let expected = if crate::source_driver::channel_is_platform_shareable(&live.channels[1]) {
+            vec!["still-shared"]
+        } else { vec![] };
+        assert_eq!(suppliers.iter().map(|s| s.channel_id.as_str()).collect::<Vec<_>>(), expected);
+        assert_eq!(health.iter().map(|h| h.channel_id.as_str()).collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
     fn subscription_catalog_declarations_do_not_erase_verified_model_features() {
         let mut channel = default_config().channels.remove(0);
         let live = ChannelCapabilityProfile { protocol:"openai_responses".into(), model_pattern:"selected-model".into(), custom_tool:true, verification_state:"verified".into(), verified_at_unix:42, ..Default::default() };
@@ -1614,10 +1557,10 @@ pub(crate) fn monitored_channel_ids(
                 && supplier_channel_selected(&channel.id, requested_channel_ids)
                 && match scope {
                     ChannelMonitorScope::PlatformSupplier => {
-                        crate::source_driver::channel_is_platform_shareable(channel)
+                        crate::source_driver::channel_shares_to_market(channel)
                     }
                     ChannelMonitorScope::LocalOnly => {
-                        !crate::source_driver::channel_is_platform_shareable(channel)
+                        !crate::source_driver::channel_shares_to_market(channel)
                     }
                 }
         })
@@ -1676,7 +1619,7 @@ pub(crate) fn apply_monitored_channel_health(
     authoritative: &ClientConfig,
     channel_ids: &[String],
     health: &[SupplierChannelHealth],
-    register_update: Option<&mpsc::Sender<SupplierRegistrationUpdate>>,
+    register_update: Option<&RegistrationSender>,
     local_channel_readiness: &Arc<StdMutex<HashMap<String, bool>>>,
     local_model_quota_routes: &Arc<StdMutex<HashMap<String, LocalModelQuotaRouteState>>>,
     transport_state: &Arc<StdMutex<SupplierTransportSnapshot>>,
@@ -1692,7 +1635,9 @@ pub(crate) fn apply_monitored_channel_health(
     update_supplier_channel_health_state(transport_state, health);
     if let Some(tx) = register_update {
         let suppliers = supplier_registration_snapshot(authoritative, channel_ids, health);
-        send_register_update(tx, suppliers);
+        if !suppliers.is_empty() {
+            send_register_update(tx, suppliers);
+        }
     }
 }
 
@@ -1706,7 +1651,7 @@ pub(crate) async fn refresh_local_only_channel_health_once(
         .channels
         .iter()
         .any(|channel| {
-            channel.enabled && !crate::source_driver::channel_is_platform_shareable(channel)
+            channel.enabled && !crate::source_driver::channel_shares_to_market(channel)
         });
     if !has_enabled_local_only_channel {
         return Ok(());
@@ -1752,7 +1697,7 @@ pub(crate) async fn run_local_only_channel_health_loop(state: AppState) {
 pub(crate) async fn monitor_supplier_channels(
     config_path: PathBuf,
     channel_ids: Vec<String>,
-    register_update: Option<mpsc::Sender<SupplierRegistrationUpdate>>,
+    register_update: Option<RegistrationSender>,
     proxy_config: Arc<crate::config::LiveClientConfig>,
     local_channel_readiness: Arc<StdMutex<HashMap<String, bool>>>,
     local_model_quota_routes: Arc<StdMutex<HashMap<String, LocalModelQuotaRouteState>>>,
@@ -1774,9 +1719,10 @@ pub(crate) async fn monitor_supplier_channels(
                     &channel_ids,
                     ChannelMonitorScope::PlatformSupplier,
                 ).await {
-                    Ok(Some((authoritative, refreshed_ids, health))) => {
+                    Ok(Some((_, refreshed_ids, health))) => {
+                        let live = proxy_config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         apply_monitored_channel_health(
-                            &authoritative,
+                            &live,
                             &refreshed_ids,
                             &health,
                             register_update.as_ref(),
@@ -1820,8 +1766,7 @@ pub(crate) fn supplier_registration_snapshot(
     cfg.channels
         .iter()
         .filter(|channel| {
-            channel.enabled
-                && crate::source_driver::channel_is_platform_shareable(channel)
+            crate::source_driver::channel_shares_to_market(channel)
                 && supplier_channel_selected(&channel.id, channel_ids)
                 && (health.is_empty() || health_by_channel.contains_key(channel.id.as_str()))
         })
@@ -2431,6 +2376,57 @@ pub(crate) async fn notify_supplier_offline_inner(
     Ok(status)
 }
 
+pub(crate) async fn set_channel_market_sharing_inner(
+    state: &AppState,
+    channel_id: String,
+    enabled: bool,
+) -> Result<SupplierStatus, String> {
+    {
+        let mut runtime = state.supplier.lock().await;
+        if enabled && runtime.starting {
+            return Err("another supplier operation is already in progress".into());
+        }
+        commit_config_update(&state.config_path, &state.proxy_config, |cfg| {
+            let channel = cfg
+                .channels
+                .iter_mut()
+                .find(|c| c.id == channel_id)
+                .ok_or_else(|| anyhow!("channel {channel_id} was not found"))?;
+            if enabled
+                && !(channel.enabled
+                    && crate::source_driver::channel_is_platform_shareable(channel))
+            {
+                return Err(anyhow!(
+                    "enable a shareable local channel before publishing it"
+                ));
+            }
+            channel.share_enabled = enabled;
+            Ok(())
+        })
+        .map_err(|e| e.to_string())?;
+        if !enabled {
+            // Withdrawal affects marketplace admission. Preserve the independent local observation.
+            let health = runtime
+                .status()
+                .channels
+                .into_iter()
+                .find(|item| item.channel_id == channel_id);
+            stop_supplier_channel_agents(&mut runtime, std::slice::from_ref(&channel_id));
+            if let Some(health) = health {
+                update_supplier_channel_health_state(
+                    &runtime.transport_state,
+                    std::slice::from_ref(&health),
+                );
+                runtime.channels.push(health);
+            }
+            let starting = runtime.starting;
+            update_supplier_runtime_after_channel_stop(&mut runtime, starting);
+            return Ok(runtime.status());
+        }
+    }
+    start_supplier_inner(state, Some(channel_id), None).await
+}
+
 pub(crate) async fn stop_supplier_channel_inner(
     state: &AppState,
     channel_id: String,
@@ -2483,8 +2479,7 @@ pub(crate) fn refresh_supplier_registration_from_config(
             else {
                 continue;
             };
-            if !channel.enabled
-                || !crate::source_driver::channel_is_platform_shareable(channel)
+            if !crate::source_driver::channel_shares_to_market(channel)
                 || channel.server_ws_url != previous.server_ws_url
                 || channel.server_quic_url != previous.server_quic_url
                 || channel.node_id != previous.node_id

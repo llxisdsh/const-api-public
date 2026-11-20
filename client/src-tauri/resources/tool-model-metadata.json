@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "source_revision": "6a98d0926117478a4ab937f1bad46a120cd4832a",
-  "compatibility_version_id": "compat-v32-2026-11-12",
+  "source_revision": "dccecb97aed70c35be758e69fdebbbfdf9fb6e4d",
+  "compatibility_version_id": "compat-v33-2026-11-20",
   "compatibility_groups": [
     {
       "id": "apex",
@@ -15,6 +15,7 @@
       "models": [
         "claude-opus-5-5",
         "claude-fable-5-2",
+        "gpt-6.2-astra",
         "gpt-6-astra",
         "gemini-4-carbon"
       ],
@@ -38,9 +39,11 @@
         "t1"
       ],
       "models": [
+        "gpt-6.2-sol",
         "gpt-6.1-sol",
         "claude-sonnet-5-5",
         "muse-wonder-full-1.0",
+        "gemini-4-neon",
         "gemini-4-argon",
         "gpt-6-sol",
         "gpt-5.6-sol",
@@ -51,6 +54,7 @@
         "claude-sonnet-5.5",
         "anthropic/claude-sonnet-5.5",
         "muse-wonder-full",
+        "gemini/gemini-4-neon",
         "gemini/gemini-4-argon",
         "openai/gpt-6-sol",
         "openai/gpt-5.6-sol",
@@ -75,7 +79,8 @@
         "kimi-k3",
         "gpt-5.6-terra",
         "muse-spark-1.3",
-        "gpt-5.5"
+        "gpt-5.5",
+        "gemini-4-hydrogen"
       ],
       "match_models": [
         "moonshot/kimi-k3.1-pro",
@@ -83,7 +88,8 @@
         "k3",
         "openai/gpt-5.6-terra",
         "meta/muse-spark-1.3",
-        "openai/gpt-5.5"
+        "openai/gpt-5.5",
+        "gemini/gemini-4-hydrogen"
       ]
     },
     {
@@ -445,6 +451,16 @@
       "vendor": "mistral"
     },
     {
+      "id": "codestral-embed",
+      "display_name": "codestral-embed",
+      "vendor": "mistral"
+    },
+    {
+      "id": "codestral-embed-2505",
+      "display_name": "codestral-embed-2505",
+      "vendor": "mistral"
+    },
+    {
       "id": "codestral-latest",
       "display_name": "codestral-latest",
       "vendor": "mistral"
@@ -517,6 +533,16 @@
     {
       "id": "davinci-002",
       "display_name": "davinci-002",
+      "vendor": "openai"
+    },
+    {
+      "id": "daybreak-blue-latest",
+      "display_name": "daybreak-blue-latest",
+      "vendor": "openai"
+    },
+    {
+      "id": "daybreak-red-latest",
+      "display_name": "daybreak-red-latest",
       "vendor": "openai"
     },
     {
@@ -635,6 +661,31 @@
       "vendor": "cognitivecomputations"
     },
     {
+      "id": "doubao-embedding",
+      "display_name": "doubao-embedding",
+      "vendor": "bytedance"
+    },
+    {
+      "id": "doubao-embedding-large",
+      "display_name": "doubao-embedding-large",
+      "vendor": "bytedance"
+    },
+    {
+      "id": "doubao-embedding-large-text-240915",
+      "display_name": "doubao-embedding-large-text-240915",
+      "vendor": "bytedance"
+    },
+    {
+      "id": "doubao-embedding-large-text-250515",
+      "display_name": "doubao-embedding-large-text-250515",
+      "vendor": "bytedance"
+    },
+    {
+      "id": "doubao-embedding-text-240715",
+      "display_name": "doubao-embedding-text-240715",
+      "vendor": "bytedance"
+    },
+    {
       "id": "doubao-seed-2-1-lite-260915",
       "display_name": "doubao-seed-2-1-lite-260915",
       "vendor": "bytedance"
@@ -652,6 +703,26 @@
     {
       "id": "doubao-seed-2-1-turbo-260628",
       "display_name": "doubao-seed-2-1-turbo-260628",
+      "vendor": "bytedance"
+    },
+    {
+      "id": "doubao-seedance-2-0-260128",
+      "display_name": "doubao-seedance-2-0-260128",
+      "vendor": "bytedance"
+    },
+    {
+      "id": "doubao-seedance-2-0-fast-260128",
+      "display_name": "doubao-seedance-2-0-fast-260128",
+      "vendor": "bytedance"
+    },
+    {
+      "id": "doubao-seedance-2-0-mini-260615",
+      "display_name": "doubao-seedance-2-0-mini-260615",
+      "vendor": "bytedance"
+    },
+    {
+      "id": "doubao-seedance-2-5-260628",
+      "display_name": "doubao-seedance-2-5-260628",
       "vendor": "bytedance"
     },
     {
@@ -1025,6 +1096,26 @@
       "vendor": "google"
     },
     {
+      "id": "gemini-4-hydrogen",
+      "display_name": "gemini-4-hydrogen",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-4-neon",
+      "display_name": "gemini-4-neon",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-embedding-001",
+      "display_name": "gemini-embedding-001",
+      "vendor": "google"
+    },
+    {
+      "id": "gemini-embedding-2",
+      "display_name": "gemini-embedding-2",
+      "vendor": "google"
+    },
+    {
       "id": "gemini-flash-latest",
       "display_name": "gemini-flash-latest",
       "vendor": "google"
@@ -1117,6 +1208,11 @@
     {
       "id": "gemma-4-31b-it",
       "display_name": "gemma-4-31b-it",
+      "vendor": "google"
+    },
+    {
+      "id": "genie-4",
+      "display_name": "genie-4",
       "vendor": "google"
     },
     {
@@ -1270,8 +1366,18 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-4.1-2025-04-14",
+      "display_name": "gpt-4.1-2025-04-14",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-4.1-mini",
       "display_name": "gpt-4.1-mini",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-4.1-mini-2025-04-14",
+      "display_name": "gpt-4.1-mini-2025-04-14",
       "vendor": "openai"
     },
     {
@@ -1325,6 +1431,11 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-4o-mini-search-preview",
+      "display_name": "gpt-4o-mini-search-preview",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-4o-mini-transcribe",
       "display_name": "gpt-4o-mini-transcribe",
       "vendor": "openai"
@@ -1355,6 +1466,11 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-4o-search-preview",
+      "display_name": "gpt-4o-search-preview",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-4o-transcribe",
       "display_name": "gpt-4o-transcribe",
       "vendor": "openai"
@@ -1367,6 +1483,11 @@
     {
       "id": "gpt-5",
       "display_name": "gpt-5",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-5-2025-08-07",
+      "display_name": "gpt-5-2025-08-07",
       "vendor": "openai"
     },
     {
@@ -1385,8 +1506,18 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-5-mini-2025-08-07",
+      "display_name": "gpt-5-mini-2025-08-07",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-5-nano",
       "display_name": "gpt-5-nano",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-5-nano-2025-08-07",
+      "display_name": "gpt-5-nano-2025-08-07",
       "vendor": "openai"
     },
     {
@@ -1395,8 +1526,28 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-5-pro-2025-10-06",
+      "display_name": "gpt-5-pro-2025-10-06",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-5-search-api",
+      "display_name": "gpt-5-search-api",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-5-search-api-2025-10-14",
+      "display_name": "gpt-5-search-api-2025-10-14",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-5.1",
       "display_name": "gpt-5.1",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-5.1-2025-11-13",
+      "display_name": "gpt-5.1-2025-11-13",
       "vendor": "openai"
     },
     {
@@ -1435,6 +1586,11 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-5.2-pro-2025-12-11",
+      "display_name": "gpt-5.2-pro-2025-12-11",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-5.3-codex",
       "display_name": "GPT-5.3 Codex",
       "vendor": "openai"
@@ -1450,6 +1606,11 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-5.4-2026-03-05",
+      "display_name": "gpt-5.4-2026-03-05",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-5.4-image-2",
       "display_name": "gpt-5.4-image-2",
       "vendor": "openrouter"
@@ -1460,8 +1621,18 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-5.4-mini-2026-03-17",
+      "display_name": "gpt-5.4-mini-2026-03-17",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-5.4-nano",
       "display_name": "GPT-5.4 nano",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-5.4-nano-2026-03-17",
+      "display_name": "gpt-5.4-nano-2026-03-17",
       "vendor": "openai"
     },
     {
@@ -1470,8 +1641,18 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-5.4-pro-2026-03-05",
+      "display_name": "gpt-5.4-pro-2026-03-05",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-5.5",
       "display_name": "GPT-5.5",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-5.5-2026-04-23",
+      "display_name": "gpt-5.5-2026-04-23",
       "vendor": "openai"
     },
     {
@@ -1480,8 +1661,23 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-5.5-cyber-preview",
+      "display_name": "gpt-5.5-cyber-preview",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-5.5-pro",
       "display_name": "GPT-5.5 Pro",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-5.5-pro-2026-04-23",
+      "display_name": "gpt-5.5-pro-2026-04-23",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-5.6",
+      "display_name": "gpt-5.6",
       "vendor": "openai"
     },
     {
@@ -1522,6 +1718,11 @@
     {
       "id": "gpt-6-astra",
       "display_name": "GPT-6 Astra",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-6-astra-law",
+      "display_name": "gpt-6-astra-law",
       "vendor": "openai"
     },
     {
@@ -1575,6 +1776,21 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-6.2-astra",
+      "display_name": "gpt-6.2-astra",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-6.2-astra-law",
+      "display_name": "gpt-6.2-astra-law",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "display_name": "gpt-6.2-sol",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-audio",
       "display_name": "gpt-audio",
       "vendor": "openai"
@@ -1610,6 +1826,21 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-daybreak-blue-latest",
+      "display_name": "gpt-daybreak-blue-latest",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-daybreak-red-latest",
+      "display_name": "gpt-daybreak-red-latest",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-image-1-mini",
+      "display_name": "gpt-image-1-mini",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-image-1.5",
       "display_name": "gpt-image-1.5",
       "vendor": "openai"
@@ -1625,13 +1856,28 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-image-2-2026-04-21",
+      "display_name": "gpt-image-2-2026-04-21",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-image-2.5-flare",
       "display_name": "gpt-image-2.5-flare",
       "vendor": "openai"
     },
     {
+      "id": "gpt-image-2.5-flare-2026-09-08",
+      "display_name": "gpt-image-2.5-flare-2026-09-08",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-image-2.5-sunburst",
       "display_name": "gpt-image-2.5-sunburst",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-image-2.5-sunburst-2026-09-08",
+      "display_name": "gpt-image-2.5-sunburst-2026-09-08",
       "vendor": "openai"
     },
     {
@@ -1652,6 +1898,16 @@
     {
       "id": "gpt-live-1-codex",
       "display_name": "Codex Voice (connection)",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-live-1.1",
+      "display_name": "gpt-live-1.1",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-live-1.1-codex",
+      "display_name": "Codex Voice 1.1 (connection)",
       "vendor": "openai"
     },
     {
@@ -1680,6 +1936,16 @@
       "vendor": "openai"
     },
     {
+      "id": "gpt-realtime-1.5",
+      "display_name": "gpt-realtime-1.5",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-realtime-2",
+      "display_name": "gpt-realtime-2",
+      "vendor": "openai"
+    },
+    {
       "id": "gpt-realtime-2.1",
       "display_name": "GPT Realtime 2.1",
       "vendor": "openai"
@@ -1687,6 +1953,21 @@
     {
       "id": "gpt-realtime-2.1-mini",
       "display_name": "GPT Realtime 2.1 Mini",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-realtime-2025-08-28",
+      "display_name": "gpt-realtime-2025-08-28",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-realtime-mini",
+      "display_name": "gpt-realtime-mini",
+      "vendor": "openai"
+    },
+    {
+      "id": "gpt-realtime-mini-2025-12-15",
+      "display_name": "gpt-realtime-mini-2025-12-15",
       "vendor": "openai"
     },
     {
@@ -1945,6 +2226,11 @@
       "vendor": "xai"
     },
     {
+      "id": "grok-imagine-image-2.0",
+      "display_name": "grok-imagine-image-2.0",
+      "vendor": "xai"
+    },
+    {
       "id": "grok-imagine-image-2026-03-02",
       "display_name": "grok-imagine-image-2026-03-02",
       "vendor": "xai"
@@ -1960,8 +2246,28 @@
       "vendor": "xai"
     },
     {
+      "id": "grok-imagine-video",
+      "display_name": "grok-imagine-video",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-imagine-video-1.5",
+      "display_name": "grok-imagine-video-1.5",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-imagine-video-1.5-2026-05-30",
+      "display_name": "grok-imagine-video-1.5-2026-05-30",
+      "vendor": "xai"
+    },
+    {
       "id": "grok-imagine-video-1.5-lite",
       "display_name": "grok-imagine-video-1.5-lite",
+      "vendor": "xai"
+    },
+    {
+      "id": "grok-imagine-video-1.5-preview",
+      "display_name": "grok-imagine-video-1.5-preview",
       "vendor": "xai"
     },
     {
@@ -2108,6 +2414,41 @@
       "id": "jamba-mini-1.7",
       "display_name": "jamba-mini-1.7",
       "vendor": "ai21"
+    },
+    {
+      "id": "jina-embeddings-v5-omni-nano",
+      "display_name": "jina-embeddings-v5-omni-nano",
+      "vendor": "jina"
+    },
+    {
+      "id": "jina-embeddings-v5-omni-small",
+      "display_name": "jina-embeddings-v5-omni-small",
+      "vendor": "jina"
+    },
+    {
+      "id": "jina-embeddings-v5-text-nano",
+      "display_name": "jina-embeddings-v5-text-nano",
+      "vendor": "jina"
+    },
+    {
+      "id": "jina-embeddings-v5-text-small",
+      "display_name": "jina-embeddings-v5-text-small",
+      "vendor": "jina"
+    },
+    {
+      "id": "jina-reranker-m0",
+      "display_name": "jina-reranker-m0",
+      "vendor": "jina"
+    },
+    {
+      "id": "jina-reranker-v2-base-multilingual",
+      "display_name": "jina-reranker-v2-base-multilingual",
+      "vendor": "jina"
+    },
+    {
+      "id": "jina-reranker-v3.5",
+      "display_name": "jina-reranker-v3.5",
+      "vendor": "jina"
     },
     {
       "id": "kat-coder-pro-v2",
@@ -2315,6 +2656,16 @@
       "vendor": "minimax"
     },
     {
+      "id": "minimax-h3",
+      "display_name": "minimax-h3",
+      "vendor": "minimax"
+    },
+    {
+      "id": "minimax-h3-max",
+      "display_name": "minimax-h3-max",
+      "vendor": "minimax"
+    },
+    {
       "id": "minimax-m1",
       "display_name": "minimax-m1",
       "vendor": "minimax"
@@ -2432,6 +2783,16 @@
     {
       "id": "mistral-code-latest",
       "display_name": "mistral-code-latest",
+      "vendor": "mistral"
+    },
+    {
+      "id": "mistral-embed",
+      "display_name": "mistral-embed",
+      "vendor": "mistral"
+    },
+    {
+      "id": "mistral-embed-2312",
+      "display_name": "mistral-embed-2312",
       "vendor": "mistral"
     },
     {
@@ -2845,6 +3206,11 @@
       "vendor": "openai"
     },
     {
+      "id": "o3-2025-04-16",
+      "display_name": "o3-2025-04-16",
+      "vendor": "openai"
+    },
+    {
       "id": "o3-mini",
       "display_name": "o3-mini",
       "vendor": "openai"
@@ -2857,6 +3223,11 @@
     {
       "id": "o3-pro",
       "display_name": "o3-pro",
+      "vendor": "openai"
+    },
+    {
+      "id": "o3-pro-2025-06-10",
+      "display_name": "o3-pro-2025-06-10",
       "vendor": "openai"
     },
     {
@@ -3280,6 +3651,11 @@
       "vendor": "qwen"
     },
     {
+      "id": "qwen4-max",
+      "display_name": "qwen4-max",
+      "vendor": "qwen"
+    },
+    {
       "id": "qwq-plus",
       "display_name": "QwQ Plus",
       "vendor": "qwen"
@@ -3328,6 +3704,41 @@
       "id": "replace-background-and-relight",
       "display_name": "replace-background-and-relight",
       "vendor": "stability"
+    },
+    {
+      "id": "rerank-english-v3.0",
+      "display_name": "rerank-english-v3.0",
+      "vendor": "cohere"
+    },
+    {
+      "id": "rerank-multilingual-v3.0",
+      "display_name": "rerank-multilingual-v3.0",
+      "vendor": "cohere"
+    },
+    {
+      "id": "rerank-v3.5",
+      "display_name": "rerank-v3.5",
+      "vendor": "cohere"
+    },
+    {
+      "id": "rerank-v4.0-fast",
+      "display_name": "rerank-v4.0-fast",
+      "vendor": "cohere"
+    },
+    {
+      "id": "rerank-v4.0-pro",
+      "display_name": "rerank-v4.0-pro",
+      "vendor": "cohere"
+    },
+    {
+      "id": "rerank-v5.0-fast",
+      "display_name": "rerank-v5.0-fast",
+      "vendor": "cohere"
+    },
+    {
+      "id": "rerank-v5.0-pro",
+      "display_name": "rerank-v5.0-pro",
+      "vendor": "cohere"
     },
     {
       "id": "sakana-namazu",
@@ -3570,6 +3981,11 @@
       "vendor": "soniox"
     },
     {
+      "id": "stt-async-v6",
+      "display_name": "stt-async-v6",
+      "vendor": "soniox"
+    },
+    {
       "id": "stt-rt-preview",
       "display_name": "stt-rt-preview",
       "vendor": "soniox"
@@ -3597,6 +4013,11 @@
     {
       "id": "stt-rt-v5",
       "display_name": "stt-rt-v5",
+      "vendor": "soniox"
+    },
+    {
+      "id": "stt-rt-v6",
+      "display_name": "stt-rt-v6",
       "vendor": "soniox"
     },
     {
@@ -3715,6 +4136,11 @@
       "vendor": "mistral"
     },
     {
+      "id": "voxtral-mini-transcribe-latest",
+      "display_name": "voxtral-mini-transcribe-latest",
+      "vendor": "mistral"
+    },
+    {
       "id": "voxtral-mini-transcribe-realtime-2602",
       "display_name": "Voxtral Mini Transcribe Realtime 2602",
       "vendor": "mistral"
@@ -3772,6 +4198,11 @@
     {
       "id": "voxtral-small-transcribe-3-0",
       "display_name": "voxtral-small-transcribe-3-0",
+      "vendor": "mistral"
+    },
+    {
+      "id": "voxtral-small-transcribe-latest",
+      "display_name": "voxtral-small-transcribe-latest",
       "vendor": "mistral"
     },
     {
@@ -3888,6 +4319,31 @@
       "id": "voyage-multimodal-3.5",
       "display_name": "voyage-multimodal-3.5",
       "vendor": "voyage"
+    },
+    {
+      "id": "wan2.7-i2v",
+      "display_name": "wan2.7-i2v",
+      "vendor": "qwen"
+    },
+    {
+      "id": "wan2.7-r2v",
+      "display_name": "wan2.7-r2v",
+      "vendor": "qwen"
+    },
+    {
+      "id": "wan2.7-t2v",
+      "display_name": "wan2.7-t2v",
+      "vendor": "qwen"
+    },
+    {
+      "id": "wan3.0-video",
+      "display_name": "wan3.0-video",
+      "vendor": "qwen"
+    },
+    {
+      "id": "wan3.0-video-prime",
+      "display_name": "wan3.0-video-prime",
+      "vendor": "qwen"
     },
     {
       "id": "weaver",
@@ -4163,7 +4619,7 @@
         "max"
       ],
       "tool_call": true,
-      "source_key": "claude-fable-5-2"
+      "source_key": "provider-registry/claude/claude-fable-5-2"
     },
     "claude-haiku-4-5": {
       "display_name": "Claude Haiku 4.5",
@@ -4652,6 +5108,30 @@
       "tool_call": true,
       "source_key": "mistral/codestral-2508"
     },
+    "codestral-embed": {
+      "display_name": "codestral-embed",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/codestral-embed"
+    },
+    "codestral-embed-2505": {
+      "display_name": "codestral-embed-2505",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/codestral-embed-2505"
+    },
     "codestral-latest": {
       "display_name": "codestral-latest",
       "context_tokens": 128000,
@@ -4855,6 +5335,40 @@
         "text"
       ],
       "source_key": "davinci-002"
+    },
+    "daybreak-blue-latest": {
+      "display_name": "daybreak-blue-latest",
+      "context_tokens": 922000,
+      "input_tokens": 922000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "daybreak-blue-latest"
+    },
+    "daybreak-red-latest": {
+      "display_name": "daybreak-red-latest",
+      "context_tokens": 272000,
+      "input_tokens": 272000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "daybreak-red-latest"
     },
     "deep-research-max-preview-04-2026": {
       "display_name": "deep-research-max-preview-04-2026",
@@ -5213,6 +5727,66 @@
       ],
       "source_key": "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition"
     },
+    "doubao-embedding": {
+      "display_name": "doubao-embedding",
+      "context_tokens": 4096,
+      "input_tokens": 4096,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "doubao-embedding"
+    },
+    "doubao-embedding-large": {
+      "display_name": "doubao-embedding-large",
+      "context_tokens": 4096,
+      "input_tokens": 4096,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "doubao-embedding-large"
+    },
+    "doubao-embedding-large-text-240915": {
+      "display_name": "doubao-embedding-large-text-240915",
+      "context_tokens": 4096,
+      "input_tokens": 4096,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "doubao-embedding-large-text-240915"
+    },
+    "doubao-embedding-large-text-250515": {
+      "display_name": "doubao-embedding-large-text-250515",
+      "context_tokens": 4096,
+      "input_tokens": 4096,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "doubao-embedding-large-text-250515"
+    },
+    "doubao-embedding-text-240715": {
+      "display_name": "doubao-embedding-text-240715",
+      "context_tokens": 4096,
+      "input_tokens": 4096,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "doubao-embedding-text-240715"
+    },
     "doubao-seed-2-1-lite-260915": {
       "display_name": "doubao-seed-2-1-lite-260915",
       "context_tokens": 1024000,
@@ -5277,6 +5851,56 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "volcengine/doubao-seed-2-1-turbo-260628"
+    },
+    "doubao-seedance-2-0-260128": {
+      "display_name": "doubao-seedance-2-0-260128",
+      "input_modalities": [
+        "audio",
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "volcengine/doubao-seedance-2-0-260128"
+    },
+    "doubao-seedance-2-0-fast-260128": {
+      "display_name": "doubao-seedance-2-0-fast-260128",
+      "input_modalities": [
+        "audio",
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "volcengine/doubao-seedance-2-0-fast-260128"
+    },
+    "doubao-seedance-2-0-mini-260615": {
+      "display_name": "doubao-seedance-2-0-mini-260615",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "volcengine/doubao-seedance-2-0-mini-260615"
+    },
+    "doubao-seedance-2-5-260628": {
+      "display_name": "doubao-seedance-2-5-260628",
+      "input_modalities": [
+        "audio",
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "volcengine/doubao-seedance-2-5-260628"
     },
     "eleven_flash_v2": {
       "display_name": "eleven_flash_v2",
@@ -6328,7 +6952,7 @@
         "high"
       ],
       "tool_call": true,
-      "source_key": "provider-registry/gemini/gemini-4-argon"
+      "source_key": "provider-registry/aistudio/gemini-4-argon"
     },
     "gemini-4-carbon": {
       "display_name": "Gemini 4 Carbon",
@@ -6353,7 +6977,83 @@
         "high"
       ],
       "tool_call": true,
-      "source_key": "gemini/gemini-4-carbon"
+      "source_key": "provider-registry/aistudio/gemini-4-carbon"
+    },
+    "gemini-4-hydrogen": {
+      "display_name": "Gemini 4 Hydrogen",
+      "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "tool_call": true,
+      "source_key": "provider-registry/aistudio/gemini-4-hydrogen"
+    },
+    "gemini-4-neon": {
+      "display_name": "gemini-4-neon",
+      "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "tool_call": true,
+      "source_key": "gemini/gemini-4-neon"
+    },
+    "gemini-embedding-001": {
+      "display_name": "gemini-embedding-001",
+      "context_tokens": 2048,
+      "input_tokens": 2048,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "gemini-embedding-001"
+    },
+    "gemini-embedding-2": {
+      "display_name": "gemini-embedding-2",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "gemini-embedding-2"
     },
     "gemini-flash-latest": {
       "display_name": "Gemini Flash Latest",
@@ -6458,6 +7158,12 @@
         "text"
       ],
       "reasoning": true,
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "source_key": "gemini-nano-banana-2.1"
     },
     "gemini-omni-1.1-flash": {
@@ -6481,6 +7187,7 @@
     "gemini-omni-1.2-flash": {
       "display_name": "Gemini Omni 1.2 Flash",
       "context_tokens": 131072,
+      "max_context_tokens": 131072,
       "input_tokens": 131072,
       "output_tokens": 65536,
       "input_modalities": [
@@ -6494,7 +7201,11 @@
         "video"
       ],
       "reasoning": true,
-      "source_key": "gemini/gemini-omni-1.2-flash"
+      "reasoning_efforts": [
+        "low",
+        "high"
+      ],
+      "source_key": "provider-registry/aistudio/gemini-omni-1.2-flash"
     },
     "gemini-omni-flash-preview": {
       "display_name": "Gemini Omni Flash Preview",
@@ -6679,6 +7390,21 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "gemini/gemma-4-31b-it"
+    },
+    "genie-4": {
+      "display_name": "genie-4",
+      "context_tokens": 1048576,
+      "input_tokens": 1048576,
+      "output_tokens": 65536,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "video"
+      ],
+      "source_key": "gemini/genie-4"
     },
     "glm-4-32b-0414-128k": {
       "display_name": "glm-4-32b-0414-128k",
@@ -7121,6 +7847,22 @@
       "tool_call": true,
       "source_key": "gpt-4.1"
     },
+    "gpt-4.1-2025-04-14": {
+      "display_name": "gpt-4.1-2025-04-14",
+      "context_tokens": 1047576,
+      "input_tokens": 1047576,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-4.1-2025-04-14"
+    },
     "gpt-4.1-mini": {
       "display_name": "gpt-4.1-mini",
       "context_tokens": 1047576,
@@ -7136,6 +7878,22 @@
       ],
       "tool_call": true,
       "source_key": "gpt-4.1-mini"
+    },
+    "gpt-4.1-mini-2025-04-14": {
+      "display_name": "gpt-4.1-mini-2025-04-14",
+      "context_tokens": 1047576,
+      "input_tokens": 1047576,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-4.1-mini-2025-04-14"
     },
     "gpt-4.1-nano": {
       "display_name": "gpt-4.1-nano",
@@ -7297,6 +8055,22 @@
       "tool_call": true,
       "source_key": "gpt-4o-mini-audio-preview-2024-12-17"
     },
+    "gpt-4o-mini-search-preview": {
+      "display_name": "gpt-4o-mini-search-preview",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-4o-mini-search-preview"
+    },
     "gpt-4o-mini-transcribe": {
       "display_name": "gpt-4o-mini-transcribe",
       "context_tokens": 16000,
@@ -7369,6 +8143,22 @@
       ],
       "source_key": "gpt-4o-mini-tts-2025-12-15"
     },
+    "gpt-4o-search-preview": {
+      "display_name": "gpt-4o-search-preview",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 16384,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-4o-search-preview"
+    },
     "gpt-4o-transcribe": {
       "display_name": "gpt-4o-transcribe",
       "context_tokens": 16000,
@@ -7417,6 +8207,29 @@
       ],
       "tool_call": true,
       "source_key": "gpt-5"
+    },
+    "gpt-5-2025-08-07": {
+      "display_name": "gpt-5-2025-08-07",
+      "context_tokens": 272000,
+      "input_tokens": 272000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5-2025-08-07"
     },
     "gpt-5-image": {
       "display_name": "gpt-5-image",
@@ -7473,6 +8286,29 @@
       "tool_call": true,
       "source_key": "gpt-5-mini"
     },
+    "gpt-5-mini-2025-08-07": {
+      "display_name": "gpt-5-mini-2025-08-07",
+      "context_tokens": 272000,
+      "input_tokens": 272000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5-mini-2025-08-07"
+    },
     "gpt-5-nano": {
       "display_name": "gpt-5-nano",
       "context_tokens": 400000,
@@ -7495,6 +8331,29 @@
       ],
       "tool_call": true,
       "source_key": "gpt-5-nano"
+    },
+    "gpt-5-nano-2025-08-07": {
+      "display_name": "gpt-5-nano-2025-08-07",
+      "context_tokens": 272000,
+      "input_tokens": 272000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5-nano-2025-08-07"
     },
     "gpt-5-pro": {
       "display_name": "gpt-5-pro",
@@ -7519,6 +8378,61 @@
       "tool_call": true,
       "source_key": "gpt-5-pro"
     },
+    "gpt-5-pro-2025-10-06": {
+      "display_name": "gpt-5-pro-2025-10-06",
+      "context_tokens": 400000,
+      "input_tokens": 400000,
+      "output_tokens": 272000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5-pro-2025-10-06"
+    },
+    "gpt-5-search-api": {
+      "display_name": "gpt-5-search-api",
+      "context_tokens": 272000,
+      "input_tokens": 272000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5-search-api"
+    },
+    "gpt-5-search-api-2025-10-14": {
+      "display_name": "gpt-5-search-api-2025-10-14",
+      "context_tokens": 272000,
+      "input_tokens": 272000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5-search-api-2025-10-14"
+    },
     "gpt-5.1": {
       "display_name": "gpt-5.1",
       "context_tokens": 400000,
@@ -7542,6 +8456,30 @@
       ],
       "tool_call": true,
       "source_key": "gpt-5.1"
+    },
+    "gpt-5.1-2025-11-13": {
+      "display_name": "gpt-5.1-2025-11-13",
+      "context_tokens": 272000,
+      "input_tokens": 272000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "image",
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5.1-2025-11-13"
     },
     "gpt-5.1-codex": {
       "display_name": "gpt-5.1-codex",
@@ -7703,6 +8641,30 @@
       "tool_call": true,
       "source_key": "gpt-5.2-pro"
     },
+    "gpt-5.2-pro-2025-12-11": {
+      "display_name": "gpt-5.2-pro-2025-12-11",
+      "context_tokens": 272000,
+      "input_tokens": 272000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5.2-pro-2025-12-11"
+    },
     "gpt-5.3-codex": {
       "display_name": "GPT-5.3 Codex",
       "family": "gpt-codex",
@@ -7775,6 +8737,30 @@
       "tool_call": true,
       "source_key": "gpt-5.4"
     },
+    "gpt-5.4-2026-03-05": {
+      "display_name": "gpt-5.4-2026-03-05",
+      "context_tokens": 1050000,
+      "input_tokens": 1050000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5.4-2026-03-05"
+    },
     "gpt-5.4-image-2": {
       "display_name": "gpt-5.4-image-2",
       "context_tokens": 272000,
@@ -7816,6 +8802,30 @@
       "tool_call": true,
       "source_key": "gpt-5.4-mini"
     },
+    "gpt-5.4-mini-2026-03-17": {
+      "display_name": "gpt-5.4-mini-2026-03-17",
+      "context_tokens": 272000,
+      "input_tokens": 272000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5.4-mini-2026-03-17"
+    },
     "gpt-5.4-nano": {
       "display_name": "GPT-5.4 nano",
       "family": "gpt-5",
@@ -7841,6 +8851,30 @@
       "tool_call": true,
       "source_key": "gpt-5.4-nano"
     },
+    "gpt-5.4-nano-2026-03-17": {
+      "display_name": "gpt-5.4-nano-2026-03-17",
+      "context_tokens": 272000,
+      "input_tokens": 272000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5.4-nano-2026-03-17"
+    },
     "gpt-5.4-pro": {
       "display_name": "GPT-5.4 Pro",
       "family": "gpt-5",
@@ -7865,11 +8899,58 @@
       "tool_call": true,
       "source_key": "gpt-5.4-pro"
     },
+    "gpt-5.4-pro-2026-03-05": {
+      "display_name": "gpt-5.4-pro-2026-03-05",
+      "context_tokens": 1050000,
+      "input_tokens": 1050000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5.4-pro-2026-03-05"
+    },
     "gpt-5.5": {
-      "display_name": "GPT-5.5",
+      "display_name": "GPT-6 Chat Thinking",
       "family": "gpt-5",
       "context_tokens": 272000,
       "max_context_tokens": 272000,
+      "input_tokens": 1050000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "tool_call": true,
+      "source_key": "codex-client/gpt-5.5"
+    },
+    "gpt-5.5-2026-04-23": {
+      "display_name": "gpt-5.5-2026-04-23",
+      "context_tokens": 1050000,
       "input_tokens": 1050000,
       "output_tokens": 128000,
       "input_modalities": [
@@ -7889,7 +8970,7 @@
         "xhigh"
       ],
       "tool_call": true,
-      "source_key": "gpt-5.5"
+      "source_key": "gpt-5.5-2026-04-23"
     },
     "gpt-5.5-cyber": {
       "display_name": "gpt-5.5-cyber",
@@ -7901,6 +8982,17 @@
       ],
       "reasoning": true,
       "source_key": "gpt-5.5-cyber"
+    },
+    "gpt-5.5-cyber-preview": {
+      "display_name": "gpt-5.5-cyber-preview",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "source_key": "gpt-5.5-cyber-preview"
     },
     "gpt-5.5-pro": {
       "display_name": "GPT-5.5 Pro",
@@ -7924,6 +9016,52 @@
       ],
       "tool_call": true,
       "source_key": "gpt-5.5-pro"
+    },
+    "gpt-5.5-pro-2026-04-23": {
+      "display_name": "gpt-5.5-pro-2026-04-23",
+      "context_tokens": 1050000,
+      "input_tokens": 1050000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5.5-pro-2026-04-23"
+    },
+    "gpt-5.6": {
+      "display_name": "gpt-5.6",
+      "context_tokens": 922000,
+      "input_tokens": 922000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-5.6"
     },
     "gpt-5.6-cyber": {
       "display_name": "gpt-5.6-cyber",
@@ -8096,6 +9234,30 @@
       ],
       "tool_call": true,
       "source_key": "codex-client/gpt-6-astra"
+    },
+    "gpt-6-astra-law": {
+      "display_name": "gpt-6-astra-law",
+      "context_tokens": 922000,
+      "input_tokens": 922000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-6-astra-law"
     },
     "gpt-6-astra-pro": {
       "display_name": "gpt-6-astra-pro",
@@ -8306,6 +9468,83 @@
       "tool_call": true,
       "source_key": "codex-client/gpt-6.1-terra"
     },
+    "gpt-6.2-astra": {
+      "display_name": "GPT-6.2-Astra",
+      "context_tokens": 272000,
+      "max_context_tokens": 1050000,
+      "input_tokens": 922000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ],
+      "tool_call": true,
+      "source_key": "codex-client/gpt-6.2-astra"
+    },
+    "gpt-6.2-astra-law": {
+      "display_name": "gpt-6.2-astra-law",
+      "context_tokens": 922000,
+      "input_tokens": 922000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-6.2-astra-law"
+    },
+    "gpt-6.2-sol": {
+      "display_name": "GPT-6.2-Sol",
+      "context_tokens": 500000,
+      "max_context_tokens": 1050000,
+      "input_tokens": 922000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ],
+      "tool_call": true,
+      "source_key": "codex-client/gpt-6.2-sol"
+    },
     "gpt-audio": {
       "display_name": "gpt-audio",
       "context_tokens": 128000,
@@ -8417,6 +9656,50 @@
       "tool_call": true,
       "source_key": "openrouter/openai/gpt-chat-latest"
     },
+    "gpt-daybreak-blue-latest": {
+      "display_name": "gpt-daybreak-blue-latest",
+      "context_tokens": 922000,
+      "input_tokens": 922000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "gpt-daybreak-blue-latest"
+    },
+    "gpt-daybreak-red-latest": {
+      "display_name": "gpt-daybreak-red-latest",
+      "context_tokens": 272000,
+      "input_tokens": 272000,
+      "output_tokens": 128000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "gpt-daybreak-red-latest"
+    },
+    "gpt-image-1-mini": {
+      "display_name": "gpt-image-1-mini",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "gpt-image-1-mini"
+    },
     "gpt-image-1.5": {
       "display_name": "gpt-image-1.5",
       "input_modalities": [
@@ -8455,6 +9738,18 @@
       ],
       "source_key": "gpt-image-2"
     },
+    "gpt-image-2-2026-04-21": {
+      "display_name": "gpt-image-2-2026-04-21",
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "gpt-image-2-2026-04-21"
+    },
     "gpt-image-2.5-flare": {
       "display_name": "gpt-image-2.5-flare",
       "context_tokens": 400000,
@@ -8469,6 +9764,18 @@
       ],
       "source_key": "gpt-image-2.5-flare"
     },
+    "gpt-image-2.5-flare-2026-09-08": {
+      "display_name": "gpt-image-2.5-flare-2026-09-08",
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "gpt-image-2.5-flare-2026-09-08"
+    },
     "gpt-image-2.5-sunburst": {
       "display_name": "gpt-image-2.5-sunburst",
       "context_tokens": 400000,
@@ -8482,6 +9789,18 @@
         "image"
       ],
       "source_key": "gpt-image-2.5-sunburst"
+    },
+    "gpt-image-2.5-sunburst-2026-09-08": {
+      "display_name": "gpt-image-2.5-sunburst-2026-09-08",
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "gpt-image-2.5-sunburst-2026-09-08"
     },
     "gpt-image-2.6-flare": {
       "display_name": "gpt-image-2.6-flare",
@@ -8521,6 +9840,31 @@
     },
     "gpt-live-1-codex": {
       "display_name": "Codex Voice (connection)",
+      "family": "gpt-audio",
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ]
+    },
+    "gpt-live-1.1": {
+      "display_name": "gpt-live-1.1",
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-live-1.1"
+    },
+    "gpt-live-1.1-codex": {
+      "display_name": "Codex Voice 1.1 (connection)",
       "family": "gpt-audio",
       "input_modalities": [
         "audio",
@@ -8603,6 +9947,40 @@
       "tool_call": true,
       "source_key": "gpt-realtime"
     },
+    "gpt-realtime-1.5": {
+      "display_name": "gpt-realtime-1.5",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "output_tokens": 4096,
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-realtime-1.5"
+    },
+    "gpt-realtime-2": {
+      "display_name": "gpt-realtime-2",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 32000,
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-realtime-2"
+    },
     "gpt-realtime-2.1": {
       "display_name": "GPT Realtime 2.1",
       "family": "gpt-audio",
@@ -8640,6 +10018,57 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "gpt-realtime-2.1-mini"
+    },
+    "gpt-realtime-2025-08-28": {
+      "display_name": "gpt-realtime-2025-08-28",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "output_tokens": 4096,
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-realtime-2025-08-28"
+    },
+    "gpt-realtime-mini": {
+      "display_name": "gpt-realtime-mini",
+      "context_tokens": 32000,
+      "input_tokens": 32000,
+      "output_tokens": 4096,
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-realtime-mini"
+    },
+    "gpt-realtime-mini-2025-12-15": {
+      "display_name": "gpt-realtime-mini-2025-12-15",
+      "context_tokens": 128000,
+      "input_tokens": 128000,
+      "output_tokens": 4096,
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "audio",
+        "text"
+      ],
+      "tool_call": true,
+      "source_key": "gpt-realtime-mini-2025-12-15"
     },
     "gpt-realtime-translate": {
       "display_name": "GPT Realtime Translate",
@@ -9020,6 +10449,7 @@
         "text"
       ],
       "reasoning": true,
+      "tool_call": true,
       "source_key": "xai/grok-4.20-multi-agent"
     },
     "grok-4.20-multi-agent-0309": {
@@ -9074,6 +10504,7 @@
         "text"
       ],
       "reasoning": true,
+      "tool_call": true,
       "source_key": "xai/grok-4.20-multi-agent-beta-latest"
     },
     "grok-4.20-multi-agent-experimental-beta-0304": {
@@ -9089,6 +10520,7 @@
         "text"
       ],
       "reasoning": true,
+      "tool_call": true,
       "source_key": "xai/grok-4.20-multi-agent-experimental-beta-0304"
     },
     "grok-4.20-multi-agent-experimental-beta-latest": {
@@ -9104,6 +10536,7 @@
         "text"
       ],
       "reasoning": true,
+      "tool_call": true,
       "source_key": "xai/grok-4.20-multi-agent-experimental-beta-latest"
     },
     "grok-4.20-multi-agent-latest": {
@@ -9119,6 +10552,7 @@
         "text"
       ],
       "reasoning": true,
+      "tool_call": true,
       "source_key": "xai/grok-4.20-multi-agent-latest"
     },
     "grok-4.20-non-reasoning": {
@@ -9433,6 +10867,17 @@
       ],
       "source_key": "provider-registry/xai/grok-imagine-image"
     },
+    "grok-imagine-image-2.0": {
+      "display_name": "grok-imagine-image-2.0",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "source_key": "provider-registry/xai/grok-imagine-image-2.0"
+    },
     "grok-imagine-image-2026-03-02": {
       "display_name": "grok-imagine-image-2026-03-02",
       "input_modalities": [
@@ -9466,6 +10911,42 @@
       ],
       "source_key": "xai/grok-imagine-image-quality-latest"
     },
+    "grok-imagine-video": {
+      "display_name": "grok-imagine-video",
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "provider-registry/xai/grok-imagine-video"
+    },
+    "grok-imagine-video-1.5": {
+      "display_name": "grok-imagine-video-1.5",
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "provider-registry/xai/grok-imagine-video-1.5"
+    },
+    "grok-imagine-video-1.5-2026-05-30": {
+      "display_name": "grok-imagine-video-1.5-2026-05-30",
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "xai/grok-imagine-video-1.5-2026-05-30"
+    },
     "grok-imagine-video-1.5-lite": {
       "display_name": "Grok Imagine Video 1.5 Lite",
       "input_modalities": [
@@ -9476,6 +10957,18 @@
         "video"
       ],
       "source_key": "provider-registry/xai/grok-imagine-video-1.5-lite"
+    },
+    "grok-imagine-video-1.5-preview": {
+      "display_name": "grok-imagine-video-1.5-preview",
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "xai/grok-imagine-video-1.5-preview"
     },
     "grok-voice-transcribe-1.0": {
       "display_name": "grok-voice-transcribe-1.0",
@@ -9836,6 +11329,91 @@
         "text"
       ],
       "source_key": "jamba-mini-1.7"
+    },
+    "jina-embeddings-v5-omni-nano": {
+      "display_name": "jina-embeddings-v5-omni-nano",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jina-embeddings-v5-omni-nano"
+    },
+    "jina-embeddings-v5-omni-small": {
+      "display_name": "jina-embeddings-v5-omni-small",
+      "context_tokens": 32768,
+      "input_tokens": 32768,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jina-embeddings-v5-omni-small"
+    },
+    "jina-embeddings-v5-text-nano": {
+      "display_name": "jina-embeddings-v5-text-nano",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jina-embeddings-v5-text-nano"
+    },
+    "jina-embeddings-v5-text-small": {
+      "display_name": "jina-embeddings-v5-text-small",
+      "context_tokens": 32768,
+      "input_tokens": 32768,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jina-embeddings-v5-text-small"
+    },
+    "jina-reranker-m0": {
+      "display_name": "jina-reranker-m0",
+      "context_tokens": 10240,
+      "input_tokens": 10240,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jina-reranker-m0"
+    },
+    "jina-reranker-v2-base-multilingual": {
+      "display_name": "jina-reranker-v2-base-multilingual",
+      "context_tokens": 1024,
+      "input_tokens": 1024,
+      "output_tokens": 1024,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jina-reranker-v2-base-multilingual"
+    },
+    "jina-reranker-v3.5": {
+      "display_name": "jina-reranker-v3.5",
+      "context_tokens": 131072,
+      "input_tokens": 131072,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "jina-reranker-v3.5"
     },
     "kat-coder-pro-v2": {
       "display_name": "kat-coder-pro-v2",
@@ -10305,6 +11883,10 @@
         "text"
       ],
       "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
       "tool_call": true,
       "source_key": "mistral/magistral-medium-latest"
     },
@@ -10321,6 +11903,10 @@
         "text"
       ],
       "reasoning": true,
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ],
       "tool_call": true,
       "source_key": "mistral/magistral-small-latest"
     },
@@ -10476,6 +12062,30 @@
         "text"
       ],
       "source_key": "openrouter/minimax/minimax-01"
+    },
+    "minimax-h3": {
+      "display_name": "minimax-h3",
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "minimax/MiniMax-H3"
+    },
+    "minimax-h3-max": {
+      "display_name": "minimax-h3-max",
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "minimax/MiniMax-H3-Max"
     },
     "minimax-m1": {
       "display_name": "minimax-m1",
@@ -10815,6 +12425,30 @@
       "tool_call": true,
       "source_key": "mistral/mistral-code-latest"
     },
+    "mistral-embed": {
+      "display_name": "mistral-embed",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/mistral-embed"
+    },
+    "mistral-embed-2312": {
+      "display_name": "mistral-embed-2312",
+      "context_tokens": 8192,
+      "input_tokens": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/mistral-embed-2312"
+    },
     "mistral-large": {
       "display_name": "mistral-large",
       "context_tokens": 128000,
@@ -10888,7 +12522,8 @@
       ],
       "reasoning": true,
       "reasoning_efforts": [
-        "none",
+        "low",
+        "medium",
         "high"
       ],
       "tool_call": true,
@@ -10906,6 +12541,12 @@
       ],
       "output_modalities": [
         "text"
+      ],
+      "reasoning": true,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
       ],
       "tool_call": true,
       "source_key": "mistral/mistral-large-latest"
@@ -11391,8 +13032,9 @@
       "source_key": "morph/morph-v3-large"
     },
     "muse-ember-1.0": {
-      "display_name": "muse-ember-1.0",
+      "display_name": "Muse Ember 1.0",
       "context_tokens": 1048576,
+      "max_context_tokens": 1048576,
       "input_tokens": 1048576,
       "output_tokens": 524288,
       "input_modalities": [
@@ -11415,7 +13057,7 @@
         "max"
       ],
       "tool_call": true,
-      "source_key": "meta/muse-ember-1.0"
+      "source_key": "provider-registry/meta/muse-ember-1.0"
     },
     "muse-glimmer-30b": {
       "display_name": "muse-glimmer-30b",
@@ -11781,6 +13423,7 @@
         "audio",
         "text"
       ],
+      "tool_call": true,
       "source_key": "amazon.nova-2-5-sonic"
     },
     "nova-2-lite-v1": {
@@ -11906,6 +13549,23 @@
       "tool_call": true,
       "source_key": "o3"
     },
+    "o3-2025-04-16": {
+      "display_name": "o3-2025-04-16",
+      "context_tokens": 200000,
+      "input_tokens": 200000,
+      "output_tokens": 100000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "o3-2025-04-16"
+    },
     "o3-mini": {
       "display_name": "o3-mini",
       "context_tokens": 200000,
@@ -11953,6 +13613,23 @@
       "reasoning": true,
       "tool_call": true,
       "source_key": "o3-pro"
+    },
+    "o3-pro-2025-06-10": {
+      "display_name": "o3-pro-2025-06-10",
+      "context_tokens": 200000,
+      "input_tokens": 200000,
+      "output_tokens": 100000,
+      "input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "o3-pro-2025-06-10"
     },
     "o4-mini": {
       "display_name": "o4-mini",
@@ -13121,6 +14798,23 @@
       "tool_call": true,
       "source_key": "dashscope/qwen3.8-omni-flash"
     },
+    "qwen4-max": {
+      "display_name": "qwen4-max",
+      "context_tokens": 991808,
+      "input_tokens": 991808,
+      "output_tokens": 131072,
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": true,
+      "tool_call": true,
+      "source_key": "dashscope/qwen4-max"
+    },
     "recraftv2": {
       "display_name": "recraftv2",
       "input_modalities": [
@@ -13225,6 +14919,97 @@
         "image"
       ],
       "source_key": "stability/replace-background-and-relight"
+    },
+    "rerank-english-v3.0": {
+      "display_name": "rerank-english-v3.0",
+      "context_tokens": 4096,
+      "input_tokens": 4096,
+      "output_tokens": 4096,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "rerank-english-v3.0"
+    },
+    "rerank-multilingual-v3.0": {
+      "display_name": "rerank-multilingual-v3.0",
+      "context_tokens": 4096,
+      "input_tokens": 4096,
+      "output_tokens": 4096,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "rerank-multilingual-v3.0"
+    },
+    "rerank-v3.5": {
+      "display_name": "rerank-v3.5",
+      "context_tokens": 4096,
+      "input_tokens": 4096,
+      "output_tokens": 4096,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "rerank-v3.5"
+    },
+    "rerank-v4.0-fast": {
+      "display_name": "rerank-v4.0-fast",
+      "context_tokens": 32768,
+      "input_tokens": 32768,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "rerank-v4.0-fast"
+    },
+    "rerank-v4.0-pro": {
+      "display_name": "rerank-v4.0-pro",
+      "context_tokens": 32768,
+      "input_tokens": 32768,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "rerank-v4.0-pro"
+    },
+    "rerank-v5.0-fast": {
+      "display_name": "rerank-v5.0-fast",
+      "context_tokens": 32768,
+      "input_tokens": 32768,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "rerank-v5.0-fast"
+    },
+    "rerank-v5.0-pro": {
+      "display_name": "rerank-v5.0-pro",
+      "context_tokens": 32768,
+      "input_tokens": 32768,
+      "output_tokens": 32768,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "rerank-v5.0-pro"
     },
     "sakana-namazu": {
       "display_name": "sakana-namazu",
@@ -13788,6 +15573,20 @@
       ],
       "source_key": "soniox/stt-async-v5"
     },
+    "stt-async-v6": {
+      "display_name": "stt-async-v6",
+      "context_tokens": 8000,
+      "input_tokens": 8000,
+      "output_tokens": 8000,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "soniox/stt-async-v6"
+    },
     "stt-rt-preview": {
       "display_name": "stt-rt-preview",
       "input_modalities": [
@@ -13847,6 +15646,16 @@
         "text"
       ],
       "source_key": "soniox/stt-rt-v5"
+    },
+    "stt-rt-v6": {
+      "display_name": "stt-rt-v6",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "soniox/stt-rt-v6"
     },
     "style": {
       "display_name": "style",
@@ -14114,6 +15923,16 @@
       ],
       "source_key": "mistral/voxtral-mini-transcribe-3-0"
     },
+    "voxtral-mini-transcribe-latest": {
+      "display_name": "voxtral-mini-transcribe-latest",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/voxtral-mini-transcribe-latest"
+    },
     "voxtral-mini-transcribe-realtime-2602": {
       "display_name": "Voxtral Mini Transcribe Realtime 2602",
       "family": "voxtral",
@@ -14245,6 +16064,16 @@
         "text"
       ],
       "source_key": "mistral/voxtral-small-transcribe-3-0"
+    },
+    "voxtral-small-transcribe-latest": {
+      "display_name": "voxtral-small-transcribe-latest",
+      "input_modalities": [
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "source_key": "mistral/voxtral-small-transcribe-latest"
     },
     "voyage-2": {
       "display_name": "voyage-2",
@@ -14522,6 +16351,69 @@
       ],
       "source_key": "voyage/voyage-multimodal-3.5"
     },
+    "wan2.7-i2v": {
+      "display_name": "wan2.7-i2v",
+      "input_modalities": [
+        "audio",
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "dashscope/wan2.7-i2v"
+    },
+    "wan2.7-r2v": {
+      "display_name": "wan2.7-r2v",
+      "input_modalities": [
+        "audio",
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "dashscope/wan2.7-r2v"
+    },
+    "wan2.7-t2v": {
+      "display_name": "wan2.7-t2v",
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "dashscope/wan2.7-t2v"
+    },
+    "wan3.0-video": {
+      "display_name": "wan3.0-video",
+      "input_modalities": [
+        "audio",
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "dashscope/wan3.0-video"
+    },
+    "wan3.0-video-prime": {
+      "display_name": "wan3.0-video-prime",
+      "input_modalities": [
+        "audio",
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "video"
+      ],
+      "source_key": "dashscope/wan3.0-video-prime"
+    },
     "weaver": {
       "display_name": "weaver",
       "context_tokens": 8000,
@@ -14639,6 +16531,12 @@
     "dashscope/qwen3-tts-flash": "qwen3-tts-flash",
     "dashscope/qwen3-vl-32b-thinking": "qwen3-vl-32b-thinking",
     "dashscope/qwen3.8-omni-flash": "qwen3.8-omni-flash",
+    "dashscope/qwen4-max": "qwen4-max",
+    "dashscope/wan2.7-i2v": "wan2.7-i2v",
+    "dashscope/wan2.7-r2v": "wan2.7-r2v",
+    "dashscope/wan2.7-t2v": "wan2.7-t2v",
+    "dashscope/wan3.0-video": "wan3.0-video",
+    "dashscope/wan3.0-video-prime": "wan3.0-video-prime",
     "deepgram/base": "base",
     "deepgram/base-conversationalai": "base-conversationalai",
     "deepgram/base-finance": "base-finance",
@@ -14733,12 +16631,17 @@
     "gemini/gemini-3.8-live-extended-thinking": "gemini-3.8-live-extended-thinking",
     "gemini/gemini-4-argon": "gemini-4-argon",
     "gemini/gemini-4-carbon": "gemini-4-carbon",
+    "gemini/gemini-4-hydrogen": "gemini-4-hydrogen",
+    "gemini/gemini-4-neon": "gemini-4-neon",
+    "gemini/gemini-embedding-001": "gemini-embedding-001",
+    "gemini/gemini-embedding-2": "gemini-embedding-2",
     "gemini/gemini-gemma-2-27b-it": "gemini-gemma-2-27b-it",
     "gemini/gemini-gemma-2-9b-it": "gemini-gemma-2-9b-it",
     "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025": "gemini-live-2.5-flash-preview-native-audio-09-2025",
     "gemini/gemini-nano-banana-2.1": "gemini-nano-banana-2.1",
     "gemini/gemini-omni-1.1-flash": "gemini-omni-1.1-flash",
     "gemini/gemini-omni-1.2-flash": "gemini-omni-1.2-flash",
+    "gemini/genie-4": "genie-4",
     "gemini/imagen-3.0-fast-generate-001": "imagen-3.0-fast-generate-001",
     "gemini/imagen-3.0-generate-001": "imagen-3.0-generate-001",
     "gemini/nano-banana-pro-preview": "nano-banana-pro-preview",
@@ -14810,6 +16713,8 @@
     "microsoft/phi-4": "phi-4",
     "microsoft/wizardlm-2-8x22b": "wizardlm-2-8x22b",
     "minimax/minimax-01": "minimax-01",
+    "minimax/minimax-h3": "minimax-h3",
+    "minimax/minimax-h3-max": "minimax-h3-max",
     "minimax/minimax-m1": "minimax-m1",
     "minimax/minimax-m2": "minimax-m2",
     "minimax/minimax-m2-her": "minimax-m2-her",
@@ -14825,6 +16730,8 @@
     "minimax/speech-2.6-hd": "speech-2.6-hd",
     "minimax/speech-2.6-turbo": "speech-2.6-turbo",
     "mistral-large-4-0": "mistral-large-4",
+    "mistral/codestral-embed": "codestral-embed",
+    "mistral/codestral-embed-2505": "codestral-embed-2505",
     "mistral/codestral-latest": "codestral-latest",
     "mistral/codestral-mamba-latest": "codestral-mamba-latest",
     "mistral/devstral-latest": "devstral-latest",
@@ -14841,6 +16748,8 @@
     "mistral/mistral-code-agent-latest": "mistral-code-agent-latest",
     "mistral/mistral-code-fim-latest": "mistral-code-fim-latest",
     "mistral/mistral-code-latest": "mistral-code-latest",
+    "mistral/mistral-embed": "mistral-embed",
+    "mistral/mistral-embed-2312": "mistral-embed-2312",
     "mistral/mistral-large-3": "mistral-large-3",
     "mistral/mistral-large-4": "mistral-large-4",
     "mistral/mistral-medium": "mistral-medium",
@@ -14858,6 +16767,7 @@
     "mistral/voxtral-mini-realtime-latest": "voxtral-mini-realtime-latest",
     "mistral/voxtral-mini-transcribe-3": "voxtral-mini-transcribe-3",
     "mistral/voxtral-mini-transcribe-3-0": "voxtral-mini-transcribe-3-0",
+    "mistral/voxtral-mini-transcribe-latest": "voxtral-mini-transcribe-latest",
     "mistral/voxtral-mini-transcribe-realtime-3": "voxtral-mini-transcribe-realtime-3",
     "mistral/voxtral-mini-transcribe-realtime-3-0": "voxtral-mini-transcribe-realtime-3-0",
     "mistral/voxtral-mini-transcribe-realtime-latest": "voxtral-mini-transcribe-realtime-latest",
@@ -14868,6 +16778,7 @@
     "mistral/voxtral-small-latest": "voxtral-small-latest",
     "mistral/voxtral-small-transcribe-3": "voxtral-small-transcribe-3",
     "mistral/voxtral-small-transcribe-3-0": "voxtral-small-transcribe-3-0",
+    "mistral/voxtral-small-transcribe-latest": "voxtral-small-transcribe-latest",
     "mistralai/codestral-2508": "codestral-2508",
     "mistralai/devstral-2512": "devstral-2512",
     "mistralai/ministral-14b-2512": "ministral-14b-2512",
@@ -15090,12 +17001,14 @@
     "sao10k/l3.3-euryale-70b": "l3.3-euryale-70b",
     "soniox/stt-async-v4": "stt-async-v4",
     "soniox/stt-async-v5": "stt-async-v5",
+    "soniox/stt-async-v6": "stt-async-v6",
     "soniox/stt-rt-preview": "stt-rt-preview",
     "soniox/stt-rt-preview-v2": "stt-rt-preview-v2",
     "soniox/stt-rt-v3": "stt-rt-v3",
     "soniox/stt-rt-v3-preview": "stt-rt-v3-preview",
     "soniox/stt-rt-v4": "stt-rt-v4",
     "soniox/stt-rt-v5": "stt-rt-v5",
+    "soniox/stt-rt-v6": "stt-rt-v6",
     "stability/conservative": "conservative",
     "stability/creative": "creative",
     "stability/erase": "erase",
@@ -15143,6 +17056,10 @@
     "volcengine/doubao-seed-2-1-pro-260628": "doubao-seed-2-1-pro-260628",
     "volcengine/doubao-seed-2-1-pro-260915": "doubao-seed-2-1-pro-260915",
     "volcengine/doubao-seed-2-1-turbo-260628": "doubao-seed-2-1-turbo-260628",
+    "volcengine/doubao-seedance-2-0-260128": "doubao-seedance-2-0-260128",
+    "volcengine/doubao-seedance-2-0-fast-260128": "doubao-seedance-2-0-fast-260128",
+    "volcengine/doubao-seedance-2-0-mini-260615": "doubao-seedance-2-0-mini-260615",
+    "volcengine/doubao-seedance-2-5-260628": "doubao-seedance-2-5-260628",
     "voyage/voyage-2": "voyage-2",
     "voyage/voyage-3": "voyage-3",
     "voyage/voyage-3-large": "voyage-3-large",
@@ -15210,10 +17127,15 @@
     "xai/grok-code-fast-1": "grok-code-fast-1",
     "xai/grok-code-fast-1-0825": "grok-code-fast-1-0825",
     "xai/grok-imagine-image": "grok-imagine-image",
+    "xai/grok-imagine-image-2.0": "grok-imagine-image-2.0",
     "xai/grok-imagine-image-2026-03-02": "grok-imagine-image-2026-03-02",
     "xai/grok-imagine-image-quality-20260403": "grok-imagine-image-quality-20260403",
     "xai/grok-imagine-image-quality-latest": "grok-imagine-image-quality-latest",
+    "xai/grok-imagine-video": "grok-imagine-video",
+    "xai/grok-imagine-video-1.5": "grok-imagine-video-1.5",
+    "xai/grok-imagine-video-1.5-2026-05-30": "grok-imagine-video-1.5-2026-05-30",
     "xai/grok-imagine-video-1.5-lite": "grok-imagine-video-1.5-lite",
+    "xai/grok-imagine-video-1.5-preview": "grok-imagine-video-1.5-preview",
     "xai/grok-voice-transcribe-1.0": "grok-voice-transcribe-1.0",
     "xai/grok-voice-transcribe-2.0": "grok-voice-transcribe-2.0",
     "xiaomi/mimo-v2.5": "mimo-v2.5",

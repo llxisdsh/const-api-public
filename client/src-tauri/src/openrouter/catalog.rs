@@ -1,7 +1,7 @@
 //! Account-scoped discovery. Never turn an authentication failure or an empty
 //! allowed list into a successful refresh of the public, unfiltered catalog.
 use crate::model_catalog::{ModelCatalogKind, ModelObservation};
-use crate::upstream_transport::AdaptiveRequestBuilderExt;
+use crate::upstream_transport::UpstreamRequestBuilderExt;
 use anyhow::{Context, Result, anyhow, ensure};
 use reqwest::{Client, Url};
 use serde_json::Value;
@@ -107,6 +107,66 @@ pub(crate) fn catalog_cache_key(
     (surface, base_url.into())
 }
 
+async fn catalog_page(
+    client: &Client,
+    url: Url,
+    key: &str,
+    user_agent: Option<&str>,
+) -> Result<(Value, Option<String>)> {
+    let request = client.get(url);
+    let request = if let Some(user_agent) = user_agent {
+        request.header(reqwest::header::USER_AGENT, user_agent)
+    } else {
+        request
+    };
+    let request = if key.trim().is_empty() {
+        request
+    } else {
+        request.bearer_auth(key.trim())
+    };
+    let response = request
+        .send_upstream()
+        .await
+        .context("OpenRouter catalog request failed")?;
+    let status = response.status();
+    let etag = response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    ensure!(
+        response
+            .content_length()
+            .is_none_or(|n| n <= MAX_CATALOG_BYTES as u64),
+        "OpenRouter catalog response is too large"
+    );
+    let mut response = response;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .context("OpenRouter catalog read failed")?
+    {
+        ensure!(
+            bytes.len().saturating_add(chunk.len()) <= MAX_CATALOG_BYTES,
+            "OpenRouter catalog response is too large"
+        );
+        bytes.extend_from_slice(&chunk);
+    }
+    // Do not echo arbitrary gateway HTML, credentials or provider prompts.
+    ensure!(
+        status.is_success(),
+        "OpenRouter catalog returned HTTP {status}; allowed models were not refreshed"
+    );
+    let value: Value =
+        serde_json::from_slice(&bytes).context("OpenRouter catalog returned non-JSON data")?;
+    ensure!(
+        value.get("error").is_none_or(Value::is_null),
+        "OpenRouter catalog returned an error envelope"
+    );
+    Ok((value, etag))
+}
+
 pub(crate) async fn fetch_catalog(
     client: &Client,
     base_url: &str,
@@ -119,57 +179,7 @@ pub(crate) async fn fetch_catalog(
     let mut seen = HashSet::new();
     let mut offset = 0_u64;
     for page_index in 0..MAX_CATALOG_PAGES {
-        let request = client.get(url.clone());
-        let request = if let Some(user_agent) = user_agent {
-            request.header(reqwest::header::USER_AGENT, user_agent)
-        } else {
-            request
-        };
-        let request = if key.trim().is_empty() {
-            request
-        } else {
-            request.bearer_auth(key.trim())
-        };
-        let response = request
-            .send_adaptive()
-            .await
-            .context("OpenRouter account catalog request failed")?;
-        let status = response.status();
-        let etag = response
-            .headers()
-            .get(reqwest::header::ETAG)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
-        ensure!(
-            response
-                .content_length()
-                .is_none_or(|n| n <= MAX_CATALOG_BYTES as u64),
-            "OpenRouter account catalog response is too large"
-        );
-        let mut response = response;
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .context("OpenRouter account catalog read failed")?
-        {
-            ensure!(
-                bytes.len().saturating_add(chunk.len()) <= MAX_CATALOG_BYTES,
-                "OpenRouter account catalog response is too large"
-            );
-            bytes.extend_from_slice(&chunk);
-        }
-        // Do not echo arbitrary gateway HTML, credentials or provider prompts.
-        ensure!(
-            status.is_success(),
-            "OpenRouter account catalog returned HTTP {status}; allowed models were not refreshed"
-        );
-        let value: Value = serde_json::from_slice(&bytes)
-            .context("OpenRouter account catalog returned non-JSON data")?;
-        ensure!(
-            value.get("error").is_none_or(Value::is_null),
-            "OpenRouter account catalog returned an error envelope"
-        );
+        let (value, etag) = catalog_page(client, url.clone(), key, user_agent).await?;
         let entries = value
             .get("data")
             .and_then(Value::as_array)
@@ -194,6 +204,36 @@ pub(crate) async fn fetch_catalog(
         for model in &mut page {
             model.etag = etag.clone();
             if let Some(entry) = by_id.get(&model.id.to_ascii_lowercase()) {
+                let endpoints = entry.get("endpoints").and_then(Value::as_array);
+                let has = |path: &str| endpoints.map(|items| items.iter().any(|item| item == path));
+                let outputs = |kind: &str| model.output_modalities.iter().any(|m| m == kind);
+                if outputs("audio") && outputs("text") {
+                    model.supported_endpoints = endpoints.map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .filter_map(|path| path.strip_prefix("/api/v1"))
+                            .map(str::to_owned)
+                            .collect()
+                    });
+                }
+                model.media_operations.video =
+                    outputs("video") && has("/api/v1/videos") != Some(false);
+                model.media_operations.speech =
+                    outputs("speech") && has("/api/v1/audio/speech") != Some(false);
+                // A text-only Images input unambiguously permits prompt-only
+                // generation, even for account variants absent from the public directory.
+                // For image inputs the per-model minimum decides if a reference is mandatory.
+                model.image_operations = match has("/api/v1/images") {
+                    Some(false) if outputs("image") => Some(Default::default()),
+                    Some(true) if outputs("image") && model.input_modalities == ["text"] => {
+                        Some(crate::image_models::ImageOperations {
+                            generate: true,
+                            edit: false,
+                        })
+                    }
+                    _ => None,
+                };
                 model.supported_parameters = entry
                     .get("supported_parameters")
                     .and_then(Value::as_array)
@@ -223,7 +263,26 @@ pub(crate) async fn fetch_catalog(
             .and_then(Value::as_u64)
             .is_some_and(|n| offset < n);
         if !next && !incomplete {
-            return Ok(crate::model_catalog::stable_dedupe_models(models));
+            let mut models = crate::model_catalog::stable_dedupe_models(models);
+            if models
+                .iter()
+                .any(|m| m.output_modalities.iter().any(|v| v == "image"))
+            {
+                // Public endpoint descriptors qualify account entries, never add models to the account.
+                let url = Url::parse(&crate::supplier::join_upstream_url(
+                    base_url,
+                    "/v1/images/models",
+                ))?;
+                match catalog_page(client, url, "", user_agent).await {
+                    Ok((value, _)) if value["data"].is_array() => {
+                        super::images::apply_directory(&mut models, &value)
+                    }
+                    _ => log::warn!(
+                        "OpenRouter image directory unavailable; only account-declared image operations are available"
+                    ),
+                }
+            }
+            return Ok(models);
         }
         ensure!(
             raw_count > 0 && seen.len() > before && page_index + 1 < MAX_CATALOG_PAGES,
@@ -367,13 +426,15 @@ mod tests {
                     assert_eq!(query["offset"], "2");
                     warp::reply::json(&json!({"data":[
                         {"id":"vendor/speech","architecture":{"output_modalities":["speech"]}},
+                        {"id":"vendor/video","architecture":{"output_modalities":["text","video"]}},
+                        {"id":"vendor/audio-chat","architecture":{"output_modalities":["text","audio"]}},
                         {"id":"vendor/batch:batch"}
-                    ],"total_count":4,"links":{"next":null}}))
+                    ],"total_count":6,"links":{"next":null}}))
                 } else {
                     warp::reply::json(&json!({"data":[
                         {"id":"vendor/text","context_length":1000000,"top_provider":{"context_length":200000},"supported_parameters":["tools","tool_choice","structured_outputs","reasoning"]},
                         {"id":"vendor/embedding","architecture":{"output_modalities":["embeddings"]}}
-                    ],"total_count":4,"links":{"next":"https://untrusted.invalid/steal-credentials"}}))
+                    ],"total_count":6,"links":{"next":"https://untrusted.invalid/steal-credentials"}}))
                 }
             });
         let (addr, server) = crate::bind_ephemeral!(route, ([127, 0, 0, 1], 0));
@@ -387,17 +448,70 @@ mod tests {
         .await
         .unwrap();
         server.abort();
-        assert_eq!(models.len(), 3);
+        assert_eq!(models.len(), 5);
         assert_eq!(requests.lock().unwrap().len(), 2);
         assert_eq!(models[0].context_tokens, Some(200000));
         assert_eq!(models[1].output_modalities, ["embeddings"]);
         assert_eq!(models[2].output_modalities, ["speech"]);
+        assert!(models[2].media_operations.speech);
+        assert!(models[3].media_operations.video);
+        assert!(models[4].media_operations.empty());
         let mut profile = crate::model::ChannelCapabilityProfile::default();
         apply_catalog_capabilities(&mut profile, &models[0]);
         assert!(
             profile.tool_calls && profile.tool_choice && profile.json_schema && profile.reasoning
         );
         assert!(!profile.custom_tool && profile.hosted_tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn image_operations_intersect_account_and_typed_directory_and_require_reference_support()
+    {
+        let arch = json!({"input_modalities":["text","image"],"output_modalities":["image"]});
+        let route = warp::get().and(warp::path::full()).and(warp::header::optional::<String>("authorization"))
+            .map(move |path: warp::path::FullPath, auth: Option<String>| {
+                let rows = match path.as_str() {
+                    "/api/v1/models/user" => {
+                        assert_eq!(auth.as_deref(), Some("Bearer test-account"));
+                        json!([{"id":"vendor/both","architecture":arch},
+                               {"id":"vendor/reference-only","architecture":arch},
+                               {"id":"vendor/no-reference","architecture":arch},
+                               {"id":"vendor/output-only","architecture":arch},
+                               {"id":"vendor/embedding-image","architecture":{"input_modalities":["image"],"output_modalities":["embeddings"]}}])
+                    }
+                    "/api/v1/images/models" => {
+                        assert!(auth.is_none());
+                        json!([{"id":"vendor/both","architecture":arch,"supported_parameters":{"input_references":{"min":0,"max":3}}},
+                               {"id":"vendor/reference-only","architecture":arch,"supported_parameters":{"input_references":{"min":1,"max":2}}},
+                               {"id":"vendor/no-reference","architecture":{"input_modalities":["text"],"output_modalities":["image"]}},
+                               {"id":"vendor/public-only","architecture":arch}])
+                    }
+                    _ => panic!("unexpected catalog path"),
+                };
+                warp::reply::json(&json!({"data":rows}))
+            });
+        let (addr, server) = crate::bind_ephemeral!(route, ([127, 0, 0, 1], 0));
+        let server = tokio::spawn(server);
+        let models = fetch_catalog(
+            &Client::new(),
+            &format!("http://{addr}/api/v1"),
+            "test-account",
+            None,
+        )
+        .await
+        .unwrap();
+        server.abort();
+        assert_eq!(models.len(), 5);
+        for (model, expected) in models.iter().zip([
+            (true, true),
+            (false, true),
+            (true, false),
+            (false, false),
+            (false, false),
+        ]) {
+            let ops = model.image_operations.unwrap_or_default();
+            assert_eq!((ops.generate, ops.edit), expected, "{}", model.id);
+        }
     }
 
     #[tokio::test]

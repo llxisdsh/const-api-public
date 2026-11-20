@@ -184,7 +184,6 @@ pub(crate) fn default_config() -> ClientConfig { let mut exported_config = (|| {
         allow_lan_access: false,
         lan_share: LanShareConfig::default(),
         proxy_auto_start: true,
-        automatic_updates: true,
         prevent_sleep_while_supplying: true,
         supplier_auto_start: false,
         api_key: generate_local_api_key(),
@@ -195,6 +194,9 @@ pub(crate) fn default_config() -> ClientConfig { let mut exported_config = (|| {
         development_endpoint: default_development_endpoint(),
         allow_model_equivalence: default_allow_model_equivalence(),
         prefer_local_supply: true,
+        protect_outgoing_secrets: default_true(),
+        configure_image_skill: true,
+        media_skill_tools: crate::tool_config::default_media_skill_tools(),
         tool_model_injection: Default::default(),
         allow_unverified_platform_routes: true,
         model_aliases: default_model_aliases(),
@@ -415,12 +417,12 @@ pub(crate) fn load_config_from_path(path: &PathBuf) -> Result<ClientConfig> {
     struct Metadata {
         #[serde(default)]
         config_version: serde_json::Value,
+        #[serde(default)]
+        local_only_channel_ids: Option<std::collections::HashSet<String>>,
     }
-    let version = serde_json::from_slice::<Metadata>(&raw)
-        .map_err(|error| anyhow::anyhow!("decode config metadata {}: {error}", path.display()))?
-        .config_version
-        .as_u64()
-        .unwrap_or_default() as u32;
+    let metadata = serde_json::from_slice::<Metadata>(&raw)
+        .map_err(|error| anyhow::anyhow!("decode config metadata {}: {error}", path.display()))?;
+    let version = metadata.config_version.as_u64().unwrap_or_default() as u32;
     let needs_migration = version < CURRENT_CLIENT_CONFIG_VERSION;
     let mut cfg = if needs_migration {
         migrate_client_config_v4(serde_json::from_slice::<ClientConfigV4Read>(&raw).map_err(
@@ -446,16 +448,38 @@ pub(crate) fn load_config_from_path(path: &PathBuf) -> Result<ClientConfig> {
     if cfg.registry_sources.is_empty() {
         cfg.registry_sources = default_config().registry_sources;
     }
+    let has_sharing_policy = metadata.local_only_channel_ids.is_some();
+    restore_disk_channel_policy(&mut cfg, metadata.local_only_channel_ids.as_ref());
     let mut cfg = normalize_config(cfg);
     if let Ok(release_sources) = crate::release_sources::trusted_release_sources(path) {
         cfg.registry_sources = release_sources.endpoint_registry_urls();
     }
     crate::endpoint::apply_trusted_endpoint_state(&mut cfg, path);
-    if needs_migration {
+    if needs_migration || !has_sharing_policy {
         backup_config(path, &format!("v{version}"))?;
         write_config_to_path(path, &cfg)?;
     }
     Ok(cfg)
+}
+
+fn restore_disk_channel_policy(
+    cfg: &mut ClientConfig,
+    local_only_ids: Option<&std::collections::HashSet<String>>,
+) {
+    for channel in &mut cfg.channels {
+        match local_only_ids {
+            // Before separate sharing preferences, enabling an ordinary channel
+            // also enabled market supply. A stopped channel keeps that default for later.
+            None => {
+                channel.share_enabled = crate::source_driver::channel_is_platform_shareable(channel)
+            }
+            Some(ids) if ids.contains(&channel.id) => {
+                channel.enabled = true;
+                channel.share_enabled = false;
+            }
+            Some(_) => {}
+        }
+    }
 }
 
 pub(crate) fn load_config_from_path_with_recovery(path: &PathBuf) -> Result<ClientConfig> {
@@ -603,6 +627,10 @@ fn recover_config_value(value: serde_json::Value) -> Result<ClientConfig> {
     } else {
         channels
     };
+    let local_only_ids = user
+        .get("local_only_channel_ids")
+        .map(|ids| serde_json::from_value(ids.clone()).unwrap_or_default());
+    restore_disk_channel_policy(&mut recovered, local_only_ids.as_ref());
     Ok(normalize_config(recovered))
 }
 
@@ -642,7 +670,6 @@ fn migrate_client_config_v4(value: ClientConfigV4Read) -> ClientConfig {
         allow_lan_access: value.allow_lan_access,
         lan_share: value.lan_share,
         proxy_auto_start: value.proxy_auto_start,
-        automatic_updates: value.automatic_updates,
         prevent_sleep_while_supplying: true,
         supplier_auto_start: value.supplier_auto_start,
         api_key: value.api_key,
@@ -653,6 +680,9 @@ fn migrate_client_config_v4(value: ClientConfigV4Read) -> ClientConfig {
         development_endpoint: default_development_endpoint(),
         allow_model_equivalence: value.allow_model_equivalence,
         prefer_local_supply: value.prefer_local_supply,
+        protect_outgoing_secrets: default_true(),
+        configure_image_skill: true,
+        media_skill_tools: crate::tool_config::default_media_skill_tools(),
         tool_model_injection: Default::default(),
         allow_unverified_platform_routes: value.allow_unverified_platform_routes,
         model_aliases: value.model_aliases,
@@ -676,7 +706,39 @@ pub(crate) fn write_config_to_path(path: &PathBuf, cfg: &ClientConfig) -> Result
         crate::channel_surface::validate_channel_source_policy(channel)
             .with_context(|| format!("validate channel {} source policy", channel.id))?;
     }
-    let raw = serde_json::to_vec_pretty(&normalized)?;
+    // Older V5 binaries publish every enabled ordinary channel. Project private
+    // channels as disabled on disk so opening a previous build cannot publish them.
+    // The renderer and the live proxy continue to see the actual local enablement.
+    #[derive(serde::Serialize)]
+    struct DiskConfig<'a> {
+        #[serde(flatten)]
+        config: &'a ClientConfig,
+        local_only_channel_ids: &'a std::collections::BTreeSet<String>,
+    }
+    let local_only_channel_ids = normalized
+        .channels
+        .iter_mut()
+        .filter_map(|channel| {
+            if channel.enabled
+                && !channel.share_enabled
+                && crate::source_driver::channel_is_platform_shareable(channel)
+            {
+                channel.enabled = false;
+                Some(channel.id.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let raw = serde_json::to_vec_pretty(&DiskConfig {
+        config: &normalized,
+        local_only_channel_ids: &local_only_channel_ids,
+    })?;
+    for channel in &mut normalized.channels {
+        if local_only_channel_ids.contains(&channel.id) {
+            channel.enabled = true;
+        }
+    }
     let mut temp = tempfile::NamedTempFile::new_in(parent)
         .with_context(|| format!("create config temp file beside {}", path.display()))?;
     temp.write_all(&raw)
@@ -912,12 +974,10 @@ pub(crate) fn normalize_config(mut cfg: ClientConfig) -> ClientConfig { let mut 
     materialize_local_channel_priorities(&mut cfg.channels);
     cfg.lan_share.shared_models = dedupe_models(cfg.lan_share.shared_models);
     cfg.lan_share.preferred_connect_ip = cfg.lan_share.preferred_connect_ip.trim().to_string();
-    // Ordinary channels retain the single-switch contract. A LAN-share
-    // channel is the one explicit local-only exception and can never start the
-    // platform supplier lifecycle.
-    cfg.supplier_auto_start = cfg.channels.iter().any(|channel| {
-        channel.enabled && crate::source_driver::channel_is_platform_shareable(channel)
-    });
+    cfg.supplier_auto_start = cfg
+        .channels
+        .iter()
+        .any(crate::source_driver::channel_shares_to_market);
     // Explicit local tiers do not change marketplace routing. Keep storage order
     // stable; older configs inherit their original distinct tiers above.
     if let Some(compatibility_channel) = cfg
@@ -958,7 +1018,7 @@ fn migrate_legacy_price_ratio(value: f64) -> f64 {
 pub(crate) fn channel_from_supplier(id: String, supplier: &SupplierConfig) -> ChannelConfig {
     let mut subscription = supplier.subscription.clone();
     subscription.credential_ref = supplier.credential_ref.clone();
-    ChannelConfig {
+    let mut channel = ChannelConfig {
         v2: ChannelConfigV2Contract {
             local_priority: None,
             created_at_unix_ms: 0,
@@ -974,7 +1034,7 @@ pub(crate) fn channel_from_supplier(id: String, supplier: &SupplierConfig) -> Ch
         },
         id,
         enabled: supplier.enabled,
-        share_enabled: supplier.enabled,
+        share_enabled: false,
         kind: supplier.kind.clone(),
         api_format: supplier.api_format.clone(),
         node_id: supplier.node_id.clone(),
@@ -992,7 +1052,9 @@ pub(crate) fn channel_from_supplier(id: String, supplier: &SupplierConfig) -> Ch
         surface_bindings: supplier.surface_bindings.clone(),
         price_ratio: supplier.price_ratio,
         subscription,
-    }
+    };
+    channel.share_enabled = crate::source_driver::channel_is_platform_shareable(&channel);
+    channel
 }
 
 fn migrate_supplier_v4_channel_at_load_boundary(
@@ -1339,7 +1401,7 @@ pub(crate) fn supplier_from_channel_unfiltered(channel: &ChannelConfig) -> Suppl
         user_agent_profile: channel.v2.user_agent_profile.clone(),
         use_system_proxy: channel.v2.use_system_proxy,
         channel_id: channel.id.clone(),
-        enabled: channel.enabled && crate::source_driver::channel_is_platform_shareable(channel),
+        enabled: crate::source_driver::channel_shares_to_market(channel),
         kind: driver
             .map(|driver| driver.kind.clone())
             .unwrap_or_else(|| channel.kind.clone()),
@@ -1374,8 +1436,7 @@ pub(crate) fn supplier_from_channel_unfiltered(channel: &ChannelConfig) -> Suppl
 
 pub(crate) fn supplier_from_channel_for_node(channel: &ChannelConfig) -> SupplierConfig {
     let mut supplier = supplier_from_channel(channel);
-    supplier.enabled =
-        channel.enabled && crate::source_driver::channel_is_platform_shareable(channel);
+    supplier.enabled = crate::source_driver::channel_shares_to_market(channel);
     supplier
 }
 
@@ -1390,10 +1451,7 @@ pub(crate) fn normalize_channel(
     crate::channel_surface::repair_channel_surface_contract(&mut channel);
     crate::openrouter::normalize_channel(&mut channel);
     crate::cursor::models::normalize_channel(&mut channel);
-    // `enabled` remains canonical. `share_enabled` is a compatibility mirror,
-    // except for the dedicated LAN-share driver which is always local-only.
-    channel.share_enabled =
-        channel.enabled && crate::source_driver::channel_is_platform_shareable(&channel);
+    channel.share_enabled &= crate::source_driver::channel_is_platform_shareable(&channel);
     channel.models = dedupe_models(std::mem::take(&mut channel.models));
     channel.v2.user_agent_profile = channel.v2.user_agent_profile.trim().to_ascii_lowercase();
     if channel.id.trim().is_empty() {
@@ -1941,27 +1999,43 @@ mod tests {
     }
 
     #[test]
-    fn legacy_config_without_native_update_preference_keeps_updates_enabled() {
+    fn retired_update_opt_out_is_ignored_in_existing_profiles() {
         let temp = tempfile::tempdir().expect("temp dir");
         let path = temp.path().join("client.json");
-        let mut value = serde_json::to_value(default_config()).expect("serialize config");
-        value
-            .as_object_mut()
-            .expect("config object")
-            .remove("automatic_updates");
-        write_json(&path, &value);
+        for mut profile in [
+            legacy_v4_fixture(),
+            serde_json::to_value(default_config()).unwrap(),
+        ] {
+            profile["automatic_updates"] = serde_json::json!(false);
+            profile["listen"] = serde_json::json!("127.0.0.1:39990");
+            write_json(&path, &profile);
+            let loaded = load_config_from_path(&path).expect("load existing profile");
+            assert_eq!(loaded.listen, "127.0.0.1:39990");
+            assert!(
+                serde_json::to_value(loaded)
+                    .unwrap()
+                    .get("automatic_updates")
+                    .is_none()
+            );
+        }
+    }
 
-        let loaded = load_config_from_path(&path).expect("load legacy config");
-        assert!(loaded.automatic_updates);
-
-        let mut disabled = loaded;
-        disabled.automatic_updates = false;
-        write_config_to_path(&path, &disabled).expect("persist native preference");
-        assert!(
-            !load_config_from_path(&path)
-                .expect("reload native preference")
-                .automatic_updates
-        );
+    #[test]
+    fn data_redaction_and_tool_image_skill_default_on_for_new_and_existing_profiles() {
+        let fresh = default_config();
+        assert!(fresh.protect_outgoing_secrets);
+        assert!(fresh.configure_image_skill);
+        for mut config in [legacy_v4_fixture(), serde_json::to_value(fresh).unwrap()] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("client.json");
+            let fields = config.as_object_mut().unwrap();
+            fields.remove("protect_outgoing_secrets");
+            fields.remove("configure_image_skill");
+            write_json(&path, &config);
+            let loaded = load_config_from_path(&path).unwrap();
+            assert!(loaded.protect_outgoing_secrets);
+            assert!(loaded.configure_image_skill);
+        }
     }
 
     fn write_json(path: &std::path::Path, value: &serde_json::Value) {
@@ -2911,7 +2985,7 @@ mod tests {
     }
 
     #[test]
-    fn normalization_collapses_legacy_channel_switches_to_enabled() {
+    fn local_enablement_and_market_admission_are_independent() {
         let mut cfg = default_config();
         cfg.channels[0].enabled = true;
         cfg.channels[0].share_enabled = false;
@@ -2920,9 +2994,9 @@ mod tests {
         let normalized = normalize_config(cfg);
 
         assert!(normalized.channels[0].enabled);
-        assert!(normalized.channels[0].share_enabled);
-        assert!(normalized.supplier_auto_start);
-        assert!(normalized.supplier.enabled);
+        assert!(!normalized.channels[0].share_enabled);
+        assert!(!normalized.supplier_auto_start);
+        assert!(!normalized.supplier.enabled);
 
         let mut cfg = normalized;
         cfg.channels[0].enabled = false;
@@ -2932,9 +3006,42 @@ mod tests {
         let normalized = normalize_config(cfg);
 
         assert!(!normalized.channels[0].enabled);
-        assert!(!normalized.channels[0].share_enabled);
+        assert_eq!(
+            normalized.channels[0].share_enabled,
+            crate::source_driver::channel_is_platform_shareable(&normalized.channels[0])
+        );
         assert!(!normalized.supplier_auto_start);
         assert!(!normalized.supplier.enabled);
+    }
+
+    #[test]
+    fn legacy_market_default_and_explicit_opt_out_survive_restart_and_channel_toggles() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("client.json");
+        let mut cfg = default_config();
+        let supported = crate::source_driver::channel_is_platform_shareable(&cfg.channels[0]);
+        cfg.channels[0].enabled = true;
+        cfg.channels[0].share_enabled = false; // Old clients derived this from enabled.
+        fs::write(&path, serde_json::to_vec(&cfg).unwrap()).unwrap();
+        let mut loaded = load_config_from_path(&path).unwrap();
+        assert_eq!(loaded.channels[0].share_enabled, supported);
+        assert_eq!(loaded.supplier_auto_start, supported);
+
+        loaded.channels[0].share_enabled = false;
+        write_config_to_path(&path, &loaded).unwrap();
+        assert_eq!(
+            persisted_json(&path)["channels"][0]["enabled"],
+            !supported,
+            "an older client must not publish a withdrawn channel"
+        );
+        for enabled in [false, true] {
+            let mut cfg = load_config_from_path(&path).unwrap();
+            cfg.channels[0].enabled = enabled;
+            write_config_to_path(&path, &cfg).unwrap();
+            let restarted = load_config_from_path(&path).unwrap();
+            assert_eq!(restarted.channels[0].enabled, enabled);
+            assert!(!restarted.channels[0].share_enabled && !restarted.supplier_auto_start);
+        }
     }
 
     #[test]

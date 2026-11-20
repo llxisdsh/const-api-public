@@ -38,6 +38,7 @@ import { useTranslation } from "react-i18next";
 import { AppErrorBoundary, RendererFailure } from "./AppErrorBoundary";
 import { DialogBackdrop } from "./DialogBackdrop";
 import { AccessPageHeader } from "./components/AccessPageHeader";
+import { ToolModelInjectionSettings } from "./components/ToolModelInjectionSettings";
 import {
   LegalNotice,
   LegalNoticeLoading,
@@ -89,6 +90,8 @@ import {
   channelIsPooled,
   channelKindLabel,
   channelOnlineLabel,
+  channelIsPlatformPooled,
+  channelIsPlatformShareable,
   channelStateTone,
   channelSwitchLabel,
   credentialStatusLabel,
@@ -163,10 +166,10 @@ import {
   ModelInput,
   QuickCard,
   SupplierChoiceCard,
+  TrackSwitch,
   ToolConfigDetailPanel,
   ToolConfigPathField,
   ToolProtocolPanel,
-  ToolRemoveDialog,
   VsCodeExtensionLinkage,
 } from "./components/AppControls";
 import { GuidanceNoticeCard } from "./components/GuidanceNoticeCard";
@@ -208,6 +211,7 @@ import {
   DEFAULT_DEVELOPMENT_ENDPOINT,
   DEVELOPMENT_PROFILE,
   PRODUCT_DISPLAY_NAME,
+  RELEASE_UPDATES_SUPPORTED,
 } from "./runtimeProfile";
 import { installAutoHidingScrollbars } from "./scrollbarVisibility";
 import {
@@ -217,6 +221,7 @@ import {
   sourceDriverTitle,
 } from "./sourceDriverPresentation";
 import {
+  sourceDriverAllowsMarketSharing,
   sourceDriverById,
   type SourceDriver
 } from "./sourceDrivers";
@@ -271,8 +276,8 @@ const MarketPricesModal = React.lazy(() => import("./MarketPricesModal")
   .then((module) => ({ default: module.MarketPricesModal })));
 const ModelCompatibilityEditor = React.lazy(() => import("./components/ModelCompatibilityEditor")
   .then((module) => ({ default: module.ModelCompatibilityEditor })));
-const ToolModelInjectionSettings = React.lazy(() => import("./components/ToolModelInjectionSettings")
-  .then((module) => ({ default: module.ToolModelInjectionSettings })));
+const MediaSkillToolsDialog = React.lazy(() => import("./components/MediaSkillToolsDialog")
+  .then((module) => ({ default: module.MediaSkillToolsDialog })));
 const OperationCapabilityMatrix = React.lazy(() => import("./components/OperationCapabilityMatrix")
   .then((module) => ({ default: module.OperationCapabilityMatrix })));
 const SupplierModelPoolDialog = React.lazy(() => import("./components/SupplierModelPoolDialog")
@@ -341,14 +346,15 @@ function ResetLocalDataDialog({
         <div className="reset-local-data-tools">
           <strong>{t("about.resetLocalDataToolsTitle")}</strong>
           <p>{t("about.resetLocalDataToolsHint")}</p>
-          <label>
+          <div className="reset-local-data-confirmation">
             <input
               type="checkbox"
+              aria-label={t("about.resetLocalDataToolsConfirmed")}
               checked={toolsHandled}
               onChange={(event) => setToolsHandled(event.target.checked)}
             />
             <span>{t("about.resetLocalDataToolsConfirmed")}</span>
-          </label>
+          </div>
         </div>
         <div className="confirm-actions">
           <button type="button" className="quiet" disabled={busy} onClick={onCancel}>
@@ -380,6 +386,8 @@ function ProductApp({
   const [localModeChosen, setLocalModeChosen] = useState(() => hasChosenLocalMode());
   const [onboardingGuideCollapsed, setOnboardingGuideCollapsed] = useState(false);
   const [toolModelInjectionEditorOpen, setToolModelInjectionEditorOpen] = useState(false);
+  const [mediaSkillToolsOpen, setMediaSkillToolsOpen] = useState(false);
+  const mediaSkillSettingRef = useRef<HTMLInputElement>(null);
   const {
     tab,
     setTab,
@@ -396,6 +404,7 @@ function ProductApp({
     refreshVsCodeExtensionConfigStatuses,
     saveToolModelInjectionSettings,
     saveRoutingPreference,
+    saveMediaSkillTools,
     toolProtocolDraftTouchedRef,
     toolProtocolSelections,
     codexModelSource,
@@ -427,6 +436,9 @@ function ProductApp({
     subscriptionImportCanRetry,
     supplierAddOpen,
     setSupplierAddOpen,
+    openSupplierAdd,
+    newChannelMarketSharing,
+    setNewChannelMarketSharing,
     supplierDetailOpen,
     supplierStartingChannelId,
     pendingSupplierChannelIds,
@@ -472,8 +484,6 @@ function ProductApp({
     setSupplierTestPrompt,
     supplierTestResult,
     updateState,
-    autoInstallUpdates,
-    setAutoInstallUpdates,
     autostartEnabled,
     autostartBusy,
     changeAutostart,
@@ -490,7 +500,6 @@ function ProductApp({
     showGuidanceNotice,
     dismissGuidanceNotice,
     confirmDialog,
-    toolRemoveDialog,
     appLogs,
     setAppLogs,
     logOpen,
@@ -559,6 +568,7 @@ function ProductApp({
     logText,
     handleDiagnosticAction,
     refreshModelCompatibilityPolicy,
+    watchModelCompatibilityPolicy,
     saveModelCompatibilityPolicy,
     resetModelCompatibilityPolicy,
     save,
@@ -587,6 +597,7 @@ function ProductApp({
     supplierChannelNeedsDetection,
     saveSupplierChanges,
     startSupplier,
+    setMarketSharing,
     stopSelectedChannel,
     refreshSupplierModels,
     refreshRoutePlan,
@@ -597,7 +608,6 @@ function ProductApp({
     toggleDebugTargetGroup,
     askConfirm,
     resolveConfirmDialog,
-    resolveToolRemoveDialog,
     applyToolConfig,
     toolBatchRunning,
     toolBatchOperation,
@@ -633,7 +643,6 @@ function ProductApp({
   );
 
   const [requestedAccountView, setRequestedAccountView] = useState<AccountViewRequest | null>(null);
-  const [previewAutoInstallUpdates, setPreviewAutoInstallUpdates] = useState(false);
   const [previewAutostartEnabled, setPreviewAutostartEnabled] = useState(false);
   const [lanShareWizardDriver, setLanShareWizardDriver] = useState<SourceDriver | null>(null);
   const [supplierAddTab, setSupplierAddTab] = useState<"official" | "local" | "lan">("official");
@@ -679,10 +688,8 @@ function ProductApp({
 
   useEffect(() => {
     if (clientModePolicy.preview.active) return;
-    setPreviewAutoInstallUpdates(autoInstallUpdates);
     setPreviewAutostartEnabled(autostartEnabled);
   }, [
-    autoInstallUpdates,
     autostartEnabled,
     clientModePolicy.preview.active,
   ]);
@@ -914,16 +921,15 @@ function ProductApp({
   const [supplierModelPoolOpen, setSupplierModelPoolOpen] = useState(false);
   const [lanSharingOpen, setLanSharingOpen] = useState(false);
   const experimentalToolsUnlockedRef = useRef(clientModePolicy.experimental.toolsUnlocked);
-  const selectedChannelTransport = supplierChannelTransportForChannel(
-    supplierStatus,
-    selectedChannel.id,
-  );
+  const selectedChannelTransport = channelIsPlatformPooled(selectedChannel)
+    ? supplierChannelTransportForChannel(supplierStatus, selectedChannel.id)
+    : undefined;
   const selectedChannelIssue = supplierChannelDiagnostic(selectedChannel, supplierStatus, pendingSupplierChannelIds);
   const selectedModelPool = useMemo(() => resolveSupplierModelPoolDetails({
     observedModels: selectedChannel.models.length > 0 ? selectedChannel.models : [selectedChannelModel].filter(Boolean),
     routeStatus: selectedChannelRouteStatus,
-    platformRegistered: selectedChannelTransport?.platform_registered === true,
-  }), [selectedChannel.models, selectedChannelModel, selectedChannelRouteStatus, selectedChannelTransport?.platform_registered]);
+    platformRegistered: selectedChannel.share_enabled && selectedChannelTransport?.platform_registered === true,
+  }), [selectedChannel.models, selectedChannel.share_enabled, selectedChannelModel, selectedChannelRouteStatus, selectedChannelTransport?.platform_registered]);
   const selectedConcurrencyGuidance = supplierConcurrencyGuidance(
     selectedChannel.max_concurrency,
   );
@@ -979,7 +985,6 @@ function ProductApp({
   const guidanceLayerSuspended = Boolean(
     inlineOverlayOpen
     || confirmDialog
-    || toolRemoveDialog
     || resetLocalDataConfirmOpen
     || legalDocumentOpen,
   );
@@ -1038,14 +1043,8 @@ function ProductApp({
       ? updateCheckedAt ? t("about.latest") : t("about.notChecked")
       : updateStatusLabel(updateState);
   const aboutUpdateDetail = aboutUpdateHint(updateState, appMeta.updateLastCheckedAt);
-  const showUpdateAction = clientModePolicy.runtime.developmentProfile
-    || clientModePolicy.capabilities.releaseUpdates;
   const showInstallUpdateAction = clientModePolicy.capabilities.releaseUpdates
     && (updateState.status === "ready" || updateState.status === "ready_waiting_idle" || updateState.status === "installing");
-  const handleUpdateCheck = () => {
-    if (clientModePolicy.runtime.developmentProfile) return;
-    void checkAndDownloadUpdate(false);
-  };
   const activeLanguage = currentAppLanguage();
 
   const resetLocalAppData = async () => {
@@ -1225,6 +1224,7 @@ function ProductApp({
                               {card.tool === "claude" && (
                                 <div className="tool-dock-combined-section">
                                   <ClaudeModelSettingsPanel
+                                    onWatchModels={watchModelCompatibilityPolicy}
                                     settings={claudeModelDraft}
                                     models={claudeModelOptions}
                                     loading={modelCompatibilityPolicy.status === "idle"
@@ -1415,18 +1415,59 @@ function ProductApp({
                           </span>
                         </div>
                       </div>
-                      <React.Suspense fallback={null}><ToolModelInjectionSettings
+                      <ToolModelInjectionSettings
                         settings={config.tool_model_injection ?? DEFAULT_TOOL_MODEL_INJECTION}
                         open={toolModelInjectionEditorOpen}
                         onOpenChange={setToolModelInjectionEditorOpen}
                         onSave={saveToolModelInjectionSettings}
-                      /></React.Suspense>
+                      />
+                      <div className="model-equivalence-toggle advanced-strategy-toggle">
+                        <div className="model-equivalence-check">
+                          <input
+                            type="checkbox"
+                            checked={config.protect_outgoing_secrets}
+                            onChange={(event) => void saveRoutingPreference("protect_outgoing_secrets", event.target.checked)}
+                            disabled={configActionBusy || routingPreferenceSaving.protect_outgoing_secrets}
+                            aria-label={t("access.dataRedaction")}
+                            aria-describedby="data-redaction-hint"
+                          />
+                          <span>
+                            <strong>{t("access.dataRedaction")}</strong>
+                            <small id="data-redaction-hint">{t("access.dataRedactionHint")}</small>
+                          </span>
+                        </div>
+                      </div>
+                      <div className="model-equivalence-toggle advanced-strategy-toggle">
+                        <div className="model-equivalence-check">
+                          <input
+                            type="checkbox"
+                            ref={mediaSkillSettingRef}
+                            checked={config.configure_image_skill}
+                            onChange={(event) => void saveRoutingPreference("configure_image_skill", event.target.checked)}
+                            disabled={configActionBusy || routingPreferenceSaving.configure_image_skill}
+                            aria-label={t("access.toolImageSkill")}
+                            aria-describedby="tool-image-skill-hint"
+                          />
+                          <span>
+                            <span className="model-equivalence-heading">
+                              <strong>{t("access.toolImageSkill")}</strong>
+                              <button type="button" className="inline-text-link model-alias-preview-button"
+                                onClick={() => setMediaSkillToolsOpen(true)}>{t("access.mediaSkillTools")}</button>
+                            </span>
+                            <small id="tool-image-skill-hint">{t("access.toolImageSkillHint")}</small>
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
                 </DialogBackdrop>
               )}
 
+              {showAccessAdvanced && mediaSkillToolsOpen && (
+                <React.Suspense fallback={null}><MediaSkillToolsDialog selected={config.media_skill_tools}
+                  onSave={saveMediaSkillTools} onClose={() => setMediaSkillToolsOpen(false)} /></React.Suspense>
+              )}
               {accessGuideOpen && (
                 <React.Suspense fallback={null}><ConnectionGuideModal
                   rootUrl={localApiRoot}
@@ -1441,6 +1482,20 @@ function ProductApp({
                   onCopy={(field, label, value) => void copyValue(field, label, value)}
                   onRefreshModels={refreshModelCompatibilityPolicy}
                   onOpenRoot={(url) => void openExternalUrl(url)}
+                  onOpenMediaSkillSettings={() => {
+                    setAccessGuideOpen(false);
+                    setShowAccessAdvanced(true);
+                    window.requestAnimationFrame(() => mediaSkillSettingRef.current?.focus());
+                  }}
+                  onCopyImageCommand={async () => {
+                    try {
+                      const invocation = await invoke<string>("image_command_usage");
+                      await copyValue("guide-image-command", t("access.guide.copyImageCommand"),
+                        t("access.guide.imageCommand", { invocation, interpolation: { escapeValue: false } }));
+                    } catch (error) {
+                      showToast(localizedError(error), "error");
+                    }
+                  }}
                   onClose={() => setAccessGuideOpen(false)}
                 /></React.Suspense>
               )}
@@ -1646,7 +1701,14 @@ function ProductApp({
                   <p>
                     {t("supplier.subtitle")}{" "}
                     <span className="page-intro-links">
-
+                      <button
+                        className="inline-text-link"
+                        type="button"
+                        onClick={() => setMarketPricesContext({ initialView: "catalog" })}
+                      >
+                        {t("market.action")}
+                      </button>
+                      <span aria-hidden="true">·</span>
                       <button
                         className="inline-text-link"
                         type="button"
@@ -1692,7 +1754,7 @@ function ProductApp({
                     </div>
                   </div>
                   <div className="actions">
-                    <button className="quiet" onClick={() => setSupplierAddOpen(true)}>
+                    <button className="quiet" onClick={openSupplierAdd}>
                       <Plus size={16} />{t("supplier.addChannel")}
                     </button>
                   </div>
@@ -1721,7 +1783,7 @@ function ProductApp({
                 >
                   {(channel, priorityHandle) => {
                     const health = supplierStatus.channels?.find((item) => item.channel_id === channel.id);
-                    const routeStatus = supplierRouteStatusForChannel(supplierStatus, channel.id);
+                    const routeStatus = channelIsPlatformPooled(channel) ? supplierRouteStatusForChannel(supplierStatus, channel.id) : undefined;
                     const routeDetail = supplierRouteStatusDetail(routeStatus);
                     const stateTone = channelStateTone(channel, health, supplierStatus, supplierStartingChannelId, pendingSupplierChannelIds);
                     const runningLabel = channelOnlineLabel(channel, health, supplierStatus, pendingSupplierChannelIds);
@@ -1839,6 +1901,15 @@ function ProductApp({
                       role="tabpanel"
                       aria-labelledby={`supplier-add-tab-${supplierAddTab}`}
                     >
+                      {supplierAddTab !== "lan" && (supplierAddTab === "official" ? subscriptionCards : customCards)
+                        .some((driver) => sourceDriverAllowsMarketSharing(driver.id)) && (
+                        <div className="model-equivalence-check">
+                          <input type="checkbox" checked={newChannelMarketSharing}
+                            aria-label={t("supplier.shareWhenEnabled")}
+                            onChange={(event) => setNewChannelMarketSharing(event.target.checked)} />
+                          <span>{t("supplier.shareWhenEnabled")}</span>
+                        </div>
+                      )}
                       {supplierAddTab === "official" && (
                         <>
                           <div className="add-channel-group">
@@ -2024,9 +2095,10 @@ function ProductApp({
                         </button>
                       </div>}
 
-                      <label className="grid-wide">
+                      <div className="checkbox-field grid-wide">
                         <span className="model-equivalence-check">
                           <input type="checkbox"
+                            aria-label={t("supplier.advanced.useSystemProxy")}
                             checked={subscriptionUseSystemProxy}
                             disabled={subscriptionWizardBusy}
                             aria-describedby="subscription-proxy-hint"
@@ -2034,7 +2106,7 @@ function ProductApp({
                           <span>{t("supplier.advanced.useSystemProxy")}</span>
                         </span>
                         <span id="subscription-proxy-hint" className="field-hint">{t("subscriptionImport.proxyHint")}</span>
-                      </label>
+                      </div>
 
                       {["cursor", "opencode", "opendesign"].includes(subscriptionWizardProvider) && subscriptionTokenJson && <div className="wizard-actions grid-wide">
                         <button className="primary" onClick={() => void importSubscriptionJson()} disabled={subscriptionWizardBusy} aria-busy={subscriptionWizardBusy}>
@@ -2253,6 +2325,13 @@ function ProductApp({
                             />
                             {selectedChannelOperation === "refreshing" ? t("common.refreshing") : t("supplier.refreshChannel")}
                           </button>
+                          {channelIsPlatformShareable(selectedChannel) && selectedChannelSwitchOn && (
+                            <button type="button" className="quiet"
+                              disabled={selectedChannelHasChanges || selectedChannelBusy}
+                              onClick={() => void setMarketSharing(selectedChannel)}>
+                              {t(selectedChannel.share_enabled ? "supplier.stopMarketSharing" : "supplier.shareToMarket")}
+                            </button>
+                          )}
                           <button
                             type="button"
                             className={selectedChannelSwitchOn ? "stop" : "start"}
@@ -2288,7 +2367,7 @@ function ProductApp({
                         <span className={selectedChannelLifecycle.localTone}>
                           {selectedChannelLifecycle.localLabel}
                         </span>
-                        {selectedChannel.source_driver !== "lan_share" ? (
+                        {channelIsPlatformShareable(selectedChannel) ? (
                           <span className={selectedChannelLifecycle.platformTone}>
                             {selectedChannelLifecycle.platformLabel}
                           </span>
@@ -2401,7 +2480,7 @@ function ProductApp({
                         )}
                         <SupplierModelPoolSummary
                           details={selectedModelPool}
-                          platformRegistered={selectedChannelTransport?.platform_registered === true}
+                          platformRegistered={selectedChannel.share_enabled && selectedChannelTransport?.platform_registered === true}
                           onViewDetails={() => setSupplierModelPoolOpen(true)}
                         />
                         {selectedChannel.source_driver !== "lan_share" ? (
@@ -2712,7 +2791,7 @@ function ProductApp({
                               <span className="field-hint">{t(selectedChannel.source_driver === "openai_subscription" ? "supplier.advanced.codexProfileHint" : "supplier.advanced.userAgentProfileHint")}</span>
                             </label>
                           )}
-                          <label>
+                          <div className="checkbox-field">
                             <span>{t("supplier.advanced.networkConnection")}</span>
                             <span className="model-equivalence-check supplier-proxy-control">
                               <input type="checkbox"
@@ -2723,27 +2802,16 @@ function ProductApp({
                               <span>{t("supplier.advanced.useSystemProxy")}</span>
                             </span>
                             <span id="channel-proxy-hint" className="field-hint">{t("supplier.advanced.useSystemProxyHint")}</span>
-                          </label>
+                          </div>
                           {selectedChannel.kind === "subscription_adapter" && (
                             <>
                               {selectedChannel.source_driver === "claude_subscription" && (
                                 <div>
-                                  <label className={`supply-toggle ${selectedChannel.subscription.claude_fast_enabled ? "checked" : ""}`}>
-                                    <input
-                                      type="checkbox"
-                                      role="switch"
-                                      checked={selectedChannel.subscription.claude_fast_enabled ?? false}
-                                      aria-describedby="claude-fast-hint"
-                                      onChange={(event) => updateSupplier({
-                                        subscription: {
-                                          ...selectedChannel.subscription,
-                                          claude_fast_enabled: event.target.checked,
-                                        },
-                                      })}
-                                    />
-                                    <span className="supply-toggle-track" aria-hidden="true"><span /></span>
-                                    <span>{t("supplier.advanced.claudeFast")}</span>
-                                  </label>
+                                  <TrackSwitch label={t("supplier.advanced.claudeFast")} describedBy="claude-fast-hint"
+                                    checked={selectedChannel.subscription.claude_fast_enabled ?? false}
+                                    onChange={(checked) => updateSupplier({
+                                      subscription: { ...selectedChannel.subscription, claude_fast_enabled: checked },
+                                    })} />
                                   <p id="claude-fast-hint" className="field-hint">{t("supplier.advanced.claudeFastHint")}</p>
                                 </div>
                               )}
@@ -2842,7 +2910,7 @@ function ProductApp({
                     ? selectedChannel.models
                     : [selectedChannelModel].filter(Boolean)}
                   routeStatus={selectedChannelRouteStatus}
-                  platformRegistered={selectedChannelTransport?.platform_registered === true}
+                  platformRegistered={selectedChannel.share_enabled && selectedChannelTransport?.platform_registered === true}
                   onClose={() => setSupplierModelPoolOpen(false)}
                   onCopy={copyText}
                 /></React.Suspense>
@@ -2884,7 +2952,7 @@ function ProductApp({
                       <button className="quiet" onClick={() => setLogOpen(true)}>
                         <Terminal size={16} />{t("about.runtimeLog")}
                       </button>
-                      {showUpdateAction && (showInstallUpdateAction ? (
+                      {RELEASE_UPDATES_SUPPORTED && (showInstallUpdateAction ? (
                         <button
                           className="start"
                           onClick={installPreparedUpdate}
@@ -2901,9 +2969,9 @@ function ProductApp({
                       ) : (
                         <button
                           className="quiet"
-                          onClick={handleUpdateCheck}
+                          onClick={() => void checkAndDownloadUpdate(false)}
                           disabled={updateState.status === "checking" || updateState.status === "downloading"}
-                          title={clientModePolicy.runtime.developmentProfile ? t("about.devUpdateCheckHint") : undefined}
+                          title={clientModePolicy.capabilities.releaseUpdates ? t("about.automaticUpdatesHint") : t("about.devUpdateCheckHint")}
                         >
                           <Download size={16} />
                           {updateState.status === "checking"
@@ -2924,26 +2992,19 @@ function ProductApp({
                             {t("about.productionPresentationPreviewHint")}
                           </strong>
                         </div>
-                        <label className={`supply-toggle ${clientModePolicy.preview.active ? "checked" : ""}`}>
-                          <input
-                            type="checkbox"
-                            role="switch"
-                            checked={clientModePolicy.preview.active}
-                            aria-describedby="production-presentation-preview-hint"
-                            onChange={(event) => setProductionPresentationPreview(event.target.checked)}
-                          />
-                          <span className="supply-toggle-track" aria-hidden="true"><span /></span>
-                          <span>{clientModePolicy.preview.active
+                        <TrackSwitch label={t("about.productionPresentationPreview")} describedBy="production-presentation-preview-hint"
+                          checked={clientModePolicy.preview.active} onChange={setProductionPresentationPreview}>
+                          {clientModePolicy.preview.active
                             ? t("about.productionPresentationPreviewEnabled")
-                            : t("about.productionPresentationPreviewDisabled")}</span>
-                        </label>
+                            : t("about.productionPresentationPreviewDisabled")}
+                        </TrackSwitch>
                       </div>
                     )}
                     <div className="about-info-row">
                       <span className="about-info-label">{t("about.clientVersion")}</span>
                       <div className="about-info-value">
                         <strong>v{appMeta.currentVersion}{clientModePolicy.presentation.showDevelopmentBranding ? " · Dev" : ""}</strong>
-                        {clientModePolicy.capabilities.releaseUpdates && (
+                        {RELEASE_UPDATES_SUPPORTED && (clientModePolicy.capabilities.releaseUpdates || updateCheckedAt || updateState.status !== "idle") && (
                           <>
                             <span className="about-info-status">{aboutUpdateHeadline}</span>
                             {aboutUpdateDetail && <small>{aboutUpdateDetail}</small>}
@@ -3039,29 +3100,13 @@ function ProductApp({
                       <div className="about-preference-toggles">
                         <span className="about-info-label">{t("about.startupAndUpdates")}</span>
                         <div className="about-preference-options">
-                          {false && (<label className="about-compact-toggle" title={clientModePolicy.runtime.developmentProfile && !releasePreferencesPreviewOnly ? t("about.releasePreferencesDevHint") : undefined}>
-                            <input
-                              type="checkbox"
-                              checked={releasePreferencesPreviewOnly
-                                ? previewAutoInstallUpdates
-                                : autoInstallUpdates}
-                              disabled={!clientModePolicy.capabilities.releaseUpdates && !releasePreferencesPreviewOnly}
-                              onChange={(event) => {
-                                if (releasePreferencesPreviewOnly) {
-                                  setPreviewAutoInstallUpdates(event.target.checked);
-                                } else {
-                                  setAutoInstallUpdates(event.target.checked);
-                                }
-                              }}
-                            />
-                            <span>{t("about.autoRestartUpdate")}</span>
-                          </label>)}
-                          <label className="about-compact-toggle" title={clientModePolicy.runtime.developmentProfile && !releasePreferencesPreviewOnly ? t("about.releasePreferencesDevHint") : undefined}>
+                          <div className="about-compact-toggle" title={clientModePolicy.runtime.developmentProfile && !releasePreferencesPreviewOnly ? t("about.releasePreferencesDevHint") : undefined}>
                             <input
                               type="checkbox"
                               checked={releasePreferencesPreviewOnly
                                 ? previewAutostartEnabled
                                 : autostartEnabled}
+                              aria-label={t("about.launchAtLogin")}
                               disabled={!releasePreferencesPreviewOnly && (!clientModePolicy.capabilities.releasePreferences || autostartBusy)}
                               onChange={(event) => {
                                 if (releasePreferencesPreviewOnly) {
@@ -3074,18 +3119,19 @@ function ProductApp({
                             <span>{!releasePreferencesPreviewOnly && autostartBusy
                               ? t("about.changing")
                               : t("about.launchAtLogin")}</span>
-                          </label>
+                          </div>
                           {config.sleep_prevention_supported && (
-                            <label className="about-compact-toggle" title={t("about.sleepPreventionHint")}>
+                            <div className="about-compact-toggle" title={t("about.sleepPreventionHint")}>
                               <input
                                 type="checkbox"
                                 checked={config.prevent_sleep_while_supplying === true}
+                                aria-label={t("about.preventSleepWhileSupplying")}
                                 aria-description={t("about.sleepPreventionHint")}
                                 disabled={sleepPreventionBusy}
                                 onChange={(event) => void changeSleepPrevention(event.target.checked)}
                               />
                               <span>{t("about.preventSleepWhileSupplying")}</span>
-                            </label>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -3253,20 +3299,12 @@ function ProductApp({
                             {t("debugConsole.experimental.claudeCompaction.hint")}
                           </small>
                         </div>
-                        <label className={`supply-toggle ${debugClaudeServerSideCompaction ? "checked" : ""}`}>
-                          <input
-                            type="checkbox"
-                            role="switch"
-                            aria-label={t("debugConsole.experimental.claudeCompaction.title")}
-                            aria-describedby="debug-claude-compaction-hint"
-                            checked={debugClaudeServerSideCompaction}
-                            onChange={(event) => changeDebugClaudeServerSideCompaction(event.target.checked)}
-                          />
-                          <span className="supply-toggle-track" aria-hidden="true"><span /></span>
-                          <span>{debugClaudeServerSideCompaction
+                        <TrackSwitch label={t("debugConsole.experimental.claudeCompaction.title")} describedBy="debug-claude-compaction-hint"
+                          checked={debugClaudeServerSideCompaction} onChange={changeDebugClaudeServerSideCompaction}>
+                          {debugClaudeServerSideCompaction
                             ? t("debugConsole.experimental.enabled")
-                            : t("debugConsole.experimental.disabled")}</span>
-                        </label>
+                            : t("debugConsole.experimental.disabled")}
+                        </TrackSwitch>
                       </div>
                     </div>
 
@@ -3326,14 +3364,14 @@ function ProductApp({
                     </div>
 
                     <div className="debug-switches">
-                      <label className="check">
-                        <input type="checkbox" checked={debugStream} onChange={(event) => setDebugStream(event.target.checked)} />
+                      <div className="check">
+                        <input type="checkbox" aria-label="stream" checked={debugStream} onChange={(event) => setDebugStream(event.target.checked)} />
                         stream
-                      </label>
-                      <label className="check">
-                        <input type="checkbox" checked={debugSkipLocalShortCircuit} onChange={(event) => setDebugSkipLocalShortCircuit(event.target.checked)} />
-                      {t("debugConsole.skipLocalShortCircuit")}
-                      </label>
+                      </div>
+                      <div className="check">
+                        <input type="checkbox" aria-label={t("debugConsole.skipLocalShortCircuit")} checked={debugSkipLocalShortCircuit} onChange={(event) => setDebugSkipLocalShortCircuit(event.target.checked)} />
+                        {t("debugConsole.skipLocalShortCircuit")}
+                      </div>
                     </div>
 
                     <div className="route-preview debug-preview">
@@ -3560,12 +3598,6 @@ function ProductApp({
           {confirmDialog && (
             <BlockingConfirmDialog dialog={confirmDialog} onResolve={resolveConfirmDialog} />
           )}
-          {toolRemoveDialog && (
-            <ToolRemoveDialog
-              dialog={toolRemoveDialog}
-              onResolve={resolveToolRemoveDialog}
-            />
-          )}
           {resetLocalDataConfirmOpen && (
             <ResetLocalDataDialog
               busy={resetLocalDataBusy}
@@ -3616,7 +3648,7 @@ function ProductApp({
                   onChooseLocal={chooseLocalMode}
                   onAddModelChannel={() => {
                     setTab("supplier");
-                    window.requestAnimationFrame(() => setSupplierAddOpen(true));
+                    window.requestAnimationFrame(openSupplierAdd);
                   }}
                   onReviewModelChannel={() => {
                     setTab("supplier");

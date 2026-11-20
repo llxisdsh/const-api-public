@@ -7,11 +7,12 @@ import { emptyConfig } from "./appHelpers";
 import { emptyAccountStatus } from "./account/accountTypes";
 import { sourceDriverById, sourceDriverInitialChannelV5 } from "./sourceDrivers";
 
-const edition = vi.hoisted(() => ({ updates: false }));
+const edition = vi.hoisted(() => ({ updates: false, development: false }));
 vi.mock("./runtimeProfile", async (importOriginal) => ({
   ...await importOriginal<typeof import("./runtimeProfile")>(),
-  DEVELOPMENT_PROFILE: false,
-  get RELEASE_UPDATES_ENABLED() { return edition.updates; },
+  get DEVELOPMENT_PROFILE() { return edition.development; },
+  get RELEASE_UPDATES_SUPPORTED() { return edition.updates; },
+  get RELEASE_UPDATES_ENABLED() { return edition.updates && !edition.development; },
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
@@ -19,6 +20,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 describe("application runtime preferences", () => {
   beforeEach(() => {
     edition.updates = false;
+    edition.development = false;
     vi.stubGlobal("__TAURI_INTERNALS__", {});
     vi.mocked(listen).mockClear();
     vi.mocked(invoke).mockReset().mockImplementation(async (command) => {
@@ -37,8 +39,8 @@ describe("application runtime preferences", () => {
       if (command === "startup_log_from_ui" || command === "sync_native_theme") return null;
       if (command.startsWith("fetch_")) return { data: [] };
       if (command === "check_tool_config") return { detected: false, configured: false, files: [], messages: [] };
-      if (command === "native_update_status") return {
-        status: "idle", automatic: false, sources: [], checked_at_unix_ms: 0,
+      if (command === "native_update_status" || command === "request_native_update_check") return {
+        status: "idle", sources: [], checkedAtUnixMs: 0,
       };
       throw new Error(`Unexpected fixture command: ${command}`);
     });
@@ -51,23 +53,45 @@ describe("application runtime preferences", () => {
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
       document.dispatchEvent(new Event("visibilitychange"));
-      result.current.setAutoInstallUpdates(true);
       await result.current.checkAndDownloadUpdate();
       await result.current.installPreparedUpdate();
     });
     expect(listen).not.toHaveBeenCalledWith("const-api://update-state", expect.any(Function));
     expect(vi.mocked(invoke).mock.calls.filter(([name]) => [
-      "native_update_status", "set_automatic_updates", "request_native_update_check", "request_native_update_install",
+      "native_update_status", "request_native_update_check", "request_native_update_install",
     ].includes(name))).toEqual([]);
     expect(result.current.updateState).toEqual({ status: "idle" });
-    expect(result.current.autoInstallUpdates).toBe(false);
   });
 
-  it("retains native update status synchronization in the hosted edition", async () => {
+  it("syncs the hosted updater and allows manual checks even with a legacy opt-out", async () => {
     edition.updates = true;
-    renderHook(() => useAppController());
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("native_update_status"));
-    expect(listen).toHaveBeenCalledWith("const-api://update-state", expect.any(Function));
+    window.localStorage.setItem("const-api:auto-install-updates", "false");
+    try {
+      const { result } = renderHook(() => useAppController());
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("native_update_status"));
+      expect(listen).toHaveBeenCalledWith("const-api://update-state", expect.any(Function));
+      await act(() => result.current.checkAndDownloadUpdate());
+      expect(invoke).toHaveBeenCalledWith("request_native_update_check");
+      expect(invoke).not.toHaveBeenCalledWith("set_automatic_updates", expect.anything());
+    } finally {
+      window.localStorage.removeItem("const-api:auto-install-updates");
+    }
+  });
+
+  it("checks a release manually in development without scheduling a download or install", async () => {
+    edition.updates = true;
+    edition.development = true;
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => command === "request_native_update_check"
+      ? { status: "available", version: "9.8.7", sources: [], checkedAtUnixMs: 1000 }
+      : base(command, args));
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("update-boundary"));
+    expect(invoke).not.toHaveBeenCalledWith("request_native_update_check");
+    await act(() => result.current.checkAndDownloadUpdate());
+    expect(result.current.updateState).toMatchObject({ status: "available", version: "9.8.7" });
+    await act(() => result.current.installPreparedUpdate());
+    expect(invoke).not.toHaveBeenCalledWith("request_native_update_install");
   });
 
   it("keeps update errors in the existing update information without an application alarm", async () => {
@@ -75,7 +99,7 @@ describe("application runtime preferences", () => {
     const base = vi.mocked(invoke).getMockImplementation()!;
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "native_update_status") return {
-        status: "error", automatic: false, sources: [], checked_at_unix_ms: 0, error: "fixture update unavailable",
+        status: "error", sources: [], checkedAtUnixMs: 0, error: "fixture update unavailable",
       };
       return base(command, args);
     });

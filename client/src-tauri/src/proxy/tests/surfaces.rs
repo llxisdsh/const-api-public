@@ -690,9 +690,13 @@
                 .parse()
                 .expect("local auth"),
         );
-        let (mut client, _) = tokio_tungstenite::connect_async(request)
+        let (mut client, handshake) = tokio_tungstenite::connect_async(request)
             .await
             .expect("connect through local proxy");
+        assert_eq!(
+            handshake.headers()["x-codex-websocket-max-message-bytes"].to_str().unwrap(),
+            RESPONSES_WEBSOCKET_MAX_MESSAGE_BYTES.to_string()
+        );
         client
             .send(tokio_tungstenite::tungstenite::Message::Text(
                 serde_json::json!({
@@ -1048,6 +1052,7 @@
 
     #[tokio::test]
     async fn responses_websocket_platform_duplex_keeps_custom_tool_output_on_one_session() {
+        use crate::outgoing_secrets::SYNTHETIC_KEY as CANARY;
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         use tokio_tungstenite::tungstenite::Message as WsMessage;
 
@@ -1127,6 +1132,8 @@
             )
             .expect("first response.create JSON");
             assert_eq!(first_body["model"], "platform-model");
+            let masked = first_body["input"][0]["content"].as_str().unwrap();
+            assert!(masked.starts_with("[CONST_SECRET_") && !first_body.to_string().contains(CANARY));
 
             for (sequence, event, terminal) in [
                 (
@@ -1206,6 +1213,8 @@
             assert_eq!(second_body["previous_response_id"], "resp-platform-tool");
             assert_eq!(second_body["input"][0]["type"], "custom_tool_call_output");
             assert_eq!(second_body["input"][0]["call_id"], "call-platform-tool");
+            assert_eq!(second_body["input"][0]["output"], masked);
+            assert!(!second_body.to_string().contains(CANARY));
 
             socket
                 .send(WsMessage::Text(
@@ -1239,6 +1248,7 @@
         config.api_key = "sk-local-platform-duplex".to_string();
         config.account_device_api_key = "sk-platform-device".to_string();
         config.prefer_local_supply = true;
+        config.protect_outgoing_secrets = true;
         config.channels.clear();
         config.endpoints = vec![Endpoint {
             server_id: String::new(),
@@ -1281,7 +1291,7 @@
                     "model": "platform-model",
                     "store": false,
                     "stream": true,
-                    "input": [{"role": "user", "content": "run the tool"}]
+                    "input": [{"role": "user", "content": CANARY}]
                 })
                 .to_string()
                 .into(),
@@ -1322,7 +1332,7 @@
                     "input": [{
                         "type": "custom_tool_call_output",
                         "call_id": "call-platform-tool",
-                        "output": "ok"
+                        "output": CANARY
                     }]
                 })
                 .to_string()

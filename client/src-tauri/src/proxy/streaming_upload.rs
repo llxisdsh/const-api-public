@@ -37,11 +37,17 @@ pub(crate) async fn match_streaming_upload_request(
     // Native xAI video calls carry JSON references. Route these through the
     // bounded JSON executor so model selection, OAuth and task affinity apply;
     // large multipart API uploads keep their existing streaming path.
-    if matches!(route.operation, crate::surface::ApiOperation::VideosCreate
-        | crate::surface::ApiOperation::VideosEdit | crate::surface::ApiOperation::VideosExtend)
-        && content_type.as_deref().is_some_and(|value| value.split(';').next()
-            .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("application/json")))
-    {
+    if matches!(
+        route.operation,
+        crate::surface::ApiOperation::VideosCreate
+            | crate::surface::ApiOperation::VideosEdit
+            | crate::surface::ApiOperation::VideosExtend
+    ) && content_type.as_deref().is_some_and(|value| {
+        value
+            .split(';')
+            .next()
+            .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("application/json"))
+    }) {
         return Err(warp::reject::not_found());
     }
     let body_limit = if method == warp::http::Method::POST {
@@ -131,35 +137,14 @@ where
     };
 
     let ready_channel_ids = shared.ready_local_channel_ids();
-    let needs_audio_model_routing = matches!(
+    if matches!(
         request.route.operation,
         crate::surface::ApiOperation::AudioTranscriptions
             | crate::surface::ApiOperation::AudioTranslations
-    ) && select_direct_http_surface_channel_where(
-        &config,
-        request.route.surface,
-        path,
-        &[],
-        true,
-        |channel| ready_channel_ids.contains(&channel.id),
-    )
-    .is_some_and(|first| {
-        select_direct_http_surface_channel_where(
-            &config,
-            request.route.surface,
-            path,
-            &[],
-            true,
-            |channel| channel.id != first.id && ready_channel_ids.contains(&channel.id),
-        )
-        .is_some()
-    });
-    let counted = limit_streaming_upload(body, limit);
-    let (request_body, selection_body) = if needs_audio_model_routing {
-        // Audio forms contain a model, possibly after the file part. Inspect a
-        // bounded copy before routing, then forward the original multipart bytes.
-        // Single-channel audio, files and video retain unbuffered uploads.
-        let mut counted = Box::pin(counted);
+    ) {
+        // Audio already has a small operation limit (26 MiB). Buffer once so the
+        // same model-aware local/platform failover path can retain the exact form.
+        let mut counted = Box::pin(limit_streaming_upload(body, limit));
         let mut bytes = bytes::BytesMut::new();
         while let Some(chunk) = counted.next().await {
             match chunk {
@@ -180,22 +165,18 @@ where
                 }
             }
         }
-        let bytes = bytes.freeze();
-        let model = match audio_upload_model(&headers, bytes.clone()).await {
-            Ok(model) => model,
-            Err(error) => {
-                return Ok(error_response(StatusCode::BAD_REQUEST, &error.to_string()));
-            }
-        };
-        let selection = model
-            .map(|model| {
-                serde_json::to_vec(&serde_json::json!({"model": model})).unwrap_or_default()
-            })
-            .unwrap_or_default();
-        (reqwest::Body::from(bytes), selection)
-    } else {
-        (reqwest::Body::wrap_stream(counted), Vec::new())
-    };
+        drop(update_activity_guard);
+        return proxy_request(
+            request.method,
+            request.path,
+            has_query.then_some(raw_query),
+            headers,
+            bytes.freeze(),
+            shared,
+        )
+        .await;
+    }
+    let request_body = reqwest::Body::wrap_stream(limit_streaming_upload(body, limit));
 
     let selected = match select_resource_owned_local_channel(
         &shared.local_resource_owners,
@@ -210,17 +191,15 @@ where
             &config,
             request.route.surface,
             path,
-            &selection_body,
+            &[],
             true,
             |channel| ready_channel_ids.contains(&channel.id),
         ),
         Err(error) => {
-            return Ok(local_surface_error_response(
-                error.surface,
-                error.status,
-                error.message,
-            )
-            .unwrap_or_else(|_| error_response(error.status, error.message)));
+            return Ok(
+                local_surface_error_response(error.surface, error.status, error.message)
+                    .unwrap_or_else(|_| error_response(error.status, error.message)),
+            );
         }
     };
     let Some(channel) = selected.cloned() else {
@@ -237,16 +216,15 @@ where
         }));
     };
 
-    let reqwest_method =
-        match reqwest::Method::from_bytes(request.method.as_str().as_bytes()) {
-            Ok(method) => method,
-            Err(_) => {
-                return Ok(error_response(
-                    StatusCode::METHOD_NOT_ALLOWED,
-                    "invalid upload method",
-                ));
-            }
-        };
+    let reqwest_method = match reqwest::Method::from_bytes(request.method.as_str().as_bytes()) {
+        Ok(method) => method,
+        Err(_) => {
+            return Ok(error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "invalid upload method",
+            ));
+        }
+    };
     let mut upstream_headers = reqwest::header::HeaderMap::new();
     for (name, value) in &headers {
         if let (Ok(name), Ok(value)) = (
@@ -353,67 +331,16 @@ where
     ))
 }
 
-fn request_content_length(
-    headers: &warp::http::HeaderMap,
-) -> Option<std::result::Result<u64, ()>> {
-    headers.get(warp::http::header::CONTENT_LENGTH).map(|value| {
-        value
-            .to_str()
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .ok_or(())
-    })
-}
-
-async fn audio_upload_model(
-    headers: &warp::http::HeaderMap,
-    body: bytes::Bytes,
-) -> Result<Option<String>> {
-    let content_type = headers
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    if !content_type.to_ascii_lowercase().starts_with("multipart/") {
-        // Some compatible providers accept JSON audio or file URLs. Keep their
-        // existing passthrough behavior; extracting a hint is not schema validation.
-        #[derive(serde::Deserialize)]
-        struct ModelHint {
-            model: Option<String>,
-        }
-        return Ok(serde_json::from_slice::<ModelHint>(&body)
-            .ok()
-            .and_then(|hint| hint.model)
-            .filter(|model| !model.trim().is_empty()));
-    }
-    let boundary = multer::parse_boundary(content_type)
-        .map_err(|_| anyhow!("audio upload requires a multipart/form-data boundary"))?;
-    let stream = futures_util::stream::once(async move { Ok::<_, std::io::Error>(body) });
-    let mut multipart = multer::Multipart::new(stream, boundary);
-    let mut model: Option<String> = None;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| anyhow!("invalid audio multipart form"))?
-    {
-        if field.name() != Some("model") || field.file_name().is_some() {
-            continue;
-        }
-        let bytes = field
-            .bytes()
-            .await
-            .map_err(|_| anyhow!("invalid audio model field"))?;
-        if bytes.len() > 1024 {
-            return Err(anyhow!("audio model field is too long"));
-        }
-        let value = std::str::from_utf8(&bytes)
-            .map_err(|_| anyhow!("audio model field must be UTF-8"))?
-            .trim();
-        if model.as_deref().is_some_and(|previous| previous != value) {
-            return Err(anyhow!("audio upload contains conflicting model fields"));
-        }
-        model = Some(value.to_string());
-    }
-    Ok(model.filter(|model| !model.is_empty()))
+fn request_content_length(headers: &warp::http::HeaderMap) -> Option<std::result::Result<u64, ()>> {
+    headers
+        .get(warp::http::header::CONTENT_LENGTH)
+        .map(|value| {
+            value
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .ok_or(())
+        })
 }
 
 fn streaming_upload_body_limit(route: &crate::surface::ApiRoute, path: &str) -> u64 {
@@ -429,9 +356,7 @@ fn streaming_upload_body_limit(route: &crate::surface::ApiRoute, path: &str) -> 
         crate::surface::ApiOperation::UploadPartsCreate => OPENAI_UPLOAD_PART_BODY_LIMIT,
         crate::surface::ApiOperation::ImagesVariations => OPENAI_IMAGE_MULTIPART_BODY_LIMIT,
         crate::surface::ApiOperation::AudioTranscriptions
-        | crate::surface::ApiOperation::AudioTranslations => {
-            OPENAI_AUDIO_MULTIPART_BODY_LIMIT
-        }
+        | crate::surface::ApiOperation::AudioTranslations => OPENAI_AUDIO_MULTIPART_BODY_LIMIT,
         crate::surface::ApiOperation::ContentProvenanceChecks => {
             OPENAI_PROVENANCE_MULTIPART_BODY_LIMIT
         }
@@ -476,43 +401,6 @@ mod streaming_upload_tests {
     use super::*;
 
     #[tokio::test]
-    async fn audio_upload_model_can_follow_binary_file_without_rewriting_it() {
-        let mut headers = warp::http::HeaderMap::new();
-        headers.insert("content-type", "multipart/form-data; boundary=audio-test".parse().unwrap());
-        let body = bytes::Bytes::from_static(
-            b"--audio-test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\nRIFF\0\xff\r\n--audio-test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-test\r\n--audio-test--\r\n",
-        );
-        let original = body.clone();
-        assert_eq!(audio_upload_model(&headers, body.clone()).await.unwrap().as_deref(), Some("whisper-test"));
-        assert_eq!(body, original);
-    }
-
-    #[tokio::test]
-    async fn audio_upload_rejects_conflicting_models() {
-        let mut headers = warp::http::HeaderMap::new();
-        headers.insert("content-type", "multipart/form-data; boundary=audio-test".parse().unwrap());
-        let body = bytes::Bytes::from_static(
-            b"--audio-test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nfirst\r\n--audio-test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nsecond\r\n--audio-test--\r\n",
-        );
-        assert!(audio_upload_model(&headers, body).await.unwrap_err().to_string().contains("conflicting"));
-    }
-
-    #[tokio::test]
-    async fn audio_upload_keeps_compatible_json_and_unknown_media_types() {
-        let mut headers = warp::http::HeaderMap::new();
-        headers.insert("content-type", "application/json".parse().unwrap());
-        assert_eq!(
-            audio_upload_model(&headers, bytes::Bytes::from_static(
-                br#"{"model":"audio-custom","file_url":"https://example.test/voice.wav"}"#,
-            )).await.unwrap().as_deref(),
-            Some("audio-custom"),
-        );
-        headers.insert("content-type", "audio/wav".parse().unwrap());
-        assert!(audio_upload_model(&headers, bytes::Bytes::from_static(b"RIFF\0\xff"))
-            .await.unwrap().is_none());
-    }
-
-    #[tokio::test]
     async fn chunked_upload_limit_is_enforced_without_aggregation() {
         let body = futures_util::stream::iter([
             Ok::<bytes::Bytes, warp::Error>(bytes::Bytes::from_static(b"abc")),
@@ -528,9 +416,11 @@ mod streaming_upload_tests {
             .await
             .expect("limit error")
             .expect_err("second chunk must exceed the limit");
-        assert!(error
-            .get_ref()
-            .is_some_and(|error| error.is::<StreamingUploadLimitExceeded>()));
+        assert!(
+            error
+                .get_ref()
+                .is_some_and(|error| error.is::<StreamingUploadLimitExceeded>())
+        );
     }
 
     #[test]

@@ -19,6 +19,16 @@ environment file, signing key, or upstream mirror is needed.
 
 ## Run and build
 
+The Bun transport for OpenCode free models and Claude subscriptions needs CMake and Clang/libclang at build
+time, plus NASM on Windows. Put NASM on `PATH` and set `LIBCLANG_PATH` to the
+directory containing libclang if it is not detected. Visual Studio 18 needs
+CMake 4.2 or newer; if multiple versions are installed, set `CMAKE` to the full
+path of the compatible `cmake.exe`. Reopen the terminal or IDE after changing
+user environment variables. On macOS use `brew install cmake llvm` and
+`LIBCLANG_PATH="$(brew --prefix llvm)/lib"`; on Debian/Ubuntu install
+`cmake clang libclang-dev binutils`. The resulting application does not need
+these build tools or an external OpenCode/Bun runtime.
+
 From the repository root:
 
 ```sh

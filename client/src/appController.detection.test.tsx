@@ -1,10 +1,13 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppController } from "./appController";
+import { MediaSkillToolsDialog } from "./components/MediaSkillToolsDialog";
+import { TOOL_CATALOG, TOOL_CATALOG_ORDER } from "./toolCatalog";
+import mediaSkillTools from "../tool-media-skill-tools.json";
 import { emptyConfig } from "./appHelpers";
 import { emptyAccountStatus } from "./account/accountTypes";
-import { sourceDriverById, sourceDriverInitialChannelV5 } from "./sourceDrivers";
+import { sourceDriverAllowsMarketSharing, sourceDriverById, sourceDriverInitialChannelV5 } from "./sourceDrivers";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
@@ -28,8 +31,12 @@ describe("channel refresh and inference command boundaries", () => {
     vi.mocked(invoke).mockReset().mockImplementation(async (command, args) => {
       const input = args as Record<string, unknown> | undefined;
       if (command === "get_config") return structuredClone(wire);
+      if (command === "save_media_skill_tools") {
+        wire = { ...wire, media_skill_tools: [...input?.tools as string[]].sort() };
+        return wire.media_skill_tools;
+      }
       if (command === "save_routing_preference") {
-        const preference = input?.preference as "prefer_local_supply" | "allow_model_equivalence";
+        const preference = input?.preference as "prefer_local_supply" | "allow_model_equivalence" | "configure_image_skill";
         wire = { ...wire, [preference]: input?.enabled as boolean };
         return wire[preference];
       }
@@ -179,7 +186,60 @@ describe("channel refresh and inference command boundaries", () => {
     expect(result.current.subscriptionCallbackInput).toBe("");
   });
 
-  it.each(["prefer_local_supply", "allow_model_equivalence"] as const)(
+  it("shows the default media skill choices before installation and keeps edits when saved preferences arrive", async () => {
+    const onSave = vi.fn(async (_tools: string[]) => {});
+    const props = { onSave, onClose: vi.fn() };
+    const { rerender } = render(<MediaSkillToolsDialog {...props} selected={emptyConfig.media_skill_tools} />);
+    const boxes = screen.getAllByRole<HTMLInputElement>("checkbox");
+    expect(boxes).toHaveLength(Object.keys(mediaSkillTools).length);
+    for (const [id, enabled] of Object.entries(mediaSkillTools)) {
+      const box = screen.getByRole<HTMLInputElement>("checkbox", { name: TOOL_CATALOG[id as keyof typeof mediaSkillTools].title });
+      expect(box).toBeEnabled();
+      expect(box.checked).toBe(enabled);
+    }
+    const save = screen.getByRole("button", { name: "保存" });
+    expect(save).toBeDisabled();
+    rerender(<MediaSkillToolsDialog {...props} selected={[]} />);
+    expect(boxes.every((box) => !box.checked)).toBe(true);
+    expect(save).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "WorkBuddy" }));
+    rerender(<MediaSkillToolsDialog {...props} selected={["hermes"]} />);
+    expect(screen.getByRole("checkbox", { name: "Hermes" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "WorkBuddy" })).toBeChecked();
+    fireEvent.click(save);
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    expect([...onSave.mock.calls[0][0]].sort()).toEqual(["hermes", "workbuddy"]);
+  });
+
+  it("lists the full catalog and saves supported tools before installation independently of the master switch and model injection", async () => {
+    wire.media_skill_tools = ["codex"];
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    const before = structuredClone(wire.tool_model_injection);
+    await act(() => result.current.saveRoutingPreference("configure_image_skill", false));
+    const onClose = vi.fn();
+    render(<MediaSkillToolsDialog selected={result.current.config.media_skill_tools}
+      onSave={result.current.saveMediaSkillTools} onClose={onClose} />);
+    const available = TOOL_CATALOG_ORDER.filter((id) => id in mediaSkillTools);
+    const other = TOOL_CATALOG_ORDER.filter((id) => !(id in mediaSkillTools));
+    const boxes = screen.getAllByRole("checkbox");
+    expect(boxes).toHaveLength(available.length);
+    available.forEach((id, index) => expect(boxes[index]).toHaveAccessibleName(TOOL_CATALOG[id].title));
+    expect(screen.getAllByRole("listitem").map((item) => item.textContent))
+      .toEqual(other.map((id) => TOOL_CATALOG[id].title));
+    const save = screen.getByRole("button", { name: "保存" });
+    fireEvent.click(screen.getByText("WorkBuddy"));
+    expect(save).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "WorkBuddy" }));
+    fireEvent.click(save);
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(result.current.config.media_skill_tools).toEqual(["codex", "workbuddy"]);
+    expect(result.current.config.configure_image_skill).toBe(false);
+    expect(wire.tool_model_injection).toEqual(before);
+    expect(invoke).not.toHaveBeenCalledWith("save_tool_model_injection_settings", expect.anything());
+  });
+
+  it.each(["prefer_local_supply", "allow_model_equivalence", "configure_image_skill"] as const)(
     "immediately saves %s without restarting access or saving other pages", async (preference) => {
       const { result } = renderHook(() => useAppController());
       await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
@@ -402,7 +462,7 @@ describe("channel refresh and inference command boundaries", () => {
     await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
   });
 
-  it.each([true, false])("subscription import persists proxy choice %s through activation", async (useSystemProxy) => {
+  it.each([[true, true], [true, false], [false, true], [false, false]])("subscription import preserves proxy %s and sharing %s through activation", async (useSystemProxy, share) => {
     const driver = sourceDriverById("openai_subscription");
     wire.channels[0] = sourceDriverInitialChannelV5(driver, {
       id: "refresh-channel", name: "Existing subscription", credentialRef: "old-managed.json",
@@ -412,7 +472,7 @@ describe("channel refresh and inference command boundaries", () => {
       id: "new-subscription", name: "New subscription", credentialRef: ".pending/new.json",
     });
     prepared.use_system_proxy = useSystemProxy;
-    const finalized = { ...prepared, credential_ref: "new-managed.json" };
+    const finalized = { ...prepared, credential_ref: "new-managed.json", share_enabled: false };
     const base = vi.mocked(invoke).getMockImplementation()!;
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "import_subscription_token_json") return prepared;
@@ -427,6 +487,8 @@ describe("channel refresh and inference command boundaries", () => {
     });
     const { result } = renderHook(() => useAppController());
     await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    act(() => { result.current.openSupplierAdd(); });
+    act(() => { result.current.setNewChannelMarketSharing(share); });
     act(() => { result.current.addSubscriptionPreset(driver); });
     act(() => { result.current.changeSubscriptionProxy(useSystemProxy); });
     vi.mocked(invoke).mockClear();
@@ -441,7 +503,10 @@ describe("channel refresh and inference command boundaries", () => {
     expect(invoke).toHaveBeenCalledWith("finalize_subscription_import", { channel: prepared, createDuplicate: true });
     expect(wire.channels).toHaveLength(2);
     expect(wire.channels[0]).toMatchObject(existing);
-    expect(wire.channels[1]).toMatchObject({ id: "new-subscription", credential_ref: "new-managed.json", enabled: true, use_system_proxy: useSystemProxy });
+    expect(wire.channels[1]).toMatchObject({
+      id: "new-subscription", credential_ref: "new-managed.json", enabled: true,
+      use_system_proxy: useSystemProxy, share_enabled: share && sourceDriverAllowsMarketSharing(driver.id),
+    });
     expect(result.current.subscriptionWizardOpen).toBe(false);
   });
 
@@ -605,8 +670,22 @@ describe("channel refresh and inference command boundaries", () => {
     expect(wire.channels[0]).toMatchObject({ name: "Renamed", price_ratio: 2, quota_reserve_percent: 10, default_model: "vendor/first" });
   });
 
-  it("explicit full check validates locally without joining the platform", async () => {
+  it.each([true, false])("uses the sharing choice from the add dialog for a new channel (%s)", async (shared) => {
+    const { result } = renderHook(() => useAppController());
+    await waitFor(() => expect(result.current.selectedChannel.id).toBe("refresh-channel"));
+    act(() => result.current.openSupplierAdd());
+    expect(result.current.newChannelMarketSharing).toBe(true);
+    act(() => result.current.setNewChannelMarketSharing(shared));
+    await act(async () => { await result.current.addPresetChannel(sourceDriverById("custom_endpoint")); });
+    expect(result.current.selectedChannel.source_driver).toBe("custom_endpoint");
+    expect(result.current.selectedChannel.share_enabled).toBe(shared && sourceDriverAllowsMarketSharing("custom_endpoint"));
+    act(() => result.current.openSupplierAdd());
+    expect(result.current.newChannelMarketSharing).toBe(true);
+  });
+
+  it.each([true, false])("full check stays local for either stored sharing flag (%s)", async (shared) => {
     wire.channels[0].enabled = true;
+    wire.channels[0].share_enabled = shared;
     const base = vi.mocked(invoke).getMockImplementation()!;
     const runtime = { running: true, starting: false, channels: [], route_statuses: [] };
     vi.mocked(invoke).mockImplementation(async (command, args) => {
@@ -619,12 +698,13 @@ describe("channel refresh and inference command boundaries", () => {
     vi.mocked(invoke).mockClear();
     await act(async () => { await result.current.saveSupplierChanges(result.current.selectedChannel, true); });
     expect(invoke).toHaveBeenCalledWith("validate_channel_upstream", expect.anything());
-    expect(invoke).not.toHaveBeenCalledWith("start_supplier", expect.anything());
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "start_supplier")).toBe(false);
     expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "refresh_supplier_registration")).toBe(false);
   });
 
   it("local saves do not depend on hosted registration availability", async () => {
     wire.channels[0].enabled = true;
+    wire.channels[0].share_enabled = true;
     const base = vi.mocked(invoke).getMockImplementation()!;
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "supplier_status") return { running: true, starting: false, channels: [], route_statuses: [] };

@@ -136,6 +136,10 @@ pub(crate) fn channel_is_lan_share(channel: &ChannelConfig) -> bool {
 
 pub(crate) fn channel_is_platform_shareable(_: &ChannelConfig) -> bool { false }
 
+pub(crate) fn channel_shares_to_market(channel: &ChannelConfig) -> bool {
+    channel.enabled && channel.share_enabled && channel_is_platform_shareable(channel)
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ExecutionKind {

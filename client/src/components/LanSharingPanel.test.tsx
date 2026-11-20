@@ -13,6 +13,10 @@ const invoke = vi.hoisted(() => vi.fn());
 const askConfirm = vi.fn();
 const emptyPresentation = { schema_version: 1, rules: [] };
 
+function expectModelOrder(...names: string[]) {
+  expect(screen.getAllByRole("checkbox")).toEqual(names.map((name) => screen.getByRole("checkbox", { name })));
+}
+
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
 const hostStatus: LanShareHostStatus = {
@@ -131,9 +135,11 @@ describe("LanSharingDrawer", () => {
     expect(container.querySelector("#lan-share-description")).toHaveTextContent(
       "局域网共享独立于模型市场：不会影响渠道的上线状态，也不能使用模型市场中其他用户提供的模型",
     );
-    expect(screen.getByRole("button", { name: "停止局域网共享" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "停止局域网共享" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "保存模型" })).not.toBeInTheDocument();
 
+    await user.click(screen.getByText("model-b"));
+    expect(screen.queryByRole("button", { name: "保存模型" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: "model-b" }));
     expect(screen.getByRole("button", { name: "保存模型" })).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledTimes(2);
@@ -178,8 +184,7 @@ describe("LanSharingDrawer", () => {
     render(<LanSharingDrawer enabled proxyRunning onToggle={vi.fn()} copyText={copyText} askConfirm={askConfirm} onClose={vi.fn()} />);
 
     expect(await screen.findByRole("checkbox", { name: "mixed" })).toBeChecked();
-    expect(screen.getAllByRole("checkbox").map((checkbox) => checkbox.closest("label")?.textContent))
-      .toEqual(["gemini-3-pro-image", "mixed", "new:free"]);
+    expectModelOrder("gemini-3-pro-image", "mixed", "new:free");
     expect(screen.queryByText("google/Gemini-3-Pro-Image")).not.toBeInTheDocument();
     expect(screen.getByText("已选 1 个，共 3 个")).toBeInTheDocument();
 
@@ -282,14 +287,13 @@ describe("LanSharingDrawer", () => {
       return status;
     });
     const { unmount } = render(<LanSharingDrawer enabled proxyRunning onToggle={vi.fn()} copyText={vi.fn()} askConfirm={askConfirm} onClose={vi.fn()} />);
-    const labels = () => screen.getAllByRole("checkbox").map((checkbox) => checkbox.closest("label")?.textContent);
     try {
       expect(await screen.findByRole("checkbox", { name: "gpt-z" })).toBeChecked();
-      expect(labels()).toEqual(["gpt-a", "gpt-z", "alpha", "claude-a"]);
+      expectModelOrder("gpt-a", "gpt-z", "alpha", "claude-a");
       await user.click(screen.getByRole("checkbox", { name: "claude-a" }));
       rules = [{ pattern: "claude-*", hidden: false }];
       await user.click(screen.getByRole("button", { name: "刷新" }));
-      await waitFor(() => expect(labels()).toEqual(["claude-a", "alpha", "gpt-a", "gpt-z"]));
+      await waitFor(() => expectModelOrder("claude-a", "alpha", "gpt-a", "gpt-z"));
       expect(screen.getByRole("checkbox", { name: "claude-a" })).toBeChecked();
       expect(screen.getByRole("checkbox", { name: "gpt-z" })).toBeChecked();
 
@@ -301,7 +305,7 @@ describe("LanSharingDrawer", () => {
       failRules = true;
       await user.click(screen.getByRole("button", { name: "刷新" }));
       await waitFor(() => expect(warning).toHaveBeenCalledWith(expect.stringContaining("retaining current order"), expect.any(Error)));
-      expect(labels()).toEqual(["claude-a", "alpha", "gpt-a", "gpt-z"]);
+      expectModelOrder("claude-a", "alpha", "gpt-a", "gpt-z");
       await user.click(screen.getByRole("button", { name: "保存模型" }));
       await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("set_lan_share_models", {
         models: ["Shared/GPT-Z", "anthropic/Claude-A"],

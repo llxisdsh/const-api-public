@@ -635,7 +635,12 @@ async fn connect_platform_websocket_wire(
         .max_frame_size(Some(PLATFORM_DUPLEX_MAX_MESSAGE_BYTES));
     let (mut websocket, _) = tokio::time::timeout(
         supplier_connect_timeout(),
-        tokio_tungstenite::connect_async_with_config(ws_url, Some(websocket_config), false),
+        tokio_tungstenite::connect_async_tls_with_config(
+            ws_url,
+            Some(websocket_config),
+            false,
+            Some(tokio_tungstenite::Connector::Rustls(crate::http_client::websocket_tls_config())),
+        ),
     )
     .await
     .map_err(|_| anyhow!("platform WebSocket connect timed out"))??;

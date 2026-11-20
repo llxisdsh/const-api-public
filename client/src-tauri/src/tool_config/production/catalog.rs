@@ -941,7 +941,11 @@ fn tool_profile(tool: &str) -> Option<&'static ToolProfile> {
     // CodeBuddy CN shares CodeBuddy's model file and runtime contract. Keep
     // the old ID as a compatibility alias for persisted operations while the
     // UI exposes one canonical tool entry.
-    let canonical = (tool == "codebuddy-cn").then_some("codebuddy").unwrap_or(tool);
+    let canonical = if tool == "codebuddy-cn" {
+        "codebuddy"
+    } else {
+        tool
+    };
     TOOL_PROFILES.iter().find(|profile| profile.id == canonical)
 }
 

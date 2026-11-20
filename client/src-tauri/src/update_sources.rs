@@ -1,4 +1,4 @@
-use crate::{DesktopLifecycle, config::commit_config_update, model::AppState};
+use crate::{DesktopLifecycle, model::AppState};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use reqwest::header::{ACCEPT, RANGE};
 use semver::Version;
@@ -290,17 +290,23 @@ struct RankedUpdateSelection {
 }
 
 /// Checks every configured updater manifest independently, keeps only the
-/// newest version, then orders equivalent mirrors by a bounded range probe.
+/// newest version, then orders equivalent mirrors. When preparing to download,
+/// a bounded range probe measures the mirrors.
 /// The first configured source remains preferred while it reaches at least
 /// 80% of the fastest measured source. Both the native background updater and
 /// the UI command use this single selection path.
 async fn ranked_update_candidates(
     app: &AppHandle<Wry>,
     state: &AppState,
-    timeout: Duration,
+    probe_downloads: bool,
 ) -> Result<RankedUpdateSelection, String> {
     let endpoints = configured_update_endpoints(state)?;
-    let checks = collect_source_checks(app, &endpoints, timeout).await;
+    let checks = collect_source_checks(
+        app,
+        &endpoints,
+        Duration::from_millis(DEFAULT_CHECK_TIMEOUT_MS),
+    )
+    .await;
 
     let mut healthy_sources = 0usize;
     let mut failures = Vec::new();
@@ -391,7 +397,7 @@ async fn ranked_update_candidates(
     };
     candidates.retain(|candidate| candidate.version == newest);
 
-    if candidates.len() > 1 {
+    if probe_downloads && candidates.len() > 1 {
         let probes = collect_download_probes(&candidates).await;
         for (candidate, probe) in candidates.iter_mut().zip(probes) {
             candidate.probe = probe;
@@ -443,12 +449,10 @@ pub(crate) struct NativeUpdateStatus {
     source_url: Option<String>,
     sources: Vec<UpdateSourceMetadata>,
     preferred_source_url: Option<String>,
-    automatic: bool,
     readiness: crate::update_activity::UpdateInstallReadiness,
 }
 
 pub(crate) struct NativeUpdateManager {
-    automatic: AtomicBool,
     check_requested: AtomicBool,
     install_requested: AtomicBool,
     wake: Notify,
@@ -458,9 +462,8 @@ pub(crate) struct NativeUpdateManager {
 }
 
 impl NativeUpdateManager {
-    pub(crate) fn new(automatic: bool) -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
-            automatic: AtomicBool::new(automatic),
             check_requested: AtomicBool::new(false),
             install_requested: AtomicBool::new(false),
             wake: Notify::new(),
@@ -474,7 +477,6 @@ impl NativeUpdateManager {
                 source_url: None,
                 sources: Vec::new(),
                 preferred_source_url: None,
-                automatic,
                 readiness: crate::update_activity::update_install_readiness(),
             }),
         })
@@ -486,7 +488,6 @@ impl NativeUpdateManager {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        status.automatic = self.automatic.load(AtomicOrdering::Acquire);
         status.readiness = crate::update_activity::update_install_readiness();
         status
     }
@@ -502,7 +503,6 @@ impl NativeUpdateManager {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             update(&mut status);
-            status.automatic = self.automatic.load(AtomicOrdering::Acquire);
             status.readiness = crate::update_activity::update_install_readiness();
             status.clone()
         };
@@ -512,19 +512,11 @@ impl NativeUpdateManager {
         self.snapshot()
     }
 
-    async fn run_cycle(
-        self: &Arc<Self>,
-        app: &AppHandle<Wry>,
-        lifecycle: &Arc<DesktopLifecycle>,
-        mut force_install: bool,
-    ) {
+    async fn run_cycle(self: &Arc<Self>, app: &AppHandle<Wry>, lifecycle: &Arc<DesktopLifecycle>) {
         let _operation = self.operation.lock().await;
-        force_install |= self.install_requested.swap(false, AtomicOrdering::AcqRel);
+        let force_install = self.install_requested.swap(false, AtomicOrdering::AcqRel);
         if self.prepared.lock().await.is_some() {
-            force_install |= self.install_requested.swap(false, AtomicOrdering::AcqRel);
-            if self.automatic.load(AtomicOrdering::Acquire) || force_install {
-                self.install_prepared(app, lifecycle, force_install).await;
-            }
+            self.install_prepared(app, lifecycle, force_install).await;
             return;
         }
 
@@ -534,13 +526,7 @@ impl NativeUpdateManager {
             status.checked_at_unix_ms = unix_now_ms();
         });
         let app_state = app.state::<AppState>();
-        let selection = match ranked_update_candidates(
-            app,
-            app_state.inner(),
-            Duration::from_millis(DEFAULT_CHECK_TIMEOUT_MS),
-        )
-        .await
-        {
+        let selection = match ranked_update_candidates(app, app_state.inner(), true).await {
             Ok(selection) => selection,
             Err(error) => {
                 self.publish(app, |status| {
@@ -604,10 +590,7 @@ impl NativeUpdateManager {
             status.preferred_source_url = preferred_source_url.clone();
         });
 
-        force_install |= self.install_requested.swap(false, AtomicOrdering::AcqRel);
-        if force_install || self.automatic.load(AtomicOrdering::Acquire) {
-            self.install_prepared(app, lifecycle, force_install).await;
-        }
+        self.install_prepared(app, lifecycle, force_install).await;
     }
 
     async fn install_prepared(
@@ -631,11 +614,6 @@ impl NativeUpdateManager {
             if force_install && !draining {
                 draining = true;
                 crate::update_activity::begin_update_drain();
-            }
-            if !force_install && !self.automatic.load(AtomicOrdering::Acquire) {
-                crate::update_activity::release_update_install_gate();
-                self.publish(app, |status| status.status = "ready".to_string());
-                return;
             }
             if !draining && Instant::now() >= natural_idle_deadline {
                 draining = true;
@@ -765,7 +743,7 @@ async fn run_native_update_manager(
         let check_requested = manager.check_requested.swap(false, AtomicOrdering::AcqRel);
         let install_requested = manager.install_requested.load(AtomicOrdering::Acquire);
         if periodic_check_due || check_requested || install_requested {
-            manager.run_cycle(&app, &lifecycle, install_requested).await;
+            manager.run_cycle(&app, &lifecycle).await;
         }
         periodic_check_due = false;
         tokio::select! {
@@ -785,9 +763,6 @@ pub(crate) fn native_update_status(
 }
 
 #[tauri::command]
-pub(crate) fn set_automatic_updates() -> Result<NativeUpdateStatus, String> { Err("Application updates are unavailable in the local edition".into()) }
-
-#[tauri::command]
 pub(crate) fn request_native_update_check() -> Result<NativeUpdateStatus, String> { Err("Application updates are unavailable in the local edition".into()) }
 
 #[tauri::command]
@@ -796,12 +771,6 @@ pub(crate) fn request_native_update_install() -> Result<NativeUpdateStatus, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn native_manager_starts_with_the_persisted_automatic_policy() {
-        assert!(!NativeUpdateManager::new(false).snapshot().automatic);
-        assert!(NativeUpdateManager::new(true).snapshot().automatic);
-    }
 
     #[test]
     fn speed_floor_keeps_primary_when_it_is_close_to_fastest() {

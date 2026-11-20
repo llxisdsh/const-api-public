@@ -508,19 +508,18 @@
 }
 
 .reset-local-data-tools p,
-.reset-local-data-tools label {
+.reset-local-data-confirmation {
   margin: 0;
   font-size: 12px;
   line-height: 1.45;
 }
 
-.reset-local-data-tools label {
+.reset-local-data-confirmation {
   display: flex;
   align-items: flex-start;
   gap: 8px;
   color: var(--text);
   font-weight: 500;
-  cursor: pointer;
 }
 
 .reset-local-data-tools input[type="checkbox"] {
@@ -552,7 +551,6 @@
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
-  cursor: pointer;
 }
 
 .about-compact-toggle input {

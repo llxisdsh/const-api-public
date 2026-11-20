@@ -302,7 +302,7 @@ async fn probe_surface_operation_family(
             format!("probe authentication unavailable: {error}"),
         );
     }
-    let response = match client.get(url).headers(headers).send_adaptive().await {
+    let response = match client.get(url).headers(headers).send_upstream().await {
         Ok(response) => response,
         Err(error) => return ("unknown", format!("probe transport unavailable: {error}")),
     };

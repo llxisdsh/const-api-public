@@ -166,6 +166,68 @@ fn history_request() -> Value {
 }
 
 #[test]
+fn responses_standalone_outputs_reach_cursor_history_and_current_input() {
+    let body = json!({"model":"gemini-4-carbon","input":[
+        {"type":"function_call_output","name":"codex_apps_open_page","namespace":"pages","output":"Page opened."},
+        {"type":"function_call_output","call_id":null,"name":"selected_page","output":[
+            {"type":"input_text","text":"Selected content."},
+            {"type":"input_image","image_url":"data:image/png;base64,aGk="}
+        ]}
+    ]});
+    let prepared = request::prepare(
+        ProtocolKind::OpenAiResponses,
+        &body,
+        "gemini-4-carbon",
+        "caller",
+    )
+    .unwrap();
+    assert!(prepared.tools.is_empty());
+    assert!(prepared.results.is_empty());
+    assert_eq!(
+        prepared.adjustments.len(),
+        1,
+        "report repeated notifications once"
+    );
+    let run = w::fields(w::data(&w::fields(&prepared.run).unwrap(), 1).unwrap()).unwrap();
+    let state = w::fields(w::data(&run, 1).unwrap()).unwrap();
+    let history = state
+        .iter()
+        .filter_map(|(n, v)| match (n, v) {
+            (1, w::ValueRef::Bytes(id)) => {
+                Some(serde_json::from_slice::<Value>(&prepared.blobs[*id]).unwrap())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[1]["role"], "user");
+    assert!(
+        history[1]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("codex_apps_open_page")
+    );
+    assert!(
+        history[1]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("\"namespace\":\"pages\"")
+    );
+    assert_eq!(history[1]["content"][1]["text"], "Page opened.");
+    let action = w::fields(w::data(&run, 2).unwrap()).unwrap();
+    let message_action = w::fields(w::data(&action, 1).unwrap()).unwrap();
+    let current = w::fields(w::data(&message_action, 1).unwrap()).unwrap();
+    let text = w::string(&current, 1).unwrap();
+    assert!(text.contains("selected_page"));
+    assert!(text.contains("Selected content."));
+    let images = w::fields(w::data(&current, 3).unwrap()).unwrap();
+    let image = w::fields(w::data(&images, 1).unwrap()).unwrap();
+    assert_eq!(w::string(&image, 7).unwrap(), "image/png");
+    let image_data = w::fields(w::data(&image, 9).unwrap()).unwrap();
+    assert_eq!(w::data(&image_data, 2).unwrap(), b"hi");
+}
+
+#[test]
 fn native_history_retains_tool_results_for_connection_loss() {
     let body = history_request();
     let prepared =

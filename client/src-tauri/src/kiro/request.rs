@@ -38,6 +38,11 @@ pub(crate) fn prepare(
         model,
     );
     let mut request = crate::protocol::decode_request(protocol, body, &context)?;
+    let mut adjustments =
+        crate::protocol::adapters::project_responses_standalone_outputs(&mut request, &context)?
+            .into_iter()
+            .map(|repair| repair.reason)
+            .collect::<Vec<_>>();
     request.model = model.into();
     let tool_mapping = bridge_request_tools(&mut request)?;
     if protocol == ProtocolKind::OpenAiResponses {
@@ -80,7 +85,6 @@ pub(crate) fn prepare(
             extension.name
         );
     }
-    let mut adjustments = Vec::new();
     if request.metadata.prompt_cache.ttl.is_some()
         || request.metadata.prompt_cache.legacy_retention.is_some()
     {

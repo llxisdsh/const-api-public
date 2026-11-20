@@ -186,30 +186,40 @@ pub(crate) struct ToolConfigOperationStatus {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ToolConfigRemoveMode {
+    ClearManaged,
     RestorePreConst,
     NativeRoute,
 }
 
 impl ToolConfigRemoveMode {
-    pub(crate) fn parse(value: Option<&str>) -> Result<Self> {
-        match value.unwrap_or("restore_pre_const") {
-            "restore_pre_const" => Ok(Self::RestorePreConst),
-            "native_route" => Ok(Self::NativeRoute),
-            value => Err(anyhow!("TOOL_CONFIG_INVALID_REMOVE_MODE: {value}")),
+    pub(crate) fn default_for_tool(tool: &str) -> Self {
+        match tool {
+            "codex" | "claude" | "claude-desktop" | "gemini" => Self::NativeRoute,
+            _ => Self::ClearManaged,
         }
+    }
+
+    pub(crate) fn parse_for_tool(tool: &str, value: Option<&str>) -> Result<Self> {
+        let mode = match value {
+            None | Some("clear_managed") => Self::default_for_tool(tool),
+            // Older renderers supplied their selection explicitly.
+            Some("restore_pre_const") => Self::RestorePreConst,
+            Some("native_route") => Self::NativeRoute,
+            Some(value) => return Err(anyhow!("TOOL_CONFIG_INVALID_REMOVE_MODE: {value}")),
+        };
+        mode.validate_for_tool(tool)
     }
 
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::ClearManaged => "clear_managed",
             Self::RestorePreConst => "restore_pre_const",
             Self::NativeRoute => "native_route",
         }
     }
 
     pub(crate) fn validate_for_tool(self, tool: &str) -> Result<Self> {
-        if self == Self::NativeRoute
-            && !matches!(tool, "codex" | "claude" | "claude-desktop" | "gemini")
-        {
+        if self == Self::NativeRoute && self != Self::default_for_tool(tool) {
             return Err(anyhow!(
                 "TOOL_CONFIG_NATIVE_ROUTE_UNSUPPORTED: {tool} does not have one canonical native route"
             ));

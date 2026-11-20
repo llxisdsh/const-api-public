@@ -1,3 +1,52 @@
+    #[tokio::test]
+    async fn consumer_http_protects_the_same_text_before_local_or_platform_routing() {
+        use warp::Filter;
+        use crate::outgoing_secrets::SYNTHETIC_KEY as CANARY;
+        let mut received = Vec::new();
+        for local in [true, false] {
+            let seen = Arc::new(StdMutex::new(Vec::<String>::new()));
+            let captured = seen.clone();
+            let upstream = warp::post().and(warp::path::full()).and(warp::body::json())
+                .map(move |path: warp::path::FullPath, value: serde_json::Value| {
+                    assert_eq!(path.as_str(), "/v1/chat/completions");
+                    captured.lock().unwrap().push(value["messages"][0]["content"].as_str().unwrap().into());
+                    warp::reply::json(&serde_json::json!({"id":"fixture","object":"chat.completion","model":"model-a",
+                        "choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+                        "usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}))
+                });
+            let (addr, server) = crate::bind_ephemeral!(upstream, ([127,0,0,1], 0));
+            let provider = tokio::spawn(server);
+            let mut config = default_config();
+            config.protect_outgoing_secrets = true;
+            config.prefer_local_supply = local;
+            config.api_key = "canary-consumer".into();
+            config.channels = if local { vec![local_model_channel(&["model-a"], &format!("http://{addr}/v1"))] } else { vec![] };
+            config.endpoints.clear();
+            if !local {
+                config.account_device_api_key = "platform-transport-fixture".into();
+                config.endpoints.push(Endpoint { server_id:String::new(),name:"platform".into(),base_url:format!("http://{addr}"),
+                    supplier_ws_url:String::new(),supplier_quic_url:String::new(),enabled:true });
+            }
+            let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+            let proxy = warp::method().and(warp::path::full()).and(optional_raw_query()).and(warp::header::headers_cloned())
+                .and(warp::body::bytes()).and(with_shared(shared)).and_then(proxy_request);
+            let (address, server) = crate::bind_ephemeral!(proxy, ([127,0,0,1],0));
+            let ingress = tokio::spawn(server);
+            let response = Client::builder().no_proxy().build().unwrap().post(format!("http://{address}/v1/chat/completions"))
+                .bearer_auth("canary-consumer").header("session-id","test-session").json(&serde_json::json!({
+                    "model":"model-a","messages":[{"role":"user","content":CANARY}]
+                })).send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "local={local}");
+            let values = seen.lock().unwrap();
+            assert_eq!(values.len(), 1);
+            assert!(values[0].starts_with("[CONST_SECRET_"));
+            received.push(values[0].clone());
+            ingress.abort();
+            provider.abort();
+        }
+        assert_eq!(received[0], received[1]);
+    }
+
     #[test]
     fn local_priority_tiers_balance_equal_accounts_without_overriding_fidelity() {
         let mut config = default_config();
@@ -600,6 +649,12 @@
                 "Content-Disposition: form-data; name=\"stream\"\r\n\r\n",
                 "true\r\n",
                 "--const-api-image-boundary\r\n",
+                "Content-Disposition: form-data; name=\"output_format\"\r\n\r\ngif\r\n",
+                "--const-api-image-boundary\r\n",
+                "Content-Disposition: form-data; name=\"frame_count\"\r\n\r\n9\r\n",
+                "--const-api-image-boundary\r\n",
+                "Content-Disposition: form-data; name=\"frame_duration_ms\"\r\n\r\n200\r\n",
+                "--const-api-image-boundary\r\n",
                 "Content-Disposition: form-data; name=\"client_trace\"\r\n\r\n",
                 "preserve-me\r\n",
                 "--const-api-image-boundary\r\n",
@@ -633,6 +688,9 @@
         assert_eq!(value["n"], 1);
         assert_eq!(value["stream"], true);
         assert_eq!(value["client_trace"], "preserve-me");
+        assert_eq!(value["output_format"], "gif");
+        assert_eq!(value["frame_count"], 9);
+        assert_eq!(value["frame_duration_ms"], 200);
         assert_eq!(
             value
                 .pointer("/mask/image_url")
@@ -2632,7 +2690,46 @@
     }
 
     #[tokio::test]
-    async fn local_model_failover_never_exceeds_three_upstream_dispatches() {
+    async fn local_ten_channels_reject_once_then_succeed_or_finish() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let all_fail = Arc::new(AtomicBool::new(false));
+        let fail = all_fail.clone();
+        let calls = Arc::new(StdMutex::new(Vec::new()));
+        let seen = calls.clone();
+        let upstream = warp::path::param::<usize>().and(warp::path::tail())
+            .and(warp::body::bytes()).map(move |index: usize, _: warp::path::Tail, _: bytes::Bytes| {
+                seen.lock().unwrap().push(index);
+                let (status, code) = match index % 4 { 0 => (402, "insufficient_quota"), 1 => (429, "rate_limit_error"), 2 => (503, "model_capacity_exhausted"), _ => (429, "FreeUsageLimitError") };
+                if index == 9 && !fail.load(Ordering::SeqCst) {
+                    warp::reply::json(&serde_json::json!({"source":"tenth-channel"})).into_response()
+                } else {
+                    let message = if code == "FreeUsageLimitError" { "Free models work in OpenCode (https://opencode.ai)" } else { "rejected" };
+                    warp::reply::with_status(warp::reply::json(&serde_json::json!({"error":{"code":code,"message":message}})), StatusCode::from_u16(status).unwrap()).into_response()
+                }
+            });
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127,0,0,1],0));
+        let task = tokio::spawn(server);
+        let mut cfg = default_config();
+        cfg.account_device_api_key.clear(); cfg.endpoints.clear(); cfg.prefer_local_supply = true;
+        cfg.channels = (0..10).map(|index| {
+            let mut channel = local_model_channel(&["model-a"], &format!("http://{address}/{index}/v1"));
+            channel.id = format!("ten-failover-{index}"); channel.v2.local_priority = Some(index+1); channel
+        }).collect();
+        for exhausted in [false, true] {
+            all_fail.store(exhausted, Ordering::SeqCst); calls.lock().unwrap().clear();
+            let shared = Arc::new(ProxyShared::from_config(normalize_config(cfg.clone()), Client::new()));
+            let response = tokio::time::timeout(Duration::from_secs(3), forward_with_failover(
+                warp::http::Method::POST, "/v1/chat/completions", "", HeaderMap::new(),
+                bytes::Bytes::from_static(br#"{"model":"model-a","messages":[]}"#), &shared)).await.unwrap().unwrap();
+            assert_eq!(response.status(), if exhausted { StatusCode::TOO_MANY_REQUESTS } else { StatusCode::OK });
+            assert_eq!(*calls.lock().unwrap(), (0..10).collect::<Vec<_>>(), "priority order, no repeated candidate");
+            assert_eq!(shared.local_channel_readiness.lock().unwrap().get("ten-failover-3"), Some(&true), "a rejected free model must not disable paid models on the channel");
+        }
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn local_unknown_failure_never_exceeds_three_upstream_dispatches() {
         let sequence = Arc::new(StdMutex::new(Vec::<String>::new()));
         let sequence_filter = sequence.clone();
         let upstream = warp::body::bytes().map(move |body: bytes::Bytes| {
@@ -2648,11 +2745,7 @@
                 warp::reply::json(&serde_json::json!({
                     "error": {
                         "code": 503,
-                        "message": format!("No capacity available for model {model} on the server"),
-                        "details": [{
-                            "reason": "MODEL_CAPACITY_EXHAUSTED",
-                            "metadata": {"model": model}
-                        }]
+                        "message": "temporary server failure"
                     }
                 })),
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -3544,6 +3637,87 @@
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(*calls.lock().unwrap(), ["first"]);
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn local_owner_unavailable_returns_without_spinning_or_platform_fallback() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = calls.clone();
+        let upstream = warp::any().map(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            warp::reply::json(&serde_json::json!({"totalTokens":12,"candidates":[]}))
+        });
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let task = tokio::spawn(server);
+        let mut config = default_config();
+        config.account_device_api_key = "owner-test-platform-key".into();
+        config.prefer_local_supply = true;
+        config.endpoints = vec![Endpoint {
+            server_id: String::new(), name: "owner-test-platform".into(),
+            base_url: format!("http://{address}"), supplier_ws_url: String::new(),
+            supplier_quic_url: String::new(), enabled: true,
+        }];
+        config.channels = vec![gemini_api_channel("owner", "model-a", &format!("http://{address}/v1beta"))];
+        let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+        shared.local_resource_owners.bind_many(vec![LocalResourceOwner {
+            key: LocalResourceOwnerKey {
+                surface: crate::surface::ApiSurface::Gemini,
+                resource_type: "cached_content".into(), resource_id: "cache_busy".into(),
+            },
+            channel_id: "owner".into(), route_model: "model-a".into(), updated_at_unix: now_unix(),
+        }]).await.unwrap();
+        let route_key = model_quota_route_key("owner", "model-a");
+        for unavailable in ["cooldown", "probe", "channel"] {
+            for (method, path, body) in [
+                (warp::http::Method::POST, "/gemini/v1beta/models/model-a:generateContent", r#"{"cachedContent":"cachedContents/cache_busy","contents":[]}"#),
+                (warp::http::Method::POST, "/gemini/v1beta/models/model-a:countTokens", r#"{"generateContentRequest":{"model":"models/model-a","cachedContent":"cachedContents/cache_busy","contents":[]}}"#),
+                (warp::http::Method::GET, "/gemini/v1beta/cachedContents/cache_busy", ""),
+            ] {
+                // A short finite lease also makes a regression terminate: the
+                // old busy loop dispatches after expiry instead of returning 503.
+                let until = now_unix() + 2;
+                let state = crate::supplier::LocalModelQuotaRouteState {
+                    runtime_failure_count: 1,
+                    runtime_cooldown_until_unix: if unavailable == "cooldown" { until } else { 0 },
+                    runtime_probe_until_unix: if unavailable == "probe" { until } else { 0 },
+                    ..Default::default()
+                };
+                shared.local_model_quota_routes.lock().unwrap().insert(route_key.clone(), state);
+                shared.set_local_channel_ready("owner", unavailable != "channel");
+                let response = forward_with_failover(
+                    method, path, "", HeaderMap::new(), bytes::Bytes::from(body), &shared,
+                ).await.unwrap();
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{unavailable}: {path}");
+                let body = crate::test_body_bytes(response.into_body()).await.unwrap();
+                assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["error"]["status"], "UNAVAILABLE");
+                assert_eq!(shared.local_model_quota_routes.lock().unwrap().get(&route_key), Some(&state),
+                    "a rejected owner request must neither extend cooldown nor release another probe");
+                assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0,
+                    "neither the owner nor the platform may be dispatched while unavailable");
+            }
+        }
+        // Existing expiry and soft-failure last-resort rules must still allow
+        // the same owner; the fix must not add a new persistent blocked state.
+        shared.set_local_channel_ready("owner", true);
+        for soft in [false, true] {
+            shared.local_model_quota_routes.lock().unwrap().insert(route_key.clone(),
+                crate::supplier::LocalModelQuotaRouteState {
+                    runtime_failure_count: 1,
+                    runtime_cooldown_until_unix: now_unix() + if soft { 60 } else { -1 },
+                    runtime_soft_failure: soft,
+                    ..Default::default()
+                });
+            let response = forward_with_failover(
+                warp::http::Method::POST, "/gemini/v1beta/models/model-a:countTokens", "",
+                HeaderMap::new(), bytes::Bytes::from_static(br#"{"generateContentRequest":{"model":"models/model-a","cachedContent":"cachedContents/cache_busy","contents":[]}}"#), &shared,
+            ).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "soft={soft}");
+            crate::test_body_bytes(response.into_body()).await.unwrap();
+            assert_eq!(shared.local_resource_owners.get(crate::surface::ApiSurface::Gemini,
+                "cached_content", "cache_busy").unwrap().channel_id, "owner");
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        task.abort();
     }
 
     #[tokio::test]
@@ -4991,6 +5165,7 @@
                 ("/gemini/v1beta/models/missing:countTokens", r#"{"contents":[{"parts":[{"fileData":{"fileUri":"https://generativelanguage.googleapis.com/v1beta/files/owned"}}]}]}"#),
                 ("/gemini/v1beta/models/missing:countTokens", r#"{"cachedContent":"cachedContents/owned","contents":[]}"#),
                 ("/gemini/v1beta/models/missing:countTokens", r#"{"generateContentRequest":{"model":"models/missing","cachedContent":"cachedContents/owned","contents":[]}}"#),
+                ("/gemini/v1beta/models/missing:generateContent", r#"{"cachedContent":"cachedContents/owned","contents":[{"role":"user","parts":[{"text":"continue"}]}]}"#),
             ] {
                 let before = posts.load(std::sync::atomic::Ordering::SeqCst);
                 let response = forward_with_failover(
@@ -5011,6 +5186,35 @@
                 );
             }
         }
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn unknown_cached_content_never_reaches_a_compatible_local_model() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = calls.clone();
+        let upstream = warp::any().map(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            warp::reply::json(&serde_json::json!({"totalTokens":12}))
+        });
+        let (address, server) = crate::bind_ephemeral!(upstream, ([127, 0, 0, 1], 0));
+        let task = tokio::spawn(server);
+        let mut config = default_config();
+        config.account_device_api_key.clear();
+        config.endpoints.clear();
+        config.channels = vec![gemini_api_channel("unrelated", "model-b", &format!("http://{address}/v1beta"))];
+        configure_model_compatibility_pair(&mut config, "model-a", "model-b");
+        let shared = Arc::new(ProxyShared::from_config(normalize_config(config), Client::new()));
+        for (path, body) in [
+            ("/gemini/v1beta/models/model-a:generateContent", r#"{"cachedContent":"cachedContents/unknown","contents":[{"role":"user","parts":[{"text":"continue"}]}]}"#),
+            ("/gemini/v1beta/models/model-a:countTokens", r#"{"generateContentRequest":{"model":"models/model-a","cachedContent":"cachedContents/unknown","contents":[]}}"#),
+        ] {
+            let response = forward_with_failover(
+                warp::http::Method::POST, path, "", HeaderMap::new(), bytes::Bytes::from(body), &shared,
+            ).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         task.abort();
     }
 
@@ -6377,6 +6581,129 @@ data: [DONE]\n\n",
     }
 
     #[test]
+    fn public_image_model_advertises_the_operation_of_its_routed_wire_id() {
+        use crate::image_models::{EDIT, GENERATE, ImageOperations};
+
+        let public = "canvas";
+        let base = "studio/canvas";
+        let variant = "studio/canvas[1m]";
+        let mut channel = openai_api_channel("image-alias", base, "https://example.test/v1");
+        for (id, generate) in [(base, true), (variant, false)] {
+            channel.capability_profiles.push(crate::model::ChannelCapabilityProfile {
+                model_pattern: id.into(),
+                verification_state: "declared".into(),
+                catalog_image_operations: Some(ImageOperations { generate, edit: !generate }),
+                ..Default::default()
+            });
+        }
+        channel.public_model = public.into();
+        let ready = HashSet::from([channel.id.clone()]);
+        for (ids, expected) in [
+            (vec![variant.into(), base.into()], GENERATE),
+            (vec![base.into(), variant.into()], GENERATE),
+            (vec![variant.into()], EDIT),
+            (vec![], GENERATE),
+        ] {
+            channel.models = ids;
+            let mut config = default_config();
+            config.channels = vec![channel.clone()];
+            let models = render_models_for_surface(&config, crate::surface::ApiSurface::OpenAi, &local_model_entries(&config, &ready));
+            assert_eq!(models.len(), 1);
+            assert_eq!(models[0]["id"], public);
+            assert_eq!(models[0]["const_api"]["image_operations"], serde_json::json!([expected]));
+        }
+    }
+
+    #[test]
+    fn images_discovery_and_route_use_the_same_exact_channel_operation() {
+        use crate::image_models::{EDIT, GENERATE, ImageOperations};
+        let id = "canvas-fixture";
+        let wire = "studio/canvas-fixture";
+        let channel = |name: &str, rank, ops: Option<ImageOperations>| {
+            let mut channel = openai_api_channel(name, wire, "https://example.test/v1");
+            channel.v2.local_priority = Some(rank);
+            channel.capability_profiles = vec![crate::model::ChannelCapabilityProfile {
+                model_pattern: wire.into(), protocol: "openai_chat".into(), verification_state: "declared".into(),
+                catalog_image_operations: ops, image_output: true, ..Default::default()
+            }];
+            channel
+        };
+        let generate = ImageOperations { generate: true, edit: false };
+        let edit = ImageOperations { generate: false, edit: true };
+        let mut config = default_config();
+        config.channels = vec![channel("unknown", 1, None), channel("generator", 2, Some(generate)),
+            channel("editor", 3, Some(edit))];
+        let model = |ids: &[&str]| local_model_entries(&config, &ids.iter().map(|s| s.to_string()).collect())
+            .into_iter().find(|m| m["id"] == wire).unwrap();
+        assert!(model(&["unknown"])["const_api"].get("image_operations").is_none());
+        assert_eq!(model(&["unknown", "generator"])["const_api"]["image_operations"], serde_json::json!([GENERATE]));
+        assert_eq!(model(&["unknown", "generator", "editor"])["const_api"]["image_operations"], serde_json::json!([GENERATE, EDIT]));
+        for (path, expected) in [("/v1/images/generations", "generator"), ("/v1/images/edits", "editor")] {
+            let route = crate::surface::resolve_api_route("POST", path, false).unwrap();
+            for request_model in [id, wire] {
+                assert_eq!(select_native_media_channel_where(&config, &route, request_model, |_| true).unwrap().id, expected);
+            }
+            assert_eq!(select_native_media_channel_where(&config, &route, id, |c| c.id == "unknown").unwrap().id, "unknown");
+        }
+        config.channels[0].set_source_driver(crate::source_driver::SourceDriverId::Openrouter);
+        config.channels[0].capability_profiles[0].catalog_image_operations = Some(generate);
+        assert!(crate::image_models::ChannelImages::new(&config.channels[0]).model(id).unwrap().names().next().is_none());
+    }
+
+    #[test]
+    fn video_and_speech_routes_use_exact_wire_evidence_with_legacy_fallback() {
+        use crate::media_models::MediaOperations;
+        let mut config = default_config();
+        let wire = "vendor/studio";
+        config.channels = [
+            ("legacy", 1, false, false),
+            ("movie", 2, true, false),
+            ("voice", 3, false, true),
+        ].into_iter().map(|(name, rank, video, speech)| {
+            let mut channel = openai_api_channel(name, wire, "https://example.test/v1");
+            channel.v2.local_priority = Some(rank);
+            channel.capability_profiles.push(crate::model::ChannelCapabilityProfile {
+                model_pattern: wire.into(), verification_state: "declared".into(),
+                catalog_media_operations: MediaOperations { video, speech }, ..Default::default()
+            });
+            channel
+        }).collect();
+        for (path, expected) in [("/v1/videos", "movie"), ("/v1/audio/speech", "voice")] {
+            for model in [wire, "studio"] {
+                let body = serde_json::to_vec(&serde_json::json!({"model": model})).unwrap();
+                for (ready, want) in [
+                    (config.channels.iter().map(|c| c.id.clone()).collect(), expected),
+                    (HashSet::from(["legacy".to_string()]), "legacy"),
+                ] {
+                    let selected = select_ready_local_channel(&config, &warp::http::Method::POST, path, &body, &ready)
+                        .unwrap().unwrap();
+                    assert_eq!(selected.channel.id, want, "{path} {model}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn multipart_image_routing_uses_uploaded_model_among_multiple_channels() {
+        let mut config = default_config();
+        let mut first = openai_api_channel("first-other-image", "another-image", "https://example.test/v1");
+        first.v2.local_priority = Some(1);
+        let mut target = openai_subscription_channel(&["gpt-image-2"]);
+        target.v2.local_priority = Some(2);
+        config.channels = vec![first, target];
+        let ready = config.channels.iter().map(|c| c.id.clone()).collect::<HashSet<_>>();
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("content-type", "multipart/form-data; boundary=fixture".parse().unwrap());
+        let body = bytes::Bytes::from_static(b"--fixture\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-2\r\n--fixture\r\nContent-Disposition: form-data; name=\"image\"; filename=\"image.png\"\r\nContent-Type: image/png\r\n\r\n\0\xff\r\n--fixture--\r\n");
+        let routing = crate::media_request::media_routing_body(crate::surface::ApiOperation::ImagesEdits, &headers, &body).await.unwrap();
+        let selected = select_ready_local_channel_with_model_route_policy(&config, &warp::http::Method::POST,
+            "/v1/images/edits", &routing, &ready, &HashMap::new(), now_unix(), ModelMatchMode::Configured,
+            None, &HashSet::new(), &HashSet::new()).unwrap();
+        assert_eq!(selected.channel.id, "openai-account-subscription");
+        assert_eq!(selected.route_model, "gpt-image-2");
+    }
+
+    #[test]
     fn non_text_model_does_not_inherit_channel_wide_dialogue_capabilities() {
         let mut channel = openai_subscription_channel(&["gpt-image-2", "gpt-6-astra"]);
         channel.capability_profiles = vec![
@@ -6397,4 +6724,44 @@ data: [DONE]\n\n",
         let text = LocalModelCapability::from_channel(&channel, "gpt-6-astra").into_metadata();
         assert_eq!(text["tool_calls"], true);
         assert_eq!(text["reasoning"], true);
+    }
+
+    #[tokio::test]
+    async fn video_creation_changes_platform_only_after_confirmed_rejection() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let rejected = Arc::new(AtomicBool::new(false));
+        let mode = rejected.clone();
+        let first = warp::post().and(warp::path!("v1" / "videos")).map(move || {
+            let mut response = warp::reply::with_status("no acknowledgement", StatusCode::SERVICE_UNAVAILABLE).into_response();
+            response.headers_mut().insert(PLATFORM_MODEL_FALLBACK_SAFE_HEADER, "1".parse().unwrap());
+            response.headers_mut().insert(PLATFORM_UPSTREAM_ATTEMPTS_USED_HEADER,
+                if mode.load(Ordering::SeqCst) { "0" } else { "1" }.parse().unwrap());
+            response
+        });
+        let creates = Arc::new(AtomicUsize::new(0));
+        let calls = creates.clone();
+        let next = warp::post().and(warp::path!("v1" / "videos")).map(move || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            warp::reply::json(&serde_json::json!({"id":"accepted"}))
+        });
+        let (a, s1) = crate::bind_ephemeral!(first, ([127, 0, 0, 1], 0));
+        let (b, s2) = crate::bind_ephemeral!(next, ([127, 0, 0, 1], 0));
+        let tasks = [tokio::spawn(s1), tokio::spawn(s2)];
+        let mut config = default_config();
+        config.channels.clear();
+        config.prefer_local_supply = false;
+        config.endpoints = [a, b].into_iter().map(|addr| Endpoint {
+            server_id: String::new(), name: addr.to_string(), base_url: format!("http://{addr}"),
+            supplier_ws_url: String::new(), supplier_quic_url: String::new(), enabled: true,
+        }).collect();
+        let shared = Arc::new(ProxyShared::with_platform_api_key(config.clone(), Client::new(),
+            Arc::new(StdMutex::new("test-device-key".to_string())), Arc::new(crate::config::LiveClientConfig::new(config)), Default::default()));
+        for (confirmed, status, count) in [(false, StatusCode::SERVICE_UNAVAILABLE, 0), (true, StatusCode::OK, 1)] {
+            rejected.store(confirmed, Ordering::SeqCst);
+            let response = forward_with_failover(warp::http::Method::POST, "/v1/videos", "", HeaderMap::new(),
+                bytes::Bytes::from_static(br#"{"model":"video","prompt":"test"}"#), &shared).await.unwrap();
+            assert_eq!(response.status(), status);
+            assert_eq!(creates.load(Ordering::SeqCst), count);
+        }
+        for task in tasks { task.abort(); }
     }

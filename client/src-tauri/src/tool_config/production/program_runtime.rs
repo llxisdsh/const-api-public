@@ -1349,13 +1349,6 @@ fn windows_tool_process_scope(
     for root in tool_runtime_extension_install_roots(tool) {
         insert_windows_tool_process_scope_root(&mut scope, &root);
     }
-    if !scope.command_line_markers.is_empty() {
-        for name in windows_runtime_host_process_names() {
-            scope
-                .executable_names
-                .insert(normalized_process_name(name));
-        }
-    }
     scope.allow_name_fallback = !scope.has_concrete_owner();
     Ok(scope)
 }

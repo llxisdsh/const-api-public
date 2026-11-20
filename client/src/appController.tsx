@@ -1,3 +1,4 @@
+import { modelDisplayName } from "./modelPresentation";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -99,10 +100,8 @@ import {
   supplierFromChannel,
   supplierQuicFromEndpoint,
   supplierRouteStatusBlocksReady,
-  supplierRouteStatusDetail,
   supplierRouteStatusForChannel,
   supplierRouteStatusInlineLabel,
-  supplierRouteStatusSuppressesToast,
   supplierRouteStatusToastIdentity,
   supplierRouteStatusToastSnapshot,
   supplierRouteStatusToastText,
@@ -162,9 +161,6 @@ import type {
   ToolConfigProgressControl,
   ToolOperationProgress,
   ToolProgramLocationResult,
-  ToolRemoveDecision,
-  ToolRemoveDialogState,
-  ToolRemoveMode,
   UpdateState
 } from "./appTypes";
 import {
@@ -212,7 +208,7 @@ import {
   localApiConnectionById,
   localApiSurfaceById,
 } from "./localApiSurfaces";
-import { DEVELOPMENT_PROFILE, RELEASE_UPDATES_ENABLED } from "./runtimeProfile";
+import { DEVELOPMENT_PROFILE, RELEASE_UPDATES_ENABLED, RELEASE_UPDATES_SUPPORTED } from "./runtimeProfile";
 import {
   UI_SNAPSHOT_AUTO_REFRESH_MS,
   createRefreshGate,
@@ -223,6 +219,7 @@ import {
 import { sourceDriverTitle } from "./sourceDriverPresentation";
 import {
   normalizeChannelV5,
+  sourceDriverAllowsMarketSharing,
   sourceDriverById,
   sourceDriverInitialChannelV5,
   sourceDriversForApiAccess,
@@ -309,7 +306,6 @@ export const SIMPLE_ENGLISH_TEST_PROMPTS = [
   "Describe a useful tool in one short English sentence.",
 ];
 
-const LEGACY_AUTO_INSTALL_UPDATES_KEY = "const-api:auto-install-updates";
 const DEBUG_EXPERIMENT_CLAUDE_SERVER_SIDE_COMPACTION = "claude_server_side_compaction";
 
 export const SUPPLIER_QUOTA_SNAPSHOTS_KEY = "const-api:supplier-quota-snapshots";
@@ -325,16 +321,12 @@ type ToolBatchProgress = {
   currentTool: string;
 };
 
-const NATIVE_ROUTE_REMOVE_TOOLS = new Set([
-  "codex",
-  "claude",
-  "claude-desktop",
-  "gemini",
-]);
-
-function matchesNativeRemoveTool(tool: string) {
-  return NATIVE_ROUTE_REMOVE_TOOLS.has(tool);
-}
+const toolCleanupNotes: Partial<Record<string, string>> = {
+  codex: "toolOperations.cleanup.codex",
+  claude: "toolOperations.cleanup.claude",
+  "claude-desktop": "toolOperations.cleanup.claudeDesktop",
+  gemini: "toolOperations.cleanup.gemini",
+};
 
 export const DEFAULT_TOAST_DURATION_MS = 4_200;
 
@@ -487,24 +479,6 @@ export function randomSimpleEnglishPrompt() {
 
 export function hasTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
-function readLegacyAutoInstallUpdatesPreference() {
-  if (typeof window === "undefined") return undefined;
-  try {
-    const value = window.localStorage.getItem(LEGACY_AUTO_INSTALL_UPDATES_KEY);
-    return value === null ? undefined : value !== "false";
-  } catch {
-    return undefined;
-  }
-}
-
-function clearLegacyAutoInstallUpdatesPreference() {
-  try {
-    window.localStorage.removeItem(LEGACY_AUTO_INSTALL_UPDATES_KEY);
-  } catch {
-    // A blocked legacy store does not affect the native preference.
-  }
 }
 
 export function readSupplierQuotaSnapshots() {
@@ -852,7 +826,7 @@ export function sourceDriverCardPresentation(driver: SourceDriver): Pick<React.C
 
 export type AppTab = "access" | "supplier" | "about" | "account";
 
-type RoutingPreference = "prefer_local_supply" | "allow_model_equivalence";
+type RoutingPreference = "prefer_local_supply" | "allow_model_equivalence" | "protect_outgoing_secrets" | "configure_image_skill";
 
 type AppControllerOptions = {
   initialTab?: AppTab;
@@ -1045,6 +1019,12 @@ export function useAppController({
   const [selectedChannelId, setSelectedChannelId] = useState<string>("");
 
   const [supplierAddOpen, setSupplierAddOpen] = useState(false);
+  const [newChannelMarketSharing, setNewChannelMarketSharing] = useState(true);
+
+  function openSupplierAdd() {
+    setNewChannelMarketSharing(true);
+    setSupplierAddOpen(true);
+  }
 
   const [supplierDetailOpen, setSupplierDetailOpen] = useState(false);
 
@@ -1127,7 +1107,6 @@ export function useAppController({
 
   const [updateState, setUpdateState] = useState<UpdateState>({ status: "idle" });
 
-  const [autoInstallUpdates, setAutoInstallUpdatesState] = useState(RELEASE_UPDATES_ENABLED);
 
   const [autostartEnabled, setAutostartEnabled] = useState(false);
 
@@ -1153,12 +1132,6 @@ export function useAppController({
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
 
   const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
-
-  const [toolRemoveDialog, setToolRemoveDialog] =
-    useState<ToolRemoveDialogState | null>(null);
-
-  const toolRemoveResolverRef =
-    useRef<((decision: ToolRemoveDecision) => void) | null>(null);
 
   const [appLogs, setAppLogs] = useState<AppLogEntry[]>([]);
 
@@ -1194,7 +1167,7 @@ export function useAppController({
 
   const configActionInFlightRef = useRef(false);
 
-  const routingPreferenceSavesRef = useRef(new Map<RoutingPreference, Promise<void>>());
+  const routingPreferenceSavesRef = useRef(new Map<RoutingPreference | "media_skill_tools", Promise<void>>());
 
   const selectedCallRecordRef = useRef<CallRecord | null>(null);
 
@@ -1210,11 +1183,11 @@ export function useAppController({
 
   const endpointRegistryRefreshInFlightRef = useRef(false);
 
-  const modelCompatibilityRefreshGateRef = useRef(createRefreshGate());
-
-  const modelCompatibilityRefreshInFlightRef = useRef<Promise<void> | null>(null);
-
-  const modelCompatibilityContextRef = useRef<string | null>(null);
+  const modelCompatibilityRefreshRef = useRef<{
+    context: string;
+    gate: RefreshGate;
+    inFlight?: Promise<void>;
+  } | null>(null);
 
   const supplierModelRefreshGatesRef = useRef(new Map<string, RefreshGate>());
 
@@ -1322,7 +1295,7 @@ export function useAppController({
       supplierQuotaSnapshots[selectedChannel.id],
     );
 
-  const selectedChannelRouteStatus = supplierRouteStatusForChannel(supplierStatus, selectedChannel.id);
+  const selectedChannelRouteStatus = channelIsPlatformPooled(selectedChannel) ? supplierRouteStatusForChannel(supplierStatus, selectedChannel.id) : undefined;
 
   const selectedChannelRouteLabel = supplierRouteStatusInlineLabel(selectedChannelRouteStatus);
 
@@ -1361,7 +1334,7 @@ export function useAppController({
       const health = supplierStatus.channels?.find((item) => item.channel_id === channel.id);
       const routeStatus = supplierRouteStatusForChannel(supplierStatus, channel.id);
       const channelTransport = supplierChannelTransportForChannel(supplierStatus, channel.id);
-      return isEstablishedSupplierTransport(channelTransport?.active_transport)
+      return channelIsPlatformPooled(channel) && isEstablishedSupplierTransport(channelTransport?.active_transport)
         && channelTransport?.platform_registered === true
         && health?.status === "available"
         && !supplierRouteStatusBlocksReady(routeStatus);
@@ -1369,7 +1342,7 @@ export function useAppController({
 
   const selectedChannelLifecycle = supplierLifecyclePresentation({
       saved: !selectedChannelHasChanges,
-      enabledForSupply: selectedChannelSwitchOn,
+      enabledForSupply: channelIsPlatformPooled(selectedChannel),
       busy: selectedChannelBusy,
       checking: supplierChannelOperation?.checksUpstream,
       detectionReady: selectedChannel.models.length > 0,
@@ -1608,27 +1581,6 @@ export function useAppController({
     }, []);
 
   useEffect(() => {
-      if (tab !== "access" && !modelAliasPreviewOpen && !accessGuideOpen) return;
-      const context = `${savedConfig.listen}\u0000${savedConfig.api_key}\u0000${account.status.state}`;
-      const contextChanged = modelCompatibilityContextRef.current !== null
-        && modelCompatibilityContextRef.current !== context;
-      modelCompatibilityContextRef.current = context;
-      void refreshModelCompatibilityPolicy(contextChanged ? { force: true } : { throttle: true });
-      const timer = window.setInterval(() => {
-        if (document.visibilityState !== "visible") return;
-        void refreshModelCompatibilityPolicy({ throttle: true });
-      }, UI_SNAPSHOT_AUTO_REFRESH_MS);
-      return () => window.clearInterval(timer);
-    }, [
-      accessGuideOpen,
-      account.status.state,
-      modelAliasPreviewOpen,
-      savedConfig.api_key,
-      savedConfig.listen,
-      tab,
-    ]);
-
-  useEffect(() => {
       if (tab !== "about" || !isTauriRuntime()) return;
       const refreshAbout = async () => {
         await Promise.allSettled([
@@ -1663,14 +1615,7 @@ export function useAppController({
             return;
           }
           unlisten = stop;
-          let status = await invoke<NativeUpdateStatus>("native_update_status");
-          const legacyPreference = readLegacyAutoInstallUpdatesPreference();
-          if (legacyPreference !== undefined) {
-            status = await invoke<NativeUpdateStatus>("set_automatic_updates", {
-              enabled: legacyPreference,
-            });
-            clearLegacyAutoInstallUpdatesPreference();
-          }
+          const status = await invoke<NativeUpdateStatus>("native_update_status");
           if (!disposed) applyNativeUpdateStatus(status);
         } catch (error) {
           recordAppLog(`native updater: ${String(error)}`, "error");
@@ -1935,18 +1880,29 @@ export function useAppController({
       return () => window.removeEventListener("beforeunload", handleBeforeUnload);
     }, [hasChanges]);
 
-  async function refreshModelCompatibilityPolicy(options: RefreshOptions = { throttle: true }) {
-      if (modelCompatibilityRefreshInFlightRef.current) {
-        if (!options.force) return modelCompatibilityRefreshInFlightRef.current;
-        await modelCompatibilityRefreshInFlightRef.current;
-      }
-      const refreshGate = modelCompatibilityRefreshGateRef.current;
-      if (!refreshGate.begin(options)) return;
+  const modelCompatibilityContext = [
+    savedConfig.listen, savedConfig.api_key, account.status.state, account.status.platform_id, account.status.user_id,
+  ].join("\u0000");
 
-      const request = (async () => {
+  const refreshModelCompatibilityPolicy = React.useCallback(async (options: RefreshOptions = { throttle: true }) => {
+      const pendingRead = modelCompatibilityRefreshRef.current?.inFlight;
+      if (modelCompatibilityRefreshRef.current?.context !== modelCompatibilityContext) {
+        modelCompatibilityRefreshRef.current = { context: modelCompatibilityContext, gate: createRefreshGate() };
+      }
+      const refresh = modelCompatibilityRefreshRef.current;
+      if (refresh.inFlight) return refresh.inFlight;
+      if (!refresh.gate.begin(options)) return;
+
+      refresh.inFlight = (async () => {
         setModelCompatibilityPolicy((current) => ({ ...current, status: "loading", error: undefined }));
         try {
-          const payload = await invoke<any>("fetch_model_compatibility");
+          // The native read can also sync a profile. Finish the previous context's read first.
+          if (pendingRead) {
+            await pendingRead;
+            if (modelCompatibilityRefreshRef.current !== refresh) return;
+          }
+          const payload = await invoke("fetch_model_compatibility");
+          if (modelCompatibilityRefreshRef.current !== refresh) return;
           const next = modelCompatibilityStateFromPayload(payload);
           setModelCompatibilityPolicy(next);
           setModelCompatibilityDraft(next.modelGroups.map((group) => ({
@@ -1955,19 +1911,25 @@ export function useAppController({
             models: [...group.models],
           })));
         } catch (error) {
-          refreshGate.reset();
+          if (modelCompatibilityRefreshRef.current !== refresh) return;
+          refresh.gate.reset();
           setModelCompatibilityPolicy((current) => ({ ...current, status: "error", error: String(error) }));
         }
-      })();
-      modelCompatibilityRefreshInFlightRef.current = request;
-      try {
-        await request;
-      } finally {
-        if (modelCompatibilityRefreshInFlightRef.current === request) {
-          modelCompatibilityRefreshInFlightRef.current = null;
-        }
-      }
-    }
+      })().finally(() => { refresh.inFlight = undefined; });
+      return refresh.inFlight;
+    }, [modelCompatibilityContext]);
+
+  const watchModelCompatibilityPolicy = React.useCallback(() => {
+      void refreshModelCompatibilityPolicy();
+      const timer = window.setInterval(() => {
+        if (document.visibilityState === "visible") void refreshModelCompatibilityPolicy();
+      }, UI_SNAPSHOT_AUTO_REFRESH_MS);
+      return () => window.clearInterval(timer);
+    }, [refreshModelCompatibilityPolicy]);
+
+  useEffect(() => {
+      if (tab === "access" && modelAliasPreviewOpen) return watchModelCompatibilityPolicy();
+    }, [tab, modelAliasPreviewOpen, watchModelCompatibilityPolicy]);
 
   async function saveModelCompatibilityPolicy() {
       if (modelCompatibilityPolicy.status !== "ready" || modelCompatibilitySaving) return;
@@ -2427,6 +2389,26 @@ export function useAppController({
       })();
       routingPreferenceSavesRef.current.set(preference, saving);
       await saving;
+    }
+
+  async function saveMediaSkillTools(tools: string[]) {
+      if (configActionInFlightRef.current || routingPreferenceSavesRef.current.has("media_skill_tools")) {
+        throw new Error(tr("common.saving"));
+      }
+      const saving = (async () => {
+        const selected = await invoke<string[]>("save_media_skill_tools", { tools });
+        configRef.current = { ...configRef.current, media_skill_tools: selected };
+        savedConfigRef.current = { ...savedConfigRef.current, media_skill_tools: selected };
+        setConfig(configRef.current);
+        setSavedConfig(savedConfigRef.current);
+      })();
+      // A subsequent full save waits for completion. The editor owns any error.
+      routingPreferenceSavesRef.current.set("media_skill_tools", saving.catch(() => {}));
+      try {
+        await saving;
+      } finally {
+        routingPreferenceSavesRef.current.delete("media_skill_tools");
+      }
     }
 
   async function saveAccessConfig() {
@@ -2991,7 +2973,6 @@ export function useAppController({
         waitingReason,
         checkedAt,
       });
-      setAutoInstallUpdatesState(status.automatic);
       setAppMeta((current) => ({
         ...current,
         updateSources: status.sources.length > 0
@@ -3003,25 +2984,8 @@ export function useAppController({
       }));
     }
 
-  function setAutoInstallUpdates(enabled: boolean) {
-      if (!RELEASE_UPDATES_ENABLED) return;
-      setAutoInstallUpdatesState(enabled);
-      if (!isTauriRuntime()) return;
-      void invoke<NativeUpdateStatus>("set_automatic_updates", { enabled })
-        .then((status) => {
-          clearLegacyAutoInstallUpdatesPreference();
-          applyNativeUpdateStatus(status);
-        })
-        .catch((error) => {
-          recordAppLog(`native updater preference: ${String(error)}`, "error");
-          void invoke<NativeUpdateStatus>("native_update_status")
-            .then(applyNativeUpdateStatus)
-            .catch(() => undefined);
-        });
-    }
-
   async function checkAndDownloadUpdate(silent = false) {
-      if (!RELEASE_UPDATES_ENABLED) return;
+      if (!RELEASE_UPDATES_SUPPORTED) return;
       if (!isTauriRuntime()) {
         if (!silent) showToast(tr("updates.desktopOnly"), "error", 4200);
         return;
@@ -3031,6 +2995,7 @@ export function useAppController({
         return;
       }
       try {
+        setUpdateState((current) => ({ ...current, status: "checking", error: undefined }));
         const status = await invoke<NativeUpdateStatus>("request_native_update_check");
         applyNativeUpdateStatus(status);
       } catch (error) {
@@ -3603,6 +3568,9 @@ export function useAppController({
           const persistedOriginal = savedConfigRef.current.channels.find(
             (item) => item.id === channelArg.id,
           );
+          if (!persistedOriginal && needsDetection && !validationWarning) {
+            channel = { ...channel, enabled: true };
+          }
           let currentChannels = configRef.current.channels;
           if (channel.id !== channelArg.id && persistedOriginal) {
             currentChannels = currentChannels.map(
@@ -3630,7 +3598,7 @@ export function useAppController({
             showToast(tr("supplier.messages.savedRuntimeValidationFailed", { error: validationWarning }), "error", 6200);
             return;
           }
-          if (channelIsPlatformPooled(channel) && (supplierStatus.running || supplierStatus.starting)) {
+          if (channelIsPlatformPooled(channel) && (supplierStatus.running || supplierStatus.starting || (!persistedOriginal && accountStateRef.current === "signed_in"))) {
             if (needsDetection || channelRuntimeNeedsActivation(persistedOriginal, channel)) {
               const ensured = await startSupplierChannelRuntime(channel.id);
               const finalSupplierStatus = await waitForSupplierPlatformAck(channel.id, ensured);
@@ -3741,61 +3709,8 @@ export function useAppController({
         setSelectedChannelId(channelArg.id);
         setSupplierStartingChannelId(channelArg.id);
         setSupplierTestResult({ status: "running", model: targetModel });
-        if (channelArg.source_driver === "lan_share") {
-          try {
-            const stagedChannel = { ...channelArg, enabled: false, share_enabled: false };
-            const nextChannels = configRef.current.channels.map((item) => (
-              item.id === stagedChannel.id ? stagedChannel : item
-            ));
-            await persistConfig({
-              ...configRef.current,
-              channels: nextChannels,
-              supplier: supplierFromChannel(nextChannels[0]),
-            });
-            const st = await activateSupplierChannelRuntime(stagedChannel.id);
-            const latest = await invoke<ClientConfigV5Wire>("get_config");
-            const normalizedLatest = hydrateClientConfigV5(latest);
-            const nextDraft = overlayAccessConfig(
-              normalizedLatest,
-              configRef.current,
-              savedConfigRef.current,
-            );
-            configRef.current = nextDraft;
-            savedConfigRef.current = normalizedLatest;
-            setConfig(nextDraft);
-            setSavedConfig(normalizedLatest);
-            const activatedChannel = normalizedLatest.channels.find(
-              (item) => item.id === stagedChannel.id,
-            ) ?? stagedChannel;
-            const channelHealth = st.channels?.find(
-              (item) => item.channel_id === stagedChannel.id,
-            );
-            if (!channelHealth || channelHealth.status !== "available") {
-              throw new Error(channelHealth?.message || tr("supplier.messages.liveValidationFailed"));
-            }
-            setSupplierModels(activatedChannel.models);
-            setSupplierTestResult({
-              status: "success",
-              latencyMs: channelHealth.latency_ms,
-              upstreamHttpVersion: channelHealth.upstream_http_version,
-              model: channelHealth.model || activatedChannel.upstream_model,
-              content: tr("lanShare.channelEnabled"),
-            });
-            showToast(tr("lanShare.channelEnabled"), "success");
-          } catch (error) {
-            setSupplierTestResult({
-              status: "error",
-              model: targetModel,
-              error: localizedError(error),
-            });
-            showToast(localizedError(error), "error", 4200);
-          } finally {
-            setSupplierStartingChannelId(null);
-          }
-          return;
-        }
         try {
-          const stagedChannel = { ...channelArg, enabled: false, share_enabled: false };
+          const stagedChannel = { ...channelArg, enabled: false };
           const currentChannels = channels.map(
             (item) => item.id === stagedChannel.id ? stagedChannel : item,
           );
@@ -3804,9 +3719,7 @@ export function useAppController({
             channels: currentChannels,
             supplier: supplierFromChannel(currentChannels[0]),
           });
-          const startedStatus = await activateSupplierChannelRuntime(stagedChannel.id);
-          setSupplierStatus(startedStatus);
-          const st = await waitForSupplierPlatformAck(stagedChannel.id, startedStatus);
+          const st = await activateSupplierChannelRuntime(stagedChannel.id);
           setSupplierStatus(st);
           const latest = await invoke<ClientConfigV5Wire>("get_config");
           const normalizedLatest = hydrateClientConfigV5(latest);
@@ -3837,46 +3750,7 @@ export function useAppController({
             model: channelHealth?.model || activatedChannel.upstream_model,
             content: channelHealth?.message || tr("supplier.messages.liveValidationStarted"),
           });
-          const channelName = activatedChannel.name || activatedChannel.id;
-          const channelTransport = supplierChannelTransportForChannel(st, activatedChannel.id);
-          const routeStatus = supplierRouteStatusForChannel(st, activatedChannel.id);
-          const routeDetail = supplierRouteStatusDetail(routeStatus);
-          if (
-            isEstablishedSupplierTransport(channelTransport?.active_transport)
-            && channelTransport?.platform_registered === true
-          ) {
-            if (routeDetail && !supplierRouteStatusSuppressesToast(routeStatus)) {
-              showToast(
-                tr("supplier.messages.localValidatedWithRoute", {
-                  channel: channelName,
-                  detail: routeDetail,
-                }),
-                supplierRouteStatusBlocksReady(routeStatus) ? "info" : "success",
-                5200,
-              );
-            } else {
-              showToast(tr("supplier.messages.platformOnline", {
-                channel: channelName,
-              }), "success");
-            }
-          } else if (account.status.state !== "signed_in") {
-            showToast(tr("supplier.messages.localValidatedSignInLater", {
-              channel: channelName,
-            }), "info", 5200);
-          } else if (channelTransport?.last_transport_error || st.last_transport_error) {
-            showToast(
-              tr("supplier.messages.platformConnectionIncomplete", {
-                channel: channelName,
-                error: channelTransport?.last_transport_error || st.last_transport_error,
-              }),
-              "error",
-              6200,
-            );
-          } else {
-            showToast(tr("supplier.messages.platformNotConfirmed", {
-              channel: channelName,
-            }), "info", 5200);
-          }
+          showToast(tr("supplier.localChannelReady"), "success");
         } catch (error) {
           setSupplierStatus((current) => ({ ...current, starting: false }));
           setPendingSupplierChannelIds([]);
@@ -3892,10 +3766,40 @@ export function useAppController({
       });
     }
 
+  async function setMarketSharing(channel: ChannelConfig) {
+      const enabled = !channel.share_enabled;
+      if (enabled && !await askConfirm({
+        title: tr("supplier.shareToMarket"),
+        message: tr("supplier.shareConfirmation", {
+          name: channel.name,
+          models: channel.models.slice(0, 5).map(modelDisplayName).join(", ") + (channel.models.length > 5 ? "…" : ""),
+          count: channel.models.length,
+          ratio: channel.price_ratio,
+        }),
+        confirmText: tr("supplier.shareToMarket"),
+      })) return;
+      await runSupplierChannelOperation(channel.id, "saving", async () => {
+        try {
+          const status = await invoke<SupplierStatus>("set_channel_market_sharing", { channelId: channel.id, enabled });
+          supplierStatusRef.current = status;
+          setSupplierStatus(status);
+          showToast(tr(enabled ? "supplier.sharingRequested" : "supplier.sharingStopped"), "success");
+        } finally {
+          // Consent is durable even if subsequently opening the platform transport failed.
+          const authoritative = hydrateClientConfigV5(await invoke<ClientConfigV5Wire>("get_config"));
+          const draft = overlayAccessConfig(authoritative, configRef.current, savedConfigRef.current);
+          configRef.current = draft;
+          savedConfigRef.current = authoritative;
+          setConfig(draft);
+          setSavedConfig(authoritative);
+        }
+      });
+    }
+
   async function stopSelectedChannel(channel = selectedChannel) {
       await runSupplierChannelOperation(channel.id, "disabling", async () => {
         try {
-          const nextChannels = channels.map((item) => item.id === channel.id ? { ...item, enabled: false, share_enabled: false } : item);
+          const nextChannels = channels.map((item) => item.id === channel.id ? { ...item, enabled: false } : item);
           const runningChannelIds = runnableChannelIds(activeSupplierChannelIds(channel.id), { ...config, channels: nextChannels });
           const shouldKeepSupplierRunning = runningChannelIds.length > 0;
           const next = normalizeConfigForSave({
@@ -4406,30 +4310,6 @@ export function useAppController({
       resolve?.(confirmed);
     }
 
-  function askToolRemove(dialog: ToolRemoveDialogState) {
-      toolRemoveResolverRef.current?.("cancel");
-      return new Promise<ToolRemoveDecision>((resolve) => {
-        toolRemoveResolverRef.current = resolve;
-        setToolRemoveDialog(dialog);
-      });
-    }
-
-  function resolveToolRemoveDialog(decision: ToolRemoveDecision) {
-      const resolve = toolRemoveResolverRef.current;
-      toolRemoveResolverRef.current = null;
-      setToolRemoveDialog(null);
-      resolve?.(decision);
-    }
-
-  function toolNativeRemoveOption(tool: string) {
-      const key = tool === "claude-desktop" ? "claudeDesktop" : tool;
-      if (!matchesNativeRemoveTool(tool)) return undefined;
-      return {
-        title: tr(`toolOperations.removeModes.nativeOptions.${key}.title`),
-        description: tr(`toolOperations.removeModes.nativeOptions.${key}.description`),
-      };
-    }
-
   function beginToolOperation(tool: string) {
       if (toolOperationRunningRef.current[tool]) {
         return false;
@@ -4478,7 +4358,6 @@ export function useAppController({
       title: string,
       action: "configure" | "launch" | "remove",
       claudeSettings?: ClaudeModelSettings,
-      removeMode?: ToolRemoveMode,
       closeRunningProcessConfirmed = false,
       appliedSelections?: { protocol?: ToolProtocolId; codexModelSource: CodexModelSource },
     ): Promise<ToolApplyResult | null> {
@@ -4527,7 +4406,6 @@ export function useAppController({
             claudeModelSettings: effectiveClaudeSettings,
             codexModelSource: tool === "codex" && backendAction === "apply"
               ? appliedSelections?.codexModelSource ?? codexModelSource : undefined,
-            removeMode: backendAction === "remove" ? removeMode : undefined,
             confirmationToken: confirmationToken,
             restart: action === "launch",
           });
@@ -4577,11 +4455,8 @@ export function useAppController({
                 : tr("toolOperations.dialogs.removeTitle", { tool: title }),
               message: response.running
                 ? tr("toolOperations.dialogs.runningMessage", { action: actionText })
-                : tool === "codex"
-                  ? tr("toolOperations.dialogs.removeCodexMessage", { tool: title })
-                  : tr("toolOperations.dialogs.removeMessage", { tool: title }),
+                : tr(toolCleanupNotes[tool] ?? "toolOperations.cleanup.managed"),
               confirmText: actionText,
-              tone: action === "remove" ? "danger" : "default",
             });
         if (!confirmed) return null;
         updateToolOperationLabel(
@@ -4687,7 +4562,6 @@ export function useAppController({
           title,
           restartAfterConfig ? "launch" : "configure",
           effectiveClaudeSettings,
-          undefined,
           closeRunningProcessConfirmed,
           appliedSelections,
         );
@@ -4867,7 +4741,7 @@ export function useAppController({
           onProgress(card.title);
           started = beginToolOperation(card.tool);
           if (!started) throw new Error("TOOL_MODEL_INJECTION_BUSY");
-          const applied = await executeToolConfigOperation(card.tool, card.title, "configure", undefined, undefined, false, {
+          const applied = await executeToolConfigOperation(card.tool, card.title, "configure", undefined, false, {
             protocol: toolProtocolId(status.details?.tool_protocol) ?? undefined,
             codexModelSource: codexModelSourceFromStatus(status),
           });
@@ -4941,13 +4815,24 @@ export function useAppController({
       }
     }
 
+  function toolRemovalAttentionReason(title: string, result: ToolApplyResult, checked: ToolApplyResult) {
+    if (toolHasManagedConfig(checked)) return tr("toolOperations.removeStillDetected", { tool: title });
+    const sessionIndexError = result.details?.session_migrated_sqlite_error;
+    if (sessionIndexError) return tr("labels.sessionIndexFailed", { error: sessionIndexError });
+    const sessionIndexInvalidRows = Number.parseInt(result.details?.session_migrated_sqlite_invalid_rows ?? "0", 10);
+    if (sessionIndexInvalidRows > 0) return tr("labels.sessionIndexInvalidRows", { count: sessionIndexInvalidRows });
+    const sessionSyncError = result.details?.session_sync_error;
+    return sessionSyncError ? tr("labels.sessionMigrationFailed", { error: sessionSyncError }) : "";
+  }
+
   async function removeToolConfig(tool: string, title: string) {
-      const removeDecision = await askToolRemove({
-        tool,
-        toolTitle: title,
-        nativeOption: toolNativeRemoveOption(tool),
+      const confirmed = await askConfirm({
+        title: tr("toolOperations.dialogs.removeTitle", { tool: title }),
+        message: tr(toolCleanupNotes[tool] ?? "toolOperations.cleanup.managed"),
+        hint: tr("toolOperations.cleanup.closeWarning", { tool: title }),
+        confirmText: tr("toolOperations.actions.removeConfiguration"),
       });
-      if (removeDecision === "cancel") return;
+      if (!confirmed) return;
       if (!beginToolOperation(tool)) return;
       try {
         const result = await executeToolConfigOperation(
@@ -4955,7 +4840,6 @@ export function useAppController({
           title,
           "remove",
           undefined,
-          removeDecision,
           true,
         );
         if (!result) return;
@@ -4968,29 +4852,7 @@ export function useAppController({
         try {
           updateToolOperationLabel(tool, tr("toolOperations.progress.refreshStatus"));
           const checked = await refreshSingleToolConfigStatus(tool, resetClaudeSettings);
-          const noManifestOwnership = removeDecision === "restore_pre_const"
-            && tool !== "codex"
-            && result.details?.manifest_entries_restored === "0"
-            && result.files.length === 0;
-          const sessionIndexError = result.details?.session_migrated_sqlite_error;
-          const sessionIndexInvalidRows = Number.parseInt(
-            result.details?.session_migrated_sqlite_invalid_rows ?? "0",
-            10,
-          );
-          const sessionSyncError = result.details?.session_sync_error;
-          const attentionReason = noManifestOwnership
-            ? tr("toolOperations.removeNoOwnedConfig", { tool: title })
-            : toolHasManagedConfig(checked)
-              ? tr("toolOperations.removeStillDetected", { tool: title })
-              : sessionIndexError
-                ? tr("labels.sessionIndexFailed", { error: sessionIndexError })
-                : sessionIndexInvalidRows > 0
-                  ? tr("labels.sessionIndexInvalidRows", {
-                      count: sessionIndexInvalidRows,
-                    })
-                  : sessionSyncError
-                    ? tr("labels.sessionMigrationFailed", { error: sessionSyncError })
-                    : "";
+          const attentionReason = toolRemovalAttentionReason(title, result, checked);
           const needsAttention = Boolean(attentionReason);
           await askConfirm({
             title: needsAttention
@@ -5084,8 +4946,13 @@ export function useAppController({
               count: targets.length,
               skipped,
             }),
+          hint: action === "remove"
+            ? targets.flatMap(({ tool }) => {
+                const note = toolCleanupNotes[tool];
+                return note ? [tr(note)] : [];
+              }).join("\n") || undefined
+            : undefined,
           confirmText: tr("access.batchConfirm"),
-          tone: action === "remove" ? "danger" : "default",
         });
         if (!confirmed) return;
 
@@ -5123,9 +4990,7 @@ export function useAppController({
                   card.title,
                   "remove",
                   undefined,
-                  "restore_pre_const",
                   true,
-                  undefined,
                 );
                 if (!result) throw new Error("TOOL_BATCH_ITEM_FAILED");
                 if (card.tool === "claude") {
@@ -5136,7 +5001,8 @@ export function useAppController({
                   card.tool,
                   card.tool === "claude" ? { ...DEFAULT_CLAUDE_MODEL_SETTINGS } : undefined,
                 );
-                if (toolHasManagedConfig(checked)) throw new Error("TOOL_BATCH_REMOVE_INCOMPLETE");
+                const attentionReason = toolRemovalAttentionReason(card.title, result, checked);
+                if (attentionReason) throw new Error(attentionReason);
               } finally {
                 finishToolOperation(card.tool);
               }
@@ -5526,7 +5392,7 @@ export function useAppController({
           ? imported.created_at_unix_ms
           : Date.now(),
         enabled: false,
-        share_enabled: false,
+        share_enabled: sourceDriverAllowsMarketSharing(imported.source_driver) && newChannelMarketSharing,
         models: [],
         public_model: "",
         upstream_model: "",
@@ -5540,12 +5406,7 @@ export function useAppController({
         (item) => item.id === importedChannel.id,
       );
       const channel = existing ?? importedChannel;
-      const retainedChannel = existing
-        ? { ...existing, enabled: false, share_enabled: false }
-        : channel;
-      const stagedChannels = existing
-        ? currentChannels.map((item) => item.id === existing.id ? retainedChannel : item)
-        : [...currentChannels, retainedChannel];
+      const stagedChannels = existing ? currentChannels : [...currentChannels, channel];
       let channelRetained = false;
       try {
         await persistConfig({
@@ -5559,7 +5420,9 @@ export function useAppController({
         setSupplierAddOpen(false);
         setSupplierDetailOpen(true);
         setSupplierModels(existing?.models ?? []);
-        const status = await activateSupplierChannelRuntime(channel.id, supplierStatusRef.current);
+        const status = existing?.enabled
+          ? await invoke<SupplierStatus>("supplier_status")
+          : await activateSupplierChannelRuntime(channel.id, supplierStatusRef.current);
         supplierStatusRef.current = status;
         setSupplierStatus(status);
         const latestWire = await invoke<ClientConfigV5Wire>("get_config");
@@ -5620,6 +5483,7 @@ export function useAppController({
         serverWsUrl,
         serverQuicUrl,
       });
+      initialChannel.share_enabled &&= newChannelMarketSharing;
       if (lanShareConnection) {
         initialChannel = normalizeChannelV5({
           ...initialChannel,
@@ -5743,6 +5607,7 @@ export function useAppController({
     refreshVsCodeExtensionConfigStatuses,
     saveToolModelInjectionSettings,
     saveRoutingPreference,
+    saveMediaSkillTools,
     toolProtocolDraftTouchedRef,
     toolProtocolSelections,
     codexModelSource,
@@ -5775,6 +5640,9 @@ export function useAppController({
     subscriptionImportCanRetry: subscriptionImportRetryChannel !== null,
     supplierAddOpen,
     setSupplierAddOpen,
+    openSupplierAdd,
+    newChannelMarketSharing,
+    setNewChannelMarketSharing,
     supplierDetailOpen,
     supplierStartingChannelId,
     pendingSupplierChannelIds,
@@ -5820,8 +5688,6 @@ export function useAppController({
     setSupplierTestPrompt,
     supplierTestResult,
     updateState,
-    autoInstallUpdates,
-    setAutoInstallUpdates,
     autostartEnabled,
     autostartBusy,
     changeAutostart,
@@ -5839,7 +5705,6 @@ export function useAppController({
     showGuidanceNotice,
     dismissGuidanceNotice: dismissGuidanceNoticeByKey,
     confirmDialog,
-    toolRemoveDialog,
     appLogs,
     setAppLogs,
     logOpen,
@@ -5910,6 +5775,7 @@ export function useAppController({
     logText,
     handleDiagnosticAction,
     refreshModelCompatibilityPolicy,
+    watchModelCompatibilityPolicy,
     saveModelCompatibilityPolicy,
     resetModelCompatibilityPolicy,
     save,
@@ -5939,6 +5805,7 @@ export function useAppController({
     supplierChannelNeedsDetection,
     saveSupplierChanges,
     startSupplier,
+    setMarketSharing,
     stopSelectedChannel,
     refreshSupplierModels,
     refreshRoutePlan,
@@ -5949,7 +5816,6 @@ export function useAppController({
     toggleDebugTargetGroup,
     askConfirm,
     resolveConfirmDialog,
-    resolveToolRemoveDialog,
     applyToolConfig,
     toolBatchRunning,
     toolBatchOperation,

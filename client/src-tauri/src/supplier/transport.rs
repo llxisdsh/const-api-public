@@ -406,6 +406,7 @@ fn supplier_agent_drained(
         && requests.is_empty()
         && queued.is_empty()
         && replay.unacknowledged.is_empty()
+        && !requests.accepted_videos().pending()
 }
 
 pub(crate) fn supplier_heartbeat_interval() -> Duration {
@@ -530,6 +531,28 @@ impl SupplierAgentConfig {
 
     pub(crate) fn endpoint_key(&self) -> String {
         format!("{}|{}", self.server_quic_url, self.server_ws_url)
+    }
+
+    fn supplier_for_request(
+        &self,
+        channel: &str,
+        unit: &str,
+        message: &SupplierMessage,
+        tasks: Option<&SupplierRequestTasks>,
+    ) -> Option<SupplierConfig> {
+        use crate::surface::ApiOperation;
+        let active = self.supplier_for_target(channel, unit);
+        let operation = message.payload.get("wire").and_then(|wire| wire.get("operation")).and_then(|value| value.as_str());
+        // A shared channel can switch accounts. Downloads use the job's owner
+        // while shared; after withdrawal only status reads for settlement survive.
+        if (operation == Some(ApiOperation::VideosGet.as_str())
+            || (active.is_some() && operation == Some(ApiOperation::VideosContent.as_str())))
+            && let Some(tasks) = tasks
+            && let Some(owner) = tasks.accepted_videos().supplier_for_read(&self.client_id, channel, unit, message)
+        {
+            return Some(owner);
+        }
+        active.cloned()
     }
 
     pub(crate) fn supplier_for_target(
@@ -1739,7 +1762,7 @@ pub(crate) fn handle_supplier_connection_outcome(
 pub(crate) async fn run_supplier_agent(
     mut config: SupplierAgentConfig,
     mut shutdown: oneshot::Receiver<()>,
-    mut register_update: mpsc::Receiver<SupplierRegistrationUpdate>,
+    mut register_update: RegistrationReceiver,
     transport_state: Arc<StdMutex<SupplierTransportSnapshot>>,
 ) { log::error!("Hosted supply is unavailable in the local edition"); }
 
@@ -1750,7 +1773,7 @@ pub(crate) async fn run_supplier_websocket_connection(
     config: &mut SupplierAgentConfig,
     ws_url: &str,
     shutdown: &mut oneshot::Receiver<()>,
-    register_update: &mut mpsc::Receiver<SupplierRegistrationUpdate>,
+    register_update: &mut RegistrationReceiver,
     transport_state: &Arc<StdMutex<SupplierTransportSnapshot>>,
 ) -> SupplierRunOutcome {
     let (request_outbound, mut request_outbound_rx) = mpsc::channel::<SupplierMessage>(256);
@@ -1779,7 +1802,7 @@ async fn run_supplier_websocket_connection_with_runtime(
     config: &mut SupplierAgentConfig,
     ws_url: &str,
     shutdown: &mut oneshot::Receiver<()>,
-    register_update: &mut mpsc::Receiver<SupplierRegistrationUpdate>,
+    register_update: &mut RegistrationReceiver,
     transport_state: &Arc<StdMutex<SupplierTransportSnapshot>>,
     request_outbound: &SupplierOutbound,
     request_outbound_rx: &mut mpsc::Receiver<SupplierMessage>,
@@ -1794,7 +1817,7 @@ pub(crate) async fn run_supplier_quic_connection(
     config: &mut SupplierAgentConfig,
     quic_url: &str,
     shutdown: &mut oneshot::Receiver<()>,
-    register_update: &mut mpsc::Receiver<SupplierRegistrationUpdate>,
+    register_update: &mut RegistrationReceiver,
     transport_state: &Arc<StdMutex<SupplierTransportSnapshot>>,
 ) -> SupplierRunOutcome {
     let (request_outbound, mut request_outbound_rx) = mpsc::channel::<SupplierMessage>(256);
@@ -1823,7 +1846,7 @@ async fn run_supplier_quic_connection_with_runtime(
     config: &mut SupplierAgentConfig,
     quic_url: &str,
     shutdown: &mut oneshot::Receiver<()>,
-    register_update: &mut mpsc::Receiver<SupplierRegistrationUpdate>,
+    register_update: &mut RegistrationReceiver,
     transport_state: &Arc<StdMutex<SupplierTransportSnapshot>>,
     request_outbound: &SupplierOutbound,
     request_outbound_rx: &mut mpsc::Receiver<SupplierMessage>,
@@ -1850,6 +1873,32 @@ pub(crate) fn apply_supplier_registration_update(
     let register_config = current.with_suppliers(update.suppliers.clone());
     merge_supplier_registration_update(&mut current.suppliers, update.suppliers);
     (register_config, min_interval)
+}
+
+// A reconnect authenticates before the normal receive loop can process queued
+// changes. The first declaration must reflect withdrawals made during that gap.
+fn initial_supplier_registration(
+    current: &mut SupplierAgentConfig,
+    changes: &mut RegistrationReceiver,
+    tasks: &SupplierRequestTasks,
+) -> SupplierAgentConfig {
+    let mut removed: Vec<SupplierConfig> = Vec::new();
+    while let Ok(update) = changes.try_recv() {
+        if update.suppliers.is_empty() {
+            removed.clear();
+        }
+        for supplier in &update.suppliers {
+            removed.retain(|item| item.channel_id != supplier.channel_id);
+            if supplier.registration_removed {
+                removed.push(supplier.clone());
+            }
+        }
+        merge_supplier_registration_update(&mut current.suppliers, update.suppliers);
+        tasks.stop_removed_duplex_channels(current);
+    }
+    let mut declaration = current.clone();
+    declaration.suppliers.extend(removed);
+    declaration
 }
 
 pub(crate) fn merge_supplier_registration_update(
@@ -2074,7 +2123,7 @@ async fn handle_supplier_inbound_text_with_tasks(
                 .get("target_supplier_unit_id")
                 .and_then(|value| value.as_str())
                 .unwrap_or_default();
-            let Some(supplier) = config.supplier_for_target(target_channel_id, target_supplier_unit_id) else {
+            let Some(supplier) = config.supplier_for_request(target_channel_id, target_supplier_unit_id, &message, request_tasks) else {
                 let response = SupplierMessage {
                     output_credit: None,
                     id: message.id,
@@ -2095,13 +2144,13 @@ async fn handle_supplier_inbound_text_with_tasks(
             };
             if let Some(tasks) = request_tasks {
                 if message.kind == "duplex_open" {
-                    tasks.spawn_duplex(client.snapshot(), supplier.clone(), message, request_outbound.clone());
+                    tasks.spawn_duplex(client.snapshot(), supplier, message, request_outbound.clone());
                 } else {
-                    tasks.spawn(client.snapshot(), supplier.clone(), message, request_outbound.clone());
+                    tasks.spawn(client.snapshot(), supplier, message, request_outbound.clone());
                 }
             } else if message.kind == "http_request" {
                 execute_supplier_request_and_report(
-                    &client.snapshot(), supplier, message, request_outbound,
+                    &client.snapshot(), &supplier, message, request_outbound, None,
                 )
                 .await;
             }

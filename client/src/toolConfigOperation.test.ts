@@ -1,9 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import mainSource from "./main.tsx?raw";
 import controllerSource from "./appController.tsx?raw";
-import appControlsSource from "./components/AppControls.tsx?raw";
 import zhLocaleSource from "./i18n/locales/zh-CN.json?raw";
 import tauriMainSource from "../src-tauri/src/main.rs?raw";
 import operationCoreSource from "../src-tauri/src/tool_config/production/core.rs?raw";
@@ -13,15 +10,11 @@ const sharedUseSource = controllerSource.slice(
   controllerSource.indexOf("  async function useTool("),
   controllerSource.indexOf("  async function removeToolConfig("),
 );
-const dialogStylesSource = readFileSync(
-  resolve(process.cwd(), "src/styles/dialogs-and-supplier.css"),
-  "utf8",
-);
 const zhLocale = JSON.parse(zhLocaleSource) as {
   labels: Record<string, string>;
   toolOperations: {
     dialogs: Record<string, string>;
-    removeModes: Record<string, string>;
+    cleanup: Record<string, string>;
   };
 };
 const zhToolOperations = zhLocale.toolOperations;
@@ -121,20 +114,52 @@ describe("tool config operation IPC", () => {
   });
 
   it("routes restart through the registered atomic Tauri command", () => {
-    expect(tauriMainSource).toMatch(
-      /async fn execute_tool_config_operation[\s\S]*?restart: bool/,
+    const handlers = tauriMainSource.match(/tauri::generate_handler!\[([\s\S]*?)\]\)/)?.[1] ?? "";
+    expect(handlers.split(",").map((entry) => entry.trim())).toEqual(
+      expect.arrayContaining([
+        "begin_tool_config_operation",
+        "execute_tool_config_operation",
+        "cancel_tool_config_operation",
+      ]),
     );
-    expect(
-      tauriMainSource.match(/execute_atomic_tool_config_operation\(/g),
-    ).toHaveLength(2);
-    expect(
-      tauriMainSource.match(/execute_previewed_tool_config_operation\(/g),
-    ).toHaveLength(8);
-    expect(
-      tauriMainSource.match(/execute_atomic_tool_config_operation_with_preview\(/g),
-    ).toHaveLength(2);
-    expect(tauriMainSource).toMatch(
-      /async fn execute_trae_tool_config_operation[\s\S]*?execute_atomic_tool_config_operation_with_preview/,
+    const rustFunction = (name: string) =>
+      tauriMainSource.match(new RegExp("\\bfn " + name + "\\b[\\s\\S]*?^}", "m"))?.[0] ?? "";
+    function expectSteps(source: string, steps: RegExp[]) {
+      for (const step of steps) {
+        const match = step.exec(source);
+        expect(match, step.source).not.toBeNull();
+        if (match) source = source.slice(match.index + match[0].length);
+      }
+    }
+    expectSteps(rustFunction("execute_tool_config_operation"), [
+      /start_tool_config_operation\(&operation_id, &tool, action, restart\)/,
+      /acquire_tool_config_operation_lease\(&lease_operation\)/,
+      /execute_tool_config_operation_inner\(\s*&state,\s*&operation,/,
+      /confirmation_token,/,
+      /finish_tool_config_operation\(&operation, result\.is_ok\(\)\)/,
+      /drop\(lease\)/,
+    ]);
+    const dispatch = rustFunction("execute_tool_config_operation_inner");
+    expect(dispatch).toMatch(
+      /if action == ToolConfigAction::Remove[\s\S]*?execute_atomic_tool_config_operation\(/,
+    );
+    const hermes = dispatch.match(/else if tool == "hermes" \{([\s\S]*?)\n    } else/)?.[1] ?? "";
+    expectSteps(hermes, [
+      /execute_previewed_tool_config_operation\(\s*operation,/,
+      /confirmation_token\.as_deref\(\)/,
+      /apply_hermes_config_for_protocol\([^)]*&image_models/,
+      /launch_tool_program_for_atomic_operation/,
+    ]);
+    expectSteps(rustFunction("execute_previewed_tool_config_operation"), [
+      /let apply_with_skill = \|\| \{[\s\S]*?apply\(\)\?[\s\S]*?sync_tool_image_skill\(/,
+      /execute_atomic_tool_config_operation_with_preview\(\s*operation,\s*protocol,\s*&context_digest,\s*confirmation_token,/,
+      /\|\| preview_tool_config_apply\(&?apply_with_skill\),\s*&?apply_with_skill,\s*launch,/,
+    ]);
+    expect(rustFunction("execute_codex_tool_config_operation_inner")).toContain(
+      "execute_atomic_tool_config_operation(",
+    );
+    expect(rustFunction("execute_trae_tool_config_operation")).toContain(
+      "execute_atomic_tool_config_operation_with_preview(",
     );
     expect(tauriMainSource).toMatch(
       /matches!\(\s*tool,\s*"workbuddy"\s*\|\s*"workbuddy-ai"\s*\|\s*"codebuddy"\s*\|\s*"codebuddy-cn"\s*\)/,
@@ -195,9 +220,9 @@ describe("tool config operation IPC", () => {
     expect(rendererSource).not.toContain("launchClaudeCodeRuntime");
   });
 
-  it("adds the restore path to successful configuration notices from both entry points", () => {
+  it("explains how to disconnect after successful configuration from either entry point", () => {
     expect(toolOperationExports.toolConfigSuccessNotice("Codex 配置完成。")).toBe(
-      "Codex 配置完成。 如需恢复原来的接入设置，右键该工具选择“取消配置”即可。",
+      "Codex 配置完成。 如需清理 CONST API 接入，右键该工具选择“取消配置”即可。",
     );
     expect(sharedUseSource).toContain("launchToolConfig(tool, title)");
     expect(mainSource).toContain("applyToolConfig(card.tool, card.title)");
@@ -236,7 +261,7 @@ describe("tool config operation IPC", () => {
       statusRefreshVerified: true,
     })).toEqual({
       title: "VS Code 已配置并启动",
-      message: expect.stringContaining("以后直接打开 VS Code，也可使用 CONST API。"),
+      message: expect.stringContaining("以后直接打开 VS Code 也可使用 CONST API。"),
       hint: "使用工具时请保持 CONST API 运行。",
       confirmText: "我知道了",
       mode: "notice",
@@ -311,29 +336,6 @@ describe("tool config operation IPC", () => {
     );
   });
 
-  it("uses one removal flow with an explicit mode and keeps restore as the default", () => {
-    expect(controllerSource).toMatch(
-      /askToolRemove\([\s\S]*?removeDecision === "cancel"[\s\S]*?executeToolConfigOperation\([\s\S]*?removeDecision/,
-    );
-    expect(appControlsSource).toContain('useState<ToolRemoveMode>("restore_pre_const")');
-    const nativeRemoveTools = controllerSource.match(
-      /const NATIVE_ROUTE_REMOVE_TOOLS = new Set\(\[[\s\S]*?\]\);/,
-    )?.[0] ?? "";
-    expect(nativeRemoveTools).toMatch(
-      /"codex"[\s\S]*?"claude"[\s\S]*?"claude-desktop"[\s\S]*?"gemini"/,
-    );
-    expect(nativeRemoveTools).not.toContain('"vscode"');
-    expect(controllerSource).toMatch(
-      /removeMode:\s*backendAction === "remove" \? removeMode : undefined/,
-    );
-    expect(operationCoreSource).toMatch(
-      /parse\(value: Option<&str>\)[\s\S]*?unwrap_or\("restore_pre_const"\)/,
-    );
-    expect(tauriMainSource).toMatch(
-      /remove_mode\.as_str\(\)[\s\S]*?remove_tool_config_by_name_with_mode/,
-    );
-  });
-
   it("folds normal process shutdown into the first removal confirmation", () => {
     expect(controllerSource).toMatch(
       /closeRunningProcessConfirmed = false[\s\S]*?processCloseAlreadyConfirmed =[\s\S]*?action === "remove" && closeRunningProcessConfirmed/,
@@ -342,36 +344,9 @@ describe("tool config operation IPC", () => {
       /const confirmed = processCloseAlreadyConfirmed\s*\? true\s*:\s*await askConfirm/,
     );
     expect(controllerSource).toMatch(
-      /executeToolConfigOperation\([\s\S]*?"remove",[\s\S]*?removeDecision,\s*true,/,
+      /executeToolConfigOperation\([\s\S]*?"remove",[\s\S]*?undefined,\s*true,/,
     );
-    expect(zhToolOperations.removeModes.restartWarning).toContain("自动关闭相关进程");
-  });
-
-  it("keeps the radio native-sized without the generic text-input rectangle", () => {
-    const radioRule = dialogStylesSource.match(
-      /\.tool-remove-option input\[type="radio"\]\s*\{[\s\S]*?\}/,
-    )?.[0] ?? "";
-    expect(radioRule).toContain("width: 16px");
-    expect(radioRule).toContain("min-height: 16px");
-    expect(radioRule).toContain("padding: 0");
-    expect(radioRule).toContain("box-shadow: none");
-    expect(dialogStylesSource).toContain(
-      '.tool-remove-option:has(input[type="radio"]:focus-visible)',
-    );
-    expect(dialogStylesSource).toMatch(
-      /\.tool-remove-option\s*\{[\s\S]*?background:\s*var\(--panel\)/,
-    );
-    const defaultBadgeRule = dialogStylesSource.match(
-      /\.tool-remove-option-badge\s*\{[\s\S]*?\}/,
-    )?.[0] ?? "";
-    expect(defaultBadgeRule).not.toMatch(/background|border-radius|padding/);
-    expect(appControlsSource).toContain('className="tool-remove-option-badge"');
-    expect(appControlsSource).not.toContain(
-      't("toolOperations.removeModes.chooseMessage")',
-    );
-    expect(appControlsSource).not.toContain(
-      't("toolOperations.removeModes.restoreOnlyMessage")',
-    );
+    expect(zhToolOperations.cleanup.closeWarning).toContain("自动关闭相关进程");
   });
 
   it("reports a non-blocking Codex session migration problem after native cleanup", () => {

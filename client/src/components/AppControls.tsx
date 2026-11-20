@@ -82,9 +82,6 @@ import type {
   ChannelCapabilityProfile,
   ConfirmDialogState,
   CustomBrandIcon,
-  ToolRemoveDecision,
-  ToolRemoveDialogState,
-  ToolRemoveMode,
 } from "../appTypes";
 
 const TOOL_MENU_EDGE_INSET = 12;
@@ -204,6 +201,23 @@ function hiddenToolMenuStyle(placement: HiddenToolMenuPlacement): React.CSSPrope
     bottom: placement.bottom === null ? "auto" : `${placement.bottom}px`,
     maxHeight: `${placement.maxHeight}px`,
   };
+}
+
+export function TrackSwitch({ label, describedBy, checked, onChange, children }: {
+  label: string;
+  describedBy: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  children?: string;
+}) {
+  return <span className={`supply-toggle ${checked ? "checked" : ""}`}>
+    <span className="supply-toggle-control">
+      <input type="checkbox" role="switch" aria-label={label} aria-describedby={describedBy}
+        checked={checked} onChange={(event) => onChange(event.currentTarget.checked)} />
+      <span className="supply-toggle-track" aria-hidden="true"><span /></span>
+    </span>
+    <span>{children ?? label}</span>
+  </span>;
 }
 
 export function ModelInput({ value, models, onChange }: { value: string; models: string[]; onChange: (value: string) => void }) {
@@ -616,6 +630,7 @@ type ClaudeModelRole = "opus" | "sonnet" | "haiku";
 export function ClaudeModelSettingsPanel({
   settings,
   models,
+  onWatchModels,
   loading,
   changed,
   disabled,
@@ -623,12 +638,14 @@ export function ClaudeModelSettingsPanel({
 }: {
   settings: ClaudeModelSettings;
   models: string[];
+  onWatchModels: () => () => void;
   loading: boolean;
   changed: boolean;
   disabled: boolean;
   onChange: (settings: ClaudeModelSettings) => void;
 }) {
   const { t } = useTranslation();
+  useEffect(onWatchModels, [onWatchModels]);
   const availableModels = Array.from(new Set(models
     .map((model) => model.trim())
     .filter(Boolean)));
@@ -908,94 +925,6 @@ export function BlockingConfirmDialog({
             onClick={() => onResolve(true)}
           >
             {dialog.confirmText || t("common.confirm")}
-          </button>
-        </div>
-      </div>
-    </DialogBackdrop>
-  );
-}
-
-export function ToolRemoveDialog({
-  dialog,
-  onResolve,
-}: {
-  dialog: ToolRemoveDialogState;
-  onResolve: (decision: ToolRemoveDecision) => void;
-}) {
-  const { t } = useTranslation();
-  const dialogId = useId().replace(/:/g, "");
-  const titleId = `tool-remove-title-${dialogId}`;
-  const warningId = `tool-remove-warning-${dialogId}`;
-  const [selectedMode, setSelectedMode] =
-    useState<ToolRemoveMode>("restore_pre_const");
-  useEscapeDismiss(() => onResolve("cancel"));
-
-  const option = (
-    mode: ToolRemoveMode,
-    title: string,
-    description: string,
-    badge?: string,
-  ) => (
-    <label
-      className={`tool-remove-option${selectedMode === mode ? " is-selected" : ""}`}
-    >
-      <input
-        type="radio"
-        name={`tool-remove-mode-${dialogId}`}
-        value={mode}
-        checked={selectedMode === mode}
-        onChange={() => setSelectedMode(mode)}
-      />
-      <span className="tool-remove-option-copy">
-        <span className="tool-remove-option-title">
-          <strong>{title}</strong>
-          {badge ? <span className="tool-remove-option-badge">{badge}</span> : null}
-        </span>
-        <small>{description}</small>
-      </span>
-    </label>
-  );
-
-  return (
-    <DialogBackdrop
-      className="confirm-backdrop"
-      aria-labelledby={titleId}
-      aria-describedby={warningId}
-    >
-      <div className="modal-panel confirm-modal tool-remove-modal">
-        <div>
-          <h2 id={titleId}>
-            {t("toolOperations.removeModes.title", { tool: dialog.toolTitle })}
-          </h2>
-        </div>
-        <div
-          className="tool-remove-options"
-          role="radiogroup"
-          aria-label={t("toolOperations.removeModes.selectionLabel")}
-        >
-          {option(
-            "restore_pre_const",
-            t("toolOperations.removeModes.restore.title"),
-            t("toolOperations.removeModes.restore.description"),
-            t("toolOperations.removeModes.defaultBadge"),
-          )}
-          {dialog.nativeOption
-            ? option(
-                "native_route",
-                dialog.nativeOption.title,
-                dialog.nativeOption.description,
-              )
-            : null}
-        </div>
-        <p id={warningId} className="tool-remove-warning">
-          {t("toolOperations.removeModes.restartWarning", { tool: dialog.toolTitle })}
-        </p>
-        <div className="confirm-actions">
-          <button type="button" className="quiet" onClick={() => onResolve("cancel")}>
-            {t("common.cancel")}
-          </button>
-          <button type="button" className="danger" onClick={() => onResolve(selectedMode)}>
-            {t("toolOperations.actions.removeConfiguration")}
           </button>
         </div>
       </div>

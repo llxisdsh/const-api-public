@@ -86,6 +86,7 @@ pub(crate) async fn forward_once(
     endpoint: &Endpoint,
     platform_api_key: &str,
 ) -> Result<warp::reply::Response> {
+    let stream_requested = platform_media_stream_requested(&method, path, raw_query, &headers, &body).await?;
     forward_once_to_base(
         method,
         path,
@@ -93,6 +94,7 @@ pub(crate) async fn forward_once(
         has_query,
         headers,
         body,
+        stream_requested,
         &client.clone().into(),
         cfg,
         &endpoint.base_url,
@@ -120,7 +122,7 @@ pub(crate) async fn forward_once_preferred(
     model_route_mode: PlatformModelRouteMode,
     upstream_attempt_budget: usize,
 ) -> Result<warp::reply::Response> {
-    let stream_requested = platform_request_is_stream(path, raw_query, &body);
+    let stream_requested = platform_media_stream_requested(&method, path, raw_query, &headers, &body).await?;
     transport.start_probe(endpoint.clone());
     if let Some((http3_client, http3_base_url)) = transport.http3_target(endpoint) {
         match forward_once_to_base(
@@ -130,6 +132,7 @@ pub(crate) async fn forward_once_preferred(
             has_query,
             headers.clone(),
             body.clone(),
+            stream_requested,
             &http3_client.into(),
             cfg,
             &http3_base_url,
@@ -161,6 +164,7 @@ pub(crate) async fn forward_once_preferred(
         has_query,
         headers,
         body,
+        stream_requested,
         transport.tcp_client(stream_requested),
         cfg,
         &endpoint.base_url,
@@ -190,6 +194,7 @@ async fn forward_once_to_base(
     has_query: bool,
     headers: warp::http::HeaderMap,
     body: bytes::Bytes,
+    stream_requested: bool,
     client: &crate::http_client::HttpClient,
     cfg: &ClientConfig,
     base_url: &str,
@@ -336,12 +341,31 @@ fn platform_request_timeout(stream_requested: bool) -> Option<std::time::Duratio
 
 fn platform_request_is_stream(path: &str, raw_query: &str, body: &[u8]) -> bool {
     crate::supplier::top_level_json_bool(body, "stream").unwrap_or(false)
+        || (path.ends_with("/audio/speech")
+            && crate::supplier::top_level_json_string(body, "stream_format").as_deref() == Some("sse"))
         || path.contains(":streamGenerateContent")
         || raw_query.split('&').any(|part| {
             part.split_once('=').is_some_and(|(key, value)| {
                 key.eq_ignore_ascii_case("alt") && value.eq_ignore_ascii_case("sse")
             })
         })
+}
+
+async fn platform_media_stream_requested(
+    method: &warp::http::Method,
+    path: &str,
+    raw_query: &str,
+    headers: &warp::http::HeaderMap,
+    body: &bytes::Bytes,
+) -> Result<bool> {
+    // Choose the streaming pool and replay policy from routing metadata, not
+    // from a JSON parser applied to raw multipart bytes. Send the original body.
+    let routing = if let Some(route) = crate::surface::resolve_api_route(method.as_str(), path, false) {
+        crate::media_request::media_routing_body(route.operation, headers, body).await?
+    } else {
+        body.clone()
+    };
+    Ok(platform_request_is_stream(path, raw_query, &routing))
 }
 
 fn http3_error_is_safe_to_fallback(method: &warp::http::Method, error: &anyhow::Error) -> bool {

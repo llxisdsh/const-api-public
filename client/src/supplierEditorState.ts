@@ -149,7 +149,7 @@ function editorSettings(channel: EditorSettings) {
     id: channel.id,
     name: channel.name,
     enabled: channel.enabled,
-    share_enabled: channel.enabled,
+    share_enabled: channel.share_enabled,
     default_model: channel.default_model,
     price_ratio: channel.price_ratio,
     node_id: channel.node_id,

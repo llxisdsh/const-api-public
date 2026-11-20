@@ -164,7 +164,7 @@ main > section {
 }
 
 main {
-  grid-template-columns: 144px minmax(0, 1fr);
+  grid-template-columns: 128px minmax(0, 1fr);
 }
 
 .renderer-failure {

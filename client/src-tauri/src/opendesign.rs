@@ -4,7 +4,7 @@ use crate::{
     model::{ChannelConfig, QuotaWindow},
     model_catalog::{ModelCatalogKind, ModelObservation},
     source_driver::SourceDriverId,
-    upstream_transport::AdaptiveRequestBuilderExt,
+    upstream_transport::UpstreamRequestBuilderExt,
 };
 use anyhow::{Context, Result, anyhow, ensure};
 use reqwest::{
@@ -155,7 +155,7 @@ async fn control_json(client: &Client, url: &str, key: &str) -> Result<Value> {
         .bearer_auth(key)
         .header("accept", "application/json")
         .header("user-agent", "Go-http-client/1.1")
-        .send_adaptive()
+        .send_upstream()
         .await?;
     crate::http_client::observe_response(&response);
     // Never include a control-plane response body or credential in diagnostics.
@@ -587,13 +587,18 @@ pub(crate) mod tests {
             "{report:?}"
         );
         assert_eq!(calls.load(Ordering::SeqCst), 5);
+        let share_preference = channel.share_enabled;
         let (admitted, health) = crate::supplier::validate_supplier_channel(
             channel,
             crate::supplier::SupplierCheckMode::Cached,
         )
         .await
         .unwrap();
-        assert!(admitted.enabled);
+        assert!(!admitted.enabled);
+        assert_eq!(
+            admitted.share_enabled, share_preference,
+            "health checks preserve the sharing preference"
+        );
         assert_eq!(health.status, "available");
         assert_eq!(health.model_count, 3);
         assert_eq!(

@@ -20,7 +20,6 @@ pub(crate) fn enforce(config: &mut crate::model::ClientConfig) {
     config.account_user_id.clear();
     config.account_email.clear();
     config.account_device_api_key.clear();
-    config.automatic_updates = false;
     config.supplier_auto_start = false;
     config.prefer_local_supply = true;
     config.supplier.server_ws_url.clear();
@@ -58,7 +57,6 @@ mod tests {
     #[test]
     fn application_update_commands_are_unavailable() {
         for result in [
-            crate::update_sources::set_automatic_updates(),
             crate::update_sources::request_native_update_check(),
             crate::update_sources::request_native_update_install(),
         ] {
@@ -128,7 +126,7 @@ mod tests {
             account_refresh_notify: Arc::new(tokio::sync::Notify::new()),
         };
         let (_shutdown, mut shutdown) = tokio::sync::oneshot::channel();
-        let (_updates, mut updates) = tokio::sync::mpsc::channel(1);
+        let (_updates, mut updates) = crate::supplier::registration_channel();
         let state = Arc::new(Mutex::new(Default::default()));
         assert_eq!(crate::supplier::run_supplier_websocket_connection(
             &client, &mut agent, &endpoint.supplier_ws_url, &mut shutdown, &mut updates, &state,
@@ -146,7 +144,6 @@ mod tests {
         let mut config = crate::config::default_config();
         config.account_device_api_key = "test-platform-key".into();
         config.account_home_base_url = "https://example.invalid".into();
-        config.automatic_updates = true;
         config.supplier_auto_start = true;
         config.registry_sources = vec!["https://example.invalid/registry.json".into()];
         config.endpoints.push(crate::model::Endpoint {
@@ -177,7 +174,7 @@ mod tests {
         let config = crate::config::load_config_from_path(&path).unwrap();
         assert!(config.account_device_api_key.is_empty());
         assert!(config.account_home_base_url.is_empty());
-        assert!(!config.automatic_updates && !config.supplier_auto_start);
+        assert!(!config.supplier_auto_start);
         assert!(config.channels.iter().all(|channel| !channel.share_enabled));
         assert!(
             config

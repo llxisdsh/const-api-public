@@ -97,8 +97,9 @@ pub(crate) fn supplier_register_payload(
     let unit_id = supplier_unit_id(&agent.client_id, &channel_id);
     let provider_kind = supplier_provider_kind(config);
     let endpoint_kind = supplier_endpoint_kind(config);
+    let channel = channel_from_supplier(channel_id.clone(), config);
     let cache_domain_id = crate::channel_identity::channel_cache_domain_id(
-        &crate::channel_from_supplier(channel_id.clone(), config),
+        &channel,
         &agent.endpoint_key(),
     )
     .unwrap_or_default();
@@ -109,20 +110,51 @@ pub(crate) fn supplier_register_payload(
     };
     let surface_bindings = supplier_surface_bindings(config, &channel_id);
     let native_protocols = supplier_native_protocols(config);
-    let supported_operations = supplier_supported_operations(config);
-    let native_capabilities = supplier_native_capability_evidence(config, &native_protocols);
+    let mut supported_operations = supplier_supported_operations(config);
+    let mut native_capabilities = supplier_native_capability_evidence(config, &native_protocols);
     let effective_capabilities =
         supplier_effective_capability_evidence(config.source_driver, &native_capabilities, &native_protocols);
     let conversion_reachability = supplier_conversion_reachability(config.source_driver, &native_protocols);
     let mut models = config.models.clone();
     if config.source_driver == crate::source_driver::SourceDriverId::OpenAiSubscription
         && config.registration_health_status.as_deref() != Some("blocked")
-        && !models.iter().any(|model| model == "gpt-live-1-codex") {
+    {
         // Voice entitlement is separate from the Responses model listing. This
         // declares an executable model, not a successful/paid entitlement probe.
-        models.push("gpt-live-1-codex".to_string());
+        for model in [crate::codex_identity::LIVE_MODEL, "gpt-live-1-codex"] {
+            if !models.iter().any(|listed| listed == model) {
+                models.push(model.to_string());
+            }
+        }
     }
-    models = availability::effective_models(&channel_from_supplier(channel_id.clone(), config), models);
+    models = availability::effective_models(&channel, models);
+    let images = crate::image_models::ChannelImages::new(&channel);
+    let media = crate::media_models::ChannelMedia::new(&channel);
+    for model in &models {
+        let image_contract = images.model(model).filter(|ops| ops.generate || ops.edit);
+        let operations = image_contract.into_iter().flat_map(|ops| {
+            [(crate::image_models::GENERATE, ops.generate), (crate::image_models::EDIT, ops.edit)]
+        }).chain(media.model(model).names().map(|op| (op, true)));
+        for (operation, enabled) in operations {
+            let source = if config.source_driver == crate::source_driver::SourceDriverId::Openrouter
+                && matches!(operation, crate::image_models::GENERATE | crate::image_models::EDIT)
+            {
+                if enabled && !supported_operations.iter().any(|item| item == operation) {
+                    supported_operations.push(operation.to_owned());
+                }
+                "openrouter_images"
+            } else {
+                "driver_contract"
+            };
+            native_capabilities.push(SupplierCapabilityEvidence {
+                feature: format!("operation:{operation}"), model_pattern: Some(model.clone()),
+                state: if enabled { "supported" } else { "unsupported" }.into(), source: source.into(),
+                protocol: "openai_responses".into(), capability_layer: "model_wire".into(),
+                observed_at_unix: 0, release_status: Some("supported".into()),
+                token_limit: None, target_protocol: None, conversion_level: None,
+            });
+        }
+    }
     let mut payload = serde_json::json!({
              "channel_id": channel_id,
              "supplier_unit_id": unit_id,
@@ -171,6 +203,10 @@ pub(crate) fn supplier_register_payload(
         .unwrap_or_default();
     if let Some(observation) = availability::health_observation(&channel_from_supplier(channel_id.clone(), config)) {
         payload.insert("health_observation".into(), serde_json::json!(observation));
+    }
+    let failures = local_failure::snapshot(&channel_from_supplier(channel_id.clone(), config));
+    if !failures.is_empty() {
+        payload.insert("local_failure_observations".into(), failures.into());
     }
     payload.insert(
         "quota_reserve_percent".to_string(),
@@ -243,6 +279,12 @@ fn supplier_supported_operations(config: &SupplierConfig) -> Vec<String> {
     };
     let mut operations = crate::surface::registered_supplier_http_operations()
         .into_iter()
+        .filter(|(_, operation, _)| crate::openrouter::supports_operation(config.source_driver, *operation))
+        // Register Images only from the actual account models above. Video
+        // settlement needs elapsed seconds; owners can still read existing jobs.
+        .filter(|(_, op, _)| !(config.source_driver == crate::source_driver::SourceDriverId::Openrouter
+            && matches!(op, crate::surface::ApiOperation::ImagesGenerations
+                | crate::surface::ApiOperation::ImagesEdits | crate::surface::ApiOperation::VideosCreate)))
         .filter(|(surface, operation, protocol)| match execution_kind {
             crate::source_driver::ExecutionKind::HttpSurface => bound_surfaces.contains(surface),
             _ => {
@@ -1195,8 +1237,7 @@ mod surface_operation_evidence_tests {
                 .iter()
                 .any(|op| op == "openai.images_generations")
         );
-        // Edits remain local-backend-only in the platform surface contract.
-        assert!(!operations.iter().any(|op| op == "openai.images_edits"));
+        assert!(operations.iter().any(|op| op == "openai.images_edits"));
         assert!(!operations.iter().any(|op| op.starts_with("openai.videos")));
         let protocols = supplier_native_protocols(&config);
         assert_eq!(protocols, ["openai_responses"]);
@@ -1283,7 +1324,7 @@ mod surface_operation_evidence_tests {
             let config = crate::supplier_from_channel(&channel);
             let operations = supplier_supported_operations(&config);
             for operation in ["gemini.generate_content", "gemini.stream_generate_content"] {
-                assert_eq!(operations.iter().any(|item| item == operation), true);
+                assert!(operations.iter().any(|item| item == operation));
             }
             assert!(!operations.iter().any(|item| item == "gemini.live_websocket" || item == "gemini.files_create"));
             let protocols = supplier_native_protocols(&config);
@@ -1354,6 +1395,10 @@ mod surface_operation_evidence_tests {
         let config = crate::supplier_from_channel(&channel);
         let operations = supplier_supported_operations(&config);
         assert!(!operations.contains(&"openai.responses_compact".into()));
+        assert!(!operations.iter().any(|op| op.starts_with("openai.images_")));
+        assert!(!operations.contains(&"openai.videos_create".into()));
+        assert!(operations.contains(&"openai.videos_get".into()));
+        assert!(operations.contains(&"openai.embeddings".into()));
         assert!(operations.contains(&"openai.responses_input_tokens".into()));
         assert!(operations.contains(&"openai.responses_websocket".into()));
         let evidence = supplier_native_capability_evidence(&config, &["openai_responses".into()]);

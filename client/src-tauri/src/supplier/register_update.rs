@@ -1,5 +1,74 @@
+// While offline, repeated monitor reports replace the last pending report.
+// Explicit lifecycle commands stay in order, including withdrawal followed by restart.
+type PendingRegistrationUpdates = Arc<StdMutex<VecDeque<SupplierRegistrationUpdate>>>;
+
+#[derive(Clone)]
+pub(crate) struct RegistrationSender {
+    pending: PendingRegistrationUpdates,
+    wake: mpsc::Sender<()>,
+}
+
+pub(crate) struct RegistrationReceiver {
+    pending: PendingRegistrationUpdates,
+    wake: mpsc::Receiver<()>,
+}
+
+pub(crate) fn registration_channel() -> (RegistrationSender, RegistrationReceiver) {
+    let pending = PendingRegistrationUpdates::default();
+    let (tx, rx) = mpsc::channel(1);
+    (
+        RegistrationSender { pending: pending.clone(), wake: tx },
+        RegistrationReceiver { pending, wake: rx },
+    )
+}
+
+impl RegistrationSender {
+    pub(crate) fn is_closed(&self) -> bool {
+        self.wake.is_closed()
+    }
+
+    pub(crate) fn send(&self, update: SupplierRegistrationUpdate) -> Result<(), &'static str> {
+        let mut pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.is_closed() {
+            return Err("registration queue closed");
+        }
+        let snapshot = |item: &SupplierRegistrationUpdate| {
+            !item.force && !item.suppliers.is_empty()
+                && item.suppliers.iter().all(|s| !s.registration_removed)
+        };
+        if snapshot(&update) && let Some(last) = pending.back_mut().filter(|item| snapshot(item)) {
+            merge_supplier_registration_update(&mut last.suppliers, update.suppliers);
+        } else {
+            pending.push_back(update);
+        }
+        match self.wake.try_send(()) {
+            Ok(()) | Err(mpsc::error::TrySendError::Full(())) => Ok(()),
+            Err(mpsc::error::TrySendError::Closed(())) => Err("registration queue closed"),
+        }
+    }
+}
+
+impl RegistrationReceiver {
+    pub(crate) fn try_recv(&mut self) -> Result<SupplierRegistrationUpdate, mpsc::error::TryRecvError> {
+        self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop_front().ok_or_else(|| {
+                if self.wake.is_closed() { mpsc::error::TryRecvError::Disconnected }
+                else { mpsc::error::TryRecvError::Empty }
+            })
+    }
+
+    pub(crate) async fn recv(&mut self) -> Option<SupplierRegistrationUpdate> {
+        loop {
+            if let Ok(update) = self.try_recv() {
+                return Some(update);
+            }
+            self.wake.recv().await?;
+        }
+    }
+}
+
 pub(crate) fn send_register_update(
-    tx: &mpsc::Sender<SupplierRegistrationUpdate>,
+    tx: &RegistrationSender,
     payload: Vec<SupplierConfig>,
 ) {
     send_supplier_registration_update(
@@ -12,7 +81,7 @@ pub(crate) fn send_register_update(
 }
 
 pub(crate) fn send_forced_register_update(
-    tx: &mpsc::Sender<SupplierRegistrationUpdate>,
+    tx: &RegistrationSender,
     payload: Vec<SupplierConfig>,
 ) {
     send_supplier_registration_update(
@@ -25,22 +94,11 @@ pub(crate) fn send_forced_register_update(
 }
 
 fn send_supplier_registration_update(
-    tx: &mpsc::Sender<SupplierRegistrationUpdate>,
+    tx: &RegistrationSender,
     update: SupplierRegistrationUpdate,
 ) {
-    match tx.try_send(update) {
-        Ok(()) => {}
-        Err(tokio::sync::mpsc::error::TrySendError::Full(update)) => {
-            let tx = tx.clone();
-            spawn_logged("supplier register update send", async move {
-                if tx.send(update).await.is_err() {
-                    log::warn!("[const-api][supplier] registration update queue closed");
-                }
-            });
-        }
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            log::warn!("[const-api][supplier] registration update queue is closed");
-        }
+    if let Err(error) = tx.send(update) {
+        log::warn!("[const-api][supplier] {error}");
     }
 }
 
@@ -262,6 +320,15 @@ pub(crate) fn remove_volatile_supplier_observation_times(value: &mut serde_json:
             object.remove("quota_checked_at_unix");
             object.remove("observed_at_unix");
             object.remove("checked_at_unix");
+            if let Some(serde_json::Value::Array(reports)) = object.get_mut("local_failure_observations") {
+                // Age validates delayed delivery; the stable observation ID owns
+                // change detection. Do not re-upload catalogs just as time passes.
+                for report in reports {
+                    if let Some(report) = report.as_object_mut() {
+                        report.remove("age_seconds");
+                    }
+                }
+            }
             for child in object.values_mut() {
                 remove_volatile_supplier_observation_times(child);
             }

@@ -1,5 +1,15 @@
 pub(crate) const EXECUTION_EVIDENCE_FIELD: &str = "_const_execution";
 
+#[cfg(test)]
+#[test]
+fn retry_budget_matches_platform_contract() {
+    let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!("../../tests/fixtures/routing-retry-evidence.json")).unwrap();
+    for case in cases {
+        assert_eq!(failure_payload_skips_attempt_budget(case["payload"].as_object().unwrap()),
+            case["exempt"].as_bool().unwrap(), "{}", case["name"]);
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub(crate) struct ExecutionFailureDiagnostics {
     pub(crate) error_class: String,
@@ -146,17 +156,42 @@ pub(crate) fn request_conversion_failure(error: impl std::fmt::Display) -> anyho
 }
 
 pub(crate) fn channel_concurrency_failure() -> anyhow::Error {
+    local_admission_failure("concurrency_full", "channel concurrency limit reached locally")
+}
+
+pub(crate) fn local_admission_failure(code: &str, message: &str) -> anyhow::Error {
     execution_failure(
         "local_admission",
         "capacity",
-        "concurrency_full",
+        code,
         false,
         false,
         false,
         false,
         recommendation("deny", "deny", "none", "ineligible", "other_channel"),
-        "channel concurrency limit reached locally",
+        message,
     )
+}
+
+pub(crate) fn execution_failure_before_dispatch(evidence: &ExecutionEvidence) -> bool {
+    evidence.version == 1 && evidence.outcome == "failure"
+        && !evidence.upstream_attempted && !evidence.upstream_response_received
+        && !evidence.response_started && !evidence.usable_output_produced
+        && evidence.recommendation.retry == "other_channel"
+        && evidence.error_code != "ambiguous_transport"
+}
+
+pub(crate) fn failure_payload_skips_attempt_budget(payload: &serde_json::Map<String, serde_json::Value>) -> bool {
+    if payload.get("safe_to_retry_other_channel").and_then(serde_json::Value::as_bool) == Some(false) {
+        return false;
+    }
+    if let Some(raw) = payload.get(EXECUTION_EVIDENCE_FIELD) {
+        return serde_json::from_value::<ExecutionEvidence>(raw.clone()).is_ok_and(|evidence|
+            execution_failure_before_dispatch(&evidence));
+    }
+    payload.get("failure_observation_v1").is_some_and(|raw|
+        serde_json::from_value::<crate::upstream_failure::Failure>(raw.clone())
+            .is_ok_and(|failure| failure.rejects_execution()))
 }
 
 /// The token endpoint was unreachable or answered 429/5xx. This is not an
@@ -335,6 +370,7 @@ fn classify_execution_evidence_for_error(error: &anyhow::Error) -> ExecutionEvid
             cause
                 .downcast_ref::<reqwest::Error>()
                 .is_some_and(reqwest::Error::is_builder)
+                || cause.downcast_ref::<wreq::Error>().is_some_and(wreq::Error::is_builder)
         }) {
             return classify_execution_evidence_for_error(&platform_execution_failure(
                 "upstream_request_build",
@@ -403,6 +439,16 @@ fn execution_failure_diagnostics(error: &anyhow::Error) -> ExecutionFailureDiagn
                 "http_request"
             }
             .to_string();
+        }
+        if let Some(request) = cause.downcast_ref::<wreq::Error>() {
+            diagnostics.error_class = if request.is_builder() { "request_build" }
+                else if request.is_redirect() { "redirect" }
+                else if request.is_connect() && request.is_timeout() { "connect_timeout" }
+                else if request.is_connect() { "connect" }
+                else if request.is_timeout() { "request_timeout" }
+                else if request.is_body() { "body_io" }
+                else if request.is_decode() { "response_decode" }
+                else { "http_request" }.to_string();
         }
         let code = if let Some(io) = cause.downcast_ref::<std::io::Error>() {
             diagnostics.os_error = io.raw_os_error().or(diagnostics.os_error);

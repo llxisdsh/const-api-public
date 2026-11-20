@@ -97,17 +97,144 @@
     }
 
     #[test]
-    fn remove_mode_defaults_to_restore_and_rejects_native_route_without_canonical_target() {
-        assert_eq!(
-            ToolConfigRemoveMode::parse(None).expect("default remove mode"),
-            ToolConfigRemoveMode::RestorePreConst
-        );
-        let error = ToolConfigRemoveMode::NativeRoute
-            .validate_for_tool("vscode")
+    fn removal_defaults_to_native_or_owned_cleanup_for_both_ui_entry_points() {
+        for tool in ["codex", "claude", "claude-desktop", "gemini"] {
+            assert_eq!(
+                ToolConfigRemoveMode::parse_for_tool(tool, None).unwrap(),
+                ToolConfigRemoveMode::NativeRoute
+            );
+            assert_eq!(
+                ToolConfigRemoveMode::parse_for_tool(tool, Some("restore_pre_const")).unwrap(),
+                ToolConfigRemoveMode::RestorePreConst
+            );
+        }
+        for tool in ["workbuddy", "vscode", "opencode", "qoder", "trae"] {
+            assert_eq!(
+                ToolConfigRemoveMode::parse_for_tool(tool, None).unwrap(),
+                ToolConfigRemoveMode::ClearManaged
+            );
+        }
+        assert!(ToolConfigRemoveMode::parse_for_tool("codex", Some("invalid")).is_err());
+        let error = ToolConfigRemoveMode::parse_for_tool("vscode", Some("native_route"))
             .expect_err("VS Code has additive providers, not one canonical native route");
-        assert!(error
-            .to_string()
-            .contains("TOOL_CONFIG_NATIVE_ROUTE_UNSUPPORTED"));
+        assert!(
+            error
+                .to_string()
+                .contains("TOOL_CONFIG_NATIVE_ROUTE_UNSUPPORTED")
+        );
+    }
+
+    #[test]
+    fn default_removal_disconnects_file_based_tools_and_is_repeatable() {
+        with_temp_home(|_| {
+            let models = capability_test_models();
+            for tool in [
+                "copilot",
+                "raven",
+                "pi",
+                "cline",
+                "reasonix",
+                "deepseek-harness",
+                "goose",
+                "mistral-vibe",
+                "kimicode",
+                "mimocode",
+                "qwencode",
+                "openscience",
+                "vibe-trading",
+                "zcode",
+                "qoder",
+                "qoder-cn",
+                "grok-build",
+                "anythingllm",
+                "open-interpreter",
+                "minimax-code",
+                "muse-code",
+                "open-design",
+            ] {
+                let protocol = resolve_tool_protocol(tool, None).unwrap();
+                apply_additional_tool_config_with_model_info_for_protocol(
+                    tool,
+                    TOOL_CONFIG_OPENAI_BASE_URL,
+                    "fixture-key",
+                    &models,
+                    protocol,
+                )
+                .unwrap_or_else(|error| panic!("{tool} setup: {error}"));
+                let configured = || {
+                    let mut status =
+                        check_additional_tool_config(tool, TOOL_CONFIG_OPENAI_BASE_URL, "fixture-key")
+                            .unwrap_or_else(|error| panic!("{tool} readback: {error}"));
+                    attach_tool_config_presence(&mut status).unwrap();
+                    status.details["has_managed_config"] == "true"
+                };
+                assert!(configured(), "{tool} should start connected");
+                for attempt in 0..2 {
+                    let result = remove_tool_config_by_name(
+                        tool,
+                        TOOL_CONFIG_OPENAI_BASE_URL,
+                        TOOL_CONFIG_ROOT_URL,
+                        "fixture-key",
+                    )
+                    .unwrap_or_else(|error| panic!("{tool} cleanup: {error}"));
+                    assert!(!configured(), "{tool} stayed connected after cleanup");
+                    if attempt == 1 {
+                        assert!(
+                            result.files.is_empty(),
+                            "{tool} rewrote files on repeated cleanup"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn cleanup_does_not_reconnect_an_inherited_const_route_in_file_and_launch_adapters() {
+        with_temp_home(|_| {
+            let dev = "http://127.0.0.1:38788";
+            let prod = TOOL_CONFIG_ROOT_URL;
+            let models = capability_test_models();
+            for tool in [
+                "copilot",
+                "vibe-trading",
+                "anythingllm",
+                "mimocode",
+                "openscience",
+                "pi",
+                "qoder",
+            ] {
+                let protocol = resolve_tool_protocol(tool, None).unwrap();
+                let apply = |root: &str, key: &str| {
+                    apply_additional_tool_config_with_model_info_for_protocol(
+                        tool, root, key, &models, protocol,
+                    )
+                    .unwrap();
+                };
+                let ready = |root: &str, key: &str| {
+                    check_additional_tool_config(tool, root, key)
+                        .unwrap()
+                        .already_configured
+                };
+                apply(prod, "first-fixture-key");
+                assert!(ready(prod, "first-fixture-key"), "{tool} first profile");
+                save_tool_config_manifest(&ToolConfigManifest::default()).unwrap();
+                apply(dev, "second-fixture-key");
+                assert!(ready(dev, "second-fixture-key"), "{tool} second profile");
+                remove_tool_config_by_name(tool, &format!("{dev}/v1"), dev, "second-fixture-key")
+                    .unwrap();
+                assert!(
+                    !ready(dev, "second-fixture-key"),
+                    "{tool} retained active route"
+                );
+                // Qoder can keep both profiles active in distinct named providers.
+                assert_eq!(
+                    ready(prod, "first-fixture-key"),
+                    tool == "qoder",
+                    "{tool} previous profile"
+                );
+            }
+        });
     }
 
     fn workbuddy_test_models() -> Vec<ToolModelInfo> {
@@ -1149,47 +1276,178 @@
     }
 
     #[test]
+    fn workbuddy_cancel_clears_managed_models_from_the_restored_baseline_in_one_pass() {
+        with_temp_home(|_| {
+            let path = workbuddy_models_path("workbuddy");
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let base = "http://127.0.0.1:38788/v1";
+            let dev_url = workbuddy_endpoint_url(base, ToolProtocol::OpenAiChat).unwrap();
+            let prod_url = "http://127.0.0.1:38787/v1/chat/completions";
+            let models = workbuddy_test_models();
+            let mut dev = serde_json::json!({});
+            configure_workbuddy_model_entry(&mut dev, &models[0], &dev_url, "dev-key");
+            let shared_id = &models[0].id;
+            let mut prod = dev.clone();
+            prod["url"] = serde_json::json!(prod_url);
+            prod["apiKey"] = serde_json::json!("prod-key");
+            let mut old_key = dev.clone();
+            old_key["apiKey"] = serde_json::json!("different-key");
+            let manual = serde_json::json!({
+                "id": "manual", "name": "My model", "vendor": "Custom",
+                "url": dev_url, "apiKey": "dev-key", "userSetting": true
+            });
+            let mut dev_only = dev.clone();
+            dev_only["id"] = serde_json::json!("dev-only");
+            dev_only["name"] = serde_json::json!("dev-only");
+            let mut legacy = dev.clone();
+            legacy.as_object_mut().unwrap().remove(WORKBUDDY_CONST_MANAGED_FIELD);
+            legacy["id"] = serde_json::json!("legacy");
+            legacy["name"] = legacy["id"].clone();
+            let original_models = serde_json::json!([dev, prod, old_key, dev_only, legacy, manual]);
+            let kept_models = serde_json::json!([manual]);
+            for (before, expected) in [
+                (original_models.clone(), kept_models.clone()),
+                (
+                    serde_json::json!({
+                        "models": original_models,
+                        "availableModels": [shared_id, "dev-only", "legacy", "manual"],
+                        "schemaVersion": 1
+                    }),
+                    serde_json::json!({
+                        "models": kept_models,
+                        "availableModels": ["manual"],
+                        "schemaVersion": 1
+                    }),
+                ),
+            ] {
+                fs::write(&path, serde_json::to_vec(&before).unwrap()).unwrap();
+                apply_workbuddy_config_with_model_info_for_protocol(
+                    "workbuddy", base, "dev-key", &models[1..], ToolProtocol::OpenAiChat,
+                ).unwrap();
+                assert!(check_workbuddy_config("workbuddy", base, "dev-key").unwrap().already_configured);
+
+                remove_tool_config_by_name(
+                    "workbuddy", base, "http://127.0.0.1:38788", "dev-key",
+                ).unwrap();
+                let mut status = check_workbuddy_config("workbuddy", base, "dev-key").unwrap();
+                attach_tool_config_presence(&mut status).unwrap();
+                assert_eq!(status.details["has_managed_config"], "false");
+                assert!(!check_workbuddy_config("workbuddy", TOOL_CONFIG_OPENAI_BASE_URL, "prod-key")
+                    .unwrap().already_configured);
+                assert_eq!(read_json_or_default(&path, serde_json::Value::Null).unwrap(), expected);
+            }
+        });
+    }
+
+    #[test]
+    fn workbuddy_cancel_preserves_a_newer_profile_using_the_same_model() {
+        with_temp_home(|_| {
+            let empty_manifest = load_tool_config_manifest().unwrap();
+            let models = workbuddy_test_models();
+            let dev = "http://127.0.0.1:38788/v1";
+            let prod = TOOL_CONFIG_OPENAI_BASE_URL;
+            let path = workbuddy_models_path("workbuddy");
+
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            for original in [
+                serde_json::json!([]),
+                serde_json::json!({"models": [], "availableModels": []}),
+            ] {
+                fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+                apply_workbuddy_config_with_model_info_for_protocol(
+                    "workbuddy", dev, "dev-key", &models[..1], ToolProtocol::OpenAiChat,
+                ).unwrap();
+                let dev_manifest = load_tool_config_manifest().unwrap();
+                // The two CONST profiles own separate manifests and share WorkBuddy's file.
+                save_tool_config_manifest(&empty_manifest).unwrap();
+                apply_workbuddy_config_with_model_info_for_protocol(
+                    "workbuddy", prod, "prod-key", &models[..1], ToolProtocol::OpenAiChat,
+                ).unwrap();
+                let prod_file = fs::read(&path).unwrap();
+                save_tool_config_manifest(&dev_manifest).unwrap();
+
+                remove_workbuddy_config("workbuddy", dev, "dev-key").unwrap();
+                assert!(check_workbuddy_config("workbuddy", prod, "prod-key").unwrap().already_configured);
+                assert_eq!(fs::read(&path).unwrap(), prod_file);
+                let mut status = check_workbuddy_config("workbuddy", dev, "dev-key").unwrap();
+                attach_tool_config_presence(&mut status).unwrap();
+                assert_eq!(status.details["has_managed_config"], "false");
+            }
+        });
+    }
+
+    #[test]
+    fn workbuddy_cleanup_preserves_foreign_rows_added_after_setup_even_with_a_shared_id() {
+        with_temp_home(|_| {
+            let path = workbuddy_models_path("workbuddy");
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, br#"{"models":[],"availableModels":[]}"#).unwrap();
+            let models = workbuddy_test_models();
+            apply_workbuddy_config_with_model_info_for_protocol(
+                "workbuddy",
+                TOOL_CONFIG_OPENAI_BASE_URL,
+                "fixture-key",
+                &models,
+                ToolProtocol::OpenAiChat,
+            )
+            .unwrap();
+            let mut live = read_json_or_default(&path, serde_json::Value::Null).unwrap();
+            let mut foreign = live["models"][0].clone();
+            foreign["url"] = serde_json::json!("http://127.0.0.1:38788/v1/chat/completions");
+            foreign["apiKey"] = serde_json::json!("other-fixture-key");
+            let manual = serde_json::json!({
+                "id": live["models"][1]["id"], "name": live["models"][1]["name"], "vendor": "Custom",
+                "url": "https://manual.example.test/v1/chat/completions", "userOption": true
+            });
+            // A user can move their model ahead of the equally named generated row.
+            let rows = live["models"].as_array_mut().unwrap();
+            rows.insert(0, manual.clone());
+            rows.push(foreign.clone());
+            live["availableModels"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|id| id != &manual["id"]);
+            fs::write(&path, json_text(&live).unwrap()).unwrap();
+            remove_workbuddy_config("workbuddy", TOOL_CONFIG_OPENAI_BASE_URL, "fixture-key").unwrap();
+            let cleaned = read_json_or_default(&path, serde_json::Value::Null).unwrap();
+            let rows = cleaned["models"].as_array().unwrap();
+            assert_eq!(rows.len(), 2);
+            assert!(rows.contains(&manual) && rows.contains(&foreign));
+            let available = cleaned["availableModels"].as_array().unwrap();
+            assert_eq!(available.as_slice(), std::slice::from_ref(&foreign["id"]));
+        });
+    }
+
+    #[test]
     fn workbuddy_cancel_removes_only_matching_unmanaged_local_models() {
         with_temp_home(|_| {
             let path = workbuddy_models_path("workbuddy");
             fs::create_dir_all(path.parent().expect("WorkBuddy config parent")).expect("mkdir");
-            fs::write(
-                &path,
-                serde_json::to_string_pretty(&serde_json::json!([
-                    {
-                        "id": "gpt-5.6-sol",
-                        "name": "gpt-5.6-sol",
-                        "vendor": "Custom",
-                        "url": "http://127.0.0.1:38787/v1/chat/completions",
-                        "apiKey": "sk-test",
-                        "supportsToolCall": true,
-                        "supportsImages": true,
-                        "supportsReasoning": true,
-                        "useCustomProtocol": false
-                    },
-                    {
-                        "id": "keep",
-                        "name": "keep",
-                        "vendor": "Custom",
-                        "url": "https://example.com/v1/chat/completions",
-                        "apiKey": "keep"
-                    }
-                ]))
-                .expect("serialize unmanaged WorkBuddy config")
-                    + "\n",
-            )
-            .expect("seed unmanaged WorkBuddy config");
-
-            let removed = remove_workbuddy_config("workbuddy", TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
-                .expect("remove unmanaged WorkBuddy config");
-            assert_eq!(
-                removed.details.get("manifest_entries_restored").map(String::as_str),
-                Some("0")
-            );
-            let restored =
-                read_json_or_default(&path, serde_json::json!([])).expect("read cleaned config");
-            assert_eq!(restored.as_array().map(Vec::len), Some(1));
-            assert_eq!(restored[0]["name"], "keep");
+            let legacy = serde_json::json!([
+                {
+                    "id": "gpt-5.6-sol", "name": "gpt-5.6-sol", "vendor": "Custom",
+                    "url": "http://127.0.0.1:38787/v1/chat/completions", "apiKey": "sk-test",
+                    "supportsToolCall": true, "supportsImages": true,
+                    "supportsReasoning": true, "useCustomProtocol": false
+                },
+                {
+                    "id": "keep", "name": "keep", "vendor": "Custom",
+                    "url": "https://example.com/v1/chat/completions", "apiKey": "keep"
+                }
+            ]);
+            for with_skill in [false, true] {
+                fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+                if with_skill {
+                    let mut setup = ToolApplyBuilder::default().finish("workbuddy");
+                    sync_tool_image_skill(&mut setup, true).unwrap();
+                    assert!(!setup.files.is_empty());
+                }
+                remove_workbuddy_config("workbuddy", TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
+                    .expect("remove unmanaged WorkBuddy config");
+                let restored = read_json_or_default(&path, serde_json::json!([])).unwrap();
+                assert_eq!(restored, serde_json::json!([legacy[1]]));
+                assert!(!tool_has_owned_config_files("workbuddy").unwrap());
+            }
         });
     }
 
@@ -1367,13 +1625,88 @@
                     .all(|model| model["reasoningEffortFormat"] == "chat-completions")
             );
 
-            remove_vscode_config().expect("remove VS Code");
+            remove_vscode_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").expect("remove VS Code");
             let restored =
                 read_json_or_default(&path, serde_json::json!([])).expect("read restored VS Code");
             assert_eq!(restored, original);
             let restored_settings = read_json_or_default(&settings_path, serde_json::json!({}))
                 .expect("read restored VS Code settings");
             assert_eq!(restored_settings, original_settings);
+        });
+    }
+
+    #[test]
+    fn vscode_cleanup_keeps_the_utility_setting_for_another_active_profile() {
+        with_temp_home(|_| {
+            let models = capability_test_models();
+            let protocol = ToolProtocol::OpenAiResponses;
+            let dev = "http://127.0.0.1:38788/v1";
+            let release = TOOL_CONFIG_OPENAI_BASE_URL;
+            apply_vscode_config_with_model_info_for_protocol(dev, "fixture-dev", &models, protocol)
+                .unwrap();
+            // The other process has its own receipt but shares VS Code's user directory.
+            let provider =
+                vscode_const_api_provider(release, "fixture-release", &models, protocol).unwrap();
+            let path = vscode_chat_language_models_path();
+            fs::write(&path, json_text(&serde_json::json!([provider])).unwrap()).unwrap();
+            assert!(
+                check_vscode_config(release, "fixture-release")
+                    .unwrap()
+                    .already_configured
+            );
+
+            remove_vscode_config(dev, "fixture-dev").unwrap();
+
+            assert!(
+                check_vscode_config(release, "fixture-release")
+                    .unwrap()
+                    .already_configured
+            );
+            assert!(
+                !check_vscode_config(dev, "fixture-dev")
+                    .unwrap()
+                    .already_configured
+            );
+            assert!(
+                remove_vscode_config(dev, "fixture-dev")
+                    .unwrap()
+                    .files
+                    .is_empty()
+            );
+        });
+    }
+
+    #[test]
+    fn vscode_cleanup_keeps_an_independent_model_inside_a_managed_provider() {
+        with_temp_home(|_| {
+            let path = vscode_chat_language_models_path();
+            apply_vscode_config_with_model_info_for_protocol(
+                TOOL_CONFIG_OPENAI_BASE_URL,
+                "fixture-key",
+                &capability_test_models(),
+                ToolProtocol::OpenAiResponses,
+            )
+            .unwrap();
+            let mut root: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            let manual = serde_json::json!({
+                "id": "custom", "url": "https://manual.example.test/responses",
+                "requestHeaders": {"Authorization": "Bearer independent-fixture"}
+            });
+            root[0]["models"]
+                .as_array_mut()
+                .unwrap()
+                .push(manual.clone());
+            fs::write(&path, json_text(&root).unwrap()).unwrap();
+            remove_vscode_config(TOOL_CONFIG_OPENAI_BASE_URL, "fixture-key").unwrap();
+            let cleaned: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(cleaned[0]["models"], serde_json::json!([manual]));
+            assert!(
+                remove_vscode_config(TOOL_CONFIG_OPENAI_BASE_URL, "fixture-key")
+                    .unwrap()
+                    .files
+                    .is_empty()
+            );
         });
     }
 
@@ -1428,7 +1761,14 @@
                     .already_configured
             );
 
-            let removed = remove_vscode_config().expect("remove legacy VS Code config");
+            let independent = serde_json::json!({
+                "name": "CONST API", "vendor": "customendpoint", "apiKey": "independent-fixture",
+                "models": [{"id": "custom", "url": "https://manual.example.test/responses"}]
+            });
+            let mut mixed = existing.clone();
+            mixed.as_array_mut().unwrap().push(independent.clone());
+            fs::write(&path, json_text(&mixed).unwrap()).unwrap();
+            let removed = remove_vscode_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test").expect("remove legacy VS Code config");
             assert_eq!(
                 removed.details.get("manifest_entries_restored").map(String::as_str),
                 Some("0")
@@ -1436,8 +1776,9 @@
             let restored =
                 read_json_or_default(&path, serde_json::json!([])).expect("read cleaned VS Code");
             let providers = restored.as_array().expect("provider array");
-            assert_eq!(providers.len(), 1);
+            assert_eq!(providers.len(), 2);
             assert_eq!(providers[0]["name"], "Existing");
+            assert_eq!(providers[1], independent);
             assert!(
                 !check_vscode_config(TOOL_CONFIG_OPENAI_BASE_URL, "sk-test")
                     .expect("check removed VS Code config")
@@ -2847,7 +3188,7 @@
                     .already_configured
             );
 
-            remove_claude_science_config().expect("remove Claude Science");
+            remove_tool_env_connection("claude-science", TOOL_CONFIG_ROOT_URL, "sk-science").expect("remove Claude Science");
             assert_eq!(
                 fs::read_to_string(&path).expect("read restored Claude Science config"),
                 original
@@ -3065,11 +3406,10 @@
             assert!(openclaw["models"]["providers"].get("CONST_API").is_some());
             assert!(openclaw["models"]["providers"].get("const_api").is_none());
 
-            let hermes = upsert_hermes_sections_for_protocol(
+            let hermes = upsert_hermes_sections(
                 "custom_providers:\n- name: const_api\n  base_url: http://127.0.0.1:38787/v1\n  api_key: sk-test\n  api_mode: chat_completions\n",
                 TOOL_CONFIG_ROOT_URL,
                 "sk-test",
-                ToolProtocol::OpenAiChat,
             )
             .expect("upsert Hermes config");
             let root =
@@ -3666,7 +4006,7 @@
             }
 
             for protocol in [ToolProtocol::OpenAiChat] {
-                apply_hermes_config_for_protocol(root_url, api_key, protocol)
+                apply_hermes_config_for_protocol(root_url, api_key, protocol, &[])
                     .expect("apply Hermes protocol");
                 let checked = check_hermes_config(root_url, api_key).expect("check Hermes protocol");
                 assert!(checked.already_configured);
@@ -4433,6 +4773,7 @@
                 "http://127.0.0.1:38787",
                 "sk-test",
                 ToolProtocol::OpenAiChat,
+                &[],
             )
             .expect("apply hermes");
             remove_hermes_config("http://127.0.0.1:38787", "sk-test").expect("cancel hermes");
@@ -4462,6 +4803,7 @@
                 "http://127.0.0.1:38787",
                 "sk-first",
                 ToolProtocol::OpenAiChat,
+                &[],
             )
             .expect("first Hermes apply");
 
@@ -4498,6 +4840,7 @@
                 "http://127.0.0.1:38787",
                 "sk-second",
                 ToolProtocol::OpenAiChat,
+                &[],
             )
             .expect("Hermes reconfigure after runtime refresh");
             let configured = serde_yaml::from_str::<serde_yaml::Value>(

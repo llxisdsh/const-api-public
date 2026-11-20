@@ -17,6 +17,15 @@ pub(crate) const CLAUDE_CODE_STAINLESS_RUNTIME_VERSION: &str = "v26.3.0";
 pub(crate) const CLAUDE_OAUTH_AXIOS_USER_AGENT: &str = "axios/1.15.2";
 pub(crate) const CLAUDE_DIRECT_BROWSER_ACCESS: &str = "true";
 
+pub(crate) fn uses_bun_transport(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("api.anthropic.com")
+        && url.port_or_known_default() == Some(443)
+        && url.username().is_empty()
+        && url.password().is_none()
+        && matches!(url.path(), "/v1/messages" | "/v1/messages/count_tokens")
+}
+
 // Captured from the official Claude Code 2.1.258 Agent SDK request. The
 // fallback-credit beta is intentionally omitted: the official client retries
 // without it when the upstream rejects that optional capability.
@@ -57,6 +66,29 @@ pub(crate) fn claude_code_stainless_arch() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bun_profile_is_limited_to_measured_subscription_operations() {
+        for path in [
+            "/v1/messages",
+            "/v1/messages?beta=true",
+            "/v1/messages/count_tokens",
+        ] {
+            assert!(uses_bun_transport(
+                &format!("https://api.anthropic.com{path}").parse().unwrap()
+            ));
+        }
+        for url in [
+            "https://api.anthropic.com/v1/models",
+            "https://platform.claude.com/v1/oauth/token",
+            "https://api.anthropic.com/api/oauth/usage",
+            "https://gateway.example/v1/messages",
+            "https://api.anthropic.com:8443/v1/messages",
+            "http://api.anthropic.com/v1/messages",
+        ] {
+            assert!(!uses_bun_transport(&url.parse().unwrap()), "{url}");
+        }
+    }
 
     #[test]
     fn synthetic_profile_is_one_coherent_release() {

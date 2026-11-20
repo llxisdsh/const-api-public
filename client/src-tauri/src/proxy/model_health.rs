@@ -8,6 +8,8 @@ struct LocalModelOutcomeGuard {
     sequence: u64,
     probe_until: i64,
     promotion: Option<LocalRoutePromotion>,
+    started: std::time::Instant,
+    reporter: Option<crate::supplier::local_failure::Reporter>,
 }
 
 impl LocalModelOutcomeGuard {
@@ -27,10 +29,18 @@ impl LocalModelOutcomeGuard {
             sequence: state.runtime_failure_sequence,
             probe_until: state.runtime_probe_until_unix,
             promotion: None,
+            started: std::time::Instant::now(),
+            reporter: None,
         }
     }
 
+    fn with_channel(mut self, channel: &ChannelConfig) -> Self {
+        self.reporter = Some(crate::supplier::local_failure::Reporter::new(channel));
+        self
+    }
+
     fn success(&self) {
+        if let Some(reporter) = &self.reporter { reporter.success(&self.model, self.started); }
         if let Some(promotion) = &self.promotion {
             self.shared.promote_local_model_route(
                 &promotion.affinity_key,
@@ -63,6 +73,7 @@ impl LocalModelOutcomeGuard {
         let body = serde_json::json!({"error": details}).to_string();
         let Some(failure) = crate::upstream_failure::observe(explicit_status.unwrap_or(200), &body, &[], Some(&self.model)) else { return; };
         if failure.cause == "unknown" { return; }
+        if let Some(reporter) = &self.reporter { reporter.failure(&failure); }
         let status = failure.effective_status();
         let mut payload =
             subscription_http_response_payload(status, "application/json", body.clone());

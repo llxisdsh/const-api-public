@@ -530,7 +530,7 @@
   overflow-y: auto;
 }
 
-.lan-share-models label {
+.lan-share-model-option {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -542,10 +542,9 @@
   background: transparent;
   color: var(--muted);
   font-size: 11.5px;
-  cursor: pointer;
 }
 
-.lan-share-models label:hover {
+.lan-share-model-option:has(input:enabled:hover) {
   color: var(--text);
 }
 
@@ -570,7 +569,7 @@
   cursor: not-allowed;
 }
 
-.lan-share-models label span {
+.lan-share-model-option span {
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1994,7 +1993,7 @@ button.modal-close-button:focus-visible {
 }
 
 .modal-panel.access-guide-modal {
-  width: min(820px, calc(100vw - 48px));
+  width: min(920px, 100%);
   max-width: none;
   padding: 18px;
 }

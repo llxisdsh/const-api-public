@@ -65,7 +65,7 @@ pub(crate) async fn fetch_ollama_tags_models(
 ) -> Result<Vec<String>> {
     let request = client.get(ollama_tags_url(base_url)?);
     let resp = crate::channel_user_agent::apply_to_request(channel, request)
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let status = resp.status();
     let value = resp.json::<serde_json::Value>().await?;
@@ -93,7 +93,7 @@ pub(crate) async fn probe_openai_responses(
         &channel.upstream_base_url,
     ).await?
     .json(&body)
-    .send_adaptive()
+    .send_upstream()
     .await?;
     ensure_probe_success(resp, "OpenAI Responses", model).await
 }
@@ -117,7 +117,7 @@ pub(crate) async fn probe_openai_responses_stream(
         &channel.upstream_base_url,
     ).await?
     .json(&body)
-    .send_adaptive()
+    .send_upstream()
     .await?;
     ensure_sse_probe_success(resp, "OpenAI Responses stream").await
 }
@@ -154,7 +154,7 @@ pub(crate) async fn probe_openai_responses_json_schema(
         &channel.upstream_base_url,
     ).await?
     .json(&body)
-    .send_adaptive()
+    .send_upstream()
     .await?;
     let status = resp.status();
     let value = resp.json::<serde_json::Value>().await?;
@@ -214,7 +214,7 @@ pub(crate) async fn probe_openai_chat_with_base(
     let resp = openai_request_with_base(client.post(url), channel, api_key, base_url)
         .await?
         .json(&body)
-        .send_adaptive()
+        .send_upstream()
         .await?;
     ensure_probe_success(resp, "OpenAI Chat Completions", model).await
 }
@@ -238,7 +238,7 @@ pub(crate) async fn probe_openai_chat_stream(
         &channel.upstream_base_url,
     ).await?
     .json(&body)
-    .send_adaptive()
+    .send_upstream()
     .await?;
     let status = resp.status();
     let content_type = resp
@@ -289,7 +289,7 @@ pub(crate) async fn probe_openai_chat_json_schema(
     let resp = openai_request_with_base(client.post(url), channel, api_key, base_url)
         .await?
         .json(&body)
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let status = resp.status();
     let value = resp.json::<serde_json::Value>().await?;
@@ -324,7 +324,7 @@ pub(crate) async fn probe_anthropic_messages(
     });
     let resp = anthropic_messages_request(client, channel, &body)
         .await?
-        .send_adaptive()
+        .send_upstream()
         .await?;
     ensure_probe_success(resp, "Anthropic Messages", model).await
 }
@@ -342,7 +342,7 @@ pub(crate) async fn probe_anthropic_messages_stream(
     });
     let resp = anthropic_messages_request(client, channel, &body)
         .await?
-        .send_adaptive()
+        .send_upstream()
         .await?;
     ensure_sse_probe_success(resp, "Anthropic Messages stream").await
 }
@@ -365,7 +365,7 @@ pub(crate) async fn probe_anthropic_messages_cache_control(
     });
     let resp = anthropic_messages_request(client, channel, &body)
         .await?
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let status = resp.status();
     let value = resp.json::<serde_json::Value>().await?;
@@ -446,7 +446,7 @@ pub(crate) async fn probe_gemini_native(
             );
     }
     req = crate::channel_user_agent::apply_to_request(channel, req);
-    let resp = req.send_adaptive().await?;
+    let resp = req.send_upstream().await?;
     ensure_probe_success(resp, "Gemini native", model).await
 }
 
@@ -461,7 +461,7 @@ pub(crate) async fn probe_gemini_native_stream(
         "generationConfig": {"maxOutputTokens": 4}
     });
     let resp = gemini_native_request(client, channel, &path, &body)?
-        .send_adaptive()
+        .send_upstream()
         .await?;
     ensure_sse_probe_success(resp, "Gemini native stream").await
 }
@@ -486,7 +486,7 @@ pub(crate) async fn probe_gemini_native_json_schema(
         }
     });
     let resp = gemini_native_request(client, channel, &path, &body)?
-        .send_adaptive()
+        .send_upstream()
         .await?;
     let status = resp.status();
     let value = resp.json::<serde_json::Value>().await?;

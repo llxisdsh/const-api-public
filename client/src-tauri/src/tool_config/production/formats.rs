@@ -38,6 +38,44 @@ fn is_const_api_local_tool_url(value: &str) -> bool {
     const_api_local_tool_url_surface(value).is_some()
 }
 
+// Called inside an adapter-identified CONST provider or private launch file.
+// In a live file both the URL and key must match this profile. A backed-up
+// default dev/release connection may also be retired if the API path matches.
+fn tool_cleanup_connection_matches(
+    url: &str,
+    key: &str,
+    expected_url: &str,
+    api_key: &str,
+    historical: bool,
+) -> bool {
+    if key.is_empty() {
+        return false;
+    }
+    let url = url.trim_end_matches('/');
+    let expected_url = expected_url.trim_end_matches('/');
+    if url == expected_url && key == api_key {
+        return true;
+    }
+    if !historical {
+        return false;
+    }
+    fn authority_and_path(url: &str) -> Option<(&str, &str)> {
+        url.strip_prefix("http://")?.split_once('/')
+    }
+    match (authority_and_path(url), authority_and_path(expected_url)) {
+        (Some((host, path)), Some((expected_host, expected_path))) => {
+            path == expected_path
+                && (host == expected_host
+                    || [
+                        crate::config::DEFAULT_LOCAL_PROXY_LISTEN,
+                        crate::config::DEFAULT_DEVELOPMENT_PROXY_LISTEN,
+                    ]
+                    .contains(&host))
+        }
+        _ => false,
+    }
+}
+
 fn const_api_local_tool_url_surface(value: &str) -> Option<&str> {
     let value = value.trim().trim_end_matches('/');
     let endpoint = value.strip_prefix("http://127.0.0.1:")?;
@@ -651,31 +689,36 @@ fn remove_openclaw_legacy_default_model(root: &mut serde_json::Value) {
 
 #[cfg(test)]
 pub(crate) fn upsert_hermes_sections(raw: &str, root_url: &str, api_key: &str) -> Result<String> {
-    upsert_hermes_sections_for_protocol(raw, root_url, api_key, ToolProtocol::OpenAiChat)
+    upsert_hermes_sections_for_protocol(
+        parse_hermes_config(raw)?,
+        root_url,
+        api_key,
+        ToolProtocol::OpenAiChat,
+        &[],
+    )
 }
 
-pub(crate) fn upsert_hermes_sections_for_protocol(
-    raw: &str,
+fn parse_hermes_config(raw: &str) -> Result<serde_yaml::Mapping> {
+    match serde_yaml::from_str(raw).context("parse Hermes config.yaml")? {
+        serde_yaml::Value::Mapping(root) => Ok(root),
+        serde_yaml::Value::Null => Ok(serde_yaml::Mapping::new()),
+        _ => Err(anyhow!("Hermes config.yaml must contain a YAML mapping")),
+    }
+}
+
+fn upsert_hermes_sections_for_protocol(
+    mut root: serde_yaml::Mapping,
     root_url: &str,
     api_key: &str,
     protocol: ToolProtocol,
+    image_models: &[&str],
 ) -> Result<String> {
-    let value = if raw.trim().is_empty() {
-        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
-    } else {
-        serde_yaml::from_str::<serde_yaml::Value>(raw)
-            .with_context(|| "parse Hermes config.yaml")?
-    };
-    let mut root = match value {
-        serde_yaml::Value::Mapping(root) => root,
-        _ => serde_yaml::Mapping::new(),
-    };
-
     let base_url = tool_surface_url(root_url, protocol.surface());
     let api_mode = hermes_api_mode(protocol)?;
     upsert_hermes_model(&mut root, &base_url, api_key, api_mode)?;
     remove_hermes_const_api_provider_dict(&mut root);
     upsert_hermes_custom_provider_list(&mut root, &base_url, api_key, api_mode);
+    upsert_hermes_images(&mut root, image_models)?;
 
     let mut content = serde_yaml::to_string(&serde_yaml::Value::Mapping(root))
         .with_context(|| "serialize Hermes config.yaml")?;
@@ -799,9 +842,7 @@ fn upsert_hermes_custom_provider_list(
     );
 }
 
-fn detect_hermes_tool_protocol(raw: &str) -> Option<ToolProtocol> {
-    let value = serde_yaml::from_str::<serde_yaml::Value>(raw).ok()?;
-    let root = value.as_mapping()?;
+fn detect_hermes_tool_protocol(root: &serde_yaml::Mapping) -> Option<ToolProtocol> {
     let mode = root
         .get(yaml_key("model"))?
         .as_mapping()?

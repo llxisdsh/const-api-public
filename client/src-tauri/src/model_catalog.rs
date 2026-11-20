@@ -1,4 +1,4 @@
-use crate::upstream_transport::AdaptiveRequestBuilderExt;
+use crate::upstream_transport::UpstreamRequestBuilderExt;
 use anyhow::{Context, Result, anyhow};
 use reqwest::{Client, Url, header::HeaderMap};
 use std::collections::{HashMap, HashSet};
@@ -24,6 +24,9 @@ pub(crate) struct ModelObservation {
     pub(crate) supported_parameters: Option<Vec<String>>,
     /// Explicit endpoint contract from a maintained provider's catalog.
     pub(crate) supported_endpoints: Option<Vec<String>>,
+    pub(crate) image_operations: Option<crate::image_models::ImageOperations>,
+    pub(crate) opencode_image_api: Option<crate::coding_gateway::ConsoleImageApi>,
+    pub(crate) media_operations: crate::media_models::MediaOperations,
     /// Kiro's per-model contract for optional native generation controls.
     pub(crate) kiro_request_schema: Option<serde_json::Value>,
     /// Catalog quote for a tiny 32-input/16-output check, never a billing rule.
@@ -33,6 +36,7 @@ pub(crate) struct ModelObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ModelCatalogKind {
     OpenAI,
+    OpenCodeConsole,
     OpenDesign,
     CommandCode,
     Copilot,
@@ -82,6 +86,18 @@ pub(crate) fn stable_dedupe_models(observations: Vec<ModelObservation>) -> Vec<M
                 &mut unique[index].output_modalities,
                 observation.output_modalities,
             );
+            if let Some(ops) = observation.image_operations {
+                unique[index]
+                    .image_operations
+                    .get_or_insert_default()
+                    .union(ops);
+            }
+            if unique[index].opencode_image_api.is_none() {
+                unique[index].opencode_image_api = observation.opencode_image_api;
+            }
+            unique[index]
+                .media_operations
+                .union(observation.media_operations);
             continue;
         }
         positions.insert(comparison_key, unique.len());
@@ -177,6 +193,7 @@ pub(crate) fn model_observations_from_value(
     let mut out = Vec::new();
     match kind {
         ModelCatalogKind::OpenAI
+        | ModelCatalogKind::OpenCodeConsole
         | ModelCatalogKind::OpenDesign
         | ModelCatalogKind::CommandCode
         | ModelCatalogKind::Anthropic
@@ -202,6 +219,13 @@ pub(crate) fn model_observations_from_value(
                         continue;
                     }
                     push_model_observation(&mut out, item, None, source, false);
+                    if kind == ModelCatalogKind::OpenCodeConsole
+                        && let Some(model) = out
+                            .last_mut()
+                            .filter(|m| item["id"].as_str() == Some(&m.id))
+                    {
+                        crate::coding_gateway::apply_console_media_descriptor(model, item);
+                    }
                     if kind == ModelCatalogKind::OpenDesign {
                         if let Some(model) = out
                             .last_mut()
@@ -611,6 +635,11 @@ fn push_model_observation_with_id(
                     .collect()
             }),
         supported_endpoints: None,
+        // A nested CONST directory projects only its Images operations. Feeding
+        // those IDs into supported_endpoints would reject working chat protocols.
+        image_operations: crate::image_models::ImageOperations::from_catalog_entry(entry),
+        opencode_image_api: None,
+        media_operations: crate::media_models::MediaOperations::from_entry(entry),
         kiro_request_schema: None,
         probe_cost_nanos: catalog_probe_cost(entry),
     });
@@ -700,7 +729,7 @@ pub(crate) async fn fetch_model_catalog(
         } else {
             request
         };
-        let response = request.send_adaptive().await?;
+        let response = request.send_upstream().await?;
         let status = response.status();
         let status_error = response.error_for_status_ref().err();
         let mut response_url = response.url().clone();
@@ -824,6 +853,7 @@ fn next_page_cursor(
             }
         }
         ModelCatalogKind::OpenAI
+        | ModelCatalogKind::OpenCodeConsole
         | ModelCatalogKind::OpenDesign
         | ModelCatalogKind::CommandCode
         | ModelCatalogKind::Abacus => {
@@ -870,6 +900,9 @@ pub(crate) fn models_from_quota_observations<'a>(
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                image_operations: None,
+                opencode_image_api: None,
+                media_operations: Default::default(),
                 kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: model.to_string(),
@@ -887,6 +920,57 @@ pub(crate) fn models_from_quota_observations<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_images_and_provider_endpoints_retain_separate_operation_evidence() {
+        use crate::image_models::{EDIT, GENERATE, ImageOperations};
+        let models = model_observations_from_value(
+            ModelCatalogKind::OpenAI,
+            &serde_json::json!({"data":[
+                {"id":"declared","supported_endpoints":["/v1/images/edits"]},
+                {"id":"declared","const_api":{"image_operations":[GENERATE]}},
+                {"id":"vision","output_modalities":["text"],"input_modalities":["image"]},
+                {"id":"text","supported_endpoints":["/chat/completions"]},
+                {"id":"other","const_api":{"image_operations":[EDIT, false]}}
+            ]}),
+            "fixture",
+        );
+        let models = stable_dedupe_models(models);
+        assert_eq!(
+            models[0].image_operations,
+            Some(ImageOperations {
+                generate: true,
+                edit: true
+            })
+        );
+        assert!(models[0].supported_endpoints.is_none());
+        assert!(models[1].image_operations.is_none());
+        assert_eq!(models[2].image_operations, Some(ImageOperations::default()));
+        assert!(models[3].image_operations.is_none());
+    }
+
+    #[test]
+    fn media_operations_require_endpoint_evidence_and_keep_chat_discovery_independent() {
+        use crate::media_models::{SPEECH, VIDEO};
+        let payload = serde_json::json!({"data":[
+            {"id":"studio","supported_endpoints":["/v1/videos","/v1/videos/{id}"]},
+            {"id":"studio","const_api":{"media_operations":[SPEECH]}},
+            {"id":"live","output_modalities":["audio","video"],"supported_endpoints":["/v1/realtime","/v1/videos"]},
+            {"id":"invalid","const_api":{"media_operations":[VIDEO, false]},"supported_endpoints":["/v1/audio/speech"]}
+        ]});
+        let models = stable_dedupe_models(model_observations_from_value(
+            ModelCatalogKind::OpenAI,
+            &payload,
+            "fixture",
+        ));
+        assert_eq!(
+            models[0].media_operations.names().collect::<Vec<_>>(),
+            [VIDEO, SPEECH]
+        );
+        assert!(models[0].supported_endpoints.is_none());
+        assert!(models[1].media_operations.empty());
+        assert!(models[2].media_operations.empty());
+    }
 
     #[test]
     fn context_limits_discovery_preserves_input_and_codex_maximum() {
@@ -1168,6 +1252,9 @@ mod tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                image_operations: None,
+                opencode_image_api: None,
+                media_operations: Default::default(),
                 kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: " GPT-5.6-Terra ".to_string(),
@@ -1185,6 +1272,9 @@ mod tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                image_operations: None,
+                opencode_image_api: None,
+                media_operations: Default::default(),
                 kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "gpt-5.6-terra".to_string(),
@@ -1266,6 +1356,9 @@ mod tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                image_operations: None,
+                opencode_image_api: None,
+                media_operations: Default::default(),
                 kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "duplicate".to_string(),
@@ -1283,6 +1376,9 @@ mod tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                image_operations: None,
+                opencode_image_api: None,
+                media_operations: Default::default(),
                 kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "other".to_string(),
@@ -1300,6 +1396,9 @@ mod tests {
                 output_tokens: None,
                 supported_parameters: None,
                 supported_endpoints: None,
+                image_operations: None,
+                opencode_image_api: None,
+                media_operations: Default::default(),
                 kiro_request_schema: None,
                 probe_cost_nanos: None,
                 id: "duplicate".to_string(),

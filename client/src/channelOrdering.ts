@@ -15,8 +15,7 @@ export function isLegacyLocalSupplierPlaceholder(channel: ModelMarketChannel): b
     && channel.name?.trim().toLowerCase() === "local supplier"
     && channel.source_driver === "custom_endpoint"
     && channel.created_at_unix_ms === 0
-    && channel.enabled !== true
-    && channel.share_enabled !== true;
+    && channel.enabled !== true;
 }
 
 export function channelsVisibleInModelMarket<T extends ModelMarketChannel>(

@@ -1,4 +1,126 @@
 #[tokio::test]
+async fn openrouter_account_refresh_reaches_compact_media_discovery_with_skill_disabled() {
+    use serde_json::json;
+    let image = json!({"input_modalities":["text","image"],"output_modalities":["image"]});
+    let catalog = json!({"data":[
+        {"id":"qwen/qwen-image-3","architecture":image,"endpoints":["/api/v1/images"]},
+        {"id":"minimax/minimax-h3-image","architecture":image,"endpoints":["/api/v1/images"]},
+        {"id":"amazon/titan-embed-image-v1","architecture":{"input_modalities":["image"],"output_modalities":["embeddings"]}},
+        {"id":"recraft/example:free","architecture":{"input_modalities":["text"],"output_modalities":["image"]},"endpoints":["/api/v1/images"]},
+        {"id":"openrouter/auto","architecture":image,"endpoints":["/api/v1/chat/completions"]},
+        {"id":"alibaba/wan-3.0","architecture":{"output_modalities":["video"]}},
+        {"id":"heygen/heygen-voice-1-turbo:free","architecture":{"output_modalities":["speech"]}},
+        {"id":"example/audio-chat","architecture":{"output_modalities":["text","audio"]}},
+        {"id":"google/lyria-3-clip-preview","architecture":{"output_modalities":["text","audio"]},"endpoints":["/api/v1/chat/completions"]},
+        {"id":"example/video-reader","architecture":{"input_modalities":["video"],"output_modalities":["text"]}}
+    ]});
+    let route = warp::get()
+        .and(warp::path!("v1" / "models" / "user"))
+        .map(move || warp::reply::json(&catalog))
+        .or(warp::get().and(warp::path!("v1" / "images" / "models")).map(move || warp::reply::json(&json!({"data":[
+            {"id":"qwen/qwen-image-3","architecture":image,"supported_parameters":{"input_references":{"min":0,"max":3}}},
+            {"id":"minimax/minimax-h3-image","architecture":image,"supported_parameters":{"input_references":{"min":1,"max":2}}},
+            {"id":"openrouter/auto","architecture":image,"supported_parameters":{"input_references":{"min":0,"max":2}}}
+        ]}))));
+    let (addr, server) = crate::bind_ephemeral!(route, ([127, 0, 0, 1], 0));
+    let server = tokio::spawn(server);
+    let mut channel = crate::channel_from_supplier("router".into(), &crate::default_supplier_config());
+    channel.set_source_driver(crate::source_driver::SourceDriverId::Openrouter);
+    channel.upstream_base_url = format!("http://{addr}/v1");
+    channel.upstream_api_key = "fixture".into();
+    channel.enabled = true;
+    channel.surface_bindings = crate::source_driver_surface_bindings(channel.source_driver(), &channel.upstream_base_url);
+    for binding in &mut channel.surface_bindings {
+        binding.verification.state = "verified".into();
+    }
+    let refreshed = crate::detection::refresh_channel(channel.clone()).await.unwrap();
+    crate::supplier::merge_channel_detection_result(&mut channel, &refreshed);
+    let selected = channel_upstream_model_for_request(&channel, Some("qwen-image-3"));
+    assert_eq!(crate::openrouter::upstream_model(&channel, &selected), "qwen/qwen-image-3");
+    let supply = crate::supplier::SupplierAgentConfig::single(crate::config::supplier_from_channel(&channel));
+    let registration = crate::supplier::supplier_register_message(&supply);
+    let registered_ops = registration.payload["channels"][0]["supported_operations"].as_array().unwrap();
+    assert!(registered_ops.contains(&json!(crate::image_models::GENERATE)));
+    assert!(registered_ops.contains(&json!(crate::image_models::EDIT)));
+    let evidence = registration.payload["channels"][0]["native_capabilities"].as_array().unwrap();
+    let advertises = |suffix: &str, op: &str| evidence.iter().any(|e|
+        e["source"] == "openrouter_images" && e["state"] == "supported"
+        && e["model_pattern"].as_str().is_some_and(|id| id.rsplit('/').next() == Some(suffix))
+        && e["feature"] == format!("operation:{op}"));
+    assert!(advertises("qwen-image-3", crate::image_models::GENERATE));
+    assert!(advertises("minimax-h3-image", crate::image_models::EDIT));
+    assert!(!advertises("minimax-h3-image", crate::image_models::GENERATE));
+    assert!(!advertises("auto", crate::image_models::EDIT));
+    let ready = [channel.id.clone()].into_iter().collect();
+    let mut config = crate::default_config();
+    config.configure_image_skill = false;
+    config.channels = vec![channel];
+    let entries = local_model_entries(&config, &ready);
+    let resp = local_models_response(&config, crate::surface::ApiSurface::OpenAi, &entries, true).unwrap();
+    let body = crate::test_body_bytes(resp.into_body()).await.unwrap();
+    let catalog = serde_json::from_slice(&body).unwrap();
+    let found = crate::media_cli::discovery(&catalog).unwrap();
+    assert_eq!(found["video"], json!(["wan-3.0"]));
+    assert_eq!(found["speech"], json!(["heygen-voice-1-turbo:free"]));
+    assert_eq!(found["native_operations"][crate::media_models::CHAT_MUSIC], json!(["lyria-3-clip-preview"]));
+    assert!(found["declared_outputs"]["audio"].as_array().unwrap().contains(&json!("audio-chat")));
+    let images: std::collections::BTreeMap<_, _> = crate::image_models::catalog_models(&catalog).unwrap()
+        .map(|m| (m.id, (m.operations.generate, m.operations.edit))).collect();
+    assert_eq!(images, [("example:free",(true,false)),("minimax-h3-image",(false,true)),("qwen-image-3",(true,true))].into_iter().collect());
+    server.abort();
+}
+
+#[tokio::test]
+async fn native_image_discovery_keeps_market_rates_scoped_to_market_operations_with_skill_off() {
+    use crate::image_models::{EDIT, GENERATE};
+    let mut config = default_config();
+    config.configure_image_skill = false;
+    let pricing = serde_json::json!({
+        "currency":"USD","price_version_id":"test",
+        "base_rates":[{"meter_kind":"image_output_unit","unit":"per_image","price_usd":0.05}],
+        "offer_ratios":{(GENERATE):{"min_ratio":0.5,"max_ratio":1.0}}
+    });
+    let platform = serde_json::json!({"data":[{"id":"canvas","const_api":{
+        "image_operations":[GENERATE],"platform_image_pricing":pricing
+    }}]});
+    let mut local = [serde_json::json!({"id":"canvas","const_api":{"image_operations":[EDIT]}})];
+    crate::model_discovery::mark_directory_source(&mut local[0], "local");
+    for prefer_local in [true, false] {
+        let response = merge_local_models_response(
+            warp::reply::json(&platform).into_response(), &config,
+            crate::surface::ApiSurface::OpenAi, &local, prefer_local, true,
+        ).await.unwrap();
+        let bytes = crate::test_body_bytes(response.into_body()).await.unwrap();
+        let payload = serde_json::from_slice(&bytes).unwrap();
+        let model = crate::image_models::catalog_models(&payload).unwrap().next().unwrap();
+        assert_eq!(model.id, "canvas");
+        assert!(model.operations.generate && model.operations.edit);
+        assert_eq!(model.platform_pricing, Some(&pricing));
+        assert_eq!(payload["data"][0]["const_api"]["operations_by_source"], serde_json::json!({
+            "local":[EDIT], "platform":[GENERATE]
+        }));
+    }
+}
+
+#[tokio::test]
+async fn native_media_directory_is_available_with_no_skill_or_local_supplier() {
+    let mut config = default_config();
+    config.configure_image_skill = false;
+    config.channels.clear();
+    let platform = serde_json::json!({"data":[{"id":"studio-voice","const_api":{
+        "media_operations":[crate::media_models::SPEECH],"speech_stream_format":"sse"
+    }}]});
+    for prefer_local in [true, false] {
+        let response = merge_local_models_response(warp::reply::json(&platform).into_response(), &config,
+            crate::surface::ApiSurface::OpenAi, &[], prefer_local, true).await.unwrap();
+        let bytes = crate::test_body_bytes(response.into_body()).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["data"][0]["const_api"]["media_operations"], serde_json::json!([crate::media_models::SPEECH]));
+        assert_eq!(payload["data"][0]["const_api"]["speech_stream_format"], "sse");
+    }
+}
+
+#[tokio::test]
 async fn model_discovery_rules_survive_local_merge_on_all_surfaces() {
     let mut config = default_config();
     config.allow_model_equivalence = false;
